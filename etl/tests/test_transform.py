@@ -451,3 +451,131 @@ def test_transform_snapshot_skips_when_lookup_missing_does_not_break_join(tmp_pa
 def test_transform_snapshot_invalid_month():
     with pytest.raises(ValueError):
         transform.transform_snapshot("bad", cache_dir=Path("."), output_dir=Path("."))
+
+
+# -----------------------------------------------------------------------------
+# Roundtrip-equivalence (ADR 0009)
+# -----------------------------------------------------------------------------
+
+
+def test_transform_snapshot_with_verify_passes(tmp_path, all_zips_dir):
+    """Verify=True não deve falhar quando os dados batem."""
+    chain = fetcher.ChainedFetcher(fetchers=[_ZipDirFetcher(all_zips_dir)])
+    transform.transform_snapshot(
+        "2026-04",
+        cache_dir=tmp_path / "cache",
+        output_dir=tmp_path / "output",
+        chain=chain,
+        skip_unimplemented=False,
+        verify=True,
+        verify_sample_size=4,
+    )
+    # Sem exceção = passou
+
+
+def test_assert_roundtrip_detects_row_count_mismatch(tmp_path, all_zips_dir):
+    """Se o parquet tem rows diferente do estabelecimento original, falha."""
+    chain = fetcher.ChainedFetcher(fetchers=[_ZipDirFetcher(all_zips_dir)])
+    output_dir = tmp_path / "output"
+    cache_dir = tmp_path / "cache"
+
+    transform.transform_snapshot(
+        "2026-04",
+        cache_dir=cache_dir,
+        output_dir=output_dir,
+        chain=chain,
+        skip_unimplemented=False,
+    )
+    cnpjs_parquet = output_dir / "cnpjs.parquet"
+
+    # Reconstrói o DuckDB com os dados originais e regrava parquet com 1 row a menos.
+    con = duckdb.connect()
+    try:
+        # Recarrega o source via extract_all (idempotente — reusa pasta diferente)
+        extracted = transform.extract_all("2026-04", chain, tmp_path / "extracted2")
+        for ef in extracted:
+            if ef.kind in transform._LOOKUP_KINDS:
+                transform.load_lookup_into_duckdb(con, ef.kind, ef.csv_path)
+        transform.load_main_tables_into_duckdb(con, extracted)
+
+        # Regrava parquet com WHERE que tira 1 row.
+        truncated = output_dir / "cnpjs_truncated.parquet"
+        con.execute(
+            f"COPY (SELECT * FROM '{cnpjs_parquet}' WHERE cnpj != "
+            f"(SELECT cnpj FROM '{cnpjs_parquet}' LIMIT 1)) "
+            f"TO '{truncated}' (FORMAT PARQUET)"
+        )
+
+        with pytest.raises(transform.RoundtripError, match="row count mismatch"):
+            transform.assert_roundtrip(con, truncated)
+    finally:
+        con.close()
+
+
+def test_assert_roundtrip_detects_field_divergence(tmp_path, all_zips_dir):
+    """Se um campo no parquet diverge do source, falha."""
+    chain = fetcher.ChainedFetcher(fetchers=[_ZipDirFetcher(all_zips_dir)])
+    output_dir = tmp_path / "output"
+    cache_dir = tmp_path / "cache"
+
+    transform.transform_snapshot(
+        "2026-04",
+        cache_dir=cache_dir,
+        output_dir=output_dir,
+        chain=chain,
+        skip_unimplemented=False,
+    )
+    cnpjs_parquet = output_dir / "cnpjs.parquet"
+
+    con = duckdb.connect()
+    try:
+        # Recarrega o source (cache_dir/2026-04/extracted)
+        extracted = transform.extract_all(
+            "2026-04", chain, tmp_path / "extracted_for_verify"
+        )
+        for ef in extracted:
+            if ef.kind in transform._LOOKUP_KINDS:
+                transform.load_lookup_into_duckdb(con, ef.kind, ef.csv_path)
+        transform.load_main_tables_into_duckdb(con, extracted)
+
+        # Cria um parquet "tampered" com razao_social trocada.
+        tampered = output_dir / "cnpjs_tampered.parquet"
+        con.execute(
+            f"""COPY (
+                SELECT * REPLACE ('TAMPERED' AS razao_social)
+                FROM '{cnpjs_parquet}'
+            ) TO '{tampered}' (FORMAT PARQUET)"""
+        )
+
+        with pytest.raises(transform.RoundtripError, match="razao_social"):
+            transform.assert_roundtrip(con, tampered, sample_size=4)
+    finally:
+        con.close()
+
+
+def test_assert_roundtrip_empty_estabelecimento_is_noop(tmp_path):
+    """Se estabelecimento estiver vazio, roundtrip passa silenciosamente."""
+    con = duckdb.connect()
+    try:
+        # Cria tabelas vazias com schema mínimo
+        con.execute(
+            "CREATE TABLE estabelecimento (cnpj_basico VARCHAR, cnpj_ordem VARCHAR, "
+            "cnpj_dv VARCHAR, identificador_matriz_filial VARCHAR, nome_fantasia VARCHAR, "
+            "situacao_cadastral VARCHAR, uf VARCHAR, municipio VARCHAR, "
+            "cnae_fiscal_principal VARCHAR)"
+        )
+        con.execute("CREATE TABLE empresa (cnpj_basico VARCHAR, razao_social VARCHAR)")
+
+        empty = tmp_path / "empty.parquet"
+        con.execute(
+            "COPY (SELECT NULL::VARCHAR AS cnpj, NULL::VARCHAR AS razao_social, "
+            "NULL::VARCHAR AS uf, NULL::VARCHAR AS cnae_principal_codigo, "
+            "NULL::VARCHAR AS situacao_cadastral, NULL::VARCHAR AS nome_fantasia, "
+            "NULL::VARCHAR AS identificador_matriz_filial, NULL::VARCHAR AS municipio_codigo "
+            "WHERE FALSE) TO '" + str(empty) + "' (FORMAT PARQUET)"
+        )
+
+        # Não deve raise (0 == 0)
+        transform.assert_roundtrip(con, empty)
+    finally:
+        con.close()
