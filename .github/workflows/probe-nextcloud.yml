@@ -1,0 +1,121 @@
+name: probe — Nextcloud share access (one-shot, always fails)
+
+# Temporary diagnostic workflow.
+# Triggers on PR pushes to claude/probe-nextcloud-share only.
+# Probes multiple URL variants for the RFB Nextcloud share, captures all
+# output, ALWAYS exits 1 so the smoke-style comment-on-PR mechanism fires.
+# Delete this file after we have the answer.
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/probe-nextcloud.yml'
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      TOKEN: YggdBLfdninEJX9
+      BASE: https://arquivos.receitafederal.gov.br
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run probe
+        id: probe
+        run: |
+          set +e  # never abort early; we want all output
+
+          OUT=/tmp/probe.txt
+          : > "$OUT"
+
+          run() {
+            echo "=========================================" >> "$OUT"
+            echo "$ $*" >> "$OUT"
+            "$@" >> "$OUT" 2>&1
+            echo "exit=$?" >> "$OUT"
+            echo "" >> "$OUT"
+          }
+
+          # 1. HEAD share root WITHOUT /index.php/ (the buggy br-acc form)
+          run curl -k -sSI -L --max-time 30 -A "Mozilla/5.0" \
+            "$BASE/s/$TOKEN/"
+
+          # 2. HEAD share root WITH /index.php/ (the form the user reported as working)
+          run curl -k -sSI -L --max-time 30 -A "Mozilla/5.0" \
+            "$BASE/index.php/s/$TOKEN/"
+
+          # 3. HEAD direct download URL of one file (br-acc style + index.php)
+          run curl -k -sSI -L --max-time 30 -A "Mozilla/5.0" \
+            "$BASE/index.php/s/$TOKEN/download?path=%2F&files=Empresas0.zip"
+
+          # 4. PROPFIND root (Depth: 1) — Nextcloud public WebDAV endpoint
+          run curl -k -sS -L --max-time 30 -A "Mozilla/5.0" \
+            -X PROPFIND -u "$TOKEN:" -H "Depth: 1" -H "Content-Type: text/xml" \
+            "$BASE/public.php/webdav/"
+
+          # 5. PROPFIND root (Depth: 0) — just resourcetype
+          run curl -k -sS -L --max-time 30 -A "Mozilla/5.0" \
+            -X PROPFIND -u "$TOKEN:" -H "Depth: 0" -H "Content-Type: text/xml" \
+            "$BASE/public.php/webdav/"
+
+          # 6. GET share landing page HTML (look for filenames / folder hints)
+          run curl -k -sS -L --max-time 30 -A "Mozilla/5.0" \
+            -o /tmp/share.html -w "%{http_code} -> %{url_effective} size=%{size_download}\n" \
+            "$BASE/index.php/s/$TOKEN/"
+          if [ -s /tmp/share.html ]; then
+            echo "=== /tmp/share.html grep: filename / data-file / displayname / .zip ===" >> "$OUT"
+            grep -oE '"filename"\s*:\s*"[^"]+"' /tmp/share.html | head -50 >> "$OUT" || true
+            grep -oE 'data-file="[^"]+"' /tmp/share.html | head -50 >> "$OUT" || true
+            grep -oE '<d:displayname>[^<]+</d:displayname>' /tmp/share.html | head -50 >> "$OUT" || true
+            grep -oE '[A-Za-z][A-Za-z0-9_-]+\.zip' /tmp/share.html | sort -u | head -50 >> "$OUT" || true
+            grep -oE '\b20[0-9]{2}-[0-1][0-9]\b' /tmp/share.html | sort -u | head -50 >> "$OUT" || true
+            echo "" >> "$OUT"
+          fi
+
+          # Mirror to step summary AND step output for the PR comment.
+          {
+            echo "## Nextcloud probe — results"
+            echo ""
+            echo '```'
+            cat "$OUT"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          {
+            echo 'output<<PROBE_EOF'
+            cat "$OUT"
+            echo 'PROBE_EOF'
+          } >> "$GITHUB_OUTPUT"
+
+          echo "Forcing failure to trigger PR comment (this is intentional)."
+          exit 1
+
+      - name: Comment probe output on PR (always)
+        if: always() && github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const output = `${{ steps.probe.outputs.output }}`;
+            const body = [
+              `### 🧪 Nextcloud probe results`,
+              '',
+              '<details><summary>Output (click to expand)</summary>',
+              '',
+              '```',
+              output,
+              '```',
+              '</details>',
+              '',
+              '_(This workflow always fails by design to dump probe output.)_',
+            ].join('\n');
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body,
+            });
