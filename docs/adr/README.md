@@ -21,4 +21,5 @@ Formato: cada ADR é um markdown curto (ideal: 1 página) com **contexto**, **de
 | [0011](0011-no-partitioning.md) | Não usar partitioning Hive-style nos Parquets | Accepted |
 | [0012](0012-ia-mirror-as-source-of-truth.md) | Internet Archive como source-of-truth do FICHA | Accepted |
 | [0013](0013-rfb-token-discovery.md) | ~~Estratégia de discovery do token Nextcloud da RFB~~ | Superseded by 0014 |
-| [0014](0014-rfb-flat-url-no-token.md) | RFB usa URL flat sem token; histórico fica no mirror IA | Accepted |
+| [0014](0014-rfb-flat-url-no-token.md) | ~~RFB usa URL flat sem token; histórico fica no mirror IA~~ | Superseded by 0015 |
+| [0015](0015-nextcloud-webdav-canonical.md) | Nextcloud WebDAV é a fonte canônica (com histórico desde 2023-05) | Accepted |
