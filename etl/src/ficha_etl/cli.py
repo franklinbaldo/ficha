@@ -34,14 +34,20 @@ def main(argv: list[str] | None = None) -> int:
         "smoke",
         help="HEAD em cada URL para detectar mudanças na fonte sem baixar bytes",
     )
-    sm.add_argument("--month", required=True, help="Snapshot alvo no formato YYYY-MM")
+    sm.add_argument(
+        "--month",
+        help=(
+            "Snapshot alvo (YYYY-MM). Se omitido, descobre o mês mais recente "
+            "disponível probing os últimos 6 meses."
+        ),
+    )
 
     args = parser.parse_args(argv)
 
     if args.command == "download":
         return _cmd_download(args.month, args.target)
     if args.command == "smoke":
-        return _cmd_smoke(args.month)
+        return _cmd_smoke(args.month)  # may be None → auto-discover
     if args.command == "run":
         raise NotImplementedError(f"Pipeline ainda não implementado (alvo: {args.month})")
 
@@ -60,10 +66,21 @@ def _cmd_download(month: str, target: Path) -> int:
     return 0
 
 
-def _cmd_smoke(month: str) -> int:
-    if not sources.is_valid_month(month):
+def _cmd_smoke(month: str | None) -> int:
+    if month is None:
+        print(f"Auto-discovering latest published month (base_url={sources.base_url()})...")
+        month = smoke_mod.find_latest_available_month()
+        if month is None:
+            print(
+                "error: no recent month responded — RFB indisponível ou URL mudou",
+                file=sys.stderr,
+            )
+            return 1
+        print(f"Latest available month: {month}")
+    elif not sources.is_valid_month(month):
         print(f"error: month must be YYYY-MM, got {month!r}", file=sys.stderr)
         return 2
+
     print(f"Smoke target: month={month}  base_url={sources.base_url()}")
     files = sources.files_for_month(month)
     results = smoke_mod.smoke_check(files)

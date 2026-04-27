@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from datetime import date, timedelta
 
 import httpx
 
@@ -16,6 +17,46 @@ from .sources import RemoteFile, base_url
 log = logging.getLogger(__name__)
 
 _HTTP_TIMEOUT = httpx.Timeout(connect=15.0, read=30.0, write=15.0, pool=15.0)
+
+
+def _shift_month(year: int, month: int, delta: int) -> tuple[int, int]:
+    idx = (year * 12 + (month - 1)) + delta
+    return idx // 12, (idx % 12) + 1
+
+
+def find_latest_available_month(*, max_lookback: int = 6) -> str | None:
+    """Probe parent directories backwards until one returns 200.
+
+    Used in CI smoke pra que mês ainda não publicado pelo RFB não falhe a build.
+    Retorna 'YYYY-MM' do mês mais recente disponível ou None se nenhum dos
+    `max_lookback` últimos meses respondeu.
+    """
+    today = date.today()
+    candidates: list[str] = []
+    for offset in range(0, max_lookback + 1):
+        y, m = _shift_month(today.year, today.month, -offset)
+        candidates.append(f"{y:04d}-{m:02d}")
+
+    with httpx.Client(timeout=_HTTP_TIMEOUT, follow_redirects=True) as client:
+        for month in candidates:
+            url = f"{base_url()}/{month}/"
+            try:
+                r = client.head(url)
+            except httpx.HTTPError as exc:
+                log.warning("probe %s failed: %s", month, exc)
+                continue
+            if 200 <= r.status_code < 300:
+                log.info("latest available month: %s", month)
+                return month
+            log.debug("probe %s → HTTP %d", month, r.status_code)
+    return None
+
+
+# kept for backward compat — unused once we fix the date math, but harmless.
+def _last_month_iso(today: date | None = None) -> str:
+    today = today or date.today()
+    last = today.replace(day=1) - timedelta(days=1)
+    return last.strftime("%Y-%m")
 
 
 @dataclass

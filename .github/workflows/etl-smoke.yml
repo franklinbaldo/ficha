@@ -39,45 +39,45 @@ jobs:
 
       - run: uv sync
 
-      - name: Resolve target month
+      - name: Validate input month (when provided)
         id: month
-        # Default = mês anterior. RFB publica entre dias 1-5 do mês corrente
-        # referente ao mês anterior — então o anterior é sempre o mais recente
-        # disponível com confiança.
         env:
           INPUT_MONTH: ${{ inputs.month }}
         run: |
           if [ -n "$INPUT_MONTH" ]; then
-            MONTH="$INPUT_MONTH"
-          else
-            # Use o dia 15 pra evitar drift de timezone perto da virada de mês.
-            MONTH=$(date -u -d "$(date -u +%Y-%m-15) -1 month" +%Y-%m)
+            if ! [[ "$INPUT_MONTH" =~ ^[0-9]{4}-(0[1-9]|1[0-2])$ ]]; then
+              echo "::error::Invalid month '$INPUT_MONTH' — expected YYYY-MM"
+              exit 1
+            fi
           fi
-          if ! [[ "$MONTH" =~ ^[0-9]{4}-(0[1-9]|1[0-2])$ ]]; then
-            echo "::error::Invalid month '$MONTH' — expected YYYY-MM"
-            exit 1
-          fi
-          echo "Resolved target month: $MONTH"
-          echo "value=$MONTH" >> "$GITHUB_OUTPUT"
+          # When unset, the smoke command auto-discovers the latest available
+          # month — robust to RFB publication delays.
+          echo "value=$INPUT_MONTH" >> "$GITHUB_OUTPUT"
 
       - name: Run smoke check
         id: smoke
         env:
           MONTH: ${{ steps.month.outputs.value }}
         run: |
+          MONTH_ARG=()
+          if [ -n "$MONTH" ]; then
+            MONTH_ARG=(--month "$MONTH")
+            HEADER="## Smoke check — \`$MONTH\`"
+          else
+            HEADER="## Smoke check — auto-discover"
+          fi
           {
-            echo "## Smoke check — \`$MONTH\`"
+            echo "$HEADER"
             echo ""
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
-          uv run ficha-etl smoke --month "$MONTH" 2>&1 | tee smoke-output.txt | tee -a "$GITHUB_STEP_SUMMARY"
+          uv run ficha-etl smoke "${MONTH_ARG[@]}" 2>&1 | tee smoke-output.txt | tee -a "$GITHUB_STEP_SUMMARY"
           rc=${PIPESTATUS[0]}
           {
             echo '```'
             echo ""
             echo "Exit code: \`$rc\`"
           } >> "$GITHUB_STEP_SUMMARY"
-          # Save output for the next step regardless of pass/fail.
           {
             echo 'output<<SMOKE_EOF'
             cat smoke-output.txt
