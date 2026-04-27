@@ -12,8 +12,10 @@ A Receita Federal Brasileira publica os dados abertos do CNPJ em dumps mensais. 
 ### URL canônica
 
 ```
-https://arquivos.receitafederal.gov.br/dados/cnpj/dados_abertos_cnpj/YYYY-MM/
+https://dadosabertos.rfb.gov.br/CNPJ/dados_abertos_cnpj/YYYY-MM/
 ```
+
+> **Histórico:** o domínio anterior `arquivos.receitafederal.gov.br/dados/cnpj/dados_abertos_cnpj/` foi descontinuado em 2025/2026. Vários repos públicos referem-se a ele como "legacy". Mantido aqui só pra documentar a migração.
 
 ### Estrutura por snapshot
 
@@ -50,7 +52,7 @@ URL é constante em `etl/src/ficha_etl/sources.py`. Pode ser sobrescrita via env
 ```python
 RFB_BASE_URL = os.environ.get(
     "FICHA_RFB_BASE_URL",
-    "https://arquivos.receitafederal.gov.br/dados/cnpj/dados_abertos_cnpj"
+    "https://dadosabertos.rfb.gov.br/CNPJ/dados_abertos_cnpj"
 )
 ```
 

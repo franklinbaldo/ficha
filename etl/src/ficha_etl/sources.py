@@ -10,9 +10,7 @@ import re
 from dataclasses import dataclass
 from typing import Literal
 
-DEFAULT_RFB_BASE_URL = (
-    "https://arquivos.receitafederal.gov.br/dados/cnpj/dados_abertos_cnpj"
-)
+DEFAULT_RFB_BASE_URL = "https://dadosabertos.rfb.gov.br/CNPJ/dados_abertos_cnpj"
 
 _MONTH_RE = re.compile(r"^\d{4}-(0[1-9]|1[0-2])$")
 
