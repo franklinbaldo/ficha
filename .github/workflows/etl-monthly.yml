@@ -33,26 +33,41 @@ jobs:
 
       - run: uv sync
 
+      # Cache os ZIPs descomprimidos entre runs do mesmo mês — re-runs ficam
+      # rápidos. A chave depende do mês resolvido (computado abaixo).
       - name: Resolve target month
-        id: month
-        # Pass user input via env (not direct shell interpolation) and validate
-        # against YYYY-MM before letting it reach any command.
+        id: month_pre
         env:
           INPUT_MONTH: ${{ inputs.month }}
         run: |
           MONTH="${INPUT_MONTH:-$(date -u +%Y-%m)}"
           if ! [[ "$MONTH" =~ ^[0-9]{4}-(0[1-9]|1[0-2])$ ]]; then
-            echo "::error::Invalid month '$MONTH' — expected YYYY-MM"
-            exit 1
+            echo "::error::Invalid month '$MONTH'"; exit 1
           fi
           echo "value=$MONTH" >> "$GITHUB_OUTPUT"
+
+      - name: Restore RFB cache
+        uses: actions/cache@v4
+        with:
+          path: etl/.cache/raw/${{ steps.month_pre.outputs.value }}
+          key: rfb-zips-${{ steps.month_pre.outputs.value }}-v1
+
+      - name: Export resolved month
+        id: month
+        run: echo "value=${{ steps.month_pre.outputs.value }}" >> "$GITHUB_OUTPUT"
 
       - name: Run pipeline
         env:
           IA_ACCESS_KEY: ${{ secrets.IA_ACCESS_KEY }}
           IA_SECRET_KEY: ${{ secrets.IA_SECRET_KEY }}
+          CNPJ_SHARE_TOKEN: ${{ secrets.CNPJ_SHARE_TOKEN }}
           MONTH: ${{ steps.month.outputs.value }}
-        run: uv run ficha-etl run --month "$MONTH"
+        run: |
+          uv run ficha-etl run \
+            --month "$MONTH" \
+            --cache-dir .cache/raw \
+            --output-dir .cache/output/"$MONTH" \
+            --manifest ../web/public/manifest.json
 
       - name: Commit updated manifest
         env:
