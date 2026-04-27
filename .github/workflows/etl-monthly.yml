@@ -68,10 +68,19 @@ jobs:
           fi
           echo "value=$MONTH" >> "$GITHUB_OUTPUT"
 
+      # Cache restrito aos ZIPs crus (≤ ~7 GB) — exclui extracted/ (~25-30 GB)
+      # que estouraria o limite de 10 GB do GH Actions.
+      - name: Cache RFB raw ZIPs
+        uses: actions/cache@v4
+        with:
+          path: etl/.cache/${{ steps.month.outputs.value }}/*.zip
+          key: rfb-zips-${{ steps.month.outputs.value }}-v1
+
       - name: Run pipeline
         env:
           IA_ACCESS_KEY: ${{ secrets.IA_ACCESS_KEY }}
           IA_SECRET_KEY: ${{ secrets.IA_SECRET_KEY }}
+          CNPJ_SHARE_TOKEN: ${{ secrets.CNPJ_SHARE_TOKEN }}
           MONTH: ${{ steps.month.outputs.value }}
           SKIP_UPLOAD: ${{ inputs.skip_upload }}
           NO_VERIFY: ${{ inputs.no_verify }}
