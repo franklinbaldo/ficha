@@ -71,7 +71,12 @@ def extract_all(
     chain: fetcher_mod.ChainedFetcher,
     extract_dir: Path,
 ) -> list[ExtractedFile]:
-    """Resolve cada ZIP via chain, extrai pra `extract_dir/{kind}/`."""
+    """Resolve cada ZIP via chain, extrai pra `extract_dir/{kind}/`.
+
+    RFB publica exatamente 1 CSV por ZIP. A invariante é checada explicitamente
+    aqui — se RFB mudar e empacotar arquivos extras (ex.: checksum), falhamos
+    loud em vez de pegar silenciosamente o primeiro entry.
+    """
     if not is_valid_month(month):
         raise ValueError(f"month must be YYYY-MM, got {month!r}")
     out: list[ExtractedFile] = []
@@ -79,11 +84,16 @@ def extract_all(
         zip_path = chain.get(spec.name)
         kind_dir = extract_dir / spec.kind
         extracted = extract_zip(zip_path, kind_dir)
-        if not extracted:
-            log.warning("zip %s contained no files", spec.name)
-            continue
-        # RFB ZIPs têm exatamente 1 CSV cada — pegamos o primeiro.
-        out.append(ExtractedFile(kind=spec.kind, zip_name=spec.name, csv_path=extracted[0]))
+        # Filtra apenas arquivos (extract_zip já pula dirs, mas defensivo)
+        files = [p for p in extracted if p.is_file()]
+        if not files:
+            raise RuntimeError(f"zip {spec.name!r} contained no files")
+        if len(files) > 1:
+            raise RuntimeError(
+                f"zip {spec.name!r} expected exactly 1 CSV, got {len(files)}: "
+                f"{[p.name for p in files]}"
+            )
+        out.append(ExtractedFile(kind=spec.kind, zip_name=spec.name, csv_path=files[0]))
     return out
 
 

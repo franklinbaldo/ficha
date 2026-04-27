@@ -200,7 +200,7 @@ def _cmd_transform(month: str, output: Path, cache_dir: Path, strict: bool) -> i
             output_dir=output,
             skip_unimplemented=not strict,
         )
-    except FileNotFoundError as exc:
+    except (FileNotFoundError, NotImplementedError, RuntimeError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
     print(f"transform OK — outputs em {output}")

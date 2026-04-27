@@ -267,3 +267,52 @@ def test_transform_snapshot_propagates_unimplemented_when_strict(tmp_path, all_z
 def test_transform_snapshot_invalid_month():
     with pytest.raises(ValueError):
         transform.transform_snapshot("bad", cache_dir=Path("."), output_dir=Path("."))
+
+
+# -----------------------------------------------------------------------------
+# extract_all enforces the "1 CSV per ZIP" invariant
+# -----------------------------------------------------------------------------
+
+
+def test_extract_all_rejects_zip_with_multiple_files(tmp_path):
+    zips = tmp_path / "zips"
+    zips.mkdir()
+    from ficha_etl.sources import canonical_inventory
+
+    csv_name_for_kind = {
+        "cnaes": "F.K03200$Z.D40410.CNAECSV",
+        "motivos": "F.K03200$Z.D40410.MOTICSV",
+        "municipios": "F.K03200$Z.D40410.MUNICCSV",
+        "naturezas": "F.K03200$Z.D40410.NATJUCSV",
+        "paises": "F.K03200$Z.D40410.PAISCSV",
+        "qualificacoes": "F.K03200$Z.D40410.QUALSCSV",
+    }
+    for spec in canonical_inventory():
+        zp = zips / spec.name
+        rows = LOOKUP_FIXTURES.get(spec.kind, [])
+        body = ("\n".join(f'"{c}";"{d}"' for c, d in rows) + "\n").encode("latin-1")
+        with zipfile.ZipFile(zp, "w") as zf:
+            inside = csv_name_for_kind.get(spec.kind, f"{spec.name}.csv")
+            zf.writestr(inside, body)
+            # Extra metadata file inside the ZIP — should trigger the invariant
+            if spec.name == "Cnaes.zip":
+                zf.writestr("README.txt", b"unexpected extra")
+
+    chain = fetcher.ChainedFetcher(fetchers=[_ZipDirFetcher(zips)])
+    with pytest.raises(RuntimeError, match="expected exactly 1 CSV"):
+        transform.extract_all("2026-04", chain, tmp_path / "extracted")
+
+
+def test_extract_all_rejects_empty_zip(tmp_path):
+    zips = tmp_path / "zips"
+    zips.mkdir()
+    from ficha_etl.sources import canonical_inventory
+
+    for spec in canonical_inventory():
+        zp = zips / spec.name
+        with zipfile.ZipFile(zp, "w") as _:
+            pass  # zero entries
+
+    chain = fetcher.ChainedFetcher(fetchers=[_ZipDirFetcher(zips)])
+    with pytest.raises(RuntimeError, match="contained no files"):
+        transform.extract_all("2026-04", chain, tmp_path / "extracted")
