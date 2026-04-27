@@ -88,6 +88,11 @@ SOCIO_ROWS: list[tuple[str, ...]] = [
         "11111111", "1", "OUTRA EMPRESA SA", "44444444000100", "49", "20200101",
         "105", "", "", "", "0",
     ),
+    # Sócio estrangeiro (tipo '3'): cpf_mascarado e cnpj_socio devem ser NULL
+    (
+        "11111111", "3", "JOHN DOE", "USA123456", "49", "20200101",
+        "249", "", "", "", "0",
+    ),
     (
         "33333333", "2", "MARIA SOUZA", "***987654**", "49", "20230101",
         "105", "", "", "", "4",
@@ -378,26 +383,44 @@ def test_transform_snapshot_writes_lookups_and_3_parquets(tmp_path, all_zips_dir
         assert ind[1] == 1
         assert ind[2] == 0  # situacao 08 = baixada (não conta como ativo)
 
-        # Socios
+        # cnae_secundario_codigos: ACME matriz tem "6201500" como secundário
+        acme_cnae = con.execute(
+            f"SELECT cnae_secundario_codigos FROM '{cnpjs_path}' WHERE cnpj = '11111111000100'"
+        ).fetchone()[0]
+        assert acme_cnae == ["6201500"], f"esperado ['6201500'], got {acme_cnae}"
+
+        # CNAE secundário com espaços (trim): ACME filial não tem secundário → []
+        filial_cnae = con.execute(
+            f"SELECT cnae_secundario_codigos FROM '{cnpjs_path}' WHERE cnpj = '11111111000200'"
+        ).fetchone()[0]
+        assert filial_cnae == []
+
+        # Socios — agora 4 (PF + PJ + estrangeiro em ACME, PF em TECH)
         socios = con.execute(
             f"SELECT cnpj_base, tipo, tipo_descricao, nome_socio_razao_social, "
             f"cpf_mascarado, cnpj_socio, qualificacao_descricao "
             f"FROM '{socios_path}' ORDER BY cnpj_base, nome_socio_razao_social"
         ).fetchall()
-        assert len(socios) == 3
-        # Primeiro de ACME (alfabético): JOAO DA SILVA (PF)
+        assert len(socios) == 4
+        # PF: JOAO DA SILVA
         joao = next(s for s in socios if s[3] == "JOAO DA SILVA")
         assert joao[0] == "11111111"
         assert joao[1] == "2"
         assert joao[2] == "PF"
         assert joao[4] == "***123456**"
         assert joao[5] is None  # PF não tem cnpj_socio
-        # PJ socio
+        # PJ: OUTRA EMPRESA SA
         pj = next(s for s in socios if s[3] == "OUTRA EMPRESA SA")
         assert pj[1] == "1"
         assert pj[2] == "PJ"
-        assert pj[4] is None  # PJ não tem cpf
+        assert pj[4] is None  # PJ não tem cpf_mascarado
         assert pj[5] == "44444444000100"
+        # Estrangeiro: JOHN DOE — ambos cpf_mascarado e cnpj_socio devem ser NULL
+        ext = next(s for s in socios if s[3] == "JOHN DOE")
+        assert ext[1] == "3"
+        assert ext[2] == "estrangeiro"
+        assert ext[4] is None  # sem cpf_mascarado
+        assert ext[5] is None  # sem cnpj_socio
     finally:
         con.close()
 

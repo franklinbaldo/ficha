@@ -180,7 +180,8 @@ def _create_table_from_csvs(
         con.execute(f"CREATE OR REPLACE TABLE {table} ({col_defs})")
         return
     # Inline as a SQL list literal — parameter binding for arrays é instável.
-    paths_literal = "[" + ", ".join(f"'{str(p)}'" for p in paths) + "]"
+    # Aspas simples nos paths são escapadas dobrando-as (padrão SQL).
+    paths_literal = "[" + ", ".join(f"'{str(p).replace(chr(39), chr(39)*2)}'" for p in paths) + "]"
     cols_clause = _csv_columns_clause(columns)
     con.execute(
         f"""
@@ -313,11 +314,11 @@ END
 
 def write_cnpjs_parquet(
     con: duckdb.DuckDBPyConnection,
-    extracted: Iterable[ExtractedFile],
     output_path: Path,
 ) -> None:
     """Produz `cnpjs.parquet`: uma linha por estabelecimento, denormalizado.
 
+    Requer que `load_main_tables_into_duckdb` e os lookups já estejam carregados em `con`.
     Ver ADR 0008 e schema `web/src/schemas/v1/estabelecimento.ts`.
     """
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -356,7 +357,7 @@ def write_cnpjs_parquet(
                 COALESCE(cn_p.descricao, '') AS cnae_principal_descricao,
                 CASE WHEN est.cnae_fiscal_secundaria IS NULL OR est.cnae_fiscal_secundaria = ''
                      THEN []::VARCHAR[]
-                     ELSE str_split(est.cnae_fiscal_secundaria, ',') END
+                     ELSE list_transform(str_split(est.cnae_fiscal_secundaria, ','), x -> trim(x)) END
                     AS cnae_secundario_codigos,
                 -- TODO: descricoes resolvidas no client via lookups.json (v0.1)
                 []::VARCHAR[] AS cnae_secundario_descricoes,
@@ -411,11 +412,11 @@ def write_cnpjs_parquet(
 
 def write_raizes_parquet(
     con: duckdb.DuckDBPyConnection,
-    extracted: Iterable[ExtractedFile],
     output_path: Path,
 ) -> None:
     """Produz `raizes.parquet`: uma linha por cnpj_base com agregados.
 
+    Requer que `load_main_tables_into_duckdb` e os lookups já estejam carregados em `con`.
     Ver ADR 0008 e schema `web/src/schemas/v1/raiz.ts`.
     """
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -434,6 +435,8 @@ def write_raizes_parquet(
                 GROUP BY est.cnpj_basico
             ),
             matriz AS (
+                -- QUALIFY garante 1 linha por cnpj_basico mesmo se dados da RFB
+                -- tiverem mais de uma entrada com identificador_matriz_filial = '1'.
                 SELECT
                     est.cnpj_basico,
                     {_date_expr('est.data_inicio_atividade')} AS data_inicio_atividade_matriz,
@@ -442,6 +445,9 @@ def write_raizes_parquet(
                     est.cnae_fiscal_principal AS cnae_principal_matriz_codigo
                 FROM estabelecimento est
                 WHERE est.identificador_matriz_filial = '1'
+                QUALIFY ROW_NUMBER() OVER (
+                    PARTITION BY est.cnpj_basico ORDER BY est.cnpj_ordem
+                ) = 1
             )
             SELECT
                 emp.cnpj_basico AS cnpj_base,
@@ -477,11 +483,11 @@ def write_raizes_parquet(
 
 def write_socios_parquet(
     con: duckdb.DuckDBPyConnection,
-    extracted: Iterable[ExtractedFile],
     output_path: Path,
 ) -> None:
     """Produz `socios.parquet`: PF + PJ + estrangeiro com flag tipo.
 
+    Requer que `load_main_tables_into_duckdb` e os lookups já estejam carregados em `con`.
     Ver ADR 0008 e schema `web/src/schemas/v1/socio.ts`.
     """
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -543,8 +549,12 @@ def transform_snapshot(
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    log.info("loading data into DuckDB")
-    con = duckdb.connect()
+    # Usa arquivo temporário em vez de in-memory para suportar o dataset real
+    # da RFB (~60 M linhas) sem estourar RAM.
+    db_path = cache_dir / month / "transform.duckdb"
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    log.info("loading data into DuckDB (%s)", db_path)
+    con = duckdb.connect(str(db_path))
     try:
         # Lookups primeiro (necessárias pros JOINs dos parquets)
         for ef in extracted:
@@ -568,7 +578,7 @@ def transform_snapshot(
             ("socios", write_socios_parquet),
         ):
             try:
-                fn(con, extracted, output_dir / f"{name}.parquet")
+                fn(con, output_dir / f"{name}.parquet")
                 log.info("wrote %s", output_dir / f"{name}.parquet")
             except NotImplementedError as exc:
                 if skip_unimplemented:
@@ -577,3 +587,4 @@ def transform_snapshot(
                     raise
     finally:
         con.close()
+        db_path.unlink(missing_ok=True)
