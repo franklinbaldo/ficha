@@ -119,9 +119,7 @@ def test_size_mismatch_is_an_error(tmp_path):
 
 
 def test_download_all_runs_sequentially(tmp_path):
-    files = [
-        RemoteFile(name=f"f{i}.zip", url=f"https://x/{i}", kind="cnaes") for i in range(3)
-    ]
+    files = [RemoteFile(name=f"f{i}.zip", url=f"https://x/{i}", kind="cnaes") for i in range(3)]
     seen: list[str] = []
 
     def handler(request: httpx.Request) -> httpx.Response:

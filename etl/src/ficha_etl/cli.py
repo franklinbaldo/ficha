@@ -8,7 +8,18 @@ import sys
 from pathlib import Path
 
 from . import download as download_mod
-from . import fetcher, mirror, smoke, sources, transform, upstream
+from . import (
+    fetcher,
+    manifest as manifest_mod,
+    mirror,
+    smoke,
+    sources,
+    transform,
+    upload as upload_mod,
+    upstream,
+)
+
+log = logging.getLogger(__name__)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -19,6 +30,47 @@ def main(argv: list[str] | None = None) -> int:
 
     run = sub.add_parser("run", help="Executa o pipeline completo para um mês")
     run.add_argument("--month", required=True, help="Snapshot alvo no formato YYYY-MM")
+    run.add_argument(
+        "--cache-dir",
+        type=Path,
+        default=fetcher.DEFAULT_CACHE_DIR,
+        help=f"Cache de ZIPs (default: {fetcher.DEFAULT_CACHE_DIR})",
+    )
+    run.add_argument(
+        "--output",
+        type=Path,
+        default=None,
+        help="Diretório de saída dos parquets (default: <cache-dir>/<month>/output)",
+    )
+    run.add_argument(
+        "--manifest",
+        type=Path,
+        default=Path("../web/public/manifest.json"),
+        help="Caminho do manifest.json a atualizar (default: ../web/public/manifest.json)",
+    )
+    run.add_argument(
+        "--skip-upload",
+        action="store_true",
+        help="Pula o upload para o IA — útil para smoke/testes locais",
+    )
+    run.add_argument(
+        "--verify",
+        action="store_true",
+        default=True,
+        help="Roda roundtrip-equivalence test após transform (default: ativado)",
+    )
+    run.add_argument(
+        "--no-verify",
+        dest="verify",
+        action="store_false",
+        help="Desativa o roundtrip-equivalence test",
+    )
+    run.add_argument(
+        "--verify-sample-size",
+        type=int,
+        default=1000,
+        help="Quantos CNPJs amostrar no roundtrip (default: 1000)",
+    )
 
     dl = sub.add_parser(
         "download",
@@ -121,11 +173,23 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_fetch(args.month, args.file, args.cache_dir, args.no_upstream)
     if args.command == "transform":
         return _cmd_transform(
-            args.month, args.output, args.cache_dir, args.strict,
-            args.verify, args.verify_sample_size,
+            args.month,
+            args.output,
+            args.cache_dir,
+            args.strict,
+            args.verify,
+            args.verify_sample_size,
         )
     if args.command == "run":
-        raise NotImplementedError(f"Pipeline ainda não implementado (alvo: {args.month})")
+        return _cmd_run(
+            args.month,
+            cache_dir=args.cache_dir,
+            output_dir=args.output,
+            manifest_path=args.manifest,
+            skip_upload=args.skip_upload,
+            verify=args.verify,
+            verify_sample_size=args.verify_sample_size,
+        )
 
     return 0
 
@@ -207,8 +271,12 @@ def _cmd_list_files(month: str) -> int:
 
 
 def _cmd_transform(
-    month: str, output: Path, cache_dir: Path, strict: bool,
-    verify: bool, verify_sample_size: int,
+    month: str,
+    output: Path,
+    cache_dir: Path,
+    strict: bool,
+    verify: bool,
+    verify_sample_size: int,
 ) -> int:
     if not sources.is_valid_month(month):
         print(f"error: month must be YYYY-MM, got {month!r}", file=sys.stderr)
@@ -233,9 +301,7 @@ def _cmd_fetch(month: str, filename: str, cache_dir: Path, no_upstream: bool) ->
     if not sources.is_valid_month(month):
         print(f"error: month must be YYYY-MM, got {month!r}", file=sys.stderr)
         return 2
-    chain = fetcher.default_chain(
-        month, cache_dir=cache_dir, include_upstream=not no_upstream
-    )
+    chain = fetcher.default_chain(month, cache_dir=cache_dir, include_upstream=not no_upstream)
     print(f"Chain: {' → '.join(f.name for f in chain.fetchers)}", file=sys.stderr)
     try:
         path = chain.get(filename)
@@ -246,9 +312,90 @@ def _cmd_fetch(month: str, filename: str, cache_dir: Path, no_upstream: bool) ->
     return 0
 
 
+def _cmd_run(
+    month: str,
+    *,
+    cache_dir: Path,
+    output_dir: Path | None,
+    manifest_path: Path,
+    skip_upload: bool,
+    verify: bool,
+    verify_sample_size: int,
+) -> int:
+    """Orquestra: transform → upload outputs → upload raw ZIPs → manifest."""
+    import os
+
+    if not sources.is_valid_month(month):
+        print(f"error: month must be YYYY-MM, got {month!r}", file=sys.stderr)
+        return 2
+
+    if output_dir is None:
+        output_dir = cache_dir / month / "output"
+
+    # ── 1. Transform ────────────────────────────────────────────────────────
+    log.info("[run 1/4] transform %s → %s", month, output_dir)
+    try:
+        transform.transform_snapshot(
+            month,
+            cache_dir=cache_dir,
+            output_dir=output_dir,
+            skip_unimplemented=False,
+            verify=verify,
+            verify_sample_size=verify_sample_size,
+        )
+    except Exception as exc:
+        print(f"error: transform failed: {exc}", file=sys.stderr)
+        return 1
+
+    # ── 2 & 3. Upload ────────────────────────────────────────────────────────
+    if not skip_upload:
+        access_key = os.environ.get("IA_ACCESS_KEY", "")
+        secret_key = os.environ.get("IA_SECRET_KEY", "")
+        if not access_key or not secret_key:
+            print(
+                "error: IA_ACCESS_KEY e IA_SECRET_KEY devem estar definidos para upload\n"
+                "       use --skip-upload para rodar sem credenciais",
+                file=sys.stderr,
+            )
+            return 1
+
+        log.info("[run 2/4] upload outputs (parquets + lookups.json) → IA")
+        try:
+            upload_mod.upload_outputs(
+                month, output_dir, access_key=access_key, secret_key=secret_key
+            )
+        except Exception as exc:
+            print(f"error: upload outputs falhou: {exc}", file=sys.stderr)
+            return 1
+
+        log.info("[run 3/4] upload raw ZIPs → IA")
+        try:
+            upload_mod.upload_raw_zips(
+                month, cache_dir, access_key=access_key, secret_key=secret_key
+            )
+        except Exception as exc:
+            print(f"error: upload raw ZIPs falhou: {exc}", file=sys.stderr)
+            return 1
+    else:
+        log.info("[run 2-3/4] upload ignorado (--skip-upload)")
+
+    # ── 4. Manifest ──────────────────────────────────────────────────────────
+    log.info("[run 4/4] atualizar manifest → %s", manifest_path)
+    try:
+        entry = manifest_mod.build_snapshot_entry(month, output_dir)
+        manifest_mod.update_manifest(manifest_path, entry)
+    except Exception as exc:
+        print(f"error: manifest update falhou: {exc}", file=sys.stderr)
+        return 1
+
+    print(f"run OK — pipeline {month} concluído. Manifest: {manifest_path}")
+    return 0
+
+
 def _basic_auth_headers(token: str) -> dict[str, str]:
     """Headers Basic auth manuais — usados pra passar pro download.py via httpx."""
     import base64
+
     raw = base64.b64encode(f"{token}:".encode()).decode()
     return {"Authorization": f"Basic {raw}"}
 

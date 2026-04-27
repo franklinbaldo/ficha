@@ -67,8 +67,7 @@ def _check_upstream(client: httpx.Client) -> tuple[bool, str]:
     if not snapshots:
         return False, f"token={token} responded but listed 0 snapshots"
     return True, (
-        f"token={token}  snapshots={len(snapshots)}  "
-        f"oldest={snapshots[0]}  newest={snapshots[-1]}"
+        f"token={token}  snapshots={len(snapshots)}  oldest={snapshots[0]}  newest={snapshots[-1]}"
     )
 
 

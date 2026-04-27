@@ -164,7 +164,10 @@ def test_default_chain_with_upstream(tmp_path, monkeypatch):
     monkeypatch.setenv(upstream.ENV_VAR, "FROM_ENV_TOKEN")
 
     def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(207, content=b'<?xml version="1.0"?><d:multistatus xmlns:d="DAV:"><d:response><d:href>/public.php/webdav/</d:href><d:propstat><d:prop><d:resourcetype><d:collection/></d:resourcetype></d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response></d:multistatus>')
+        return httpx.Response(
+            207,
+            content=b'<?xml version="1.0"?><d:multistatus xmlns:d="DAV:"><d:response><d:href>/public.php/webdav/</d:href><d:propstat><d:prop><d:resourcetype><d:collection/></d:resourcetype></d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response></d:multistatus>',
+        )
 
     _patch_client(monkeypatch, handler)
     chain = fetcher.default_chain("2026-04", cache_dir=tmp_path)
