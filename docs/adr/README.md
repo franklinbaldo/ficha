@@ -1,0 +1,17 @@
+# Architecture Decision Records
+
+Decisões arquiteturais do FICHA, registradas no momento em que são tomadas.
+
+Formato: cada ADR é um markdown curto (ideal: 1 página) com **contexto**, **decisão**, **consequências**. Numerados sequencialmente. Nunca editar um ADR após "Accepted" — se mudar de ideia, escrever novo ADR que **supersedes** o antigo.
+
+## Status
+
+| # | Título | Status |
+|---|---|---|
+| [0001](0001-astro-svelte-stack.md) | Stack frontend: Astro + Svelte 5 + TS + Zod | Accepted |
+| [0002](0002-no-tanstack-db.md) | Não adotar TanStack DB | Accepted |
+| [0003](0003-schema-versioning.md) | Versionamento de schema em três camadas | Accepted |
+| [0004](0004-internet-archive-as-storage.md) | Internet Archive como storage primário | Accepted |
+| [0005](0005-monorepo-web-etl.md) | Monorepo `web/` + `etl/` simétrico | Accepted |
+| [0006](0006-data-quality-pragmatic.md) | Validação pragmática (não Great Expectations) | Accepted |
+| [0007](0007-tanstack-query-atomic-only.md) | TanStack Query só para camada atômica | Accepted |
