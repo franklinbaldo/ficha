@@ -1,0 +1,89 @@
+name: ETL — monthly snapshot
+
+on:
+  schedule:
+    # 03:00 UTC no dia 5 de cada mês — RFB normalmente publica antes disso.
+    - cron: '0 3 5 * *'
+  workflow_dispatch:
+    inputs:
+      month:
+        description: 'Snapshot alvo (YYYY-MM). Vazio = mês corrente.'
+        required: false
+        type: string
+
+permissions:
+  contents: write  # precisa pra commitar manifest.json atualizado
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350  # margem dentro do limite de 6h
+    defaults:
+      run:
+        working-directory: etl
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+
+      - run: uv python install 3.11
+
+      - run: uv sync
+
+      - name: Resolve target month
+        id: month
+        # Pass user input via env (not direct shell interpolation) and validate
+        # against YYYY-MM before letting it reach any command.
+        env:
+          INPUT_MONTH: ${{ inputs.month }}
+        run: |
+          MONTH="${INPUT_MONTH:-$(date -u +%Y-%m)}"
+          if ! [[ "$MONTH" =~ ^[0-9]{4}-(0[1-9]|1[0-2])$ ]]; then
+            echo "::error::Invalid month '$MONTH' — expected YYYY-MM"
+            exit 1
+          fi
+          echo "value=$MONTH" >> "$GITHUB_OUTPUT"
+
+      - name: Run pipeline
+        env:
+          IA_ACCESS_KEY: ${{ secrets.IA_ACCESS_KEY }}
+          IA_SECRET_KEY: ${{ secrets.IA_SECRET_KEY }}
+          MONTH: ${{ steps.month.outputs.value }}
+        run: uv run ficha-etl run --month "$MONTH"
+
+      - name: Commit updated manifest
+        env:
+          MONTH: ${{ steps.month.outputs.value }}
+        run: |
+          cd ..
+          # Stage first so we detect both modifications and new files (bootstrap case).
+          git add web/public/manifest.json
+          if git diff --cached --quiet -- web/public/manifest.json; then
+            echo "Manifest unchanged — nothing to commit"
+            exit 0
+          fi
+          git config user.name "ficha-etl-bot"
+          git config user.email "ficha-etl-bot@users.noreply.github.com"
+          git commit -m "chore(etl): update manifest for $MONTH"
+
+          # ETL can run for hours — concurrent commits to main during that window
+          # would make a plain push non-fast-forward. Rebase + retry.
+          for attempt in 1 2 3; do
+            git fetch origin main
+            git rebase origin/main || {
+              echo "::error::rebase conflict on attempt $attempt — aborting"
+              git rebase --abort || true
+              exit 1
+            }
+            if git push origin HEAD:main; then
+              echo "Pushed manifest update on attempt $attempt"
+              exit 0
+            fi
+            echo "Push rejected on attempt $attempt; retrying in $((attempt * 5))s"
+            sleep $((attempt * 5))
+          done
+          echo "::error::failed to push manifest after 3 attempts"
+          exit 1
