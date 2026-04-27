@@ -26,6 +26,7 @@ log = logging.getLogger(__name__)
 # Conservador pra não estressar o RFB. Eles podem rate-limitar.
 _HTTP_TIMEOUT = httpx.Timeout(connect=30.0, read=300.0, write=60.0, pool=30.0)
 _CHUNK_BYTES = 1024 * 1024  # 1 MiB
+_PROGRESS_EVERY_BYTES = 100 * 1024 * 1024  # loga progresso a cada 100 MB
 
 
 @dataclass
@@ -67,14 +68,27 @@ def download_all(
 
     `extra_headers` é aplicado a todas as requests do cliente (ex.: Basic auth).
     """
+    file_list = list(files)
+    total = len(file_list)
     results: list[DownloadResult] = []
     with httpx.Client(
         timeout=_HTTP_TIMEOUT,
         follow_redirects=True,
         headers=extra_headers or {},
     ) as client:
-        for f in files:
-            results.append(download_one(f, target_dir, client=client, max_attempts=max_attempts))
+        for i, f in enumerate(file_list, 1):
+            log.info("[%d/%d] downloading %s", i, total, f.name)
+            result = download_one(f, target_dir, client=client, max_attempts=max_attempts)
+            results.append(result)
+            total_mb = sum(r.size_bytes for r in results) / 1024 / 1024
+            log.info(
+                "[%d/%d] done — %s (%.1f MB). Accumulated: %.0f MB",
+                i,
+                total,
+                f.name,
+                result.size_bytes / 1024 / 1024,
+                total_mb,
+            )
     return results
 
 
@@ -134,15 +148,37 @@ def _download_streaming(
             response.raise_for_status()
 
         with target.open(mode) as fh:
+            downloaded = existing
+            last_report = downloaded
+            t0 = time.monotonic()
             for chunk in response.iter_bytes(_CHUNK_BYTES):
                 fh.write(chunk)
+                downloaded += len(chunk)
+                if downloaded - last_report >= _PROGRESS_EVERY_BYTES:
+                    elapsed = time.monotonic() - t0 or 0.001
+                    speed = (downloaded - existing) / elapsed / 1024 / 1024
+                    log.info(
+                        "  %s — %.0f MB downloaded (%.1f MB/s)",
+                        file.name,
+                        downloaded / 1024 / 1024,
+                        speed,
+                    )
+                    last_report = downloaded
 
     size = target.stat().st_size
     expected = _expected_size(response, existing)
     if expected is not None and size != expected:
         raise RuntimeError(f"{file.name}: downloaded {size} bytes, expected {expected}")
 
-    log.info("downloaded %s (%s bytes)", file.name, f"{size:,}")
+    elapsed = time.monotonic() - t0 or 0.001
+    speed = (size - existing) / elapsed / 1024 / 1024
+    log.info(
+        "downloaded %s — %.1f MB in %.0fs (%.1f MB/s)",
+        file.name,
+        size / 1024 / 1024,
+        elapsed,
+        speed,
+    )
     return DownloadResult(file=file, path=target, size_bytes=size, resumed=resumed)
 
 

@@ -11,6 +11,7 @@ from __future__ import annotations
 import collections
 import json
 import logging
+import time
 import zipfile
 from collections.abc import Iterable
 from dataclasses import dataclass
@@ -136,8 +137,12 @@ def extract_all(
     """
     if not is_valid_month(month):
         raise ValueError(f"month must be YYYY-MM, got {month!r}")
+    inventory = list(canonical_inventory())
+    total = len(inventory)
     out: list[ExtractedFile] = []
-    for spec in canonical_inventory():
+    for i, spec in enumerate(inventory, 1):
+        log.info("[%d/%d] resolving+extracting %s", i, total, spec.name)
+        t0 = time.monotonic()
         zip_path = chain.get(spec.name)
         kind_dir = extract_dir / spec.kind
         extracted = extract_zip(zip_path, kind_dir)
@@ -149,7 +154,17 @@ def extract_all(
                 f"zip {spec.name!r} expected exactly 1 CSV, got {len(files)}: "
                 f"{[p.name for p in files]}"
             )
-        out.append(ExtractedFile(kind=spec.kind, zip_name=spec.name, csv_path=files[0]))
+        csv_path = files[0]
+        size_mb = csv_path.stat().st_size / 1024 / 1024
+        log.info(
+            "[%d/%d] extracted %s → %.1f MB CSV (%.1fs)",
+            i,
+            total,
+            spec.name,
+            size_mb,
+            time.monotonic() - t0,
+        )
+        out.append(ExtractedFile(kind=spec.kind, zip_name=spec.name, csv_path=csv_path))
     return out
 
 
@@ -211,12 +226,22 @@ def load_main_tables_into_duckdb(
     for ef in extracted:
         by_kind[ef.kind].append(ef.csv_path)
 
-    _create_table_from_csvs(con, "empresa", by_kind.get("empresas", []), _EMPRESA_COLUMNS)
-    _create_table_from_csvs(
-        con, "estabelecimento", by_kind.get("estabelecimentos", []), _ESTABELECIMENTO_COLUMNS
-    )
-    _create_table_from_csvs(con, "socio", by_kind.get("socios", []), _SOCIO_COLUMNS)
-    _create_table_from_csvs(con, "simples", by_kind.get("simples", []), _SIMPLES_COLUMNS)
+    for table, kind, cols in (
+        ("empresa", "empresas", _EMPRESA_COLUMNS),
+        ("estabelecimento", "estabelecimentos", _ESTABELECIMENTO_COLUMNS),
+        ("socio", "socios", _SOCIO_COLUMNS),
+        ("simples", "simples", _SIMPLES_COLUMNS),
+    ):
+        t0 = time.monotonic()
+        log.info("loading table '%s' from %d CSV(s)...", table, len(by_kind.get(kind, [])))
+        _create_table_from_csvs(con, table, by_kind.get(kind, []), cols)
+        n = con.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+        log.info(
+            "loaded '%s' — %s rows in %.1fs",
+            table,
+            f"{n:,}",
+            time.monotonic() - t0,
+        )
 
 
 def load_lookup_into_duckdb(
@@ -552,8 +577,11 @@ def transform_snapshot(
     chain = chain or fetcher_mod.default_chain(month, cache_dir=cache_dir)
     extract_dir = cache_dir / month / "extracted"
 
-    log.info("extracting 37 ZIPs for %s into %s", month, extract_dir)
+    t_total = time.monotonic()
+    log.info("=== PHASE 1/4: extract 37 ZIPs for %s ===", month)
+    t0 = time.monotonic()
     extracted = extract_all(month, chain, extract_dir)
+    log.info("=== PHASE 1/4 done in %.0fs ===", time.monotonic() - t0)
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -561,16 +589,19 @@ def transform_snapshot(
     # da RFB (~60 M linhas) sem estourar RAM.
     db_path = cache_dir / month / "transform.duckdb"
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    log.info("loading data into DuckDB (%s)", db_path)
+    log.info("=== PHASE 2/4: load into DuckDB (%s) ===", db_path)
+    t0 = time.monotonic()
     con = duckdb.connect(str(db_path))
     try:
         # Lookups primeiro (necessárias pros JOINs dos parquets)
         for ef in extracted:
             if ef.kind in _LOOKUP_KINDS:
                 load_lookup_into_duckdb(con, ef.kind, ef.csv_path)
+                log.info("  lookup '%s' loaded", ef.kind)
 
         # Tabelas grandes
         load_main_tables_into_duckdb(con, extracted)
+        log.info("=== PHASE 2/4 done in %.0fs ===", time.monotonic() - t0)
 
         write_lookups_json(
             con,
@@ -578,28 +609,44 @@ def transform_snapshot(
             schema_version=schema_version,
             snapshot_date=month,
         )
-        log.info("wrote %s", output_dir / "lookups.json")
+        log.info("wrote lookups.json")
 
+        log.info("=== PHASE 3/4: write parquets ===")
+        t0 = time.monotonic()
         for name, fn in (
             ("cnpjs", write_cnpjs_parquet),
             ("raizes", write_raizes_parquet),
             ("socios", write_socios_parquet),
         ):
             try:
+                log.info("  writing %s.parquet...", name)
+                tp = time.monotonic()
                 fn(con, output_dir / f"{name}.parquet")
-                log.info("wrote %s", output_dir / f"{name}.parquet")
+                size_mb = (output_dir / f"{name}.parquet").stat().st_size / 1024 / 1024
+                log.info(
+                    "  wrote %s.parquet — %.1f MB in %.0fs",
+                    name,
+                    size_mb,
+                    time.monotonic() - tp,
+                )
             except NotImplementedError as exc:
                 if skip_unimplemented:
                     log.warning("skipping %s.parquet: %s", name, exc)
                 else:
                     raise
+        log.info("=== PHASE 3/4 done in %.0fs ===", time.monotonic() - t0)
 
         if verify:
             cnpjs_parquet = output_dir / "cnpjs.parquet"
             if cnpjs_parquet.exists():
-                log.info("running roundtrip-equivalence check on cnpjs.parquet")
+                log.info(
+                    "=== PHASE 4/4: roundtrip-equivalence check (sample=%d) ===", verify_sample_size
+                )
+                t0 = time.monotonic()
                 assert_roundtrip(con, cnpjs_parquet, sample_size=verify_sample_size)
-                log.info("roundtrip OK")
+                log.info("=== PHASE 4/4 roundtrip OK in %.0fs ===", time.monotonic() - t0)
+
+        log.info("transform_snapshot total: %.0fs", time.monotonic() - t_total)
     finally:
         con.close()
         db_path.unlink(missing_ok=True)
