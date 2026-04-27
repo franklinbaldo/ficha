@@ -1,6 +1,6 @@
 import httpx
 
-from ficha_etl import smoke, upstream
+from ficha_etl import smoke
 
 
 def _patch_client(monkeypatch, handler):
@@ -15,8 +15,6 @@ def _patch_client(monkeypatch, handler):
 
 
 def test_smoke_all_ok(monkeypatch):
-    monkeypatch.setenv(upstream.ENV_VAR, "FROM_ENV")
-
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200)
 
@@ -29,12 +27,10 @@ def test_smoke_all_ok(monkeypatch):
 
 
 def test_smoke_upstream_failure_is_warning_not_blocking(monkeypatch):
-    monkeypatch.delenv(upstream.ENV_VAR, raising=False)
-
     def handler(request: httpx.Request) -> httpx.Response:
         if "archive.org" in str(request.url):
             return httpx.Response(200)
-        return httpx.Response(404)  # all token strategies fail
+        return httpx.Response(503)  # upstream down
 
     _patch_client(monkeypatch, handler)
     report = smoke.run_smoke()
@@ -45,8 +41,6 @@ def test_smoke_upstream_failure_is_warning_not_blocking(monkeypatch):
 
 
 def test_smoke_mirror_failure_is_blocking(monkeypatch):
-    monkeypatch.setenv(upstream.ENV_VAR, "FROM_ENV")
-
     def handler(request: httpx.Request) -> httpx.Response:
         if "archive.org" in str(request.url):
             raise httpx.ConnectError("simulated outage")
@@ -59,3 +53,17 @@ def test_smoke_mirror_failure_is_blocking(monkeypatch):
     assert report.all_ok is False
     assert report.blocking_failure is True
     assert "simulated outage" in report.mirror_detail
+
+
+def test_smoke_upstream_network_error_reported(monkeypatch):
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "archive.org" in str(request.url):
+            return httpx.Response(200)
+        raise httpx.ConnectError("rfb dns fail")
+
+    _patch_client(monkeypatch, handler)
+    report = smoke.run_smoke()
+    assert report.upstream_ok is False
+    assert "rfb dns fail" in report.upstream_detail
+    assert report.mirror_ok is True
+    assert report.blocking_failure is False

@@ -1,14 +1,16 @@
-"""Smoke check do ETL: valida que upstream + mirror estão acessíveis.
+"""Smoke check do ETL: valida que upstream RFB + mirror IA estão acessíveis.
 
-Modelo (ADR 0012):
-    RFB Nextcloud  →  ficha-YYYY-MM @ Internet Archive  →  frontend
+Modelo (ADR 0012 + ADR 0014):
+
+    RFB Nextcloud-flat  →  ficha-YYYY-MM @ Internet Archive  →  frontend
 
 Smoke verifica os dois alvos em separado:
 
-1. **Upstream RFB**: consigo descobrir um token Nextcloud válido? (ADR 0013)
-2. **Mirror IA**: consigo alcançar archive.org?
+1. **Upstream RFB**: HEAD em `dadosabertos.rfb.gov.br/CNPJ/`
+2. **Mirror IA**: HEAD em `archive.org/`
 
-Cada lado é reportado independentemente. Falha total = ambos quebrados.
+Mirror caído = bloqueante (RFB sem mirror = sem produto). Upstream caído
+= warning (operador investiga; histórico já mirror'd no IA continua servindo).
 """
 
 from __future__ import annotations
@@ -38,9 +40,7 @@ class SmokeReport:
 
     @property
     def blocking_failure(self) -> bool:
-        """Apenas mirror caído é bloqueante. Upstream sem token é warning
-        — significa que operador precisa atualizar KNOWN_TOKENS manualmente,
-        mas não bloqueia PRs do código."""
+        """Apenas mirror caído é bloqueante. Upstream caído = warning."""
         return not self.mirror_ok
 
 
@@ -57,15 +57,17 @@ def run_smoke() -> SmokeReport:
 
 
 def _check_upstream(client: httpx.Client) -> tuple[bool, str]:
+    url = upstream.base_url() + "/"
     try:
-        result = upstream.discover_token(client=client)
-    except upstream.NoTokenFoundError as exc:
-        return False, str(exc)
-    return True, f"token={result.token} source={result.source}"
+        r = client.head(url)
+    except httpx.HTTPError as exc:
+        return False, f"{url} → {exc}"
+    if 200 <= r.status_code < 400:
+        return True, f"{url} → HTTP {r.status_code}"
+    return False, f"{url} → HTTP {r.status_code}"
 
 
 def _check_mirror(client: httpx.Client) -> tuple[bool, str]:
-    """HEAD na front page do IA — endpoint mais estável que `/download`."""
     url = mirror.health_url()
     try:
         r = client.head(url)

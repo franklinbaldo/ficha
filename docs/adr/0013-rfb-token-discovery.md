@@ -1,8 +1,17 @@
 # ADR 0013 — Estratégia de discovery do token Nextcloud da RFB
 
-**Status:** Accepted
+**Status:** Superseded by [ADR 0014](0014-rfb-flat-url-no-token.md)
 **Data:** 2026-04-27
 **Complementa:** [ADR 0012](0012-ia-mirror-as-source-of-truth.md)
+
+> **⚠️ SUPERSEDED.** Esta ADR foi escrita assumindo que a RFB usava
+> Nextcloud com tokens rotativos como fonte canônica. Investigação via
+> Playwright contra o portal oficial `dados.gov.br` provou que a URL
+> canônica é flat (`dadosabertos.rfb.gov.br/CNPJ/{filename}`) e não usa
+> tokens. Veja [ADR 0014](0014-rfb-flat-url-no-token.md) para a decisão
+> em vigor. O conteúdo abaixo fica como histórico do raciocínio.
+
+---
 
 ## Contexto
 
