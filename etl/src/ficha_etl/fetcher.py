@@ -17,6 +17,8 @@ Ver ADR 0012 (IA como source-of-truth) e ADR 0015 (RFB Nextcloud).
 from __future__ import annotations
 
 import logging
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
@@ -80,16 +82,42 @@ class LocalCacheFetcher:
 class IAMirrorFetcher:
     """Tenta baixar de `archive.org/download/ficha-{month}/raw/{file}`.
 
-    HEAD primeiro pra checar existência (item pode não ter sido mirror'd ainda).
+    Checa existência do item IA uma única vez (HEAD no item root) e cacheia
+    o resultado — evita 37 HEADs individuais quando o item ainda não existe.
     """
 
     month: str
     cache_dir: Path
     name: str = "ia"
+    _item_exists: bool | None = field(default=None, init=False, repr=False)
+    _lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
+
+    def _check_item(self, client: httpx.Client) -> bool:
+        with self._lock:
+            if self._item_exists is not None:
+                return self._item_exists
+            item_url = mirror.item_root(self.month)
+            status_label = "error"
+            try:
+                resp = client.head(item_url)
+                status_label = str(resp.status_code)
+                self._item_exists = resp.status_code == 200
+            except httpx.HTTPError:
+                self._item_exists = False
+            if not self._item_exists:
+                log.info(
+                    "[%s] item %s not found (HTTP %s) — skipping mirror for all files",
+                    self.name,
+                    mirror.item_id(self.month),
+                    status_label,
+                )
+            return self._item_exists
 
     def get(self, filename: str) -> Path | None:
         url = mirror.raw_file_url(self.month, filename)
         with httpx.Client(timeout=_HTTP_TIMEOUT, follow_redirects=True) as client:
+            if not self._check_item(client):
+                return None
             try:
                 head = client.head(url)
             except httpx.HTTPError as exc:
@@ -152,6 +180,47 @@ class ChainedFetcher:
                 return path
         sources = ", ".join(f.name for f in self.fetchers)
         raise FileNotFoundError(f"{filename!r} not found in any source ({sources})")
+
+    def get_all_parallel(
+        self,
+        filenames: list[str],
+        *,
+        workers: int = 4,
+    ) -> dict[str, Path]:
+        """Baixa todos os arquivos em paralelo com ThreadPoolExecutor.
+
+        Args:
+            filenames: lista de nomes de arquivo a baixar.
+            workers: número de downloads simultâneos (default: 4).
+
+        Returns:
+            dict {filename: local_path} na ordem original.
+
+        Raises:
+            FileNotFoundError: se qualquer arquivo não for encontrado.
+        """
+        total = len(filenames)
+        completed = 0
+        lock = threading.Lock()
+        results: dict[str, Path] = {}
+
+        log.info("parallel download: %d files, %d workers", total, workers)
+
+        def _fetch(name: str) -> tuple[str, Path]:
+            path = self.get(name)
+            nonlocal completed
+            with lock:
+                completed += 1
+                log.info("[%d/%d] fetched %s", completed, total, name)
+            return name, path
+
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            futures = {executor.submit(_fetch, name): name for name in filenames}
+            for future in as_completed(futures):
+                name, path = future.result()  # propaga exceção se houver
+                results[name] = path
+
+        return results
 
 
 def default_chain(
