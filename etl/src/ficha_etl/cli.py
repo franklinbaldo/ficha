@@ -71,6 +71,20 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Falha se algum parquet stub não estiver implementado",
     )
+    tr.add_argument(
+        "--verify",
+        action="store_true",
+        help=(
+            "Roda roundtrip-equivalence test (ADR 0009) após escrever os "
+            "parquets — falha se sample de CNPJs divergir do source."
+        ),
+    )
+    tr.add_argument(
+        "--verify-sample-size",
+        type=int,
+        default=100,
+        help="Quantos CNPJs amostrar no roundtrip (default: 100)",
+    )
 
     ft = sub.add_parser(
         "fetch",
@@ -106,7 +120,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "fetch":
         return _cmd_fetch(args.month, args.file, args.cache_dir, args.no_upstream)
     if args.command == "transform":
-        return _cmd_transform(args.month, args.output, args.cache_dir, args.strict)
+        return _cmd_transform(
+            args.month, args.output, args.cache_dir, args.strict,
+            args.verify, args.verify_sample_size,
+        )
     if args.command == "run":
         raise NotImplementedError(f"Pipeline ainda não implementado (alvo: {args.month})")
 
@@ -189,7 +206,10 @@ def _cmd_list_files(month: str) -> int:
     return 0
 
 
-def _cmd_transform(month: str, output: Path, cache_dir: Path, strict: bool) -> int:
+def _cmd_transform(
+    month: str, output: Path, cache_dir: Path, strict: bool,
+    verify: bool, verify_sample_size: int,
+) -> int:
     if not sources.is_valid_month(month):
         print(f"error: month must be YYYY-MM, got {month!r}", file=sys.stderr)
         return 2
@@ -199,6 +219,8 @@ def _cmd_transform(month: str, output: Path, cache_dir: Path, strict: bool) -> i
             cache_dir=cache_dir,
             output_dir=output,
             skip_unimplemented=not strict,
+            verify=verify,
+            verify_sample_size=verify_sample_size,
         )
     except (FileNotFoundError, NotImplementedError, RuntimeError) as exc:
         print(f"error: {exc}", file=sys.stderr)
