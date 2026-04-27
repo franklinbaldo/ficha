@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 
 from . import download as download_mod
-from . import fetcher, mirror, smoke, sources, upstream
+from . import fetcher, mirror, smoke, sources, transform, upstream
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -45,6 +45,33 @@ def main(argv: list[str] | None = None) -> int:
     ls = sub.add_parser("list-files", help="Lista arquivos de um snapshot mensal")
     ls.add_argument("--month", required=True)
 
+    tr = sub.add_parser(
+        "transform",
+        help=(
+            "Roda o transform completo de um mês: resolve via chain → "
+            "extract → DuckDB → escreve outputs (lookups.json sempre; "
+            "parquets quando implementados)."
+        ),
+    )
+    tr.add_argument("--month", required=True)
+    tr.add_argument(
+        "--output",
+        type=Path,
+        required=True,
+        help="Diretório onde escrever lookups.json + parquets",
+    )
+    tr.add_argument(
+        "--cache-dir",
+        type=Path,
+        default=fetcher.DEFAULT_CACHE_DIR,
+        help=f"Cache de ZIPs (default: {fetcher.DEFAULT_CACHE_DIR})",
+    )
+    tr.add_argument(
+        "--strict",
+        action="store_true",
+        help="Falha se algum parquet stub não estiver implementado",
+    )
+
     ft = sub.add_parser(
         "fetch",
         help=(
@@ -78,6 +105,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_list_files(args.month)
     if args.command == "fetch":
         return _cmd_fetch(args.month, args.file, args.cache_dir, args.no_upstream)
+    if args.command == "transform":
+        return _cmd_transform(args.month, args.output, args.cache_dir, args.strict)
     if args.command == "run":
         raise NotImplementedError(f"Pipeline ainda não implementado (alvo: {args.month})")
 
@@ -157,6 +186,24 @@ def _cmd_list_files(month: str) -> int:
         print(f"{f.size:>14,}  {f.name}")
         total += f.size
     print(f"\n{len(files)} files, {total:,} bytes total", file=sys.stderr)
+    return 0
+
+
+def _cmd_transform(month: str, output: Path, cache_dir: Path, strict: bool) -> int:
+    if not sources.is_valid_month(month):
+        print(f"error: month must be YYYY-MM, got {month!r}", file=sys.stderr)
+        return 2
+    try:
+        transform.transform_snapshot(
+            month,
+            cache_dir=cache_dir,
+            output_dir=output,
+            skip_unimplemented=not strict,
+        )
+    except (FileNotFoundError, NotImplementedError, RuntimeError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    print(f"transform OK — outputs em {output}")
     return 0
 
 
