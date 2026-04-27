@@ -138,12 +138,22 @@ def extract_all(
     if not is_valid_month(month):
         raise ValueError(f"month must be YYYY-MM, got {month!r}")
     inventory = list(canonical_inventory())
+
+    # ── Download em paralelo ────────────────────────────────────────────────
+    log.info("downloading %d ZIPs in parallel (4 workers)...", len(inventory))
+    t_dl = time.monotonic()
+    zip_paths = chain.get_all_parallel(
+        [spec.name for spec in inventory],
+        workers=4,
+    )
+    log.info("all ZIPs downloaded in %.0fs", time.monotonic() - t_dl)
+
+    # ── Extração sequencial (I/O local, rápido) ─────────────────────────────
     total = len(inventory)
     out: list[ExtractedFile] = []
     for i, spec in enumerate(inventory, 1):
-        log.info("[%d/%d] resolving+extracting %s", i, total, spec.name)
         t0 = time.monotonic()
-        zip_path = chain.get(spec.name)
+        zip_path = zip_paths[spec.name]
         kind_dir = extract_dir / spec.kind
         extracted = extract_zip(zip_path, kind_dir)
         files = [p for p in extracted if p.is_file()]
