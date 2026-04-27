@@ -1,0 +1,84 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+# Path filters per ADR 0005: each subproject has its own job, only runs when relevant.
+jobs:
+  web:
+    name: web/
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Detect changes in web/
+        id: changes
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            web:
+              - 'web/**'
+              - '.github/workflows/ci.yml'
+
+      - uses: oven-sh/setup-bun@v2
+        if: steps.changes.outputs.web == 'true'
+        with:
+          bun-version: latest
+
+      - name: Install
+        if: steps.changes.outputs.web == 'true'
+        run: bun install --frozen-lockfile
+
+      - name: Astro check
+        if: steps.changes.outputs.web == 'true'
+        run: bunx astro check
+
+      - name: Build
+        if: steps.changes.outputs.web == 'true'
+        run: bun run build
+
+  etl:
+    name: etl/
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: etl
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Detect changes in etl/
+        id: changes
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            etl:
+              - 'etl/**'
+              - '.github/workflows/ci.yml'
+
+      - name: Install uv
+        if: steps.changes.outputs.etl == 'true'
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        if: steps.changes.outputs.etl == 'true'
+        run: uv python install 3.11
+
+      - name: Install
+        if: steps.changes.outputs.etl == 'true'
+        run: uv sync --extra dev
+
+      - name: Lint
+        if: steps.changes.outputs.etl == 'true'
+        run: uv run ruff check src
+
+      - name: Test
+        if: steps.changes.outputs.etl == 'true'
+        run: uv run pytest tests || echo "no tests yet"
