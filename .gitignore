@@ -62,7 +62,6 @@ htmlcov/
 
 # uv
 .uv/
-uv.lock
 
 # ETL generated artifacts
 etl/output/
