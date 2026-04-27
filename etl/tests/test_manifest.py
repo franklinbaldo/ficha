@@ -20,10 +20,7 @@ def _write_parquet(path: Path, n_rows: int) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     con = duckdb.connect()
     try:
-        con.execute(
-            f"COPY (SELECT range AS id FROM range({n_rows})) "
-            f"TO '{path}' (FORMAT PARQUET)"
-        )
+        con.execute(f"COPY (SELECT range AS id FROM range({n_rows})) TO '{path}' (FORMAT PARQUET)")
     finally:
         con.close()
 
@@ -129,10 +126,10 @@ def test_update_manifest_keeps_older_snapshots(tmp_path: Path, output_dir: Path)
         "generator": "ficha-etl",
         "row_counts": {"cnpjs": 1, "raizes": 1, "socios": 1},
         "files": {
-            "cnpjs":  {"url": "https://example.com/c.parquet", "sha256": "aa", "size": 1},
+            "cnpjs": {"url": "https://example.com/c.parquet", "sha256": "aa", "size": 1},
             "raizes": {"url": "https://example.com/r.parquet", "sha256": "bb", "size": 1},
             "socios": {"url": "https://example.com/s.parquet", "sha256": "cc", "size": 1},
-            "lookups":{"url": "https://example.com/l.json",    "sha256": "dd", "size": 1},
+            "lookups": {"url": "https://example.com/l.json", "sha256": "dd", "size": 1},
         },
     }
     manifest_path.write_text(

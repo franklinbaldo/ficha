@@ -44,9 +44,7 @@ def _row_count(parquet_path: Path) -> int:
     """Conta linhas de um Parquet via DuckDB (leitura local, sem copiar)."""
     con = duckdb.connect()
     try:
-        return con.execute(
-            f"SELECT COUNT(*) FROM read_parquet('{parquet_path}')"
-        ).fetchone()[0]
+        return con.execute(f"SELECT COUNT(*) FROM read_parquet('{parquet_path}')").fetchone()[0]
     finally:
         con.close()
 
@@ -129,9 +127,7 @@ def update_manifest(manifest_path: Path, snapshot_entry: dict) -> None:
         manifest = {"current": month, "snapshots": []}
 
     # Upsert: descarta entrada antiga do mesmo mês
-    manifest["snapshots"] = [
-        s for s in manifest["snapshots"] if s["date"] != month
-    ]
+    manifest["snapshots"] = [s for s in manifest["snapshots"] if s["date"] != month]
     manifest["snapshots"].append(snapshot_entry)
 
     # Mais recente primeiro; current aponta pro topo

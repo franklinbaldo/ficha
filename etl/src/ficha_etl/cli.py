@@ -8,7 +8,18 @@ import sys
 from pathlib import Path
 
 from . import download as download_mod
-from . import fetcher, manifest as manifest_mod, mirror, smoke, sources, transform, upload as upload_mod, upstream
+from . import (
+    fetcher,
+    manifest as manifest_mod,
+    mirror,
+    smoke,
+    sources,
+    transform,
+    upload as upload_mod,
+    upstream,
+)
+
+log = logging.getLogger(__name__)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -240,9 +251,7 @@ def _cmd_fetch(month: str, filename: str, cache_dir: Path, no_upstream: bool) ->
     if not sources.is_valid_month(month):
         print(f"error: month must be YYYY-MM, got {month!r}", file=sys.stderr)
         return 2
-    chain = fetcher.default_chain(
-        month, cache_dir=cache_dir, include_upstream=not no_upstream
-    )
+    chain = fetcher.default_chain(month, cache_dir=cache_dir, include_upstream=not no_upstream)
     print(f"Chain: {' → '.join(f.name for f in chain.fetchers)}", file=sys.stderr)
     try:
         path = chain.get(filename)
@@ -332,6 +341,7 @@ def _cmd_run(
 def _basic_auth_headers(token: str) -> dict[str, str]:
     """Headers Basic auth manuais — usados pra passar pro download.py via httpx."""
     import base64
+
     raw = base64.b64encode(f"{token}:".encode()).decode()
     return {"Authorization": f"Basic {raw}"}
 

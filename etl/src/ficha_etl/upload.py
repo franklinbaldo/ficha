@@ -40,9 +40,7 @@ def _check_responses(responses: list, label: str) -> None:
     """Levanta RuntimeError se algum response indicar falha."""
     for r in responses:
         if r.status_code not in (200, 201):
-            raise RuntimeError(
-                f"IA upload failed [{label}]: HTTP {r.status_code} — {r.url}"
-            )
+            raise RuntimeError(f"IA upload failed [{label}]: HTTP {r.status_code} — {r.url}")
 
 
 def upload_outputs(
@@ -131,9 +129,7 @@ def upload_raw_zips(
             log.warning("raw ZIP not in cache, skipping mirror: %s", local)
 
     if not files:
-        raise FileNotFoundError(
-            f"no raw ZIPs found in {raw_dir} — run download first"
-        )
+        raise FileNotFoundError(f"no raw ZIPs found in {raw_dir} — run download first")
 
     identifier = item_id(month)
     log.info("uploading %d raw ZIPs to ia:%s/raw/", len(files), identifier)
