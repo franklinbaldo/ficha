@@ -1,16 +1,15 @@
-"""Smoke check do ETL: valida que upstream RFB + mirror IA estão acessíveis.
+"""Smoke check do ETL.
 
-Modelo (ADR 0012 + ADR 0014):
+Modelo (ADR 0012 + 0015):
 
-    RFB Nextcloud-flat  →  ficha-YYYY-MM @ Internet Archive  →  frontend
+    RFB Nextcloud (WebDAV)  →  ficha-YYYY-MM @ Internet Archive  →  frontend
 
-Smoke verifica os dois alvos em separado:
+Smoke verifica os dois alvos:
 
-1. **Upstream RFB**: HEAD em `dadosabertos.rfb.gov.br/CNPJ/`
-2. **Mirror IA**: HEAD em `archive.org/`
+1. **Upstream**: PROPFIND root do Nextcloud com token discovered.
+2. **Mirror**: HEAD em archive.org/.
 
-Mirror caído = bloqueante (RFB sem mirror = sem produto). Upstream caído
-= warning (operador investiga; histórico já mirror'd no IA continua servindo).
+Mirror caído = bloqueante. Upstream caído = warning não-bloqueante.
 """
 
 from __future__ import annotations
@@ -57,14 +56,20 @@ def run_smoke() -> SmokeReport:
 
 
 def _check_upstream(client: httpx.Client) -> tuple[bool, str]:
-    url = upstream.base_url() + "/"
     try:
-        r = client.head(url)
+        token = upstream.discover_token(client=client)
+    except upstream.NoTokenError as exc:
+        return False, str(exc)
+    try:
+        snapshots = upstream.list_snapshots(token, client=client)
     except httpx.HTTPError as exc:
-        return False, f"{url} → {exc}"
-    if 200 <= r.status_code < 400:
-        return True, f"{url} → HTTP {r.status_code}"
-    return False, f"{url} → HTTP {r.status_code}"
+        return False, f"PROPFIND failed with token={token}: {exc}"
+    if not snapshots:
+        return False, f"token={token} responded but listed 0 snapshots"
+    return True, (
+        f"token={token}  snapshots={len(snapshots)}  "
+        f"oldest={snapshots[0]}  newest={snapshots[-1]}"
+    )
 
 
 def _check_mirror(client: httpx.Client) -> tuple[bool, str]:

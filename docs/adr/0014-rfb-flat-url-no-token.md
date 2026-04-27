@@ -1,8 +1,18 @@
 # ADR 0014 — RFB usa URL flat sem token; histórico fica no mirror IA
 
-**Status:** Accepted
+**Status:** Superseded by [ADR 0015](0015-nextcloud-webdav-canonical.md)
 **Data:** 2026-04-27
 **Supersedes:** [ADR 0013](0013-rfb-token-discovery.md) — token discovery não é necessário; complementa [ADR 0010](0010-rfb-source-url.md) com URL atual
+
+> **⚠️ SUPERSEDED.** Esta ADR concluiu que a URL flat
+> `dadosabertos.rfb.gov.br/CNPJ/` era a fonte canônica e que a RFB não
+> preservava histórico. Investigação subsequente provou que a RFB tem
+> um Nextcloud público com 35 meses de histórico desde maio/2023 — só
+> estávamos batendo no endpoint errado (`/s/{TOKEN}/...` em vez de
+> `/public.php/webdav/`). Veja [ADR 0015](0015-nextcloud-webdav-canonical.md)
+> para a decisão atual. Conteúdo abaixo fica como histórico do raciocínio.
+
+---
 
 ## Contexto
 

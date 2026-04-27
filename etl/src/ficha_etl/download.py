@@ -61,10 +61,18 @@ def download_all(
     target_dir: Path,
     *,
     max_attempts: int = 4,
+    extra_headers: dict[str, str] | None = None,
 ) -> list[DownloadResult]:
-    """Baixa todos os arquivos sequencialmente, reusando o cliente HTTP."""
+    """Baixa todos os arquivos sequencialmente, reusando o cliente HTTP.
+
+    `extra_headers` é aplicado a todas as requests do cliente (ex.: Basic auth).
+    """
     results: list[DownloadResult] = []
-    with httpx.Client(timeout=_HTTP_TIMEOUT, follow_redirects=True) as client:
+    with httpx.Client(
+        timeout=_HTTP_TIMEOUT,
+        follow_redirects=True,
+        headers=extra_headers or {},
+    ) as client:
         for f in files:
             results.append(download_one(f, target_dir, client=client, max_attempts=max_attempts))
     return results
