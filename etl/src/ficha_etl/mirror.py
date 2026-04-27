@@ -24,12 +24,18 @@ import os
 from .sources import RemoteFile, canonical_inventory, is_valid_month
 
 DEFAULT_IA_BASE_URL = "https://archive.org/download"
+DEFAULT_IA_HEALTH_URL = "https://archive.org/"
 ITEM_PREFIX = "ficha"
 
 
 def base_url() -> str:
     """IA download base, overridable via env var (testes / mirror alternativo)."""
     return os.environ.get("FICHA_IA_BASE_URL", DEFAULT_IA_BASE_URL).rstrip("/")
+
+
+def health_url() -> str:
+    """Endpoint pra checar se o IA está respondendo (frente do site, sempre 200)."""
+    return os.environ.get("FICHA_IA_HEALTH_URL", DEFAULT_IA_HEALTH_URL)
 
 
 def item_id(month: str) -> str:

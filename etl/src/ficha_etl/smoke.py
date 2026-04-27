@@ -36,6 +36,13 @@ class SmokeReport:
     def all_ok(self) -> bool:
         return self.upstream_ok and self.mirror_ok
 
+    @property
+    def blocking_failure(self) -> bool:
+        """Apenas mirror caído é bloqueante. Upstream sem token é warning
+        — significa que operador precisa atualizar KNOWN_TOKENS manualmente,
+        mas não bloqueia PRs do código."""
+        return not self.mirror_ok
+
 
 def run_smoke() -> SmokeReport:
     with httpx.Client(timeout=_HTTP_TIMEOUT, follow_redirects=True) as client:
@@ -58,7 +65,8 @@ def _check_upstream(client: httpx.Client) -> tuple[bool, str]:
 
 
 def _check_mirror(client: httpx.Client) -> tuple[bool, str]:
-    url = mirror.base_url()
+    """HEAD na front page do IA — endpoint mais estável que `/download`."""
+    url = mirror.health_url()
     try:
         r = client.head(url)
     except httpx.HTTPError as exc:

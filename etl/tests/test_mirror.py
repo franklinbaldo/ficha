@@ -39,3 +39,12 @@ def test_base_url_env_override(monkeypatch):
     assert mirror.raw_file_url("2026-03", "X.zip") == (
         "https://example.test/dl/ficha-2026-03/raw/X.zip"
     )
+
+
+def test_health_url_default():
+    assert mirror.health_url() == "https://archive.org/"
+
+
+def test_health_url_env_override(monkeypatch):
+    monkeypatch.setenv("FICHA_IA_HEALTH_URL", "https://example.test/")
+    assert mirror.health_url() == "https://example.test/"

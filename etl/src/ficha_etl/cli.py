@@ -83,8 +83,26 @@ def _cmd_smoke() -> int:
     if report.all_ok:
         print("OK — upstream e mirror estão acessíveis")
         return 0
-    print("FAIL — alguma fonte está inacessível", file=sys.stderr)
-    return 1
+
+    if not report.upstream_ok:
+        print(
+            "WARNING: upstream RFB token discovery falhou.\n"
+            "  Operator action: visite "
+            "https://www.gov.br/receitafederal/pt-br/assuntos/orientacao-tributaria/"
+            "cadastros/consultas/dados-publicos-cnpj\n"
+            "  Encontre o link do share atual (formato "
+            "arquivos.receitafederal.gov.br/s/{TOKEN})\n"
+            "  Adicione o token novo a KNOWN_TOKENS em etl/src/ficha_etl/upstream.py "
+            "via PR.",
+            file=sys.stderr,
+        )
+
+    if report.blocking_failure:
+        print("\nFAIL — mirror IA inacessível (bloqueante)", file=sys.stderr)
+        return 1
+
+    print("\nOK — mirror IA acessível (upstream warning não-bloqueante)")
+    return 0
 
 
 def _cmd_discover_token() -> int:

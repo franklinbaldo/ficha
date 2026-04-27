@@ -25,9 +25,10 @@ def test_smoke_all_ok(monkeypatch):
     assert report.upstream_ok is True
     assert report.mirror_ok is True
     assert report.all_ok is True
+    assert report.blocking_failure is False
 
 
-def test_smoke_upstream_failure_reported(monkeypatch):
+def test_smoke_upstream_failure_is_warning_not_blocking(monkeypatch):
     monkeypatch.delenv(upstream.ENV_VAR, raising=False)
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -40,9 +41,10 @@ def test_smoke_upstream_failure_reported(monkeypatch):
     assert report.upstream_ok is False
     assert report.mirror_ok is True
     assert report.all_ok is False
+    assert report.blocking_failure is False
 
 
-def test_smoke_mirror_failure_reported(monkeypatch):
+def test_smoke_mirror_failure_is_blocking(monkeypatch):
     monkeypatch.setenv(upstream.ENV_VAR, "FROM_ENV")
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -55,4 +57,5 @@ def test_smoke_mirror_failure_reported(monkeypatch):
     assert report.upstream_ok is True
     assert report.mirror_ok is False
     assert report.all_ok is False
+    assert report.blocking_failure is True
     assert "simulated outage" in report.mirror_detail
