@@ -15,3 +15,7 @@ Formato: cada ADR é um markdown curto (ideal: 1 página) com **contexto**, **de
 | [0005](0005-monorepo-web-etl.md) | Monorepo `web/` + `etl/` simétrico | Accepted |
 | [0006](0006-data-quality-pragmatic.md) | Validação pragmática (não Great Expectations) | Accepted |
 | [0007](0007-tanstack-query-atomic-only.md) | TanStack Query só para camada atômica | Accepted |
+| [0008](0008-three-parquet-architecture.md) | Arquitetura de três Parquets + lookups.json | Accepted |
+| [0009](0009-denormalization-and-roundtrip.md) | Denormalização e roundtrip-equivalence como gate | Accepted |
+| [0010](0010-rfb-source-url.md) | Fonte: dumps RFB em arquivos.receitafederal.gov.br | Accepted |
+| [0011](0011-no-partitioning.md) | Não usar partitioning Hive-style nos Parquets | Accepted |
