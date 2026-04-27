@@ -59,4 +59,17 @@ jobs:
       - name: Run smoke check
         env:
           MONTH: ${{ steps.month.outputs.value }}
-        run: uv run ficha-etl smoke --month "$MONTH"
+        run: |
+          {
+            echo "## Smoke check — \`$MONTH\`"
+            echo ""
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          uv run ficha-etl smoke --month "$MONTH" 2>&1 | tee -a "$GITHUB_STEP_SUMMARY"
+          rc=${PIPESTATUS[0]}
+          {
+            echo '```'
+            echo ""
+            echo "Exit code: \`$rc\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$rc"
