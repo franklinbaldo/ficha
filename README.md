@@ -29,6 +29,33 @@ O projeto opera em duas camadas de acesso para máxima eficiência:
 *   **Storage:** Internet Archive (arquivos .parquet e .zip/.json).
 *   **ETL:** Python + DuckDB CLI + GitHub Actions.
 
+## 📂 Estrutura do Repositório
+
+```
+ficha/
+├── web/             # Frontend Astro (deploy → GitHub Pages)
+├── etl/             # Pipeline Python (RFB → Parquet → Internet Archive)
+├── experiments/     # PoCs e benchmarks numerados
+├── docs/            # Documentação técnica e ADRs (futuro)
+└── .github/         # Workflows de CI/deploy/cron (futuro)
+```
+
+`web/` e `etl/` são projetos auto-contidos com sua própria build, deps e config. Único contrato entre eles: o schema do Parquet declarado em `web/src/schemas/vN/`.
+
+## 🚀 Desenvolvimento
+
+```bash
+# Frontend
+cd web
+bun install
+bun dev
+
+# ETL (futuro)
+cd etl
+uv venv && uv pip install -e ".[dev]"
+ficha-etl run --month 2026-01
+```
+
 ## 🚀 O Conceito "Ficha"
 
 Inspirado nos antigos fichários de metal (Rolodex), cada empresa tem sua "lâmina" digital individualizada e imutável no tempo, permitindo o rastreamento histórico de alterações cadastrais através dos snapshots mensais.
