@@ -127,3 +127,31 @@ def test_upload_snapshot_skipped_when_ia_returns_empty(tmp_path, monkeypatch):
     plan = upload.build_upload_plan("2026-04", output_dir=out)
     results = upload.upload_snapshot(plan, verbose=False)
     assert all(status == "skipped" for status in results.values())
+
+
+def test_upload_snapshot_reports_http_failure_status(tmp_path, monkeypatch):
+    """Falha HTTP transitória (5xx) deve aparecer como 'http_503' no resultado.
+
+    Crítico: `_cmd_run` precisa detectar isso e abortar antes de atualizar manifest.
+    """
+    monkeypatch.setenv("IA_ACCESS_KEY", "fake")
+    monkeypatch.setenv("IA_SECRET_KEY", "fake")
+    out = tmp_path / "out"
+    _build_outputs(out)
+
+    class _FakeRespFail:
+        status_code = 503
+
+    class _FakeItem:
+        def upload_file(self, *args, **kwargs):
+            return [_FakeRespFail()]
+
+    class _FakeSession:
+        def get_item(self, item_id):
+            return _FakeItem()
+
+    monkeypatch.setattr(upload, "get_session", lambda **kwargs: _FakeSession())
+
+    plan = upload.build_upload_plan("2026-04", output_dir=out)
+    results = upload.upload_snapshot(plan, verbose=False)
+    assert all(status == "http_503" for status in results.values())

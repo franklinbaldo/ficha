@@ -371,6 +371,18 @@ def _cmd_run(
         except (RuntimeError, FileNotFoundError) as exc:
             print(f"error in upload: {exc}", file=sys.stderr)
             return 1
+        # Falha o run se qualquer arquivo não retornou 'uploaded' ou 'skipped'.
+        # Crítico: nunca atualizar manifest apontando pra IA URLs incompletas.
+        failures = {
+            n: s for n, s in results.items() if s not in ("uploaded", "skipped")
+        }
+        if failures:
+            print(
+                f"error: upload failed for {len(failures)}/{len(results)} files; "
+                f"refusing to update manifest. Statuses: {failures}",
+                file=sys.stderr,
+            )
+            return 1
     else:
         print("skip-upload: pulando IA upload")
 
