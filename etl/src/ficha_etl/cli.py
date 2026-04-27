@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 
 from . import download as download_mod
+from . import smoke as smoke_mod
 from . import sources
 
 
@@ -29,10 +30,18 @@ def main(argv: list[str] | None = None) -> int:
         help="Diretório de destino (default: ./.cache/raw)",
     )
 
+    sm = sub.add_parser(
+        "smoke",
+        help="HEAD em cada URL para detectar mudanças na fonte sem baixar bytes",
+    )
+    sm.add_argument("--month", required=True, help="Snapshot alvo no formato YYYY-MM")
+
     args = parser.parse_args(argv)
 
     if args.command == "download":
         return _cmd_download(args.month, args.target)
+    if args.command == "smoke":
+        return _cmd_smoke(args.month)
     if args.command == "run":
         raise NotImplementedError(f"Pipeline ainda não implementado (alvo: {args.month})")
 
@@ -49,6 +58,24 @@ def _cmd_download(month: str, target: Path) -> int:
     total = sum(r.size_bytes for r in results)
     print(f"downloaded {len(results)} files ({total:,} bytes) to {target}")
     return 0
+
+
+def _cmd_smoke(month: str) -> int:
+    if not sources.is_valid_month(month):
+        print(f"error: month must be YYYY-MM, got {month!r}", file=sys.stderr)
+        return 2
+    files = sources.files_for_month(month)
+    results = smoke_mod.smoke_check(files)
+    failed = [r for r in results if not r.ok]
+    for r in results:
+        size_str = f"{r.size:>12,} bytes" if r.size else " " * 18
+        if r.ok:
+            print(f"  ok  {r.status}  {size_str}  {r.file.name}")
+        else:
+            err = r.error or f"HTTP {r.status}"
+            print(f"FAIL       {size_str}  {r.file.name}  — {err}", file=sys.stderr)
+    print(f"\n{len(results) - len(failed)}/{len(results)} URLs OK")
+    return 0 if not failed else 1
 
 
 if __name__ == "__main__":

@@ -1,0 +1,49 @@
+name: ETL — RFB source smoke check
+
+on:
+  schedule:
+    # Toda segunda 06:00 UTC. Detecta mudança de URL/disponibilidade do RFB
+    # antes do cron mensal de fato rodar.
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+    inputs:
+      month:
+        description: 'YYYY-MM (vazio = mês corrente)'
+        required: false
+        type: string
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: etl
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+
+      - run: uv python install 3.11
+
+      - run: uv sync
+
+      - name: Resolve target month
+        id: month
+        env:
+          INPUT_MONTH: ${{ inputs.month }}
+        run: |
+          MONTH="${INPUT_MONTH:-$(date -u +%Y-%m)}"
+          if ! [[ "$MONTH" =~ ^[0-9]{4}-(0[1-9]|1[0-2])$ ]]; then
+            echo "::error::Invalid month '$MONTH' — expected YYYY-MM"
+            exit 1
+          fi
+          echo "value=$MONTH" >> "$GITHUB_OUTPUT"
+
+      - name: Run smoke check
+        env:
+          MONTH: ${{ steps.month.outputs.value }}
+        run: uv run ficha-etl smoke --month "$MONTH"
