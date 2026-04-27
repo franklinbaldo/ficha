@@ -64,6 +64,7 @@ def _cmd_smoke(month: str) -> int:
     if not sources.is_valid_month(month):
         print(f"error: month must be YYYY-MM, got {month!r}", file=sys.stderr)
         return 2
+    print(f"Smoke target: month={month}  base_url={sources.base_url()}")
     files = sources.files_for_month(month)
     results = smoke_mod.smoke_check(files)
     failed = [r for r in results if not r.ok]
@@ -75,6 +76,25 @@ def _cmd_smoke(month: str) -> int:
             err = r.error or f"HTTP {r.status}"
             print(f"FAIL       {size_str}  {r.file.name}  — {err}", file=sys.stderr)
     print(f"\n{len(results) - len(failed)}/{len(results)} URLs OK")
+
+    if failed:
+        # Probe pai pra distinguir "RFB fora" de "mês não publicado".
+        url, status, err = smoke_mod.diagnose_root(month)
+        if err:
+            print(f"\nDiagnóstico — pasta do mês: {url}  ERRO: {err}", file=sys.stderr)
+        else:
+            print(f"\nDiagnóstico — pasta do mês: {url}  HTTP {status}", file=sys.stderr)
+            if status == 404:
+                print(
+                    "  → mês ainda não publicado pelo RFB. Tente um mês anterior.",
+                    file=sys.stderr,
+                )
+            elif status and 500 <= status < 600:
+                print(
+                    "  → RFB indisponível (5xx). Não bloquear merge — re-rodar depois.",
+                    file=sys.stderr,
+                )
+
     return 0 if not failed else 1
 
 
