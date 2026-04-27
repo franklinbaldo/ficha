@@ -77,13 +77,10 @@ jobs:
 
       - name: Lint
         if: steps.changes.outputs.etl == 'true'
-        run: uv run ruff check src
+        run: |
+          uv run ruff check src tests
+          uv run ruff format --check src tests
 
       - name: Test
         if: steps.changes.outputs.etl == 'true'
-        run: |
-          if [ -d tests ]; then
-            uv run pytest tests
-          else
-            echo "tests/ directory does not exist yet — skipping"
-          fi
+        run: uv run pytest tests
