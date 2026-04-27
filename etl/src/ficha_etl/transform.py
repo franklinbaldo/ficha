@@ -181,7 +181,9 @@ def _create_table_from_csvs(
         return
     # Inline as a SQL list literal — parameter binding for arrays é instável.
     # Aspas simples nos paths são escapadas dobrando-as (padrão SQL).
-    paths_literal = "[" + ", ".join(f"'{str(p).replace(chr(39), chr(39)*2)}'" for p in paths) + "]"
+    paths_literal = (
+        "[" + ", ".join(f"'{str(p).replace(chr(39), chr(39) * 2)}'" for p in paths) + "]"
+    )
     cols_clause = _csv_columns_clause(columns)
     con.execute(
         f"""
@@ -277,9 +279,8 @@ def write_lookups_json(
 # -----------------------------------------------------------------------------
 
 # Capital social no RFB usa vírgula como separador decimal. Converte pra DOUBLE.
-_CAPITAL_SOCIAL_EXPR = (
-    "TRY_CAST(REPLACE(emp.capital_social, ',', '.') AS DOUBLE)"
-)
+_CAPITAL_SOCIAL_EXPR = "TRY_CAST(REPLACE(emp.capital_social, ',', '.') AS DOUBLE)"
+
 
 # YYYYMMDD → YYYY-MM-DD. Strings vazias / '0' viram NULL.
 def _date_expr(col: str) -> str:
@@ -347,10 +348,10 @@ def write_cnpjs_parquet(
                 est.nome_fantasia,
                 est.situacao_cadastral,
                 {_SITUACAO_DESCRICAO_SQL} AS situacao_cadastral_descricao,
-                {_date_expr('est.data_situacao_cadastral')} AS data_situacao_cadastral,
+                {_date_expr("est.data_situacao_cadastral")} AS data_situacao_cadastral,
                 est.motivo_situacao_cadastral AS motivo_situacao_cadastral_codigo,
                 COALESCE(mt.descricao, '') AS motivo_situacao_cadastral_descricao,
-                {_date_expr('est.data_inicio_atividade')} AS data_inicio_atividade,
+                {_date_expr("est.data_inicio_atividade")} AS data_inicio_atividade,
 
                 -- CNAE (principal + secundários)
                 est.cnae_fiscal_principal AS cnae_principal_codigo,
@@ -382,17 +383,17 @@ def write_cnpjs_parquet(
 
                 -- Estado especial
                 est.situacao_especial,
-                {_date_expr('est.data_situacao_especial')} AS data_situacao_especial,
+                {_date_expr("est.data_situacao_especial")} AS data_situacao_especial,
 
                 -- Simples / MEI (inline)
                 CASE s.opcao_simples WHEN 'S' THEN TRUE WHEN 'N' THEN FALSE ELSE NULL END
                     AS opcao_simples,
-                {_date_expr('s.data_opcao_simples')} AS data_opcao_simples,
-                {_date_expr('s.data_exclusao_simples')} AS data_exclusao_simples,
+                {_date_expr("s.data_opcao_simples")} AS data_opcao_simples,
+                {_date_expr("s.data_exclusao_simples")} AS data_exclusao_simples,
                 CASE s.opcao_mei WHEN 'S' THEN TRUE WHEN 'N' THEN FALSE ELSE NULL END
                     AS opcao_mei,
-                {_date_expr('s.data_opcao_mei')} AS data_opcao_mei,
-                {_date_expr('s.data_exclusao_mei')} AS data_exclusao_mei
+                {_date_expr("s.data_opcao_mei")} AS data_opcao_mei,
+                {_date_expr("s.data_exclusao_mei")} AS data_exclusao_mei
 
             FROM estabelecimento est
             LEFT JOIN empresa emp ON emp.cnpj_basico = est.cnpj_basico
@@ -439,7 +440,7 @@ def write_raizes_parquet(
                 -- tiverem mais de uma entrada com identificador_matriz_filial = '1'.
                 SELECT
                     est.cnpj_basico,
-                    {_date_expr('est.data_inicio_atividade')} AS data_inicio_atividade_matriz,
+                    {_date_expr("est.data_inicio_atividade")} AS data_inicio_atividade_matriz,
                     est.uf AS uf_matriz,
                     est.municipio AS municipio_matriz_codigo,
                     est.cnae_fiscal_principal AS cnae_principal_matriz_codigo
@@ -509,7 +510,7 @@ def write_socios_parquet(
                 END AS cnpj_socio,
                 soc.qualificacao_socio AS qualificacao_codigo,
                 COALESCE(qs.descricao, '') AS qualificacao_descricao,
-                {_date_expr('soc.data_entrada_sociedade')} AS data_entrada_sociedade,
+                {_date_expr("soc.data_entrada_sociedade")} AS data_entrada_sociedade,
                 soc.pais AS pais_codigo,
                 COALESCE(ps.descricao, '') AS pais_nome,
                 soc.representante_legal AS representante_legal_cpf,
@@ -644,13 +645,10 @@ def assert_roundtrip(
     """
     # Contagem total
     expected_n = con.execute("SELECT COUNT(*) FROM estabelecimento").fetchone()[0]
-    actual_n = con.execute(
-        f"SELECT COUNT(*) FROM '{cnpjs_parquet}'"
-    ).fetchone()[0]
+    actual_n = con.execute(f"SELECT COUNT(*) FROM '{cnpjs_parquet}'").fetchone()[0]
     if expected_n != actual_n:
         raise RoundtripError(
-            f"row count mismatch: estabelecimento has {expected_n}, "
-            f"cnpjs.parquet has {actual_n}"
+            f"row count mismatch: estabelecimento has {expected_n}, cnpjs.parquet has {actual_n}"
         )
 
     if expected_n == 0:
@@ -683,9 +681,7 @@ def assert_roundtrip(
             continue
         for i, (alias, _) in enumerate(_ROUNDTRIP_FIELDS, start=1):
             if row[i] != actual[i]:
-                divergences.append(
-                    f"{cnpj}.{alias}: source={row[i]!r} parquet={actual[i]!r}"
-                )
+                divergences.append(f"{cnpj}.{alias}: source={row[i]!r} parquet={actual[i]!r}")
 
     if divergences:
         head = divergences[:10]
@@ -693,6 +689,4 @@ def assert_roundtrip(
         msg = "\n  ".join(head)
         if more:
             msg += f"\n  ... and {more} more"
-        raise RoundtripError(
-            f"roundtrip mismatch over {len(sampled)} sampled CNPJs:\n  {msg}"
-        )
+        raise RoundtripError(f"roundtrip mismatch over {len(sampled)} sampled CNPJs:\n  {msg}")

@@ -57,8 +57,7 @@ class Fetcher(Protocol):
 
     name: str
 
-    def get(self, filename: str) -> Path | None:
-        ...
+    def get(self, filename: str) -> Path | None: ...
 
 
 @dataclass
@@ -107,7 +106,9 @@ class IAMirrorFetcher:
             except RuntimeError as exc:
                 log.warning("[%s] download failed: %s", self.name, exc)
                 return None
-            log.info("[%s] downloaded: %s (%s bytes)", self.name, result.path, f"{result.size_bytes:,}")
+            log.info(
+                "[%s] downloaded: %s (%s bytes)", self.name, result.path, f"{result.size_bytes:,}"
+            )
             return result.path
 
 
@@ -132,7 +133,9 @@ class UpstreamFetcher:
             except RuntimeError as exc:
                 log.warning("[%s] download failed: %s", self.name, exc)
                 return None
-            log.info("[%s] downloaded: %s (%s bytes)", self.name, result.path, f"{result.size_bytes:,}")
+            log.info(
+                "[%s] downloaded: %s (%s bytes)", self.name, result.path, f"{result.size_bytes:,}"
+            )
             return result.path
 
 

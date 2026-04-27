@@ -94,8 +94,7 @@ def discover_token(*, client: httpx.Client | None = None) -> str:
                 log.info("token from KNOWN_TOKENS")
                 return tok
         raise NoTokenError(
-            f"no working share token found (tried env {ENV_VAR} + "
-            f"{len(KNOWN_TOKENS)} known tokens)"
+            f"no working share token found (tried env {ENV_VAR} + {len(KNOWN_TOKENS)} known tokens)"
         )
     finally:
         if own_client:
@@ -119,9 +118,7 @@ def list_snapshots(token: str, *, client: httpx.Client | None = None) -> list[st
             client.close()
 
 
-def list_files(
-    token: str, month: str, *, client: httpx.Client | None = None
-) -> list[FileEntry]:
+def list_files(token: str, month: str, *, client: httpx.Client | None = None) -> list[FileEntry]:
     """PROPFIND da pasta do mês, devolve metadados dos arquivos."""
     if not is_valid_month(month):
         raise ValueError(f"month must be YYYY-MM, got {month!r}")

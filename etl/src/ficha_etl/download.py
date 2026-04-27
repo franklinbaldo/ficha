@@ -140,9 +140,7 @@ def _download_streaming(
     size = target.stat().st_size
     expected = _expected_size(response, existing)
     if expected is not None and size != expected:
-        raise RuntimeError(
-            f"{file.name}: downloaded {size} bytes, expected {expected}"
-        )
+        raise RuntimeError(f"{file.name}: downloaded {size} bytes, expected {expected}")
 
     log.info("downloaded %s (%s bytes)", file.name, f"{size:,}")
     return DownloadResult(file=file, path=target, size_bytes=size, resumed=resumed)

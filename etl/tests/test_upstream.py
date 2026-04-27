@@ -71,9 +71,7 @@ def test_base_url_env_override(monkeypatch):
 
 
 def test_webdav_url():
-    assert (
-        upstream.webdav_url() == "https://arquivos.receitafederal.gov.br/public.php/webdav/"
-    )
+    assert upstream.webdav_url() == "https://arquivos.receitafederal.gov.br/public.php/webdav/"
     assert upstream.webdav_url("2026-04", "Empresas0.zip") == (
         "https://arquivos.receitafederal.gov.br/public.php/webdav/2026-04/Empresas0.zip"
     )
@@ -87,9 +85,7 @@ def test_files_for_month_count_and_urls():
     files = upstream.files_for_month("XYZ", "2026-04")
     assert len(files) == 37
     assert all(
-        f.url.startswith(
-            "https://arquivos.receitafederal.gov.br/public.php/webdav/2026-04/"
-        )
+        f.url.startswith("https://arquivos.receitafederal.gov.br/public.php/webdav/2026-04/")
         for f in files
     )
 
@@ -166,6 +162,4 @@ def test_list_files_invalid_month():
 
 def test_file_url():
     url = upstream.file_url("TOK", "2026-04", "Empresas0.zip")
-    assert url == (
-        "https://arquivos.receitafederal.gov.br/public.php/webdav/2026-04/Empresas0.zip"
-    )
+    assert url == ("https://arquivos.receitafederal.gov.br/public.php/webdav/2026-04/Empresas0.zip")
