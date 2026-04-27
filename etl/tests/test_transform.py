@@ -52,28 +52,132 @@ ESTABELECIMENTO_ROWS: list[tuple[str, ...]] = [
     # tipo_log, log, num, comp, bairro, cep, uf, municipio,
     # ddd1, tel1, ddd2, tel2, ddd_fax, fax, email, sit_esp, data_sit_esp
     (
-        "11111111", "0001", "00", "1", "ACME", "02", "20200101", "00", "", "105",
-        "20200101", "4711301", "6201500", "RUA", "DAS FLORES", "100", "", "CENTRO",
-        "01000000", "SP", "3550308", "11", "999999999", "", "", "", "",
-        "contato@acme.com", "", "",
+        "11111111",
+        "0001",
+        "00",
+        "1",
+        "ACME",
+        "02",
+        "20200101",
+        "00",
+        "",
+        "105",
+        "20200101",
+        "4711301",
+        "6201500",
+        "RUA",
+        "DAS FLORES",
+        "100",
+        "",
+        "CENTRO",
+        "01000000",
+        "SP",
+        "3550308",
+        "11",
+        "999999999",
+        "",
+        "",
+        "",
+        "",
+        "contato@acme.com",
+        "",
+        "",
     ),
     (
-        "11111111", "0002", "00", "2", "ACME FILIAL", "02", "20210101", "00", "", "105",
-        "20210101", "4711301", "", "AV", "BRASIL", "200", "", "CENTRO",
-        "20000000", "RJ", "3304557", "21", "888888888", "", "", "", "",
-        "filial@acme.com", "", "",
+        "11111111",
+        "0002",
+        "00",
+        "2",
+        "ACME FILIAL",
+        "02",
+        "20210101",
+        "00",
+        "",
+        "105",
+        "20210101",
+        "4711301",
+        "",
+        "AV",
+        "BRASIL",
+        "200",
+        "",
+        "CENTRO",
+        "20000000",
+        "RJ",
+        "3304557",
+        "21",
+        "888888888",
+        "",
+        "",
+        "",
+        "",
+        "filial@acme.com",
+        "",
+        "",
     ),
     (
-        "22222222", "0001", "00", "1", "INDIV", "08", "20240101", "01", "", "105",
-        "20180101", "4711301", "", "RUA", "OUTRA", "50", "", "VILA",
-        "01010000", "SP", "3550308", "11", "777777777", "", "", "", "",
-        "ind@x.com", "", "",
+        "22222222",
+        "0001",
+        "00",
+        "1",
+        "INDIV",
+        "08",
+        "20240101",
+        "01",
+        "",
+        "105",
+        "20180101",
+        "4711301",
+        "",
+        "RUA",
+        "OUTRA",
+        "50",
+        "",
+        "VILA",
+        "01010000",
+        "SP",
+        "3550308",
+        "11",
+        "777777777",
+        "",
+        "",
+        "",
+        "",
+        "ind@x.com",
+        "",
+        "",
     ),
     (
-        "33333333", "0001", "00", "1", "TECH", "02", "20230101", "00", "", "105",
-        "20230101", "6201500", "", "RUA", "DEV", "10", "", "BAIRRO",
-        "04000000", "SP", "3550308", "11", "555555555", "", "", "", "",
-        "dev@tech.com", "", "",
+        "33333333",
+        "0001",
+        "00",
+        "1",
+        "TECH",
+        "02",
+        "20230101",
+        "00",
+        "",
+        "105",
+        "20230101",
+        "6201500",
+        "",
+        "RUA",
+        "DEV",
+        "10",
+        "",
+        "BAIRRO",
+        "04000000",
+        "SP",
+        "3550308",
+        "11",
+        "555555555",
+        "",
+        "",
+        "",
+        "",
+        "dev@tech.com",
+        "",
+        "",
     ),
 ]
 
@@ -81,21 +185,57 @@ SOCIO_ROWS: list[tuple[str, ...]] = [
     # cnpj_basico, ident_socio, nome, cnpj_cpf, qualif, data_entrada,
     # pais, rep_legal_cpf, nome_rep, qualif_rep, faixa_etaria
     (
-        "11111111", "2", "JOAO DA SILVA", "***123456**", "49", "20200101",
-        "105", "", "", "", "5",
+        "11111111",
+        "2",
+        "JOAO DA SILVA",
+        "***123456**",
+        "49",
+        "20200101",
+        "105",
+        "",
+        "",
+        "",
+        "5",
     ),
     (
-        "11111111", "1", "OUTRA EMPRESA SA", "44444444000100", "49", "20200101",
-        "105", "", "", "", "0",
+        "11111111",
+        "1",
+        "OUTRA EMPRESA SA",
+        "44444444000100",
+        "49",
+        "20200101",
+        "105",
+        "",
+        "",
+        "",
+        "0",
     ),
     # Sócio estrangeiro (tipo '3'): cpf_mascarado e cnpj_socio devem ser NULL
     (
-        "11111111", "3", "JOHN DOE", "USA123456", "49", "20200101",
-        "249", "", "", "", "0",
+        "11111111",
+        "3",
+        "JOHN DOE",
+        "USA123456",
+        "49",
+        "20200101",
+        "249",
+        "",
+        "",
+        "",
+        "0",
     ),
     (
-        "33333333", "2", "MARIA SOUZA", "***987654**", "49", "20230101",
-        "105", "", "", "", "4",
+        "33333333",
+        "2",
+        "MARIA SOUZA",
+        "***987654**",
+        "49",
+        "20230101",
+        "105",
+        "",
+        "",
+        "",
+        "4",
     ),
 ]
 
@@ -119,9 +259,7 @@ def _zip_with_csv(zip_path: Path, csv_name: str, rows: list[tuple[str, ...]]) ->
     `_create_table_from_csvs` ignore.
     """
     if rows:
-        body = (
-            "\n".join(";".join(f'"{c}"' for c in row) for row in rows) + "\n"
-        ).encode("latin-1")
+        body = ("\n".join(";".join(f'"{c}"' for c in row) for row in rows) + "\n").encode("latin-1")
     else:
         body = b""
     with zipfile.ZipFile(zip_path, "w") as zf:
@@ -194,9 +332,7 @@ def test_write_lookups_json_full_shape(tmp_path):
             transform.load_lookup_into_duckdb(con, kind, csv)
 
         out = tmp_path / "lookups.json"
-        transform.write_lookups_json(
-            con, out, schema_version="1.0.0", snapshot_date="2026-04"
-        )
+        transform.write_lookups_json(con, out, schema_version="1.0.0", snapshot_date="2026-04")
         data = json.loads(out.read_text())
 
         assert data["schema_version"] == "1.0.0"
@@ -451,3 +587,129 @@ def test_transform_snapshot_skips_when_lookup_missing_does_not_break_join(tmp_pa
 def test_transform_snapshot_invalid_month():
     with pytest.raises(ValueError):
         transform.transform_snapshot("bad", cache_dir=Path("."), output_dir=Path("."))
+
+
+# -----------------------------------------------------------------------------
+# Roundtrip-equivalence (ADR 0009)
+# -----------------------------------------------------------------------------
+
+
+def test_transform_snapshot_with_verify_passes(tmp_path, all_zips_dir):
+    """Verify=True não deve falhar quando os dados batem."""
+    chain = fetcher.ChainedFetcher(fetchers=[_ZipDirFetcher(all_zips_dir)])
+    transform.transform_snapshot(
+        "2026-04",
+        cache_dir=tmp_path / "cache",
+        output_dir=tmp_path / "output",
+        chain=chain,
+        skip_unimplemented=False,
+        verify=True,
+        verify_sample_size=4,
+    )
+    # Sem exceção = passou
+
+
+def test_assert_roundtrip_detects_row_count_mismatch(tmp_path, all_zips_dir):
+    """Se o parquet tem rows diferente do estabelecimento original, falha."""
+    chain = fetcher.ChainedFetcher(fetchers=[_ZipDirFetcher(all_zips_dir)])
+    output_dir = tmp_path / "output"
+    cache_dir = tmp_path / "cache"
+
+    transform.transform_snapshot(
+        "2026-04",
+        cache_dir=cache_dir,
+        output_dir=output_dir,
+        chain=chain,
+        skip_unimplemented=False,
+    )
+    cnpjs_parquet = output_dir / "cnpjs.parquet"
+
+    # Reconstrói o DuckDB com os dados originais e regrava parquet com 1 row a menos.
+    con = duckdb.connect()
+    try:
+        # Recarrega o source via extract_all (idempotente — reusa pasta diferente)
+        extracted = transform.extract_all("2026-04", chain, tmp_path / "extracted2")
+        for ef in extracted:
+            if ef.kind in transform._LOOKUP_KINDS:
+                transform.load_lookup_into_duckdb(con, ef.kind, ef.csv_path)
+        transform.load_main_tables_into_duckdb(con, extracted)
+
+        # Regrava parquet com WHERE que tira 1 row.
+        truncated = output_dir / "cnpjs_truncated.parquet"
+        con.execute(
+            f"COPY (SELECT * FROM '{cnpjs_parquet}' WHERE cnpj != "
+            f"(SELECT cnpj FROM '{cnpjs_parquet}' LIMIT 1)) "
+            f"TO '{truncated}' (FORMAT PARQUET)"
+        )
+
+        with pytest.raises(transform.RoundtripError, match="row count mismatch"):
+            transform.assert_roundtrip(con, truncated)
+    finally:
+        con.close()
+
+
+def test_assert_roundtrip_detects_field_divergence(tmp_path, all_zips_dir):
+    """Se um campo no parquet diverge do source, falha."""
+    chain = fetcher.ChainedFetcher(fetchers=[_ZipDirFetcher(all_zips_dir)])
+    output_dir = tmp_path / "output"
+    cache_dir = tmp_path / "cache"
+
+    transform.transform_snapshot(
+        "2026-04",
+        cache_dir=cache_dir,
+        output_dir=output_dir,
+        chain=chain,
+        skip_unimplemented=False,
+    )
+    cnpjs_parquet = output_dir / "cnpjs.parquet"
+
+    con = duckdb.connect()
+    try:
+        # Recarrega o source (cache_dir/2026-04/extracted)
+        extracted = transform.extract_all("2026-04", chain, tmp_path / "extracted_for_verify")
+        for ef in extracted:
+            if ef.kind in transform._LOOKUP_KINDS:
+                transform.load_lookup_into_duckdb(con, ef.kind, ef.csv_path)
+        transform.load_main_tables_into_duckdb(con, extracted)
+
+        # Cria um parquet "tampered" com razao_social trocada.
+        tampered = output_dir / "cnpjs_tampered.parquet"
+        con.execute(
+            f"""COPY (
+                SELECT * REPLACE ('TAMPERED' AS razao_social)
+                FROM '{cnpjs_parquet}'
+            ) TO '{tampered}' (FORMAT PARQUET)"""
+        )
+
+        with pytest.raises(transform.RoundtripError, match="razao_social"):
+            transform.assert_roundtrip(con, tampered, sample_size=4)
+    finally:
+        con.close()
+
+
+def test_assert_roundtrip_empty_estabelecimento_is_noop(tmp_path):
+    """Se estabelecimento estiver vazio, roundtrip passa silenciosamente."""
+    con = duckdb.connect()
+    try:
+        # Cria tabelas vazias com schema mínimo
+        con.execute(
+            "CREATE TABLE estabelecimento (cnpj_basico VARCHAR, cnpj_ordem VARCHAR, "
+            "cnpj_dv VARCHAR, identificador_matriz_filial VARCHAR, nome_fantasia VARCHAR, "
+            "situacao_cadastral VARCHAR, uf VARCHAR, municipio VARCHAR, "
+            "cnae_fiscal_principal VARCHAR)"
+        )
+        con.execute("CREATE TABLE empresa (cnpj_basico VARCHAR, razao_social VARCHAR)")
+
+        empty = tmp_path / "empty.parquet"
+        con.execute(
+            "COPY (SELECT NULL::VARCHAR AS cnpj, NULL::VARCHAR AS razao_social, "
+            "NULL::VARCHAR AS uf, NULL::VARCHAR AS cnae_principal_codigo, "
+            "NULL::VARCHAR AS situacao_cadastral, NULL::VARCHAR AS nome_fantasia, "
+            "NULL::VARCHAR AS identificador_matriz_filial, NULL::VARCHAR AS municipio_codigo "
+            "WHERE FALSE) TO '" + str(empty) + "' (FORMAT PARQUET)"
+        )
+
+        # Não deve raise (0 == 0)
+        transform.assert_roundtrip(con, empty)
+    finally:
+        con.close()

@@ -405,7 +405,7 @@ def write_cnpjs_parquet(
             LEFT JOIN lookup_municipios mn ON mn.codigo = est.municipio
             LEFT JOIN lookup_paises ps ON ps.codigo = est.pais
             ORDER BY cnpj
-        ) TO ? (FORMAT PARQUET, COMPRESSION ZSTD)
+        ) TO ? (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 200000)
         """,
         [str(output_path)],
     )
@@ -476,7 +476,7 @@ def write_raizes_parquet(
             LEFT JOIN lookup_municipios mn ON mn.codigo = matriz.municipio_matriz_codigo
             LEFT JOIN lookup_cnaes cn ON cn.codigo = matriz.cnae_principal_matriz_codigo
             ORDER BY razao_social_normalizada
-        ) TO ? (FORMAT PARQUET, COMPRESSION ZSTD)
+        ) TO ? (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 200000)
         """,
         [str(output_path)],
     )
@@ -523,7 +523,7 @@ def write_socios_parquet(
             LEFT JOIN lookup_qualificacoes qr ON qr.codigo = soc.qualificacao_representante_legal
             LEFT JOIN lookup_paises ps ON ps.codigo = soc.pais
             ORDER BY cnpj_base
-        ) TO ? (FORMAT PARQUET, COMPRESSION ZSTD)
+        ) TO ? (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 200000)
         """,
         [str(output_path)],
     )
@@ -537,8 +537,15 @@ def transform_snapshot(
     chain: fetcher_mod.ChainedFetcher | None = None,
     schema_version: str = "1.0.0",
     skip_unimplemented: bool = True,
+    verify: bool = False,
+    verify_sample_size: int = 100,
 ) -> None:
-    """Orquestrador: resolve → extract → load → write outputs."""
+    """Orquestrador: resolve → extract → load → write outputs.
+
+    Se `verify=True`, roda `assert_roundtrip` após escrever `cnpjs.parquet`
+    como gate de qualidade (ADR 0009): falha se campos amostrados do
+    Parquet não baterem com os dados originais já carregados no DuckDB.
+    """
     if not is_valid_month(month):
         raise ValueError(f"month must be YYYY-MM, got {month!r}")
 
@@ -586,6 +593,100 @@ def transform_snapshot(
                     log.warning("skipping %s.parquet: %s", name, exc)
                 else:
                     raise
+
+        if verify:
+            cnpjs_parquet = output_dir / "cnpjs.parquet"
+            if cnpjs_parquet.exists():
+                log.info("running roundtrip-equivalence check on cnpjs.parquet")
+                assert_roundtrip(con, cnpjs_parquet, sample_size=verify_sample_size)
+                log.info("roundtrip OK")
     finally:
         con.close()
         db_path.unlink(missing_ok=True)
+
+
+# -----------------------------------------------------------------------------
+# Roundtrip-equivalence (ADR 0009)
+# -----------------------------------------------------------------------------
+
+
+# Campos comparados na verificação. Subset "fácil" — pula campos computados
+# (razao_social_normalizada, descricoes de lookup) que requerem reaplicar
+# transformação. Pra esses, comparações de igualdade dos códigos de origem
+# (cnae_principal_codigo, etc.) são proxy suficiente.
+_ROUNDTRIP_FIELDS = (
+    ("razao_social", "emp.razao_social"),
+    ("uf", "est.uf"),
+    ("cnae_principal_codigo", "est.cnae_fiscal_principal"),
+    ("situacao_cadastral", "est.situacao_cadastral"),
+    ("nome_fantasia", "est.nome_fantasia"),
+    ("identificador_matriz_filial", "est.identificador_matriz_filial"),
+    ("municipio_codigo", "est.municipio"),
+)
+
+
+class RoundtripError(AssertionError):
+    """Falha do gate de roundtrip-equivalence (ADR 0009)."""
+
+
+def assert_roundtrip(
+    con: duckdb.DuckDBPyConnection,
+    cnpjs_parquet: Path,
+    *,
+    sample_size: int = 100,
+) -> None:
+    """Sortea N CNPJs do estabelecimento original e compara com o Parquet.
+
+    Falha (RoundtripError) se a contagem total não bater OU se algum dos
+    campos `_ROUNDTRIP_FIELDS` divergir pra qualquer CNPJ amostrado.
+
+    Pré-requisito: tabelas `estabelecimento` + `empresa` carregadas em `con`,
+    e `cnpjs_parquet` já escrito.
+    """
+    # Contagem total
+    expected_n = con.execute("SELECT COUNT(*) FROM estabelecimento").fetchone()[0]
+    actual_n = con.execute(f"SELECT COUNT(*) FROM '{cnpjs_parquet}'").fetchone()[0]
+    if expected_n != actual_n:
+        raise RoundtripError(
+            f"row count mismatch: estabelecimento has {expected_n}, cnpjs.parquet has {actual_n}"
+        )
+
+    if expected_n == 0:
+        return  # nada pra amostrar
+
+    # Sample N CNPJs
+    n = min(sample_size, expected_n)
+    sample_query = f"""
+        SELECT est.cnpj_basico || est.cnpj_ordem || est.cnpj_dv AS cnpj,
+               {", ".join(expr + " AS " + alias for alias, expr in _ROUNDTRIP_FIELDS)}
+        FROM estabelecimento est
+        LEFT JOIN empresa emp ON emp.cnpj_basico = est.cnpj_basico
+        ORDER BY random()
+        LIMIT {n}
+    """
+    sampled = con.execute(sample_query).fetchall()
+
+    field_names = ["cnpj"] + [alias for alias, _ in _ROUNDTRIP_FIELDS]
+    parquet_select = ", ".join(field_names)
+
+    divergences: list[str] = []
+    for row in sampled:
+        cnpj = row[0]
+        actual = con.execute(
+            f"SELECT {parquet_select} FROM '{cnpjs_parquet}' WHERE cnpj = ?",
+            [cnpj],
+        ).fetchone()
+        if actual is None:
+            divergences.append(f"{cnpj}: missing from parquet")
+            continue
+        for i, (alias, _) in enumerate(_ROUNDTRIP_FIELDS, start=1):
+            if row[i] != actual[i]:
+                divergences.append(f"{cnpj}.{alias}: source={row[i]!r} parquet={actual[i]!r}")
+
+    if divergences:
+        head = divergences[:10]
+        more = len(divergences) - len(head)
+        msg = "\n  ".join(head)
+        if more:
+            msg += f"\n  ... and {more} more"
+        raise RoundtripError(f"roundtrip mismatch over {len(sampled)} sampled CNPJs:\n  {msg}")
