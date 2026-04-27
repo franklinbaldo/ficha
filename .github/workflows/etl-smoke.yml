@@ -1,0 +1,80 @@
+name: ETL — upstream + mirror smoke check
+
+on:
+  pull_request:
+    paths:
+      - 'etl/**'
+      - '.github/workflows/etl-smoke.yml'
+  schedule:
+    # Toda segunda 06:00 UTC. Detecta mudança de URL/disponibilidade da RFB
+    # antes do cron mensal de fato rodar.
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: write  # for comment-on-PR debug output
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: etl
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+
+      - run: uv python install 3.11
+
+      - run: uv sync
+
+      - name: Run smoke check
+        id: smoke
+        run: |
+          {
+            echo "## ETL smoke check"
+            echo ""
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          uv run ficha-etl smoke 2>&1 | tee smoke-output.txt | tee -a "$GITHUB_STEP_SUMMARY"
+          rc=${PIPESTATUS[0]}
+          {
+            echo '```'
+            echo ""
+            echo "Exit code: \`$rc\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+          {
+            echo 'output<<SMOKE_EOF'
+            cat smoke-output.txt
+            echo 'SMOKE_EOF'
+          } >> "$GITHUB_OUTPUT"
+          exit "$rc"
+
+      - name: Comment debug output on PR (failure only)
+        if: failure() && github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const output = `${{ steps.smoke.outputs.output }}`;
+            const body = [
+              `### 🔥 Smoke check failed`,
+              '',
+              '<details><summary>Output</summary>',
+              '',
+              '```',
+              output,
+              '```',
+              '</details>',
+            ].join('\n');
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body,
+            });

@@ -19,3 +19,5 @@ Formato: cada ADR é um markdown curto (ideal: 1 página) com **contexto**, **de
 | [0009](0009-denormalization-and-roundtrip.md) | Denormalização e roundtrip-equivalence como gate | Accepted |
 | [0010](0010-rfb-source-url.md) | Fonte: dumps RFB em arquivos.receitafederal.gov.br | Accepted |
 | [0011](0011-no-partitioning.md) | Não usar partitioning Hive-style nos Parquets | Accepted |
+| [0012](0012-ia-mirror-as-source-of-truth.md) | Internet Archive como source-of-truth do FICHA | Accepted |
+| [0013](0013-rfb-token-discovery.md) | Estratégia de discovery do token Nextcloud da RFB | Accepted |
