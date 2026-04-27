@@ -1,0 +1,33 @@
+[project]
+name = "ficha-etl"
+version = "0.0.1"
+description = "ETL pipeline for FICHA — transforms RFB CNPJ dumps into Parquet snapshots and publishes to Internet Archive."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+dependencies = [
+    "duckdb>=1.0.0",
+    "pyarrow>=17.0.0",
+    "httpx>=0.27.0",
+    "internetarchive>=4.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "ruff>=0.6.0",
+]
+
+[project.scripts]
+ficha-etl = "ficha_etl.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/ficha_etl"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"

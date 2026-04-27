@@ -1,0 +1,79 @@
+# Node / JavaScript
+node_modules/
+dist/
+.astro/
+.output/
+.vercel/
+.netlify/
+.cache/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Bun
+.bun/
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Editor / OS
+.DS_Store
+Thumbs.db
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+.idea/
+*.swp
+*.swo
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+.venv/
+venv/
+ENV/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# uv
+.uv/
+uv.lock
+
+# ETL generated artifacts
+etl/output/
+etl/output_*/
+etl/.cache/
+experiments/**/output/
+experiments/**/.cache/
+*.parquet
+*.zip
+
+# Allow small sample data committed intentionally
+!web/public/samples/*.parquet
+!experiments/**/samples/*.parquet
+!etl/samples/*.parquet
