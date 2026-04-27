@@ -120,11 +120,13 @@ jobs:
       - name: Comment probe output on PR (always)
         if: always() && github.event_name == 'pull_request'
         uses: actions/github-script@v7
+        env:
+          PROBE_OUTPUT: ${{ steps.probe.outputs.output }}
         with:
           script: |
-            const output = `${{ steps.probe.outputs.output }}`;
+            const output = process.env.PROBE_OUTPUT || '(no output captured)';
             const body = [
-              `### 🧪 Nextcloud probe results`,
+              '### 🧪 Nextcloud probe results',
               '',
               '<details><summary>Output (click to expand)</summary>',
               '',
