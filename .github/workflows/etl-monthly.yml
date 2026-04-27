@@ -51,12 +51,13 @@ jobs:
       - name: Commit updated manifest
         run: |
           cd ..
-          if git diff --quiet web/public/manifest.json; then
-            echo "Manifest unchanged"
+          # Stage first so we detect both modifications and new files (bootstrap case).
+          git add web/public/manifest.json
+          if git diff --cached --quiet -- web/public/manifest.json; then
+            echo "Manifest unchanged — nothing to commit"
             exit 0
           fi
           git config user.name "ficha-etl-bot"
           git config user.email "ficha-etl-bot@users.noreply.github.com"
-          git add web/public/manifest.json
           git commit -m "chore(etl): update manifest for ${{ steps.month.outputs.value }}"
           git push origin main
