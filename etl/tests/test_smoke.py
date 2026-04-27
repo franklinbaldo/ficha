@@ -1,20 +1,9 @@
 import httpx
 
-from ficha_etl import smoke
-from ficha_etl.sources import RemoteFile
+from ficha_etl import smoke, upstream
 
 
-def _files() -> list[RemoteFile]:
-    return [
-        RemoteFile(name="A.zip", url="https://x/A.zip", kind="cnaes"),
-        RemoteFile(name="B.zip", url="https://x/B.zip", kind="paises"),
-    ]
-
-
-def test_smoke_all_ok():
-    def handler(_request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, headers={"content-length": "1234"})
-
+def _patch_client(monkeypatch, handler):
     transport = httpx.MockTransport(handler)
     original = httpx.Client
 
@@ -22,54 +11,48 @@ def test_smoke_all_ok():
         kwargs.setdefault("transport", transport)
         return original(*args, **kwargs)
 
-    httpx.Client = patched  # type: ignore[assignment]
-    try:
-        results = smoke.smoke_check(_files())
-    finally:
-        httpx.Client = original  # type: ignore[assignment]
-
-    assert all(r.ok for r in results)
-    assert all(r.size == 1234 for r in results)
+    monkeypatch.setattr(httpx, "Client", patched)
 
 
-def test_smoke_reports_404_as_failure():
-    def handler(_request: httpx.Request) -> httpx.Response:
-        return httpx.Response(404)
+def test_smoke_all_ok(monkeypatch):
+    monkeypatch.setenv(upstream.ENV_VAR, "FROM_ENV")
 
-    transport = httpx.MockTransport(handler)
-    original = httpx.Client
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200)
 
-    def patched(*args, **kwargs):
-        kwargs.setdefault("transport", transport)
-        return original(*args, **kwargs)
-
-    httpx.Client = patched  # type: ignore[assignment]
-    try:
-        results = smoke.smoke_check(_files())
-    finally:
-        httpx.Client = original  # type: ignore[assignment]
-
-    assert not any(r.ok for r in results)
-    assert all(r.status == 404 for r in results)
+    _patch_client(monkeypatch, handler)
+    report = smoke.run_smoke()
+    assert report.upstream_ok is True
+    assert report.mirror_ok is True
+    assert report.all_ok is True
 
 
-def test_smoke_captures_network_error():
-    def handler(_request: httpx.Request) -> httpx.Response:
-        raise httpx.ConnectError("boom")
+def test_smoke_upstream_failure_reported(monkeypatch):
+    monkeypatch.delenv(upstream.ENV_VAR, raising=False)
 
-    transport = httpx.MockTransport(handler)
-    original = httpx.Client
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "archive.org" in str(request.url):
+            return httpx.Response(200)
+        return httpx.Response(404)  # all token strategies fail
 
-    def patched(*args, **kwargs):
-        kwargs.setdefault("transport", transport)
-        return original(*args, **kwargs)
+    _patch_client(monkeypatch, handler)
+    report = smoke.run_smoke()
+    assert report.upstream_ok is False
+    assert report.mirror_ok is True
+    assert report.all_ok is False
 
-    httpx.Client = patched  # type: ignore[assignment]
-    try:
-        results = smoke.smoke_check(_files())
-    finally:
-        httpx.Client = original  # type: ignore[assignment]
 
-    assert not any(r.ok for r in results)
-    assert all(r.status is None for r in results)
-    assert all(r.error and "boom" in r.error for r in results)
+def test_smoke_mirror_failure_reported(monkeypatch):
+    monkeypatch.setenv(upstream.ENV_VAR, "FROM_ENV")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "archive.org" in str(request.url):
+            raise httpx.ConnectError("simulated outage")
+        return httpx.Response(200)
+
+    _patch_client(monkeypatch, handler)
+    report = smoke.run_smoke()
+    assert report.upstream_ok is True
+    assert report.mirror_ok is False
+    assert report.all_ok is False
+    assert "simulated outage" in report.mirror_detail

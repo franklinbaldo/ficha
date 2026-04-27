@@ -1,105 +1,68 @@
-"""HEAD-only smoke check para detectar mudanças na URL/disponibilidade do RFB
-sem baixar bytes.
+"""Smoke check do ETL: valida que upstream + mirror estão acessíveis.
 
-Uso típico em CI scheduled — falha cedo se o RFB mudar layout/URL.
+Modelo (ADR 0012):
+    RFB Nextcloud  →  ficha-YYYY-MM @ Internet Archive  →  frontend
+
+Smoke verifica os dois alvos em separado:
+
+1. **Upstream RFB**: consigo descobrir um token Nextcloud válido? (ADR 0013)
+2. **Mirror IA**: consigo alcançar archive.org?
+
+Cada lado é reportado independentemente. Falha total = ambos quebrados.
 """
 
 from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import date, timedelta
 
 import httpx
 
-from .sources import RemoteFile, base_url
+from . import mirror, upstream
 
 log = logging.getLogger(__name__)
 
 _HTTP_TIMEOUT = httpx.Timeout(connect=15.0, read=30.0, write=15.0, pool=15.0)
 
 
-def _shift_month(year: int, month: int, delta: int) -> tuple[int, int]:
-    idx = (year * 12 + (month - 1)) + delta
-    return idx // 12, (idx % 12) + 1
-
-
-def find_latest_available_month(*, max_lookback: int = 6) -> str | None:
-    """Probe parent directories backwards until one returns 200.
-
-    Used in CI smoke pra que mês ainda não publicado pelo RFB não falhe a build.
-    Retorna 'YYYY-MM' do mês mais recente disponível ou None se nenhum dos
-    `max_lookback` últimos meses respondeu.
-    """
-    today = date.today()
-    candidates: list[str] = []
-    for offset in range(0, max_lookback + 1):
-        y, m = _shift_month(today.year, today.month, -offset)
-        candidates.append(f"{y:04d}-{m:02d}")
-
-    with httpx.Client(timeout=_HTTP_TIMEOUT, follow_redirects=True) as client:
-        for month in candidates:
-            url = f"{base_url()}/{month}/"
-            try:
-                r = client.head(url)
-            except httpx.HTTPError as exc:
-                log.warning("probe %s failed: %s", month, exc)
-                continue
-            if 200 <= r.status_code < 300:
-                log.info("latest available month: %s", month)
-                return month
-            log.debug("probe %s → HTTP %d", month, r.status_code)
-    return None
-
-
-# kept for backward compat — unused once we fix the date math, but harmless.
-def _last_month_iso(today: date | None = None) -> str:
-    today = today or date.today()
-    last = today.replace(day=1) - timedelta(days=1)
-    return last.strftime("%Y-%m")
-
-
 @dataclass
-class SmokeResult:
-    file: RemoteFile
-    status: int | None
-    size: int | None
-    error: str | None
+class SmokeReport:
+    upstream_ok: bool
+    upstream_detail: str
+    mirror_ok: bool
+    mirror_detail: str
 
     @property
-    def ok(self) -> bool:
-        return self.status is not None and 200 <= self.status < 300
+    def all_ok(self) -> bool:
+        return self.upstream_ok and self.mirror_ok
 
 
-def smoke_check(files: list[RemoteFile]) -> list[SmokeResult]:
-    """Roda HEAD em cada URL. Não levanta — devolve resultado por arquivo."""
-    results: list[SmokeResult] = []
+def run_smoke() -> SmokeReport:
     with httpx.Client(timeout=_HTTP_TIMEOUT, follow_redirects=True) as client:
-        for f in files:
-            results.append(_head(f, client))
-    return results
+        upstream_ok, upstream_detail = _check_upstream(client)
+        mirror_ok, mirror_detail = _check_mirror(client)
+    return SmokeReport(
+        upstream_ok=upstream_ok,
+        upstream_detail=upstream_detail,
+        mirror_ok=mirror_ok,
+        mirror_detail=mirror_detail,
+    )
 
 
-def diagnose_root(month: str) -> tuple[str, int | None, str | None]:
-    """Faz HEAD na URL raiz dos dumps + na pasta do mês alvo.
-
-    Retorna (url_da_pasta_do_mes, status_code, error_msg). Útil para
-    distinguir 'RFB inteiro fora do ar' de 'mês ainda não publicado'.
-    """
-    month_url = f"{base_url()}/{month}/"
+def _check_upstream(client: httpx.Client) -> tuple[bool, str]:
     try:
-        with httpx.Client(timeout=_HTTP_TIMEOUT, follow_redirects=True) as client:
-            r = client.head(month_url)
-            return month_url, r.status_code, None
-    except httpx.HTTPError as exc:
-        return month_url, None, str(exc)
+        result = upstream.discover_token(client=client)
+    except upstream.NoTokenFoundError as exc:
+        return False, str(exc)
+    return True, f"token={result.token} source={result.source}"
 
 
-def _head(file: RemoteFile, client: httpx.Client) -> SmokeResult:
+def _check_mirror(client: httpx.Client) -> tuple[bool, str]:
+    url = mirror.base_url()
     try:
-        r = client.head(file.url)
-        cl = r.headers.get("content-length")
-        size = int(cl) if cl and cl.isdigit() else None
-        return SmokeResult(file=file, status=r.status_code, size=size, error=None)
+        r = client.head(url)
     except httpx.HTTPError as exc:
-        return SmokeResult(file=file, status=None, size=None, error=str(exc))
+        return False, f"{url} → {exc}"
+    if 200 <= r.status_code < 400:
+        return True, f"{url} → HTTP {r.status_code}"
+    return False, f"{url} → HTTP {r.status_code}"

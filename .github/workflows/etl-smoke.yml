@@ -1,4 +1,4 @@
-name: ETL — RFB source smoke check
+name: ETL — upstream + mirror smoke check
 
 on:
   pull_request:
@@ -6,15 +6,10 @@ on:
       - 'etl/**'
       - '.github/workflows/etl-smoke.yml'
   schedule:
-    # Toda segunda 06:00 UTC. Detecta mudança de URL/disponibilidade do RFB
+    # Toda segunda 06:00 UTC. Detecta mudança de URL/disponibilidade da RFB
     # antes do cron mensal de fato rodar.
     - cron: '0 6 * * 1'
   workflow_dispatch:
-    inputs:
-      month:
-        description: 'YYYY-MM (vazio = mês anterior, mais provável de estar publicado)'
-        required: false
-        type: string
 
 permissions:
   contents: read
@@ -39,39 +34,15 @@ jobs:
 
       - run: uv sync
 
-      - name: Validate input month (when provided)
-        id: month
-        env:
-          INPUT_MONTH: ${{ inputs.month }}
-        run: |
-          if [ -n "$INPUT_MONTH" ]; then
-            if ! [[ "$INPUT_MONTH" =~ ^[0-9]{4}-(0[1-9]|1[0-2])$ ]]; then
-              echo "::error::Invalid month '$INPUT_MONTH' — expected YYYY-MM"
-              exit 1
-            fi
-          fi
-          # When unset, the smoke command auto-discovers the latest available
-          # month — robust to RFB publication delays.
-          echo "value=$INPUT_MONTH" >> "$GITHUB_OUTPUT"
-
       - name: Run smoke check
         id: smoke
-        env:
-          MONTH: ${{ steps.month.outputs.value }}
         run: |
-          MONTH_ARG=()
-          if [ -n "$MONTH" ]; then
-            MONTH_ARG=(--month "$MONTH")
-            HEADER="## Smoke check — \`$MONTH\`"
-          else
-            HEADER="## Smoke check — auto-discover"
-          fi
           {
-            echo "$HEADER"
+            echo "## ETL smoke check"
             echo ""
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
-          uv run ficha-etl smoke "${MONTH_ARG[@]}" 2>&1 | tee smoke-output.txt | tee -a "$GITHUB_STEP_SUMMARY"
+          uv run ficha-etl smoke 2>&1 | tee smoke-output.txt | tee -a "$GITHUB_STEP_SUMMARY"
           rc=${PIPESTATUS[0]}
           {
             echo '```'
@@ -91,9 +62,8 @@ jobs:
         with:
           script: |
             const output = `${{ steps.smoke.outputs.output }}`;
-            const month = `${{ steps.month.outputs.value }}`;
             const body = [
-              `### 🔥 Smoke check failed for \`${month}\``,
+              `### 🔥 Smoke check failed`,
               '',
               '<details><summary>Output</summary>',
               '',

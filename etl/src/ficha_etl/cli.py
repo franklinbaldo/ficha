@@ -8,8 +8,7 @@ import sys
 from pathlib import Path
 
 from . import download as download_mod
-from . import smoke as smoke_mod
-from . import sources
+from . import mirror, smoke, sources, upstream
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -21,8 +20,7 @@ def main(argv: list[str] | None = None) -> int:
     run = sub.add_parser("run", help="Executa o pipeline completo para um mês")
     run.add_argument("--month", required=True, help="Snapshot alvo no formato YYYY-MM")
 
-    dl = sub.add_parser("download", help="Apenas baixa os ZIPs de um mês")
-    dl.add_argument("--month", required=True, help="Snapshot alvo no formato YYYY-MM")
+    dl = sub.add_parser("download", help="Baixa o release atual da RFB para disco")
     dl.add_argument(
         "--target",
         type=Path,
@@ -30,35 +28,39 @@ def main(argv: list[str] | None = None) -> int:
         help="Diretório de destino (default: ./.cache/raw)",
     )
 
-    sm = sub.add_parser(
+    sub.add_parser(
         "smoke",
-        help="HEAD em cada URL para detectar mudanças na fonte sem baixar bytes",
+        help="Valida que upstream RFB e mirror IA estão acessíveis",
     )
-    sm.add_argument(
-        "--month",
-        help=(
-            "Snapshot alvo (YYYY-MM). Se omitido, descobre o mês mais recente "
-            "disponível probing os últimos 6 meses."
-        ),
+
+    sub.add_parser(
+        "discover-token",
+        help="Imprime o token Nextcloud da RFB descoberto via env / known / scrape",
     )
 
     args = parser.parse_args(argv)
 
     if args.command == "download":
-        return _cmd_download(args.month, args.target)
+        return _cmd_download(args.target)
     if args.command == "smoke":
-        return _cmd_smoke(args.month)  # may be None → auto-discover
+        return _cmd_smoke()
+    if args.command == "discover-token":
+        return _cmd_discover_token()
     if args.command == "run":
         raise NotImplementedError(f"Pipeline ainda não implementado (alvo: {args.month})")
 
     return 0
 
 
-def _cmd_download(month: str, target: Path) -> int:
-    if not sources.is_valid_month(month):
-        print(f"error: month must be YYYY-MM, got {month!r}", file=sys.stderr)
-        return 2
-    files = sources.files_for_month(month)
+def _cmd_download(target: Path) -> int:
+    """Baixa todos os ZIPs do release atual da RFB. Token via discover."""
+    try:
+        tok = upstream.discover_token()
+    except upstream.NoTokenFoundError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    print(f"Using token {tok.token} (source: {tok.source})")
+    files = upstream.files_in_share(tok.token)
     target.mkdir(parents=True, exist_ok=True)
     results = download_mod.download_all(files, target)
     total = sum(r.size_bytes for r in results)
@@ -66,53 +68,39 @@ def _cmd_download(month: str, target: Path) -> int:
     return 0
 
 
-def _cmd_smoke(month: str | None) -> int:
-    if month is None:
-        print(f"Auto-discovering latest published month (base_url={sources.base_url()})...")
-        month = smoke_mod.find_latest_available_month()
-        if month is None:
-            print(
-                "error: no recent month responded — RFB indisponível ou URL mudou",
-                file=sys.stderr,
-            )
-            return 1
-        print(f"Latest available month: {month}")
-    elif not sources.is_valid_month(month):
-        print(f"error: month must be YYYY-MM, got {month!r}", file=sys.stderr)
-        return 2
+def _cmd_smoke() -> int:
+    print("Smoke check — upstream RFB + mirror IA")
+    print()
+    report = smoke.run_smoke()
 
-    print(f"Smoke target: month={month}  base_url={sources.base_url()}")
-    files = sources.files_for_month(month)
-    results = smoke_mod.smoke_check(files)
-    failed = [r for r in results if not r.ok]
-    for r in results:
-        size_str = f"{r.size:>12,} bytes" if r.size else " " * 18
-        if r.ok:
-            print(f"  ok  {r.status}  {size_str}  {r.file.name}")
-        else:
-            err = r.error or f"HTTP {r.status}"
-            print(f"FAIL       {size_str}  {r.file.name}  — {err}", file=sys.stderr)
-    print(f"\n{len(results) - len(failed)}/{len(results)} URLs OK")
+    upstream_mark = "✓" if report.upstream_ok else "✗"
+    mirror_mark = "✓" if report.mirror_ok else "✗"
 
-    if failed:
-        # Probe pai pra distinguir "RFB fora" de "mês não publicado".
-        url, status, err = smoke_mod.diagnose_root(month)
-        if err:
-            print(f"\nDiagnóstico — pasta do mês: {url}  ERRO: {err}", file=sys.stderr)
-        else:
-            print(f"\nDiagnóstico — pasta do mês: {url}  HTTP {status}", file=sys.stderr)
-            if status == 404:
-                print(
-                    "  → mês ainda não publicado pelo RFB. Tente um mês anterior.",
-                    file=sys.stderr,
-                )
-            elif status and 500 <= status < 600:
-                print(
-                    "  → RFB indisponível (5xx). Não bloquear merge — re-rodar depois.",
-                    file=sys.stderr,
-                )
+    print(f"  {upstream_mark} upstream  {report.upstream_detail}")
+    print(f"  {mirror_mark} mirror    {report.mirror_detail}")
+    print()
 
-    return 0 if not failed else 1
+    if report.all_ok:
+        print("OK — upstream e mirror estão acessíveis")
+        return 0
+    print("FAIL — alguma fonte está inacessível", file=sys.stderr)
+    return 1
+
+
+def _cmd_discover_token() -> int:
+    try:
+        result = upstream.discover_token()
+    except upstream.NoTokenFoundError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    print(f"token={result.token}")
+    print(f"source={result.source}")
+    return 0
+
+
+# Re-export for backward compat with anyone importing sources.is_valid_month.
+__all__ = ["main"]
+_ = (sources, mirror)  # silence unused-import lints in editors
 
 
 if __name__ == "__main__":
