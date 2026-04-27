@@ -36,17 +36,20 @@ __pycache__/
 *$py.class
 *.so
 .Python
-build/
-develop-eggs/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
+# These are Python build artifacts. Scope them under etl/ so we don't
+# accidentally ignore directories with the same name elsewhere (notably
+# web/src/lib/).
+etl/build/
+etl/develop-eggs/
+etl/downloads/
+etl/eggs/
+etl/.eggs/
+etl/lib/
+etl/lib64/
+etl/parts/
+etl/sdist/
+etl/var/
+etl/wheels/
 *.egg-info/
 .installed.cfg
 *.egg

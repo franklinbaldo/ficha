@@ -1,18 +1,27 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import * as duckdb from '@duckdb/duckdb-wasm';
+  import { strip as stripCNPJ } from '../lib/cnpj';
 
-  // Svelte 5 Runes
+  type EmpresaRow = {
+    cnpj: string;
+    razao_social: string | null;
+    nome_fantasia: string | null;
+    uf: string | null;
+    cnae_principal: string | null;
+    capital_social: number | null;
+  };
+
   let cnpj = $state('');
-  let results = $state<any[]>([]);
+  let results = $state<EmpresaRow[]>([]);
   let db = $state<duckdb.AsyncDuckDB | null>(null);
   let loading = $state(false);
   let status = $state('Inicializando Lakehouse...');
 
   async function initDuckDB() {
     try {
-      const JSDELIVR_BUNDLES = duckdb.getJsDelivrBundles();
-      const bundle = await duckdb.selectBundle(JSDELIVR_BUNDLES);
+      const bundles = duckdb.getJsDelivrBundles();
+      const bundle = await duckdb.selectBundle(bundles);
 
       const worker = new Worker(
         URL.createObjectURL(
@@ -27,8 +36,7 @@
 
       status = 'Montando base de dados (Parquet)...';
       const conn = await db.connect();
-      
-      // Registrar o arquivo remoto
+
       await db.registerFileURL(
         'base_amostra.parquet',
         '/samples/base_amostra.parquet',
@@ -36,12 +44,11 @@
         false
       );
 
-      // Criar view ou carregar dados
       await conn.query(`
-        CREATE TABLE empresas AS 
+        CREATE TABLE empresas AS
         SELECT * FROM 'base_amostra.parquet'
       `);
-      
+
       await conn.close();
       status = 'Pronto para consultas';
     } catch (e) {
@@ -55,28 +62,30 @@
   });
 
   async function search() {
-    if (!db || !cnpj) return;
+    if (!db || !cnpj.trim()) return;
     loading = true;
-    const cleanCNPJ = cnpj.replace(/\D/g, '');
+    const cleanCNPJ = stripCNPJ(cnpj);
+    const searchTerm = cnpj.trim();
 
     try {
       const conn = await db.connect();
-      // Busca vetorizada e eficiente
-      const res = await conn.query(`
-        SELECT 
-          cnpj, 
-          razao_social, 
-          nome_fantasia, 
-          uf, 
+      // Prepared statement com binds — evita SQL injection.
+      const stmt = await conn.prepare(`
+        SELECT
+          cnpj,
+          razao_social,
+          nome_fantasia,
+          uf,
           cnae_principal,
           capital_social
-        FROM empresas 
-        WHERE cnpj LIKE '%${cleanCNPJ}%'
-           OR razao_social ILIKE '%${cnpj}%'
+        FROM empresas
+        WHERE cnpj LIKE ?
+           OR razao_social ILIKE ?
         LIMIT 20
       `);
-      
-      results = res.toArray().map(r => r.toJSON());
+      const res = await stmt.query(`%${cleanCNPJ}%`, `%${searchTerm}%`);
+      results = res.toArray().map((r) => r.toJSON() as EmpresaRow);
+      await stmt.close();
       await conn.close();
     } catch (e) {
       console.error('Erro na busca:', e);

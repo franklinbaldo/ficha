@@ -1,0 +1,87 @@
+---
+import FICHAHeader from '../components/Header.svelte';
+---
+
+<html lang="pt-br">
+  <head>
+    <meta charset="utf-8" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="viewport" content="width=device-width" />
+    <meta name="generator" content={Astro.generator} />
+    <title>Sobre — FICHA</title>
+  </head>
+  <body>
+    <FICHAHeader client:load />
+    <main>
+      <h1>Sobre o FICHA</h1>
+      <p>
+        <strong>FICHA</strong> — <em>Fichário de Identificação de CNPJ Hospedado no Archive</em> — é
+        um Data Lakehouse <em>serverless</em> e atômico para dados públicos do CNPJ da Receita
+        Federal Brasileira.
+      </p>
+
+      <h2>Como funciona</h2>
+      <p>O projeto opera em duas camadas de acesso:</p>
+      <ul>
+        <li>
+          <strong>Camada Atômica:</strong> milhões de arquivos <code>{`{cnpj}.json`}</code> servidos
+          via Internet Archive — consulta direta por CNPJ, custo zero de processamento.
+        </li>
+        <li>
+          <strong>Camada Analítica:</strong> Apache Parquet otimizado, consultado via DuckDB-WASM
+          direto no navegador — joins, filtros e análise de grafos sem backend.
+        </li>
+      </ul>
+
+      <h2>Stack</h2>
+      <ul>
+        <li>Frontend: Astro + Svelte 5 + TypeScript + Zod</li>
+        <li>Motor de dados: DuckDB-WASM</li>
+        <li>Storage: Internet Archive</li>
+        <li>ETL: Python + DuckDB + GitHub Actions</li>
+      </ul>
+
+      <h2>Código</h2>
+      <p>
+        Open source, MIT.
+        <a href="https://github.com/franklinbaldo/ficha" rel="noopener">github.com/franklinbaldo/ficha</a>
+      </p>
+
+      <h2>Disclaimer</h2>
+      <p>
+        Os dados exibidos vêm dos dumps mensais públicos da Receita Federal. O FICHA não modifica os
+        dados originais e não se responsabiliza por imprecisões ou desatualizações na fonte.
+      </p>
+    </main>
+  </body>
+</html>
+
+<style>
+  body {
+    font-family: sans-serif;
+    margin: 0;
+    padding: 0;
+    background: #f4f4f4;
+  }
+  main {
+    max-width: 800px;
+    margin: 2rem auto;
+    padding: 2rem;
+    background: white;
+    border-radius: 8px;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+    line-height: 1.6;
+  }
+  h1 {
+    margin-top: 0;
+  }
+  h2 {
+    margin-top: 2rem;
+  }
+  code {
+    background: #eee;
+    padding: 0.1em 0.3em;
+    border-radius: 3px;
+    font-size: 0.9em;
+  }
+</style>
