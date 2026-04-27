@@ -1,6 +1,10 @@
 name: ETL — RFB source smoke check
 
 on:
+  pull_request:
+    paths:
+      - 'etl/**'
+      - '.github/workflows/etl-smoke.yml'
   schedule:
     # Toda segunda 06:00 UTC. Detecta mudança de URL/disponibilidade do RFB
     # antes do cron mensal de fato rodar.
@@ -8,7 +12,7 @@ on:
   workflow_dispatch:
     inputs:
       month:
-        description: 'YYYY-MM (vazio = mês corrente)'
+        description: 'YYYY-MM (vazio = mês anterior, mais provável de estar publicado)'
         required: false
         type: string
 
@@ -33,14 +37,23 @@ jobs:
 
       - name: Resolve target month
         id: month
+        # Default = mês anterior. RFB publica entre dias 1-5 do mês corrente
+        # referente ao mês anterior — então o anterior é sempre o mais recente
+        # disponível com confiança.
         env:
           INPUT_MONTH: ${{ inputs.month }}
         run: |
-          MONTH="${INPUT_MONTH:-$(date -u +%Y-%m)}"
+          if [ -n "$INPUT_MONTH" ]; then
+            MONTH="$INPUT_MONTH"
+          else
+            # Use o dia 15 pra evitar drift de timezone perto da virada de mês.
+            MONTH=$(date -u -d "$(date -u +%Y-%m-15) -1 month" +%Y-%m)
+          fi
           if ! [[ "$MONTH" =~ ^[0-9]{4}-(0[1-9]|1[0-2])$ ]]; then
             echo "::error::Invalid month '$MONTH' — expected YYYY-MM"
             exit 1
           fi
+          echo "Resolved target month: $MONTH"
           echo "value=$MONTH" >> "$GITHUB_OUTPUT"
 
       - name: Run smoke check
