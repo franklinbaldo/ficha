@@ -77,6 +77,28 @@ jobs:
             echo "" >> "$OUT"
           fi
 
+          # 7. PROPFIND inside latest month folder — see what files exist there
+          run curl -k -sS -L --max-time 30 -A "Mozilla/5.0" \
+            -X PROPFIND -u "$TOKEN:" -H "Depth: 1" -H "Content-Type: text/xml" \
+            "$BASE/public.php/webdav/2026-04/"
+
+          # 8. HEAD on a known file inside the month folder — check size + Range support
+          run curl -k -sSI -L --max-time 30 -A "Mozilla/5.0" -u "$TOKEN:" \
+            "$BASE/public.php/webdav/2026-04/Empresas0.zip"
+
+          # 9. HEAD on cnpj.tar.gz (63GB bundle) — check size + Range support
+          run curl -k -sSI -L --max-time 30 -A "Mozilla/5.0" -u "$TOKEN:" \
+            "$BASE/public.php/webdav/cnpj.tar.gz"
+
+          # 10. Range request: first 512 bytes of cnpj.tar.gz to see header magic
+          run curl -k -sS --max-time 30 -A "Mozilla/5.0" -u "$TOKEN:" \
+            -H "Range: bytes=0-511" \
+            -o /tmp/tar-head.bin -w "%{http_code} %{size_download}b range_supported=%{header_accept_ranges}\n" \
+            "$BASE/public.php/webdav/cnpj.tar.gz"
+          echo "=== tar.gz first 512 bytes (od -c, first 80 lines) ===" >> "$OUT"
+          od -c /tmp/tar-head.bin | head -10 >> "$OUT" || true
+          echo "" >> "$OUT"
+
           # Mirror to step summary AND step output for the PR comment.
           {
             echo "## Nextcloud probe — results"
