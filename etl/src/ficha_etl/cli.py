@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 
 from . import download as download_mod
-from . import mirror, smoke, sources, upstream
+from . import fetcher, mirror, smoke, sources, upstream
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -45,6 +45,27 @@ def main(argv: list[str] | None = None) -> int:
     ls = sub.add_parser("list-files", help="Lista arquivos de um snapshot mensal")
     ls.add_argument("--month", required=True)
 
+    ft = sub.add_parser(
+        "fetch",
+        help=(
+            "Resolve um arquivo via chain: cache local → IA mirror → RFB upstream. "
+            "Devolve o caminho local do arquivo após download (se necessário)."
+        ),
+    )
+    ft.add_argument("--month", required=True)
+    ft.add_argument("--file", required=True, help="Nome do arquivo (ex.: Empresas0.zip)")
+    ft.add_argument(
+        "--cache-dir",
+        type=Path,
+        default=fetcher.DEFAULT_CACHE_DIR,
+        help=f"Diretório de cache (default: {fetcher.DEFAULT_CACHE_DIR})",
+    )
+    ft.add_argument(
+        "--no-upstream",
+        action="store_true",
+        help="Não cair no RFB upstream se cache + IA mirror falharem",
+    )
+
     args = parser.parse_args(argv)
 
     if args.command == "download":
@@ -55,6 +76,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_list_snapshots()
     if args.command == "list-files":
         return _cmd_list_files(args.month)
+    if args.command == "fetch":
+        return _cmd_fetch(args.month, args.file, args.cache_dir, args.no_upstream)
     if args.command == "run":
         raise NotImplementedError(f"Pipeline ainda não implementado (alvo: {args.month})")
 
@@ -134,6 +157,23 @@ def _cmd_list_files(month: str) -> int:
         print(f"{f.size:>14,}  {f.name}")
         total += f.size
     print(f"\n{len(files)} files, {total:,} bytes total", file=sys.stderr)
+    return 0
+
+
+def _cmd_fetch(month: str, filename: str, cache_dir: Path, no_upstream: bool) -> int:
+    if not sources.is_valid_month(month):
+        print(f"error: month must be YYYY-MM, got {month!r}", file=sys.stderr)
+        return 2
+    chain = fetcher.default_chain(
+        month, cache_dir=cache_dir, include_upstream=not no_upstream
+    )
+    print(f"Chain: {' → '.join(f.name for f in chain.fetchers)}", file=sys.stderr)
+    try:
+        path = chain.get(filename)
+    except FileNotFoundError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    print(path)
     return 0
 
 
