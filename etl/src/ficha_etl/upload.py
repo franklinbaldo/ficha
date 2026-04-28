@@ -15,14 +15,23 @@ Ver ADR 0012 e mirror.py (URLs de leitura).
 from __future__ import annotations
 
 import logging
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
+import httpx
 import internetarchive as ia
 
 from .mirror import item_id
 from .sources import canonical_inventory, is_valid_month
+from . import upstream
 
 log = logging.getLogger(__name__)
+
+# Timeout generoso: ZIPs grandes podem levar minutos pra transferir
+_STREAM_TIMEOUT = httpx.Timeout(connect=30.0, read=600.0, write=600.0, pool=30.0)
+_IA_S3_BASE = "https://s3.us.archive.org"
+_CHUNK = 1024 * 1024  # 1 MiB
 
 _RETRIES = 5
 _RETRY_SLEEP = 30  # segundos entre tentativas
@@ -34,6 +43,157 @@ _IA_METADATA_BASE: dict[str, object] = {
     "licenseurl": "https://creativecommons.org/publicdomain/zero/1.0/",
     "language": "por",
 }
+
+
+def _ia_s3_put(
+    identifier: str,
+    remote_name: str,
+    body_iter,
+    *,
+    content_length: str,
+    access_key: str,
+    secret_key: str,
+    is_first: bool = False,
+) -> None:
+    """PUT streaming para o S3 do Internet Archive.
+
+    `body_iter` é consumido em chunks de 1 MiB — nenhum byte é bufferizado em disco.
+    `content_length` é repassado no header para que o IA não use chunked encoding.
+    `is_first=True` envia os metadados do item junto com o primeiro arquivo.
+    """
+    headers: dict[str, str] = {
+        "Authorization": f"LOW {access_key}:{secret_key}",
+        "Content-Length": content_length,
+        "x-archive-size-hint": content_length,
+        "x-archive-queue-derive": "0",
+        "x-archive-auto-make-bucket": "1",
+    }
+    if is_first:
+        # Metadados do item — enviados uma vez só no primeiro PUT
+        headers.update(
+            {
+                "x-archive-meta-mediatype": "data",
+                "x-archive-meta-title": f"FICHA CNPJ — {identifier}",
+                "x-archive-meta-subject": "CNPJ;Receita Federal;dados abertos;Brasil",
+                "x-archive-meta-creator": "franklinbaldo",
+                "x-archive-meta-licenseurl": ("https://creativecommons.org/publicdomain/zero/1.0/"),
+            }
+        )
+    url = f"{_IA_S3_BASE}/{identifier}/{remote_name}"
+    with httpx.Client(timeout=_STREAM_TIMEOUT) as client:
+        resp = client.put(url, content=body_iter, headers=headers)
+    if resp.status_code not in (200, 201):
+        raise RuntimeError(f"IA S3 PUT failed: HTTP {resp.status_code} — {url}")
+
+
+def _stream_one_zip(
+    spec,
+    *,
+    rfb_token: str,
+    month: str,
+    identifier: str,
+    access_key: str,
+    secret_key: str,
+    is_first: bool,
+) -> str:
+    """Faz GET streaming da RFB e PUT direto ao IA S3. Zero bytes em disco."""
+    rfb_url = upstream.file_url(rfb_token, month, spec.name)
+    remote_name = f"raw/{spec.name}"
+
+    with httpx.Client(timeout=_STREAM_TIMEOUT, follow_redirects=True) as dl:
+        with dl.stream("GET", rfb_url, auth=(rfb_token, "")) as rfb_resp:
+            rfb_resp.raise_for_status()
+            content_length = rfb_resp.headers.get("content-length", "")
+            if not content_length:
+                raise RuntimeError(
+                    f"RFB não retornou Content-Length para {spec.name} "
+                    "— streaming sem tamanho não é suportado"
+                )
+            log.info(
+                "streaming %s → IA (%.1f MB)",
+                spec.name,
+                int(content_length) / 1024 / 1024,
+            )
+            _ia_s3_put(
+                identifier,
+                remote_name,
+                rfb_resp.iter_bytes(_CHUNK),
+                content_length=content_length,
+                access_key=access_key,
+                secret_key=secret_key,
+                is_first=is_first,
+            )
+    return spec.name
+
+
+def stream_raw_zips_to_ia(
+    month: str,
+    *,
+    access_key: str,
+    secret_key: str,
+    workers: int = 4,
+) -> None:
+    """Espelha os 37 ZIPs da RFB para ficha-YYYY-MM/raw/ SEM tocar disco.
+
+    Abre GET streaming para cada ZIP no WebDAV da RFB e faz PUT direto ao
+    endpoint S3 do Internet Archive. A memória usada por worker é de apenas
+    1 MiB (tamanho do chunk) — ideal para runners com disco limitado.
+
+    Args:
+        month: snapshot no formato YYYY-MM.
+        access_key: IA S3-like access key.
+        secret_key: IA S3-like secret key.
+        workers: downloads/uploads simultâneos (default: 4).
+    """
+    if not is_valid_month(month):
+        raise ValueError(f"month must be YYYY-MM, got {month!r}")
+
+    try:
+        rfb_token = upstream.discover_token()
+    except upstream.NoTokenError as exc:
+        raise RuntimeError(f"sem token RFB para streaming: {exc}") from exc
+
+    identifier = item_id(month)
+    specs = list(canonical_inventory())
+    total = len(specs)
+    done = 0
+    lock = threading.Lock()
+    first_lock = threading.Lock()
+    first_sent = False
+
+    log.info(
+        "streaming %d ZIPs RFB → ia:%s/raw/ (%d workers, zero disk)",
+        total,
+        identifier,
+        workers,
+    )
+
+    def _task(spec) -> str:
+        nonlocal done, first_sent
+        with first_lock:
+            is_first = not first_sent
+            if is_first:
+                first_sent = True
+        name = _stream_one_zip(
+            spec,
+            rfb_token=rfb_token,
+            month=month,
+            identifier=identifier,
+            access_key=access_key,
+            secret_key=secret_key,
+            is_first=is_first,
+        )
+        with lock:
+            done += 1
+            log.info("[%d/%d] streamed %s → IA", done, total, name)
+        return name
+
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        futures = {executor.submit(_task, spec): spec for spec in specs}
+        for future in as_completed(futures):
+            future.result()  # propaga exceção se houver
+
+    log.info("all %d ZIPs streamed to ia:%s OK", total, identifier)
 
 
 def _check_responses(responses: list, label: str) -> None:

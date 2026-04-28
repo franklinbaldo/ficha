@@ -322,7 +322,18 @@ def _cmd_run(
     verify: bool,
     verify_sample_size: int,
 ) -> int:
-    """Orquestra: transform → upload outputs → upload raw ZIPs → manifest."""
+    """Orquestra: stream ZIPs → IA → transform → upload parquets → manifest.
+
+    Com upload ativado (default):
+      1. Stream 37 ZIPs da RFB → IA (zero disco, paralelo)
+      2. Transform: baixa do IA (rápido) → DuckDB → parquets
+      3. Upload parquets + lookups.json → IA
+      4. Atualiza manifest.json
+
+    Com --skip-upload (dry-run):
+      1. Transform: baixa da RFB → DuckDB → parquets
+      2. Atualiza manifest.json (sem upload)
+    """
     import os
 
     if not sources.is_valid_month(month):
@@ -332,8 +343,31 @@ def _cmd_run(
     if output_dir is None:
         output_dir = cache_dir / month / "output"
 
-    # ── 1. Transform ────────────────────────────────────────────────────────
-    log.info("[run 1/4] transform %s → %s", month, output_dir)
+    if not skip_upload:
+        access_key = os.environ.get("IA_ACCESS_KEY", "")
+        secret_key = os.environ.get("IA_SECRET_KEY", "")
+        if not access_key or not secret_key:
+            print(
+                "error: IA_ACCESS_KEY e IA_SECRET_KEY devem estar definidos para upload\n"
+                "       use --skip-upload para rodar sem credenciais",
+                file=sys.stderr,
+            )
+            return 1
+
+        # ── 1. Stream ZIPs → IA (zero disco) ────────────────────────────────
+        log.info("[run 1/4] stream ZIPs RFB → IA (zero disco)")
+        try:
+            upload_mod.stream_raw_zips_to_ia(month, access_key=access_key, secret_key=secret_key)
+        except Exception as exc:
+            print(f"error: stream ZIPs falhou: {exc}", file=sys.stderr)
+            return 1
+    else:
+        log.info("[run 1/4] stream ignorado (--skip-upload) — transform usará RFB direto")
+
+    # ── 2. Transform ─────────────────────────────────────────────────────────
+    # Com upload: fetcher chain encontra ZIPs no IA (rápido).
+    # Sem upload: fetcher chain vai direto na RFB.
+    log.info("[run 2/4] transform %s → %s", month, output_dir)
     try:
         transform.transform_snapshot(
             month,
@@ -347,19 +381,9 @@ def _cmd_run(
         print(f"error: transform failed: {exc}", file=sys.stderr)
         return 1
 
-    # ── 2 & 3. Upload ────────────────────────────────────────────────────────
+    # ── 3. Upload parquets ───────────────────────────────────────────────────
     if not skip_upload:
-        access_key = os.environ.get("IA_ACCESS_KEY", "")
-        secret_key = os.environ.get("IA_SECRET_KEY", "")
-        if not access_key or not secret_key:
-            print(
-                "error: IA_ACCESS_KEY e IA_SECRET_KEY devem estar definidos para upload\n"
-                "       use --skip-upload para rodar sem credenciais",
-                file=sys.stderr,
-            )
-            return 1
-
-        log.info("[run 2/4] upload outputs (parquets + lookups.json) → IA")
+        log.info("[run 3/4] upload outputs (parquets + lookups.json) → IA")
         try:
             upload_mod.upload_outputs(
                 month, output_dir, access_key=access_key, secret_key=secret_key
@@ -367,19 +391,10 @@ def _cmd_run(
         except Exception as exc:
             print(f"error: upload outputs falhou: {exc}", file=sys.stderr)
             return 1
-
-        log.info("[run 3/4] upload raw ZIPs → IA")
-        try:
-            upload_mod.upload_raw_zips(
-                month, cache_dir, access_key=access_key, secret_key=secret_key
-            )
-        except Exception as exc:
-            print(f"error: upload raw ZIPs falhou: {exc}", file=sys.stderr)
-            return 1
     else:
-        log.info("[run 2-3/4] upload ignorado (--skip-upload)")
+        log.info("[run 3/4] upload ignorado (--skip-upload)")
 
-    # ── 4. Manifest ──────────────────────────────────────────────────────────
+    # ── 4. Manifest ─────────────────────────────────────────────────────────
     log.info("[run 4/4] atualizar manifest → %s", manifest_path)
     try:
         entry = manifest_mod.build_snapshot_entry(month, output_dir)
