@@ -192,8 +192,8 @@ def _create_table_from_csvs(
 ) -> None:
     """Cria/recria `table` lendo todos os CSVs com layout RFB padrão.
 
-    Layout: ISO-8859-1, sep=`;`, quote=`"`, sem header. Todas as colunas como
-    VARCHAR — conversões (decimal, datas) ficam nas SELECTs finais.
+    Tenta latin-1 primeiro (encoding histórico da RFB); se falhar por encoding,
+    tenta utf-8 (algumas partições da RFB foram publicadas em UTF-8).
 
     Filtra arquivos vazios pra evitar problemas no sniffer do DuckDB.
     """
@@ -210,20 +210,37 @@ def _create_table_from_csvs(
         "[" + ", ".join(f"'{str(p).replace(chr(39), chr(39) * 2)}'" for p in paths) + "]"
     )
     cols_clause = _csv_columns_clause(columns)
-    con.execute(
-        f"""
-        CREATE OR REPLACE TABLE {table} AS
-        SELECT * FROM read_csv(
-            {paths_literal},
-            delim=';',
-            header=false,
-            quote='"',
-            encoding='latin-1',
-            columns={cols_clause},
-            null_padding=true,
-            strict_mode=false
-        )
-        """
+
+    for encoding in ("latin-1", "utf-8"):
+        try:
+            con.execute(
+                f"""
+                CREATE OR REPLACE TABLE {table} AS
+                SELECT * FROM read_csv(
+                    {paths_literal},
+                    delim=';',
+                    header=false,
+                    quote='"',
+                    encoding='{encoding}',
+                    columns={cols_clause},
+                    null_padding=true,
+                    strict_mode=false
+                )
+                """
+            )
+            if encoding != "latin-1":
+                log.warning("tabela '%s' carregada com encoding=%s (fallback)", table, encoding)
+            return
+        except Exception as exc:
+            msg = str(exc).lower()
+            if "not latin-1 encoded" in msg or "not utf-8" in msg or "encoding" in msg:
+                log.warning(
+                    "encoding=%s falhou para '%s': %s — tentando próximo", encoding, table, exc
+                )
+                continue
+            raise
+    raise RuntimeError(
+        f"Falha ao carregar tabela '{table}': nenhum encoding funcionou (latin-1, utf-8)"
     )
 
 
