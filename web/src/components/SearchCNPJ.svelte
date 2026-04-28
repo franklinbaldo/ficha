@@ -1,14 +1,18 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import * as duckdb from '@duckdb/duckdb-wasm';
+  import type * as duckdb from '@duckdb/duckdb-wasm';
   import { strip as stripCNPJ } from '../lib/cnpj';
+  import { fetchManifest, currentSnapshot } from '../lib/manifest';
+  import { createDuckDB, attachCnpjs } from '../lib/analytical';
 
   type EmpresaRow = {
     cnpj: string;
     razao_social: string | null;
     nome_fantasia: string | null;
     uf: string | null;
-    cnae_principal: string | null;
+    cnae_principal_codigo: string | null;
+    cnae_principal_descricao: string | null;
+    municipio_nome: string | null;
     capital_social: number | null;
   };
 
@@ -16,49 +20,40 @@
   let results = $state<EmpresaRow[]>([]);
   let db = $state<duckdb.AsyncDuckDB | null>(null);
   let loading = $state(false);
-  let status = $state('Inicializando Lakehouse...');
+  let snapshotDate = $state<string | null>(null);
+  let status = $state('Inicializando…');
 
-  async function initDuckDB() {
+  async function init() {
     try {
-      const bundles = duckdb.getJsDelivrBundles();
-      const bundle = await duckdb.selectBundle(bundles);
+      status = 'Buscando manifest…';
+      const manifest = await fetchManifest();
+      if (!manifest) {
+        status = 'Aguardando primeira publicação. Volte em breve.';
+        return;
+      }
+      const snap = currentSnapshot(manifest);
+      if (!snap) {
+        status = `Manifest inválido — current=${manifest.current} sem snapshot correspondente.`;
+        return;
+      }
+      snapshotDate = snap.date;
 
-      const worker = new Worker(
-        URL.createObjectURL(
-          new Blob([`importScripts("${bundle.mainWorker!}");`], { type: 'text/javascript' })
-        )
-      );
+      status = 'Carregando DuckDB-WASM…';
+      const duckDB = await createDuckDB();
 
-      const logger = new duckdb.ConsoleLogger();
-      const duckDB = new duckdb.AsyncDuckDB(logger, worker);
-      await duckDB.instantiate(bundle.mainModule, bundle.pthreadWorker);
+      status = `Anexando snapshot ${snap.date}…`;
+      await attachCnpjs(duckDB, snap.files.cnpjs.url);
+
       db = duckDB;
-
-      status = 'Montando base de dados (Parquet)...';
-      const conn = await db.connect();
-
-      await db.registerFileURL(
-        'base_amostra.parquet',
-        '/samples/base_amostra.parquet',
-        duckdb.DuckDBDataProtocol.HTTP,
-        false
-      );
-
-      await conn.query(`
-        CREATE TABLE empresas AS
-        SELECT * FROM 'base_amostra.parquet'
-      `);
-
-      await conn.close();
-      status = 'Pronto para consultas';
+      status = `Pronto para consultas — snapshot ${snap.date}`;
     } catch (e) {
-      console.error('Erro DuckDB:', e);
+      console.error('init error:', e);
       status = 'Erro: ' + (e as Error).message;
     }
   }
 
   onMount(() => {
-    initDuckDB();
+    init();
   });
 
   async function search() {
@@ -76,9 +71,11 @@
           razao_social,
           nome_fantasia,
           uf,
-          cnae_principal,
+          cnae_principal_codigo,
+          cnae_principal_descricao,
+          municipio_nome,
           capital_social
-        FROM empresas
+        FROM cnpjs
         WHERE cnpj LIKE ?
            OR razao_social ILIKE ?
         LIMIT 20
@@ -98,10 +95,10 @@
 <div class="container">
   <div class="search-box">
     <div class="input-group">
-      <input 
-        type="text" 
-        bind:value={cnpj} 
-        placeholder="CNPJ ou Razão Social..." 
+      <input
+        type="text"
+        bind:value={cnpj}
+        placeholder="CNPJ ou Razão Social..."
         onkeydown={(e) => e.key === 'Enter' && search()}
       />
       <button onclick={search} disabled={loading || !db}>
@@ -128,13 +125,18 @@
           <div class="card-body">
             <p><strong>CNPJ:</strong> {empresa.cnpj}</p>
             <p><strong>Fantasia:</strong> {empresa.nome_fantasia || '-'}</p>
-            <p><strong>CNAE:</strong> {empresa.cnae_principal}</p>
+            <p>
+              <strong>CNAE:</strong>
+              {empresa.cnae_principal_codigo}
+              {#if empresa.cnae_principal_descricao}— {empresa.cnae_principal_descricao}{/if}
+            </p>
+            <p><strong>Município:</strong> {empresa.municipio_nome || '-'}</p>
             <p><strong>Capital:</strong> R$ {Number(empresa.capital_social || 0).toLocaleString('pt-BR')}</p>
           </div>
         </div>
       {/each}
     </div>
-  {:else if !loading && cnpj && status === 'Pronto para consultas'}
+  {:else if !loading && cnpj && db}
     <div class="no-results">
       Nenhum dado encontrado para "{cnpj}".
     </div>
