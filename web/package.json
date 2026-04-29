@@ -15,7 +15,7 @@
     "@astrojs/svelte": "^7.0.0",
     "@duckdb/duckdb-wasm": "^1.33.1-dev45.0",
     "apache-arrow": "^21.1.0",
-    "astro": "^5.0.0",
+    "astro": "^6.1.9",
     "duckdb": "^1.4.4",
     "svelte": "^5.0.0",
     "zod": "^3.23.8"
