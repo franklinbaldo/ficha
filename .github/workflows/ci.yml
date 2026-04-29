@@ -33,7 +33,7 @@ jobs:
 
       - name: Install
         if: steps.changes.outputs.web == 'true'
-        run: bun install --frozen-lockfile
+        run: bun install
 
       - name: Astro check
         if: steps.changes.outputs.web == 'true'
