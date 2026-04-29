@@ -26,25 +26,19 @@ jobs:
               - 'web/**'
               - '.github/workflows/ci.yml'
 
+      - uses: actions/setup-node@v4
+        if: steps.changes.outputs.web == 'true'
+        with:
+          node-version: '22'
+
       - uses: oven-sh/setup-bun@v2
         if: steps.changes.outputs.web == 'true'
         with:
           bun-version: latest
 
-      - name: Diagnose env
-        if: steps.changes.outputs.web == 'true'
-        run: |
-          set -x
-          bun --version
-          node --version || true
-          uname -a
-          cat package.json
-          head -5 bun.lock
-          ls -la
-
       - name: Install
         if: steps.changes.outputs.web == 'true'
-        run: bun install --frozen-lockfile --verbose 2>&1
+        run: bun install --frozen-lockfile
 
       - name: Astro check
         if: steps.changes.outputs.web == 'true'
