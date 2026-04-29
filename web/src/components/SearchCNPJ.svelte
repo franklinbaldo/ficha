@@ -4,6 +4,7 @@
   import { strip as stripCNPJ } from '../lib/cnpj';
   import { fetchManifest, currentSnapshot } from '../lib/manifest';
   import { createDuckDB, attachCnpjs } from '../lib/analytical';
+  import EmpresaFicha from './EmpresaFicha.svelte';
 
   type EmpresaRow = {
     cnpj: string;
@@ -115,25 +116,9 @@
   </div>
 
   {#if results.length > 0}
-    <div class="results-grid">
+    <div class="results-list">
       {#each results as empresa}
-        <div class="card">
-          <div class="card-header">
-            <h3>{empresa.razao_social || 'Empresa sem Razão Social'}</h3>
-            <span class="uf-tag">{empresa.uf}</span>
-          </div>
-          <div class="card-body">
-            <p><strong>CNPJ:</strong> {empresa.cnpj}</p>
-            <p><strong>Fantasia:</strong> {empresa.nome_fantasia || '-'}</p>
-            <p>
-              <strong>CNAE:</strong>
-              {empresa.cnae_principal_codigo}
-              {#if empresa.cnae_principal_descricao}— {empresa.cnae_principal_descricao}{/if}
-            </p>
-            <p><strong>Município:</strong> {empresa.municipio_nome || '-'}</p>
-            <p><strong>Capital:</strong> R$ {Number(empresa.capital_social || 0).toLocaleString('pt-BR')}</p>
-          </div>
-        </div>
+        <EmpresaFicha {empresa} />
       {/each}
     </div>
   {:else if !loading && cnpj && db}
@@ -210,52 +195,10 @@
     color: #dc2626;
   }
 
-  .results-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-    gap: 1.5rem;
-  }
-
-  .card {
-    background: white;
-    border-radius: 12px;
-    padding: 1.5rem;
-    border: 1px solid #e5e7eb;
-    transition: box-shadow 0.2s;
-  }
-
-  .card:hover {
-    box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
-  }
-
-  .card-header {
+  .results-list {
     display: flex;
-    justify-content: space-between;
-    align-items: flex-start;
-    margin-bottom: 1rem;
-    gap: 1rem;
-  }
-
-  h3 {
-    margin: 0;
-    font-size: 1.125rem;
-    color: #111827;
-    text-transform: uppercase;
-  }
-
-  .uf-tag {
-    background: #dbeafe;
-    color: #1e40af;
-    padding: 0.25rem 0.625rem;
-    border-radius: 6px;
-    font-size: 0.75rem;
-    font-weight: 700;
-  }
-
-  .card-body p {
-    margin: 0.5rem 0;
-    font-size: 0.9375rem;
-    color: #4b5563;
+    flex-direction: column;
+    gap: 1.5rem;
   }
 
   .no-results {
