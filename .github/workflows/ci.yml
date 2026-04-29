@@ -26,6 +26,11 @@ jobs:
               - 'web/**'
               - '.github/workflows/ci.yml'
 
+      - uses: actions/setup-node@v4
+        if: steps.changes.outputs.web == 'true'
+        with:
+          node-version: '22'
+
       - uses: oven-sh/setup-bun@v2
         if: steps.changes.outputs.web == 'true'
         with:
