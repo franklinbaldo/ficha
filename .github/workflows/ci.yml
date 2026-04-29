@@ -31,9 +31,20 @@ jobs:
         with:
           bun-version: latest
 
+      - name: Diagnose env
+        if: steps.changes.outputs.web == 'true'
+        run: |
+          set -x
+          bun --version
+          node --version || true
+          uname -a
+          cat package.json
+          head -5 bun.lock
+          ls -la
+
       - name: Install
         if: steps.changes.outputs.web == 'true'
-        run: bun install --frozen-lockfile
+        run: bun install --frozen-lockfile --verbose 2>&1
 
       - name: Astro check
         if: steps.changes.outputs.web == 'true'
