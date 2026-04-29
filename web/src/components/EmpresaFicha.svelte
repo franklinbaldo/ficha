@@ -40,12 +40,20 @@
     return s.replace(/^(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})/, "$1.$2.$3/$4-$5");
   }
 
-  function formatCurrency(val: string | number) {
-    let numVal = val;
-    if (typeof val === 'string') {
+  function formatCurrency(val: any) {
+    if (val === null || val === undefined) return 'R$ 0,00';
+
+    let numVal;
+    if (typeof val === 'bigint') {
+      numVal = Number(val);
+    } else if (typeof val === 'string') {
       numVal = Number(val.replace(',', '.'));
+    } else {
+      numVal = Number(val);
     }
-    return Number(numVal || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+
+    if (isNaN(numVal)) return 'R$ 0,00';
+    return numVal.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
   }
 
   function getDiffClass(currentValue: any, pastValue: any) {
@@ -140,14 +148,14 @@
 
 <style>
   .ficha-card {
-    background: #fffdf9;
-    border: 1px solid #e2dcd0;
-    border-radius: 8px;
+    background: var(--color-concreto-bg, #fffdf9);
+    border: 1px solid var(--color-concreto-border, #e2dcd0);
+    border-radius: var(--radius-0, 0);
     box-shadow: 0 4px 10px rgba(0, 0, 0, 0.05), 0 1px 3px rgba(0, 0, 0, 0.1);
     margin-bottom: 1.5rem;
     position: relative;
     overflow: hidden;
-    font-family: 'Courier New', Courier, monospace;
+    font-family: var(--font-concreto, 'Courier New', Courier, monospace);
     transition: transform 0.2s, box-shadow 0.2s;
   }
 
@@ -178,8 +186,8 @@
     justify-content: space-between;
     align-items: center;
     padding: 1.5rem 1.5rem 1rem;
-    border-bottom: 1px dashed #d1c8b4;
-    background: #faf8f2;
+    border-bottom: 1px dashed var(--color-concreto-border, #d1c8b4);
+    background: var(--color-concreto-bg-alt, #faf8f2);
   }
 
   .ficha-id {
@@ -191,7 +199,7 @@
   .label {
     font-size: 0.75rem;
     font-weight: bold;
-    color: #8c8371;
+    color: var(--color-concreto-text-muted, #8c8371);
     text-transform: uppercase;
     letter-spacing: 1px;
   }
@@ -199,19 +207,19 @@
   .value {
     font-size: 1.25rem;
     font-weight: 700;
-    color: #2c2820;
-    font-family: 'Courier New', Courier, monospace;
+    color: var(--color-concreto-text, #2c2820);
+    font-family: var(--font-concreto, 'Courier New', Courier, monospace);
     letter-spacing: -0.5px;
   }
 
   .ficha-uf {
-    background: #2c2820;
+    background: var(--color-concreto-text, #2c2820);
     color: white;
     padding: 0.25rem 0.5rem;
-    border-radius: 4px;
+    border-radius: var(--radius-0, 0);
     font-weight: bold;
     font-size: 0.875rem;
-    font-family: system-ui, sans-serif;
+    font-family: var(--font-curva, system-ui, sans-serif);
   }
 
   .ficha-body {
@@ -229,22 +237,22 @@
 
   .field-label {
     font-size: 0.75rem;
-    color: #8c8371;
+    color: var(--color-concreto-text-muted, #8c8371);
     text-transform: uppercase;
-    font-family: system-ui, sans-serif;
+    font-family: var(--font-curva, system-ui, sans-serif);
     letter-spacing: 0.5px;
   }
 
   .field-value {
     font-size: 1rem;
-    color: #3d382d;
+    color: var(--color-concreto-text-alt, #3d382d);
     font-weight: 600;
     margin: 0;
   }
 
   .main-title {
     font-size: 1.375rem;
-    color: #1a1712;
+    color: var(--color-concreto-text-strong, #1a1712);
     line-height: 1.3;
   }
 
@@ -260,8 +268,8 @@
 
   .ficha-footer {
     padding: 1rem 1.5rem;
-    background: #f5f2eb;
-    border-top: 1px solid #e2dcd0;
+    background: var(--color-concreto-bg-footer, #f5f2eb);
+    border-top: 1px solid var(--color-concreto-border, #e2dcd0);
     display: flex;
     justify-content: flex-end;
   }
@@ -271,28 +279,28 @@
     align-items: center;
     gap: 0.5rem;
     background: white;
-    border: 1px solid #d1c8b4;
-    color: #5c5545;
+    border: 1px solid var(--color-concreto-border, #d1c8b4);
+    color: var(--color-concreto-text-muted2, #5c5545);
     padding: 0.5rem 1rem;
-    border-radius: 6px;
+    border-radius: var(--radius-0, 0);
     font-size: 0.875rem;
     font-weight: 600;
     cursor: pointer;
-    font-family: system-ui, sans-serif;
+    font-family: var(--font-curva, system-ui, sans-serif);
     transition: all 0.2s;
   }
 
   .historico-btn:hover {
-    background: #eeeadd;
-    color: #2c2820;
+    background: var(--color-concreto-hover, #eeeadd);
+    color: var(--color-concreto-text, #2c2820);
   }
 
   .historico-panel {
-    background: #2c2820;
-    color: #e5e5e5;
+    background: var(--color-concreto-text, #2c2820);
+    color: var(--color-concreto-panel-text, #e5e5e5);
     padding: 1.5rem;
-    border-top: 2px solid #1a1712;
-    font-family: system-ui, sans-serif;
+    border-top: 2px solid var(--color-concreto-text-strong, #1a1712);
+    font-family: var(--font-curva, system-ui, sans-serif);
   }
 
   .historico-title {
@@ -300,7 +308,7 @@
     font-size: 0.875rem;
     text-transform: uppercase;
     letter-spacing: 1px;
-    color: #a3a3a3;
+    color: var(--color-concreto-muted3, #a3a3a3);
     display: flex;
     align-items: center;
     gap: 0.5rem;
@@ -316,15 +324,15 @@
   }
 
   .loading-state {
-    color: #a3a3a3;
+    color: var(--color-concreto-muted3, #a3a3a3);
     font-size: 0.875rem;
     font-style: italic;
   }
 
   .snapshot-card {
-    background: #1f1c16;
-    border: 1px solid #3d382d;
-    border-radius: 6px;
+    background: var(--color-concreto-card-bg, #1f1c16);
+    border: 1px solid var(--color-concreto-text-alt, #3d382d);
+    border-radius: var(--radius-0, 0);
     padding: 1rem;
     margin-bottom: 1rem;
   }
@@ -358,7 +366,7 @@
   }
 
   .change-label {
-    color: #a3a3a3;
+    color: var(--color-concreto-muted3, #a3a3a3);
     width: 100px;
   }
 
