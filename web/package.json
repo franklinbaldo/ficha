@@ -12,7 +12,7 @@
     "astro": "astro"
   },
   "dependencies": {
-    "@astrojs/svelte": "^7.0.0",
+    "@astrojs/svelte": "^8.1.0",
     "@duckdb/duckdb-wasm": "^1.33.1-dev45.0",
     "apache-arrow": "^21.1.0",
     "astro": "^6.1.9",
@@ -22,7 +22,7 @@
   },
   "devDependencies": {
     "@astrojs/check": "^0.9.8",
-    "typescript": "^6.0.3",
+    "typescript": "^5.6.0",
     "vitest": "^4.1.5"
   }
 }
