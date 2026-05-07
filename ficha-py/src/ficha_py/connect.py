@@ -39,13 +39,23 @@ def connect_local(parquet_dir: str | Path) -> DuckDBBackend:
     """Open an in-memory DuckDB and register cnpjs/raizes/socios from `parquet_dir`.
 
     Expected files: `cnpjs.parquet`, `raizes.parquet`, `socios.parquet`.
+    All three must be present -- a typo or interrupted copy that's missing
+    one would otherwise leave the connection in a half-broken state where
+    `cnpjs(con)` works but `socios(con)` fails with an opaque
+    table-not-found error inside unrelated query code. Fail fast here
+    instead.
     """
     parquet_dir = Path(parquet_dir)
+    expected = [parquet_dir / f"{name}.parquet" for name in _PARQUETS]
+    missing = [p for p in expected if not p.exists()]
+    if missing:
+        names = ", ".join(p.name for p in missing)
+        raise FileNotFoundError(
+            f"snapshot dir {parquet_dir} is missing required parquet(s): {names}"
+        )
     con: DuckDBBackend = ibis.duckdb.connect()
-    for name in _PARQUETS:
-        path = parquet_dir / f"{name}.parquet"
-        if path.exists():
-            con.read_parquet(str(path), table_name=name)
+    for name, path in zip(_PARQUETS, expected, strict=True):
+        con.read_parquet(str(path), table_name=name)
     return con
 
 
@@ -59,7 +69,14 @@ def connect_ia(month: str) -> DuckDBBackend:
     """
     base = _ia_item_url(month)
     con: DuckDBBackend = ibis.duckdb.connect()
-    con.raw_sql("INSTALL httpfs; LOAD httpfs;")
+    # Try LOAD first (works on pre-provisioned runtimes where INSTALL is
+    # blocked: read-only extension dir, restricted egress, or environments
+    # that ship httpfs in the base image). Only fall back to INSTALL if
+    # the extension genuinely isn't on the path.
+    try:
+        con.raw_sql("LOAD httpfs;")
+    except Exception:
+        con.raw_sql("INSTALL httpfs; LOAD httpfs;")
     for name in _PARQUETS:
         url = f"{base}/{name}.parquet"
         con.read_parquet(url, table_name=name)

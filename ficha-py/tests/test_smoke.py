@@ -102,3 +102,18 @@ def test_connect_ia_validates_month():
         ficha_py.connect_ia(month="2026-13")
     with pytest.raises(ValueError, match="YYYY-MM"):
         ficha_py.connect_ia(month="not-a-month")
+
+
+def test_connect_local_fails_fast_when_parquet_missing(tmp_path):
+    """Incomplete snapshot dirs (typo, partial copy) must fail at connect()
+    time -- not later as an opaque table-not-found inside query code.
+    """
+    _write_fixture(tmp_path)
+    (tmp_path / "socios.parquet").unlink()  # simulate partial copy
+    with pytest.raises(FileNotFoundError, match="socios.parquet"):
+        ficha_py.connect_local(tmp_path)
+
+
+def test_connect_local_fails_fast_when_dir_empty(tmp_path):
+    with pytest.raises(FileNotFoundError, match="cnpjs.parquet"):
+        ficha_py.connect_local(tmp_path)
