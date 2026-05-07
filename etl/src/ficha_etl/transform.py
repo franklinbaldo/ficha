@@ -508,35 +508,48 @@ def write_raizes_parquet(
     Ver ADR 0008 e schema `web/src/schemas/v1/raiz.ts`.
     """
     output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Pre-materialize the heavy CTEs separately. As inline CTEs in a single
+    # COPY query, the 50M-group LIST_DISTINCT aggregation competed for
+    # memory with the empresa JOIN and OOM'd at 5.5 GiB (PR #24, run
+    # 25522678418). Splitting into temp tables forces DuckDB to spill
+    # each step to disk independently, then the final query is just
+    # a chain of small JOINs.
+    log.info("    materializing raizes_agg...")
+    con.execute("""
+        CREATE OR REPLACE TEMP TABLE _raizes_agg AS
+        SELECT
+            est.cnpj_basico AS cnpj_base,
+            COUNT(*)::INTEGER AS qtd_estabelecimentos,
+            COUNT(*) FILTER (WHERE est.situacao_cadastral = '02')::INTEGER
+                AS qtd_estabelecimentos_ativos,
+            LIST_DISTINCT(LIST(est.uf)) AS ufs_atuacao,
+            LIST_DISTINCT(LIST(est.cnae_fiscal_principal)) AS cnaes_principais_distintos
+        FROM estabelecimento est
+        GROUP BY est.cnpj_basico
+    """)
+    log.info("    materializing raizes_matriz...")
+    con.execute(f"""
+        CREATE OR REPLACE TEMP TABLE _raizes_matriz AS
+        SELECT
+            est.cnpj_basico,
+            {_date_expr("est.data_inicio_atividade")} AS data_inicio_atividade_matriz,
+            est.uf AS uf_matriz,
+            est.municipio AS municipio_matriz_codigo,
+            est.cnae_fiscal_principal AS cnae_principal_matriz_codigo
+        FROM estabelecimento est
+        WHERE est.identificador_matriz_filial = '1'
+        QUALIFY ROW_NUMBER() OVER (
+            PARTITION BY est.cnpj_basico ORDER BY est.cnpj_ordem
+        ) = 1
+    """)
+
+    log.info("    joining + writing raizes.parquet...")
     con.execute(
         f"""
         COPY (
-            WITH agg AS (
-                SELECT
-                    est.cnpj_basico AS cnpj_base,
-                    COUNT(*)::INTEGER AS qtd_estabelecimentos,
-                    COUNT(*) FILTER (WHERE est.situacao_cadastral = '02')::INTEGER
-                        AS qtd_estabelecimentos_ativos,
-                    LIST_DISTINCT(LIST(est.uf)) AS ufs_atuacao,
-                    LIST_DISTINCT(LIST(est.cnae_fiscal_principal)) AS cnaes_principais_distintos
-                FROM estabelecimento est
-                GROUP BY est.cnpj_basico
-            ),
-            matriz AS (
-                -- QUALIFY garante 1 linha por cnpj_basico mesmo se dados da RFB
-                -- tiverem mais de uma entrada com identificador_matriz_filial = '1'.
-                SELECT
-                    est.cnpj_basico,
-                    {_date_expr("est.data_inicio_atividade")} AS data_inicio_atividade_matriz,
-                    est.uf AS uf_matriz,
-                    est.municipio AS municipio_matriz_codigo,
-                    est.cnae_fiscal_principal AS cnae_principal_matriz_codigo
-                FROM estabelecimento est
-                WHERE est.identificador_matriz_filial = '1'
-                QUALIFY ROW_NUMBER() OVER (
-                    PARTITION BY est.cnpj_basico ORDER BY est.cnpj_ordem
-                ) = 1
-            )
+            WITH agg AS (SELECT * FROM _raizes_agg),
+            matriz AS (SELECT * FROM _raizes_matriz)
             SELECT
                 emp.cnpj_basico AS cnpj_base,
                 emp.razao_social,
@@ -575,6 +588,9 @@ def write_raizes_parquet(
         """,
         [str(output_path)],
     )
+    # Free the temp tables now that raizes.parquet is on disk.
+    con.execute("DROP TABLE IF EXISTS _raizes_agg")
+    con.execute("DROP TABLE IF EXISTS _raizes_matriz")
 
 
 def write_socios_parquet(
@@ -681,9 +697,12 @@ def transform_snapshot(
     # Reduce parallelism. Each thread holds its own working set during
     # the 70M x 67M VARCHAR-keyed hash join in write_cnpjs_parquet --
     # 4 threads (default) blew through 70 GB of temp spill (run
-    # 25518175202). Cutting to 2 roughly halves peak temp at the cost
-    # of ~2x wall time, which we can afford for the bootstrap.
-    con.execute("PRAGMA threads=2")
+    # 25518175202). Cutting to 1 sacrifices wall time for peak memory:
+    # cnpjs took 32 min with threads=2 in run 25522678418, so threads=1
+    # bumps that to ~60 min, fitting in the 350 min runner budget.
+    # threads=1 also helps raizes' LIST_DISTINCT(LIST(...)) GROUP BY
+    # avoid the 5.5 GB OOM that bit run 25522678418.
+    con.execute("PRAGMA threads=1")
     try:
         # Lookups primeiro (necessárias pros JOINs dos parquets)
         for ef in extracted:
