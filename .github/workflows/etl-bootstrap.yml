@@ -78,42 +78,52 @@ jobs:
           CNPJ_SHARE_TOKEN: ${{ secrets.CNPJ_SHARE_TOKEN }}
         run: |
           set -x  # echo commands so we can see what list-snapshots actually returns
-          # Default to the latest snapshot RFB actually has on Nextcloud,
-          # not the current calendar month — RFB publishes around day 5
-          # and the bootstrap should never race that window. If RFB is
-          # unreachable, fall back to a hardcoded sensible default
-          # (`2026-04` is what the bootstrap has been targeting all along
-          # and is on IA from prior partial runs anyway).
+          # Resolution policy:
+          # - INPUT_MONTH (operator-supplied): validated immediately; invalid
+          #   means the operator made a typo and should know -- never silently
+          #   coerced to a fallback.
+          # - No INPUT_MONTH: query RFB list-snapshots with retries. Only if
+          #   auto-resolution exhausts retries do we fall back to the
+          #   hardcoded `2026-04` known-good month.
           MONTH=""
           if [ -n "$INPUT_MONTH" ]; then
-            MONTH="$INPUT_MONTH"
-            echo "Using user-provided month: $MONTH"
+            if [[ "$INPUT_MONTH" =~ ^[0-9]{4}-(0[1-9]|1[0-2])$ ]]; then
+              MONTH="$INPUT_MONTH"
+              echo "Using user-provided month: $MONTH"
+            else
+              echo "::error::Invalid INPUT_MONTH '$INPUT_MONTH' -- expected YYYY-MM"
+              exit 1
+            fi
           else
             DELAY=5
             for attempt in 1 2 3 4 5; do
               # Capture stderr alongside so failures are visible in the GHA log.
+              # Wrap the entire pipeline in `set +e` -- grep -E exits 1 on
+              # no-matches, which under bash -e -o pipefail (GHA default)
+              # would kill the step before the retry loop and fallback can
+              # run. We need the loop to handle "succeeded but produced no
+              # YYYY-MM lines" as well as "process failed".
               set +e
               OUTPUT=$(uv run ficha-etl list-snapshots 2>&1)
               RC=$?
+              MONTH=$(echo "$OUTPUT" | grep -E '^[0-9]{4}-(0[1-9]|1[0-2])$' | sort | tail -n 1)
               set -e
-              echo "::group::list-snapshots attempt $attempt (rc=$RC)"
+              echo "::group::list-snapshots attempt $attempt (rc=$RC, month='$MONTH')"
               echo "$OUTPUT"
               echo "::endgroup::"
-              if [ $RC -eq 0 ]; then
-                MONTH=$(echo "$OUTPUT" | grep -E '^[0-9]{4}-(0[1-9]|1[0-2])$' | sort | tail -n 1)
-                if [[ "$MONTH" =~ ^[0-9]{4}-(0[1-9]|1[0-2])$ ]]; then
-                  echo "Resolved on attempt $attempt: $MONTH"
-                  break
-                fi
+              if [ $RC -eq 0 ] && [[ "$MONTH" =~ ^[0-9]{4}-(0[1-9]|1[0-2])$ ]]; then
+                echo "Resolved on attempt $attempt: $MONTH"
+                break
               fi
-              echo "list-snapshots attempt $attempt failed (rc=$RC, MONTH='$MONTH'); sleeping ${DELAY}s"
+              MONTH=""  # reset before retry
+              echo "list-snapshots attempt $attempt failed (rc=$RC); sleeping ${DELAY}s"
               sleep $DELAY
               DELAY=$((DELAY * 2))
             done
-          fi
-          if ! [[ "$MONTH" =~ ^[0-9]{4}-(0[1-9]|1[0-2])$ ]]; then
-            echo "::warning::list-snapshots failed all retries; falling back to hardcoded 2026-04"
-            MONTH="2026-04"
+            if ! [[ "$MONTH" =~ ^[0-9]{4}-(0[1-9]|1[0-2])$ ]]; then
+              echo "::warning::list-snapshots failed all retries; falling back to hardcoded 2026-04"
+              MONTH="2026-04"
+            fi
           fi
           echo "value=$MONTH" >> "$GITHUB_OUTPUT"
           echo "Final resolved month: $MONTH"

@@ -211,7 +211,17 @@ def _create_table_from_csvs(
     )
     cols_clause = _csv_columns_clause(columns)
 
-    for encoding in ("latin-1", "utf-8"):
+    # Each attempt: (encoding, ignore_errors). RFB occasionally emits rows
+    # that are neither valid latin-1 nor utf-8 (mixed-encoding garbage from
+    # legacy systems). Last attempt drops the offending rows rather than
+    # failing the whole bootstrap. Per ADR 0006 this is pragmatic data
+    # quality -- a few dropped rows out of 60M+ is preferable to no snapshot.
+    attempts = [
+        ("latin-1", False),
+        ("utf-8", False),
+        ("latin-1", True),
+    ]
+    for encoding, ignore_errors in attempts:
         try:
             con.execute(
                 f"""
@@ -225,23 +235,34 @@ def _create_table_from_csvs(
                     columns={cols_clause},
                     null_padding=true,
                     strict_mode=false,
-                    max_line_size=16777216
+                    max_line_size=16777216,
+                    ignore_errors={"true" if ignore_errors else "false"}
                 )
                 """
             )
-            if encoding != "latin-1":
-                log.warning("tabela '%s' carregada com encoding=%s (fallback)", table, encoding)
+            if encoding != "latin-1" or ignore_errors:
+                log.warning(
+                    "tabela '%s' carregada com encoding=%s ignore_errors=%s (fallback)",
+                    table,
+                    encoding,
+                    ignore_errors,
+                )
             return
         except Exception as exc:
             msg = str(exc).lower()
             if "not latin-1 encoded" in msg or "not utf-8" in msg or "encoding" in msg:
                 log.warning(
-                    "encoding=%s falhou para '%s': %s — tentando próximo", encoding, table, exc
+                    "encoding=%s ignore_errors=%s falhou para '%s': %s -- tentando proximo",
+                    encoding,
+                    ignore_errors,
+                    table,
+                    exc,
                 )
                 continue
             raise
     raise RuntimeError(
-        f"Falha ao carregar tabela '{table}': nenhum encoding funcionou (latin-1, utf-8)"
+        f"Falha ao carregar tabela '{table}': nenhum encoding funcionou "
+        "(latin-1, utf-8, latin-1+ignore_errors)"
     )
 
 
