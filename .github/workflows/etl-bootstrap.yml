@@ -250,12 +250,14 @@ jobs:
       - name: Commit manifest back to PR branch
         # always() bypasses the implicit success() gate so a flaky
         # Comment-on-PR step can't drop the bootstrap manifest. Verify
-        # must also succeed (or be skipped via --skip-upload) so we
-        # never commit a manifest pointing at an incomplete IA item.
+        # must succeed (not just be skipped) — `--skip-upload` is a
+        # dry-run that still updates manifest.json locally, but its
+        # IA URLs point at artifacts we never uploaded, so committing
+        # would leave consumers chasing 404s.
         if: |
           always()
           && steps.run.outcome == 'success'
-          && (steps.verify.outcome == 'success' || steps.verify.outcome == 'skipped')
+          && steps.verify.outcome == 'success'
         env:
           MONTH: ${{ steps.month.outputs.value }}
         run: |
