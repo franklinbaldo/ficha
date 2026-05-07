@@ -183,7 +183,11 @@ jobs:
           fi
 
       - name: Comment on PR
+        # Advisory only — `Propagate pipeline failure` is the canonical
+        # success/failure signal. A flaky GitHub comment API shouldn't
+        # flip a clean bootstrap to red.
         if: always()
+        continue-on-error: true
         uses: actions/github-script@v7
         env:
           MONTH: ${{ steps.month.outputs.value }}
