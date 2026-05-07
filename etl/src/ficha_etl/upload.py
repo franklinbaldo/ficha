@@ -273,11 +273,6 @@ def stream_raw_zips_to_ia(
     if not is_valid_month(month):
         raise ValueError(f"month must be YYYY-MM, got {month!r}")
 
-    try:
-        rfb_token = upstream.discover_token()
-    except upstream.NoTokenError as exc:
-        raise RuntimeError(f"sem token RFB para streaming: {exc}") from exc
-
     identifier = item_id(month)
     all_specs = list(canonical_inventory())
 
@@ -285,6 +280,9 @@ def stream_raw_zips_to_ia(
     # transform failure, or backfill resuming a partial month) avoid
     # ~30 min and ~7 GB of pointless re-streaming. RFB historical files
     # are immutable per ADR 0015, so name-based existence is sufficient.
+    # IMPORTANT: this runs BEFORE upstream.discover_token() so a recovery
+    # run with all files already on IA succeeds even if RFB is down or
+    # has rotated its share token.
     existing = _existing_raw_files_on_ia(identifier)
     specs = [s for s in all_specs if f"raw/{s.name}" not in existing]
     skipped = len(all_specs) - len(specs)
@@ -298,6 +296,12 @@ def stream_raw_zips_to_ia(
     if not specs:
         log.info("all %d ZIPs already on ia:%s — stream is a no-op", len(all_specs), identifier)
         return
+
+    # Only contact RFB if we actually need to stream from it.
+    try:
+        rfb_token = upstream.discover_token()
+    except upstream.NoTokenError as exc:
+        raise RuntimeError(f"sem token RFB para streaming: {exc}") from exc
 
     total = len(specs)
     done = 0

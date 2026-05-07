@@ -378,23 +378,34 @@ def test_existing_raw_files_on_ia_returns_empty_on_network_error(monkeypatch):
 
 
 def test_stream_raw_zips_to_ia_skips_existing(monkeypatch):
-    """When all ZIPs are already on IA, stream returns immediately."""
+    """When all ZIPs are already on IA, stream returns immediately AND does
+    not contact RFB for a token. Recovery from a transform/upload failure
+    must succeed even when RFB upstream is down or has rotated its token.
+    """
 
     all_names = {f"raw/{spec.name}" for spec in canonical_inventory()}
     monkeypatch.setattr(upload_mod, "_existing_raw_files_on_ia", lambda _id: all_names)
-    monkeypatch.setattr(upload_mod.upstream, "discover_token", lambda: "TOKEN")
 
-    called = {"n": 0}
+    token_calls = {"n": 0}
+
+    def fake_discover_token():
+        token_calls["n"] += 1
+        raise upload_mod.upstream.NoTokenError("RFB is hypothetically down")
+
+    monkeypatch.setattr(upload_mod.upstream, "discover_token", fake_discover_token)
+
+    streamed = {"n": 0}
 
     def fake_stream(*a, **kw):
-        called["n"] += 1
+        streamed["n"] += 1
         return "x"
 
     monkeypatch.setattr(upload_mod, "_stream_one_zip_with_retry", fake_stream)
 
-    # Should be a no-op -- no streaming, no exception.
+    # Should be a no-op -- no streaming, no token lookup, no exception.
     upload_mod.stream_raw_zips_to_ia("2026-04", access_key="A", secret_key="S")
-    assert called["n"] == 0
+    assert streamed["n"] == 0
+    assert token_calls["n"] == 0, "should not contact RFB when nothing to stream"
 
 
 def test_stream_one_zip_with_retry_gives_up_after_max_attempts(monkeypatch):
