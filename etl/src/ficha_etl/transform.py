@@ -213,13 +213,17 @@ def _create_table_from_csvs(
 
     # Each attempt: (encoding, ignore_errors). RFB occasionally emits rows
     # that are neither valid latin-1 nor utf-8 (mixed-encoding garbage from
-    # legacy systems). Last attempt drops the offending rows rather than
-    # failing the whole bootstrap. Per ADR 0006 this is pragmatic data
-    # quality -- a few dropped rows out of 60M+ is preferable to no snapshot.
+    # legacy systems). DuckDB's latin-1 mode pre-flight-rejects the whole
+    # file ("File is not latin-1 encoded"), so `ignore_errors` doesn't
+    # help that branch. utf-8 mode accepts any bytes at parse time and
+    # only fails per-row, so `ignore_errors=true` there drops the bad
+    # rows. Per ADR 0006, a handful of dropped rows out of 60M+ is
+    # preferable to no snapshot. The fallback is logged loudly so we
+    # can see if it ever fires in production.
     attempts = [
         ("latin-1", False),
         ("utf-8", False),
-        ("latin-1", True),
+        ("utf-8", True),
     ]
     for encoding, ignore_errors in attempts:
         try:
