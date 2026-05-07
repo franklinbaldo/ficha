@@ -1,13 +1,19 @@
 name: ETL — bootstrap (first production snapshot)
 
-# One-shot bootstrap of the first manifest.json. Triggers only when this
-# workflow file changes on the bootstrap branch (so the bot's [skip ci]
-# manifest commit doesn't re-fire it), or manually via workflow_dispatch.
+# One-shot bootstrap of the first manifest.json. Triggers when the
+# workflow file or any ETL source/test changes on the bootstrap branch
+# (so a fix to upload.py / transform.py retriggers naturally), or
+# manually via workflow_dispatch. The bot's [skip ci] manifest commit
+# touches web/public/manifest.json, which is NOT in this list, so it
+# doesn't loop.
 on:
   push:
     branches: [claude/review-repo-planning-ApKX5]
     paths:
       - '.github/workflows/etl-bootstrap.yml'
+      - 'etl/src/**'
+      - 'etl/tests/**'
+      - 'etl/pyproject.toml'
   workflow_dispatch:
     inputs:
       month:
