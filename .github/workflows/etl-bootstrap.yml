@@ -29,6 +29,12 @@ permissions:
   contents: write
   pull-requests: write
 
+# Cancel any in-flight bootstrap when a new commit lands on the branch —
+# avoids two ETL runs racing on the same Internet Archive item.
+concurrency:
+  group: etl-bootstrap-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   bootstrap:
     runs-on: ubuntu-latest
@@ -163,7 +169,9 @@ jobs:
             });
 
       - name: Commit manifest back to PR branch
-        if: steps.run.outcome == 'success'
+        # always() bypasses the implicit success() gate so a flaky
+        # Comment-on-PR step can't drop the bootstrap manifest.
+        if: always() && steps.run.outcome == 'success'
         env:
           MONTH: ${{ steps.month.outputs.value }}
         run: |
@@ -178,7 +186,9 @@ jobs:
           git push origin "HEAD:${GITHUB_REF_NAME}"
 
       - name: Propagate pipeline failure
-        if: steps.run.outcome != 'success'
+        # always() ensures the failure signal isn't swallowed when an
+        # earlier non-critical step (log tail, comment) also failed.
+        if: always() && steps.run.outcome != 'success'
         run: |
           echo "::error::ETL bootstrap failed — see PR comment + run logs"
           exit 1
