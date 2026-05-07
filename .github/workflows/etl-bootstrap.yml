@@ -84,11 +84,23 @@ jobs:
             MONTH="$INPUT_MONTH"
             echo "Using user-provided month: $MONTH"
           else
-            MONTH=$(uv run ficha-etl list-snapshots 2>/dev/null | sort | tail -n 1)
+            # RFB Nextcloud occasionally hiccups (PROPFIND timing out or
+            # returning empty). Retry 3x with backoff before giving up.
+            MONTH=""
+            DELAY=5
+            for attempt in 1 2 3; do
+              MONTH=$(uv run ficha-etl list-snapshots | sort | tail -n 1)
+              if [[ "$MONTH" =~ ^[0-9]{4}-(0[1-9]|1[0-2])$ ]]; then
+                break
+              fi
+              echo "list-snapshots attempt $attempt got '$MONTH' (invalid); sleeping ${DELAY}s"
+              sleep $DELAY
+              DELAY=$((DELAY * 2))
+            done
             echo "Latest snapshot on RFB upstream: $MONTH"
           fi
           if ! [[ "$MONTH" =~ ^[0-9]{4}-(0[1-9]|1[0-2])$ ]]; then
-            echo "::error::Invalid month '$MONTH' — expected YYYY-MM"
+            echo "::error::Invalid month '$MONTH' - expected YYYY-MM"
             exit 1
           fi
           echo "value=$MONTH" >> "$GITHUB_OUTPUT"
