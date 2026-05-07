@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
@@ -35,6 +36,26 @@ _CHUNK = 1024 * 1024  # 1 MiB
 
 _RETRIES = 5
 _RETRY_SLEEP = 30  # segundos entre tentativas
+
+# IA S3 occasionally returns 5xx (transient backend error) or 409 (bucket-create
+# race when multiple workers fire `auto-make-bucket` simultaneously). Both are
+# retriable — we re-issue the whole RFB GET + IA PUT pair.
+_TRANSIENT_STATUS = frozenset({409, 500, 502, 503, 504})
+
+
+class _IAS3Error(RuntimeError):
+    """PUT to IA S3 returned a non-2xx response. Carries status for retry logic."""
+
+    def __init__(self, status: int, url: str, body: str = "") -> None:
+        self.status = status
+        self.url = url
+        # ASCII-only message — runners can default stderr to ascii encoding
+        # (LANG=C), and an em-dash in an error message is enough to trigger
+        # UnicodeEncodeError when the exception is printed.
+        snippet = body.strip()[:200].encode("ascii", "replace").decode("ascii")
+        suffix = f" :: {snippet}" if snippet else ""
+        super().__init__(f"IA S3 PUT failed: HTTP {status} - {url}{suffix}")
+
 
 _IA_METADATA_BASE: dict[str, object] = {
     "mediatype": "data",
@@ -83,7 +104,7 @@ def _ia_s3_put(
     with httpx.Client(timeout=_STREAM_TIMEOUT) as client:
         resp = client.put(url, content=body_iter, headers=headers)
     if resp.status_code not in (200, 201):
-        raise RuntimeError(f"IA S3 PUT failed: HTTP {resp.status_code} — {url}")
+        raise _IAS3Error(resp.status_code, url, resp.text)
 
 
 def _stream_one_zip(
@@ -124,6 +145,66 @@ def _stream_one_zip(
                 is_first=is_first,
             )
     return spec.name
+
+
+def _stream_one_zip_with_retry(
+    spec,
+    *,
+    rfb_token: str,
+    month: str,
+    identifier: str,
+    access_key: str,
+    secret_key: str,
+    is_first: bool,
+) -> str:
+    """`_stream_one_zip` with exponential backoff on transient IA S3 errors.
+
+    The PUT body is a one-shot iterator off the RFB GET stream, so retrying
+    means re-issuing the whole GET+PUT pair. RFB GETs are cheap relative to
+    IA PUTs, so this is fine.
+    """
+    last_exc: Exception | None = None
+    for attempt in range(1, _RETRIES + 1):
+        try:
+            return _stream_one_zip(
+                spec,
+                rfb_token=rfb_token,
+                month=month,
+                identifier=identifier,
+                access_key=access_key,
+                secret_key=secret_key,
+                is_first=is_first,
+            )
+        except _IAS3Error as exc:
+            last_exc = exc
+            if exc.status not in _TRANSIENT_STATUS or attempt == _RETRIES:
+                raise
+            sleep_s = min(_RETRY_SLEEP * (2 ** (attempt - 1)), 300)
+            log.warning(
+                "%s: HTTP %d (attempt %d/%d) — retrying in %ds",
+                spec.name,
+                exc.status,
+                attempt,
+                _RETRIES,
+                sleep_s,
+            )
+            time.sleep(sleep_s)
+        except httpx.TransportError as exc:
+            last_exc = exc
+            if attempt == _RETRIES:
+                raise
+            sleep_s = min(_RETRY_SLEEP * (2 ** (attempt - 1)), 300)
+            log.warning(
+                "%s: %s (attempt %d/%d) — retrying in %ds",
+                spec.name,
+                type(exc).__name__,
+                attempt,
+                _RETRIES,
+                sleep_s,
+            )
+            time.sleep(sleep_s)
+    assert last_exc is not None
+    raise last_exc
 
 
 def stream_raw_zips_to_ia(
@@ -174,7 +255,7 @@ def stream_raw_zips_to_ia(
             is_first = not first_sent
             if is_first:
                 first_sent = True
-        name = _stream_one_zip(
+        name = _stream_one_zip_with_retry(
             spec,
             rfb_token=rfb_token,
             month=month,

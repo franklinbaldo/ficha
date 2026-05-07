@@ -97,12 +97,66 @@ jobs:
           MONTH: ${{ steps.month.outputs.value }}
           SKIP_UPLOAD: ${{ inputs.skip_upload }}
           NO_VERIFY: ${{ inputs.no_verify }}
+          # Force UTF-8 on stdout/stderr — runner locale can default to
+          # ascii under `2>&1 | tee`, and a single em-dash in a log line
+          # is enough to crash the pipeline with UnicodeEncodeError.
+          PYTHONIOENCODING: utf-8
+          PYTHONUTF8: '1'
         run: |
           set -o pipefail
           EXTRA_ARGS=""
           [ "$SKIP_UPLOAD" = "true" ] && EXTRA_ARGS="$EXTRA_ARGS --skip-upload"
           [ "$NO_VERIFY"   = "true" ] && EXTRA_ARGS="$EXTRA_ARGS --no-verify"
           uv run ficha-etl run --month "$MONTH" $EXTRA_ARGS 2>&1 | tee run.log
+
+      - name: Verify IA item
+        id: verify
+        if: steps.run.outcome == 'success' && inputs.skip_upload != true
+        env:
+          MONTH: ${{ steps.month.outputs.value }}
+        run: |
+          set +e
+          ITEM="ficha-${MONTH}"
+          # IA metadata can lag uploads by a few seconds — small retry loop.
+          for attempt in 1 2 3 4 5; do
+            if curl -fsS "https://archive.org/metadata/${ITEM}" -o /tmp/ia.json; then
+              break
+            fi
+            echo "metadata fetch attempt $attempt failed; sleeping 10s"
+            sleep 10
+          done
+          REPORT=$(python3 - <<'PY'
+          import json, sys
+          try:
+              with open("/tmp/ia.json") as f:
+                  d = json.load(f)
+          except Exception as exc:
+              print(f"failed to parse IA metadata: {exc}")
+              sys.exit(1)
+          files = d.get("files", []) or []
+          raw = [f for f in files if f.get("name", "").startswith("raw/")]
+          pq  = [f for f in files if f.get("name", "").endswith(".parquet")]
+          lk  = [f for f in files if f.get("name") == "lookups.json"]
+          total = sum(int(f.get("size", 0) or 0) for f in files)
+          ident = d.get("metadata", {}).get("identifier", "?")
+          ok = len(raw) == 37 and len(pq) >= 3 and len(lk) == 1
+          print(f"identifier:  {ident}")
+          print(f"raw zips:    {len(raw)}/37")
+          print(f"parquets:    {len(pq)} (expect >=3: cnpjs, raizes, socios)")
+          print(f"lookups:     {len(lk)}/1")
+          print(f"total size:  {total:,} bytes ({total/1e9:.2f} GB)")
+          print(f"verdict:     {'OK' if ok else 'INCOMPLETE'}")
+          sys.exit(0 if ok else 1)
+          PY
+          )
+          STATUS=$?
+          {
+            echo 'report<<RPT_EOF'
+            echo "$REPORT"
+            echo RPT_EOF
+          } >> "$GITHUB_OUTPUT"
+          echo "$REPORT"
+          exit $STATUS
 
       - name: Capture log tail
         if: always()
@@ -134,6 +188,8 @@ jobs:
         env:
           MONTH: ${{ steps.month.outputs.value }}
           OUTCOME: ${{ steps.run.outcome }}
+          VERIFY_OUTCOME: ${{ steps.verify.outcome }}
+          VERIFY_REPORT: ${{ steps.verify.outputs.report }}
           LOG: ${{ steps.tail.outputs.log }}
           MANIFEST: ${{ steps.manifest.outputs.body }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
@@ -150,11 +206,23 @@ jobs:
               core.warning(`No open PR for branch ${branch} — skipping comment`);
               return;
             }
-            const icon = process.env.OUTCOME === 'success' ? '✅' : '❌';
+            const runOk = process.env.OUTCOME === 'success';
+            const verifyOutcome = process.env.VERIFY_OUTCOME || 'skipped';
+            const verifyOk = verifyOutcome === 'success';
+            const overallOk = runOk && (verifyOk || verifyOutcome === 'skipped');
+            const icon = overallOk ? '✅' : '❌';
             const body = [
               `## ${icon} ETL bootstrap — \`${process.env.MONTH}\``,
               ``,
-              `**Outcome:** \`${process.env.OUTCOME}\` · [run logs](${process.env.RUN_URL})`,
+              `**Pipeline:** \`${process.env.OUTCOME}\` · **IA verify:** \`${verifyOutcome}\` · [run logs](${process.env.RUN_URL})`,
+              ``,
+              `<details${verifyOk ? '' : ' open'}><summary>IA item verification (archive.org/metadata)</summary>`,
+              ``,
+              '```',
+              process.env.VERIFY_REPORT || '(verify did not run)',
+              '```',
+              ``,
+              `</details>`,
               ``,
               `<details><summary>Pipeline log (last 12 KB)</summary>`,
               ``,
@@ -181,8 +249,13 @@ jobs:
 
       - name: Commit manifest back to PR branch
         # always() bypasses the implicit success() gate so a flaky
-        # Comment-on-PR step can't drop the bootstrap manifest.
-        if: always() && steps.run.outcome == 'success'
+        # Comment-on-PR step can't drop the bootstrap manifest. Verify
+        # must also succeed (or be skipped via --skip-upload) so we
+        # never commit a manifest pointing at an incomplete IA item.
+        if: |
+          always()
+          && steps.run.outcome == 'success'
+          && (steps.verify.outcome == 'success' || steps.verify.outcome == 'skipped')
         env:
           MONTH: ${{ steps.month.outputs.value }}
         run: |
@@ -199,7 +272,13 @@ jobs:
       - name: Propagate pipeline failure
         # always() ensures the failure signal isn't swallowed when an
         # earlier non-critical step (log tail, comment) also failed.
-        if: always() && steps.run.outcome != 'success'
+        # Either the pipeline failed or IA verification said incomplete.
+        if: |
+          always()
+          && (
+            steps.run.outcome != 'success'
+            || (steps.verify.outcome != 'success' && steps.verify.outcome != 'skipped')
+          )
         run: |
-          echo "::error::ETL bootstrap failed — see PR comment + run logs"
+          echo "::error::ETL bootstrap failed - see PR comment + run logs"
           exit 1

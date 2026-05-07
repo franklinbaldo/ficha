@@ -178,3 +178,97 @@ def test_upload_raw_zips_raises_on_http_error(mock_upload, tmp_path):
 
     with pytest.raises(RuntimeError, match="500"):
         upload_mod.upload_raw_zips(month, tmp_path, access_key="A", secret_key="S")
+
+
+# ---------------------------------------------------------------------------
+# Streaming retry path (zero-disk)
+# ---------------------------------------------------------------------------
+
+
+def test_ias3_error_message_is_ascii():
+    """Error messages must be ASCII so they survive a runner with stderr=ascii.
+
+    Production was hitting `'ascii' codec can't encode character '\\u2014'`
+    because the original RuntimeError contained an em-dash.
+    """
+    exc = upload_mod._IAS3Error(500, "https://s3.us.archive.org/x/y", body="boom")
+    str(exc).encode("ascii")  # raises if any non-ASCII char slipped in
+    assert exc.status == 500
+
+
+def test_stream_one_zip_with_retry_retries_transient(monkeypatch):
+    """Transient IA S3 errors (5xx, 409) should be retried up to _RETRIES."""
+    calls = {"n": 0}
+
+    def fake_stream_one_zip(spec, **_kw):
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise upload_mod._IAS3Error(500, "https://s3.us.archive.org/x/y")
+        return spec.name
+
+    monkeypatch.setattr(upload_mod, "_stream_one_zip", fake_stream_one_zip)
+    monkeypatch.setattr(upload_mod.time, "sleep", lambda *_: None)
+
+    spec = next(iter(canonical_inventory()))
+    name = upload_mod._stream_one_zip_with_retry(
+        spec,
+        rfb_token="t",
+        month="2026-04",
+        identifier=item_id("2026-04"),
+        access_key="A",
+        secret_key="S",
+        is_first=True,
+    )
+    assert name == spec.name
+    assert calls["n"] == 3
+
+
+def test_stream_one_zip_with_retry_does_not_retry_non_transient(monkeypatch):
+    """Non-transient client errors (e.g. 401, 403) should fail immediately."""
+    calls = {"n": 0}
+
+    def fake_stream_one_zip(spec, **_kw):
+        calls["n"] += 1
+        raise upload_mod._IAS3Error(401, "https://s3.us.archive.org/x/y")
+
+    monkeypatch.setattr(upload_mod, "_stream_one_zip", fake_stream_one_zip)
+    monkeypatch.setattr(upload_mod.time, "sleep", lambda *_: None)
+
+    spec = next(iter(canonical_inventory()))
+    with pytest.raises(upload_mod._IAS3Error) as ei:
+        upload_mod._stream_one_zip_with_retry(
+            spec,
+            rfb_token="t",
+            month="2026-04",
+            identifier=item_id("2026-04"),
+            access_key="A",
+            secret_key="S",
+            is_first=False,
+        )
+    assert ei.value.status == 401
+    assert calls["n"] == 1
+
+
+def test_stream_one_zip_with_retry_gives_up_after_max_attempts(monkeypatch):
+    calls = {"n": 0}
+
+    def fake_stream_one_zip(spec, **_kw):
+        calls["n"] += 1
+        raise upload_mod._IAS3Error(503, "https://s3.us.archive.org/x/y")
+
+    monkeypatch.setattr(upload_mod, "_stream_one_zip", fake_stream_one_zip)
+    monkeypatch.setattr(upload_mod.time, "sleep", lambda *_: None)
+
+    spec = next(iter(canonical_inventory()))
+    with pytest.raises(upload_mod._IAS3Error) as ei:
+        upload_mod._stream_one_zip_with_retry(
+            spec,
+            rfb_token="t",
+            month="2026-04",
+            identifier=item_id("2026-04"),
+            access_key="A",
+            secret_key="S",
+            is_first=False,
+        )
+    assert ei.value.status == 503
+    assert calls["n"] == upload_mod._RETRIES
