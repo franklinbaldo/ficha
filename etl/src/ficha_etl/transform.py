@@ -711,8 +711,7 @@ def transform_snapshot(
                 zp.unlink()
             if zip_size_gb > 0:
                 log.info(
-                    "freed %.1f GB by removing raw ZIPs in %s "
-                    "(FICHA_DROP_ZIPS_AFTER_LOAD=1)",
+                    "freed %.1f GB by removing raw ZIPs in %s (FICHA_DROP_ZIPS_AFTER_LOAD=1)",
                     zip_size_gb,
                     zips_dir,
                 )
