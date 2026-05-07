@@ -344,7 +344,7 @@ jobs:
           for attempt in 1 2 3; do
             git fetch origin "$GITHUB_REF_NAME"
             git rebase "origin/$GITHUB_REF_NAME" || {
-              echo "::error::rebase conflict on attempt $attempt - aborting"
+              echo "::error::git rebase failed on attempt $attempt - aborting"
               git rebase --abort || true
               exit 1
             }
