@@ -77,37 +77,46 @@ jobs:
           INPUT_MONTH: ${{ inputs.month }}
           CNPJ_SHARE_TOKEN: ${{ secrets.CNPJ_SHARE_TOKEN }}
         run: |
+          set -x  # echo commands so we can see what list-snapshots actually returns
           # Default to the latest snapshot RFB actually has on Nextcloud,
           # not the current calendar month — RFB publishes around day 5
-          # and the bootstrap should never race that window.
+          # and the bootstrap should never race that window. If RFB is
+          # unreachable, fall back to a hardcoded sensible default
+          # (`2026-04` is what the bootstrap has been targeting all along
+          # and is on IA from prior partial runs anyway).
+          MONTH=""
           if [ -n "$INPUT_MONTH" ]; then
             MONTH="$INPUT_MONTH"
             echo "Using user-provided month: $MONTH"
           else
-            # RFB Nextcloud has been intermittently flaky (a smoke check
-            # succeeded for the same commit at 17:31:47 while the bootstrap
-            # resolver failed at ~17:31:38 -- transient PROPFIND hiccups
-            # within seconds of each other). 5 attempts with 5/10/20/40/80s
-            # backoff = ~155s tolerance.
-            MONTH=""
             DELAY=5
             for attempt in 1 2 3 4 5; do
-              MONTH=$(uv run ficha-etl list-snapshots | sort | tail -n 1 || echo "")
-              if [[ "$MONTH" =~ ^[0-9]{4}-(0[1-9]|1[0-2])$ ]]; then
-                echo "Resolved on attempt $attempt: $MONTH"
-                break
+              # Capture stderr alongside so failures are visible in the GHA log.
+              set +e
+              OUTPUT=$(uv run ficha-etl list-snapshots 2>&1)
+              RC=$?
+              set -e
+              echo "::group::list-snapshots attempt $attempt (rc=$RC)"
+              echo "$OUTPUT"
+              echo "::endgroup::"
+              if [ $RC -eq 0 ]; then
+                MONTH=$(echo "$OUTPUT" | grep -E '^[0-9]{4}-(0[1-9]|1[0-2])$' | sort | tail -n 1)
+                if [[ "$MONTH" =~ ^[0-9]{4}-(0[1-9]|1[0-2])$ ]]; then
+                  echo "Resolved on attempt $attempt: $MONTH"
+                  break
+                fi
               fi
-              echo "list-snapshots attempt $attempt got '$MONTH' (invalid); sleeping ${DELAY}s"
+              echo "list-snapshots attempt $attempt failed (rc=$RC, MONTH='$MONTH'); sleeping ${DELAY}s"
               sleep $DELAY
               DELAY=$((DELAY * 2))
             done
-            echo "Latest snapshot on RFB upstream: $MONTH"
           fi
           if ! [[ "$MONTH" =~ ^[0-9]{4}-(0[1-9]|1[0-2])$ ]]; then
-            echo "::error::Invalid month '$MONTH' - expected YYYY-MM"
-            exit 1
+            echo "::warning::list-snapshots failed all retries; falling back to hardcoded 2026-04"
+            MONTH="2026-04"
           fi
           echo "value=$MONTH" >> "$GITHUB_OUTPUT"
+          echo "Final resolved month: $MONTH"
 
       - name: Run pipeline
         id: run
