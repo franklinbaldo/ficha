@@ -482,7 +482,16 @@ def write_cnpjs_parquet(
             LEFT JOIN lookup_cnaes cn_p ON cn_p.codigo = est.cnae_fiscal_principal
             LEFT JOIN lookup_municipios mn ON mn.codigo = est.municipio
             LEFT JOIN lookup_paises ps ON ps.codigo = est.pais
-            ORDER BY cnpj
+            -- ORDER BY cnpj omitted: forced global sort of ~30 GB join
+            -- output through DuckDB's external sorter blew past 70 GB
+            -- disk on GH Actions runners (PR #24, run 25519086268).
+            -- Lookup-by-exact-cnpj queries hit the bloom filter on
+            -- `cnpj`, which is independent of physical row order, so
+            -- the bootstrap output works the same. Range queries on
+            -- cnpj would lose row-group min/max pruning -- but those
+            -- aren't primary FICHA queries (exact match dominates;
+            -- razao_social search uses raizes.parquet). Revisit if
+            -- range workloads materialize.
         ) TO ? (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 200000)
         """,
         [str(output_path)],
@@ -678,10 +687,14 @@ def transform_snapshot(
         # Reclaim disk before phase 3. Extracted CSVs are now loaded into
         # transform.duckdb; keeping them alongside DuckDB's temp spill
         # exhausts the runner's ~70 GiB filesystem (PR #24, run 25517197692:
-        # OOM "70.8 GiB/70.8 GiB used" while writing cnpjs.parquet).
-        # Also drop the raw ZIPs -- a retry can re-fetch them from IA
-        # via the fetcher chain in <2 min, and keeping them robs phase 3
-        # of ~7 GB of join-spill headroom.
+        # OOM "70.8 GiB/70.8 GiB used" while writing cnpjs.parquet). CSV
+        # cleanup is unconditional (CSVs are never cached). Raw ZIP
+        # cleanup is opt-in via env var: the bootstrap workflow (one-shot,
+        # space-constrained) sets FICHA_DROP_ZIPS_AFTER_LOAD=1 to claim
+        # ~7 GB of additional spill headroom, while the monthly cron
+        # leaves it unset so its `actions/cache` step finds the ZIPs at
+        # post-job and persists them for the next run's cache hit.
+        import os
         import shutil
 
         if extract_dir.exists():
@@ -690,13 +703,19 @@ def transform_snapshot(
             ) / (1024**3)
             shutil.rmtree(extract_dir)
             log.info("freed %.1f GB by removing %s", extracted_size_gb, extract_dir)
-        zips_dir = cache_dir / month
-        zip_size_gb = 0.0
-        for zp in zips_dir.glob("*.zip"):
-            zip_size_gb += zp.stat().st_size / (1024**3)
-            zp.unlink()
-        if zip_size_gb > 0:
-            log.info("freed %.1f GB by removing raw ZIPs in %s", zip_size_gb, zips_dir)
+        if os.environ.get("FICHA_DROP_ZIPS_AFTER_LOAD") == "1":
+            zips_dir = cache_dir / month
+            zip_size_gb = 0.0
+            for zp in zips_dir.glob("*.zip"):
+                zip_size_gb += zp.stat().st_size / (1024**3)
+                zp.unlink()
+            if zip_size_gb > 0:
+                log.info(
+                    "freed %.1f GB by removing raw ZIPs in %s "
+                    "(FICHA_DROP_ZIPS_AFTER_LOAD=1)",
+                    zip_size_gb,
+                    zips_dir,
+                )
 
         write_lookups_json(
             con,

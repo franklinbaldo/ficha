@@ -143,6 +143,12 @@ jobs:
           # is enough to crash the pipeline with UnicodeEncodeError.
           PYTHONIOENCODING: utf-8
           PYTHONUTF8: '1'
+          # Bootstrap is one-shot and disk-constrained; reclaim ~7 GB of
+          # raw ZIPs after they're loaded into DuckDB so phase 3 spill
+          # has room. Monthly cron leaves this unset so its actions/cache
+          # step keeps the ZIPs warm for next run's retry. See ADR 0008
+          # / Codex P2 in PR #24.
+          FICHA_DROP_ZIPS_AFTER_LOAD: '1'
         run: |
           set -o pipefail
           EXTRA_ARGS=""
