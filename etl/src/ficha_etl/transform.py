@@ -651,13 +651,19 @@ def transform_snapshot(
     # ~80% of system RAM with limited spill -- explicit limit + dedicated
     # temp dir on the same partition as db_path makes spill behavior
     # predictable.
-    con.execute("PRAGMA memory_limit='4GB'")
+    con.execute("PRAGMA memory_limit='5GB'")
     con.execute(f"PRAGMA temp_directory='{db_path.parent / 'duckdb_tmp'}'")
     # Reduce per-query memory pressure during the big JOIN at phase 3.
     # DuckDB's default preserves input ordering, which buffers more in
     # memory; we sort by `cnpj` at write time anyway, so insertion order
     # of intermediates doesn't matter. Saves ~30% on temp spill size.
     con.execute("PRAGMA preserve_insertion_order=false")
+    # Reduce parallelism. Each thread holds its own working set during
+    # the 70M x 67M VARCHAR-keyed hash join in write_cnpjs_parquet --
+    # 4 threads (default) blew through 70 GB of temp spill (run
+    # 25518175202). Cutting to 2 roughly halves peak temp at the cost
+    # of ~2x wall time, which we can afford for the bootstrap.
+    con.execute("PRAGMA threads=2")
     try:
         # Lookups primeiro (necessárias pros JOINs dos parquets)
         for ef in extracted:
@@ -672,9 +678,10 @@ def transform_snapshot(
         # Reclaim disk before phase 3. Extracted CSVs are now loaded into
         # transform.duckdb; keeping them alongside DuckDB's temp spill
         # exhausts the runner's ~70 GiB filesystem (PR #24, run 25517197692:
-        # OOM "70.8 GiB/70.8 GiB used" while writing cnpjs.parquet). Raw
-        # ZIPs in cache_dir/<month>/ are kept -- a re-run can re-extract
-        # them without re-fetching from IA.
+        # OOM "70.8 GiB/70.8 GiB used" while writing cnpjs.parquet).
+        # Also drop the raw ZIPs -- a retry can re-fetch them from IA
+        # via the fetcher chain in <2 min, and keeping them robs phase 3
+        # of ~7 GB of join-spill headroom.
         import shutil
 
         if extract_dir.exists():
@@ -683,6 +690,13 @@ def transform_snapshot(
             ) / (1024**3)
             shutil.rmtree(extract_dir)
             log.info("freed %.1f GB by removing %s", extracted_size_gb, extract_dir)
+        zips_dir = cache_dir / month
+        zip_size_gb = 0.0
+        for zp in zips_dir.glob("*.zip"):
+            zip_size_gb += zp.stat().st_size / (1024**3)
+            zp.unlink()
+        if zip_size_gb > 0:
+            log.info("freed %.1f GB by removing raw ZIPs in %s", zip_size_gb, zips_dir)
 
         write_lookups_json(
             con,
