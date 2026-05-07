@@ -288,7 +288,6 @@ def stream_raw_zips_to_ia(
     existing = _existing_raw_files_on_ia(identifier)
     specs = [s for s in all_specs if f"raw/{s.name}" not in existing]
     skipped = len(all_specs) - len(specs)
-    item_is_new = len(existing) == 0
     if skipped:
         log.info(
             "skipping %d/%d ZIPs already on ia:%s/raw/",
@@ -304,9 +303,14 @@ def stream_raw_zips_to_ia(
     done = 0
     lock = threading.Lock()
     first_lock = threading.Lock()
-    # `is_first` carries item metadata. If the item already has files,
-    # metadata was set by a previous run -- no need to send it again.
-    first_sent = not item_is_new
+    # `is_first` carries item metadata (title, subject, license, etc.).
+    # We always send it on the first task of every run -- if a prior
+    # run created the item but its `is_first` worker died (e.g. em-dash
+    # crash, see PR #24), the item could exist with files but no
+    # metadata. Re-sending the metadata headers on a PUT is idempotent
+    # at IA's end (overwrite with same values). Cost: 5 extra header
+    # keys on exactly one PUT per run.
+    first_sent = False
 
     log.info(
         "streaming %d ZIPs RFB → ia:%s/raw/ (%d workers, zero disk)",

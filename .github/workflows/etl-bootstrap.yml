@@ -84,13 +84,17 @@ jobs:
             MONTH="$INPUT_MONTH"
             echo "Using user-provided month: $MONTH"
           else
-            # RFB Nextcloud occasionally hiccups (PROPFIND timing out or
-            # returning empty). Retry 3x with backoff before giving up.
+            # RFB Nextcloud has been intermittently flaky (a smoke check
+            # succeeded for the same commit at 17:31:47 while the bootstrap
+            # resolver failed at ~17:31:38 -- transient PROPFIND hiccups
+            # within seconds of each other). 5 attempts with 5/10/20/40/80s
+            # backoff = ~155s tolerance.
             MONTH=""
             DELAY=5
-            for attempt in 1 2 3; do
-              MONTH=$(uv run ficha-etl list-snapshots | sort | tail -n 1)
+            for attempt in 1 2 3 4 5; do
+              MONTH=$(uv run ficha-etl list-snapshots | sort | tail -n 1 || echo "")
               if [[ "$MONTH" =~ ^[0-9]{4}-(0[1-9]|1[0-2])$ ]]; then
+                echo "Resolved on attempt $attempt: $MONTH"
                 break
               fi
               echo "list-snapshots attempt $attempt got '$MONTH' (invalid); sleeping ${DELAY}s"
