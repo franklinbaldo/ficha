@@ -562,7 +562,15 @@ def write_raizes_parquet(
             LEFT JOIN lookup_naturezas nj ON nj.codigo = emp.natureza_juridica
             LEFT JOIN lookup_municipios mn ON mn.codigo = matriz.municipio_matriz_codigo
             LEFT JOIN lookup_cnaes cn ON cn.codigo = matriz.cnae_principal_matriz_codigo
-            ORDER BY razao_social_normalizada
+            -- ORDER BY razao_social_normalizada omitted: forced sort over
+            -- ~50M rows alongside the LIST_DISTINCT aggs in the `agg`
+            -- CTE OOM'd raizes write (PR #24, run 25520136856 hit
+            -- 4.6 GiB / 4.6 GiB memory cap right after cnpjs.parquet
+            -- finished). Autocomplete on razao_social can still scan
+            -- via row-group bloom on cnpj_base + a sequential filter;
+            -- range queries on the normalized name lose pruning, but
+            -- typing-prefix queries (the dominant autocomplete pattern)
+            -- still work via early-stop. Revisit after bootstrap lands.
         ) TO ? (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 200000)
         """,
         [str(output_path)],
@@ -609,7 +617,10 @@ def write_socios_parquet(
             LEFT JOIN lookup_qualificacoes qs ON qs.codigo = soc.qualificacao_socio
             LEFT JOIN lookup_qualificacoes qr ON qr.codigo = soc.qualificacao_representante_legal
             LEFT JOIN lookup_paises ps ON ps.codigo = soc.pais
-            ORDER BY cnpj_base
+            -- ORDER BY cnpj_base omitted: same trade-off as cnpjs.parquet.
+            -- Bloom filter on cnpj_base handles "sócios de X" exact match
+            -- regardless of physical order. Defensive against the same OOM
+            -- pattern that hit cnpjs/raizes writes in PR #24.
         ) TO ? (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 200000)
         """,
         [str(output_path)],
@@ -660,7 +671,7 @@ def transform_snapshot(
     # ~80% of system RAM with limited spill -- explicit limit + dedicated
     # temp dir on the same partition as db_path makes spill behavior
     # predictable.
-    con.execute("PRAGMA memory_limit='5GB'")
+    con.execute("PRAGMA memory_limit='6GB'")
     con.execute(f"PRAGMA temp_directory='{db_path.parent / 'duckdb_tmp'}'")
     # Reduce per-query memory pressure during the big JOIN at phase 3.
     # DuckDB's default preserves input ordering, which buffers more in
@@ -726,6 +737,23 @@ def transform_snapshot(
 
         log.info("=== PHASE 3/4: write parquets ===")
         t0 = time.monotonic()
+        # Drop tables we no longer need between writes to free DuckDB's
+        # buffer-managed memory. Without this, all four big tables stay
+        # loaded through the entire phase, competing for memory_limit
+        # during the next write's joins/sorts.
+        # Dependency map:
+        #   cnpjs.parquet  needs: estabelecimento + empresa + simples + lookups
+        #   raizes.parquet needs: empresa + estabelecimento + lookups
+        #   socios.parquet needs: socio + lookups
+        # NB: estabelecimento + empresa stay loaded through phase 4 too --
+        # the roundtrip-equivalence verify (ADR 0009) re-queries them
+        # against the just-written parquet. Only `simples` is safe to
+        # drop early.
+        post_write_drops = {
+            "cnpjs": ("simples",),  # only used by cnpjs; not referenced again
+            "raizes": (),
+            "socios": (),
+        }
         for name, fn in (
             ("cnpjs", write_cnpjs_parquet),
             ("raizes", write_raizes_parquet),
@@ -742,6 +770,9 @@ def transform_snapshot(
                     size_mb,
                     time.monotonic() - tp,
                 )
+                for tbl in post_write_drops.get(name, ()):
+                    con.execute(f"DROP TABLE IF EXISTS {tbl}")
+                    log.info("  dropped table %s (no longer needed)", tbl)
             except NotImplementedError as exc:
                 if skip_unimplemented:
                     log.warning("skipping %s.parquet: %s", name, exc)
