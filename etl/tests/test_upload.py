@@ -296,6 +296,107 @@ def test_stream_one_zip_with_retry_does_not_retry_non_transient(monkeypatch):
     assert calls["n"] == 1
 
 
+def test_existing_raw_files_on_ia_parses_metadata(monkeypatch):
+    """Existence check should return only `raw/*` names with non-zero size."""
+
+    payload = {
+        "files": [
+            {"name": "raw/Empresas0.zip", "size": "494200000"},
+            {"name": "raw/Empresas1.zip", "size": "74300000"},
+            {"name": "raw/Cnaes.zip", "size": "0"},  # zero-size: not yet uploaded
+            {"name": "cnpjs.parquet", "size": "3000000000"},  # not a raw zip
+            {"name": "raw/Estabelecimentos0.zip"},  # missing size
+        ]
+    }
+
+    class _FakeResp:
+        status_code = 200
+
+        def json(self):
+            return payload
+
+    class _FakeClient:
+        def __init__(self, *a, **kw):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def get(self, url):
+            return _FakeResp()
+
+    monkeypatch.setattr(upload_mod.httpx, "Client", _FakeClient)
+    out = upload_mod._existing_raw_files_on_ia("ficha-2026-04")
+    assert out == {"raw/Empresas0.zip", "raw/Empresas1.zip"}
+
+
+def test_existing_raw_files_on_ia_returns_empty_on_404(monkeypatch):
+    class _FakeResp:
+        status_code = 404
+
+        def json(self):
+            return {}
+
+    class _FakeClient:
+        def __init__(self, *a, **kw):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def get(self, url):
+            return _FakeResp()
+
+    monkeypatch.setattr(upload_mod.httpx, "Client", _FakeClient)
+    assert upload_mod._existing_raw_files_on_ia("ficha-2099-01") == set()
+
+
+def test_existing_raw_files_on_ia_returns_empty_on_network_error(monkeypatch):
+    """A flaky IA metadata API shouldn't block streaming -- fall back to "stream all"."""
+
+    class _FakeClient:
+        def __init__(self, *a, **kw):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def get(self, url):
+            raise upload_mod.httpx.ConnectError("boom")
+
+    monkeypatch.setattr(upload_mod.httpx, "Client", _FakeClient)
+    assert upload_mod._existing_raw_files_on_ia("ficha-2026-04") == set()
+
+
+def test_stream_raw_zips_to_ia_skips_existing(monkeypatch):
+    """When all ZIPs are already on IA, stream returns immediately."""
+
+    all_names = {f"raw/{spec.name}" for spec in canonical_inventory()}
+    monkeypatch.setattr(upload_mod, "_existing_raw_files_on_ia", lambda _id: all_names)
+    monkeypatch.setattr(upload_mod.upstream, "discover_token", lambda: "TOKEN")
+
+    called = {"n": 0}
+
+    def fake_stream(*a, **kw):
+        called["n"] += 1
+        return "x"
+
+    monkeypatch.setattr(upload_mod, "_stream_one_zip_with_retry", fake_stream)
+
+    # Should be a no-op -- no streaming, no exception.
+    upload_mod.stream_raw_zips_to_ia("2026-04", access_key="A", secret_key="S")
+    assert called["n"] == 0
+
+
 def test_stream_one_zip_with_retry_gives_up_after_max_attempts(monkeypatch):
     calls = {"n": 0}
 

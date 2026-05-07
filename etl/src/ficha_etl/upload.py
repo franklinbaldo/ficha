@@ -216,6 +216,41 @@ def _stream_one_zip_with_retry(
     raise last_exc
 
 
+_IA_METADATA_URL = "https://archive.org/metadata/{identifier}"
+
+
+def _existing_raw_files_on_ia(identifier: str) -> set[str]:
+    """Returns the set of `raw/*` file names already on ia:{identifier}.
+
+    Empty set when the item doesn't exist yet, or when the metadata API
+    fails (502/timeout) -- in that case we fall back to streaming
+    everything, which is correct (PUTs are idempotent overwrites at IA).
+    """
+    url = _IA_METADATA_URL.format(identifier=identifier)
+    try:
+        with httpx.Client(timeout=30.0) as client:
+            resp = client.get(url)
+        if resp.status_code != 200:
+            log.info(
+                "ia:%s metadata returned HTTP %d -- assuming new item", identifier, resp.status_code
+            )
+            return set()
+        data = resp.json()
+    except (httpx.HTTPError, ValueError) as exc:
+        log.warning("ia:%s metadata fetch failed (%s) -- will stream all", identifier, exc)
+        return set()
+
+    files = data.get("files") or []
+    raw = {
+        f["name"]
+        for f in files
+        if isinstance(f, dict)
+        and f.get("name", "").startswith("raw/")
+        and int(f.get("size", 0) or 0) > 0
+    }
+    return raw
+
+
 def stream_raw_zips_to_ia(
     month: str,
     *,
@@ -244,12 +279,34 @@ def stream_raw_zips_to_ia(
         raise RuntimeError(f"sem token RFB para streaming: {exc}") from exc
 
     identifier = item_id(month)
-    specs = list(canonical_inventory())
+    all_specs = list(canonical_inventory())
+
+    # Skip ZIPs already present on IA. Idempotent re-runs (e.g. retry after
+    # transform failure, or backfill resuming a partial month) avoid
+    # ~30 min and ~7 GB of pointless re-streaming. RFB historical files
+    # are immutable per ADR 0015, so name-based existence is sufficient.
+    existing = _existing_raw_files_on_ia(identifier)
+    specs = [s for s in all_specs if f"raw/{s.name}" not in existing]
+    skipped = len(all_specs) - len(specs)
+    item_is_new = len(existing) == 0
+    if skipped:
+        log.info(
+            "skipping %d/%d ZIPs already on ia:%s/raw/",
+            skipped,
+            len(all_specs),
+            identifier,
+        )
+    if not specs:
+        log.info("all %d ZIPs already on ia:%s — stream is a no-op", len(all_specs), identifier)
+        return
+
     total = len(specs)
     done = 0
     lock = threading.Lock()
     first_lock = threading.Lock()
-    first_sent = False
+    # `is_first` carries item metadata. If the item already has files,
+    # metadata was set by a previous run -- no need to send it again.
+    first_sent = not item_is_new
 
     log.info(
         "streaming %d ZIPs RFB → ia:%s/raw/ (%d workers, zero disk)",
