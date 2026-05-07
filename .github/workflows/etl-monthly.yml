@@ -56,14 +56,26 @@ jobs:
 
       - name: Resolve target month
         id: month
-        # Pass user input via env (not direct shell interpolation) and validate
-        # against YYYY-MM before letting it reach any command.
+        working-directory: etl
+        # When no month is given by the operator, query the RFB Nextcloud
+        # listing and pick the most recent published snapshot. The cron
+        # fires at 03:00 UTC on day 5 but RFB sometimes publishes later;
+        # defaulting to the calendar month would 404 every byte (see
+        # PR #24). Pass user input via env, validate as YYYY-MM before
+        # it can reach any command.
         env:
           INPUT_MONTH: ${{ inputs.month }}
+          CNPJ_SHARE_TOKEN: ${{ secrets.CNPJ_SHARE_TOKEN }}
         run: |
-          MONTH="${INPUT_MONTH:-$(date -u +%Y-%m)}"
+          if [ -n "$INPUT_MONTH" ]; then
+            MONTH="$INPUT_MONTH"
+            echo "Using user-provided month: $MONTH"
+          else
+            MONTH=$(uv run ficha-etl list-snapshots 2>/dev/null | sort | tail -n 1)
+            echo "Latest snapshot on RFB upstream: $MONTH"
+          fi
           if ! [[ "$MONTH" =~ ^[0-9]{4}-(0[1-9]|1[0-2])$ ]]; then
-            echo "::error::Invalid month '$MONTH' — expected YYYY-MM"
+            echo "::error::Invalid month '$MONTH' - expected YYYY-MM"
             exit 1
           fi
           echo "value=$MONTH" >> "$GITHUB_OUTPUT"
@@ -84,6 +96,10 @@ jobs:
           MONTH: ${{ steps.month.outputs.value }}
           SKIP_UPLOAD: ${{ inputs.skip_upload }}
           NO_VERIFY: ${{ inputs.no_verify }}
+          # Defense against `'ascii' codec can't encode character` crashes
+          # when runner stderr defaults to ascii (PR #24, commit 75691a94).
+          PYTHONIOENCODING: utf-8
+          PYTHONUTF8: '1'
         run: |
           EXTRA_ARGS=""
           [ "$SKIP_UPLOAD" = "true" ] && EXTRA_ARGS="$EXTRA_ARGS --skip-upload"
