@@ -653,6 +653,11 @@ def transform_snapshot(
     # predictable.
     con.execute("PRAGMA memory_limit='4GB'")
     con.execute(f"PRAGMA temp_directory='{db_path.parent / 'duckdb_tmp'}'")
+    # Reduce per-query memory pressure during the big JOIN at phase 3.
+    # DuckDB's default preserves input ordering, which buffers more in
+    # memory; we sort by `cnpj` at write time anyway, so insertion order
+    # of intermediates doesn't matter. Saves ~30% on temp spill size.
+    con.execute("PRAGMA preserve_insertion_order=false")
     try:
         # Lookups primeiro (necessárias pros JOINs dos parquets)
         for ef in extracted:
@@ -663,6 +668,21 @@ def transform_snapshot(
         # Tabelas grandes
         load_main_tables_into_duckdb(con, extracted)
         log.info("=== PHASE 2/4 done in %.0fs ===", time.monotonic() - t0)
+
+        # Reclaim disk before phase 3. Extracted CSVs are now loaded into
+        # transform.duckdb; keeping them alongside DuckDB's temp spill
+        # exhausts the runner's ~70 GiB filesystem (PR #24, run 25517197692:
+        # OOM "70.8 GiB/70.8 GiB used" while writing cnpjs.parquet). Raw
+        # ZIPs in cache_dir/<month>/ are kept -- a re-run can re-extract
+        # them without re-fetching from IA.
+        import shutil
+
+        if extract_dir.exists():
+            extracted_size_gb = sum(
+                p.stat().st_size for p in extract_dir.rglob("*") if p.is_file()
+            ) / (1024**3)
+            shutil.rmtree(extract_dir)
+            log.info("freed %.1f GB by removing %s", extracted_size_gb, extract_dir)
 
         write_lookups_json(
             con,
