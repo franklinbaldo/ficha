@@ -196,6 +196,53 @@ def test_ias3_error_message_is_ascii():
     assert exc.status == 500
 
 
+def test_ia_s3_put_metadata_headers_are_ascii(monkeypatch):
+    """`x-archive-meta-*` headers go on the wire as HTTP headers, which must
+    be ASCII. A single em-dash in the title crashes httpx with
+    UnicodeEncodeError BEFORE the PUT goes out — see PR #24, run
+    25502969568 where 36/37 ZIPs uploaded but the is_first worker died.
+    """
+    sent_headers: dict[str, str] = {}
+
+    class _FakeClient:
+        def __init__(self, *a, **kw):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def put(self, url, content=None, headers=None):
+            sent_headers.update(headers or {})
+            return _FakeResp(200)
+
+    class _FakeResp:
+        def __init__(self, status):
+            self.status_code = status
+            self.text = ""
+
+    monkeypatch.setattr(upload_mod.httpx, "Client", _FakeClient)
+
+    upload_mod._ia_s3_put(
+        "ficha-2026-04",
+        "raw/Empresas0.zip",
+        iter([b"x"]),
+        content_length="1",
+        access_key="A",
+        secret_key="S",
+        is_first=True,
+    )
+
+    assert sent_headers, "headers should have been captured"
+    for k, v in sent_headers.items():
+        try:
+            v.encode("ascii")
+        except UnicodeEncodeError:
+            pytest.fail(f"header {k!r} has non-ASCII value: {v!r}")
+
+
 def test_stream_one_zip_with_retry_retries_transient(monkeypatch):
     """Transient IA S3 errors (5xx, 409) should be retried up to _RETRIES."""
     calls = {"n": 0}

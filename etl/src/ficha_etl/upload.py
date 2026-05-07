@@ -90,17 +90,26 @@ def _ia_s3_put(
         "x-archive-auto-make-bucket": "1",
     }
     if is_first:
-        # Metadados do item — enviados uma vez só no primeiro PUT
+        # Metadados do item — enviados uma vez só no primeiro PUT.
+        # NB: IA S3 metadata vai em headers HTTP, que precisam ser ASCII.
+        # Em-dash / acentos aqui crasham com UnicodeEncodeError dentro do
+        # httpx ANTES do PUT sair (ver PR #24, run 25502969568).
         headers.update(
             {
                 "x-archive-meta-mediatype": "data",
-                "x-archive-meta-title": f"FICHA CNPJ — {identifier}",
+                "x-archive-meta-title": f"FICHA CNPJ - {identifier}",
                 "x-archive-meta-subject": "CNPJ;Receita Federal;dados abertos;Brasil",
                 "x-archive-meta-creator": "franklinbaldo",
                 "x-archive-meta-licenseurl": ("https://creativecommons.org/publicdomain/zero/1.0/"),
             }
         )
     url = f"{_IA_S3_BASE}/{identifier}/{remote_name}"
+    # Defense: every header value MUST be ASCII (IA S3 spec + httpx).
+    for k, v in headers.items():
+        try:
+            v.encode("ascii")
+        except UnicodeEncodeError as exc:
+            raise _IAS3Error(0, url, f"non-ASCII header {k!r}: {v!r} ({exc.reason})") from exc
     with httpx.Client(timeout=_STREAM_TIMEOUT) as client:
         resp = client.put(url, content=body_iter, headers=headers)
     if resp.status_code not in (200, 201):

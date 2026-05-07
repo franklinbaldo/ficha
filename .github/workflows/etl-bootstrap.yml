@@ -117,13 +117,19 @@ jobs:
         run: |
           set +e
           ITEM="ficha-${MONTH}"
-          # IA metadata can lag uploads by a few seconds — small retry loop.
+          # IA metadata can lag uploads (eventual consistency, ~seconds)
+          # AND archive.org/ has been intermittently 502/timing out for
+          # extended windows (see PR #24 smoke-check failures). Exponential
+          # backoff: 10, 20, 40, 80, 160s -- ~5 min total tolerance.
+          rm -f /tmp/ia.json
+          DELAY=10
           for attempt in 1 2 3 4 5; do
-            if curl -fsS "https://archive.org/metadata/${ITEM}" -o /tmp/ia.json; then
+            if curl -fsS --max-time 30 "https://archive.org/metadata/${ITEM}" -o /tmp/ia.json; then
               break
             fi
-            echo "metadata fetch attempt $attempt failed; sleeping 10s"
-            sleep 10
+            echo "metadata fetch attempt $attempt failed; sleeping ${DELAY}s"
+            sleep $DELAY
+            DELAY=$((DELAY * 2))
           done
           REPORT=$(python3 - <<'PY'
           import json, sys
