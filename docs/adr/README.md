@@ -24,3 +24,4 @@ Formato: cada ADR é um markdown curto (ideal: 1 página) com **contexto**, **de
 | [0014](0014-rfb-flat-url-no-token.md) | ~~RFB usa URL flat sem token; histórico fica no mirror IA~~ | Superseded by 0015 |
 | [0015](0015-nextcloud-webdav-canonical.md) | Nextcloud WebDAV é a fonte canônica (com histórico desde 2023-05) | Accepted |
 | [0016](0016-backfill-strategy.md) | Estratégia de backfill dos 35 snapshots históricos | Proposed |
+| [0017](0017-ibis-shared-analytical-layer.md) | Ibis como camada analítica compartilhada (`ficha-py`) | Proposed |
