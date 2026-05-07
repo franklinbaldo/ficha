@@ -1,0 +1,184 @@
+name: ETL — bootstrap (first production snapshot)
+
+# One-shot bootstrap of the first manifest.json. Triggers only when this
+# workflow file changes on the bootstrap branch (so the bot's [skip ci]
+# manifest commit doesn't re-fire it), or manually via workflow_dispatch.
+on:
+  push:
+    branches: [claude/review-repo-planning-ApKX5]
+    paths:
+      - '.github/workflows/etl-bootstrap.yml'
+  workflow_dispatch:
+    inputs:
+      month:
+        description: 'Snapshot alvo (YYYY-MM). Vazio = mês corrente.'
+        required: false
+        type: string
+      skip_upload:
+        description: 'Pular upload IA (dry-run, transform + verify apenas)'
+        required: false
+        type: boolean
+        default: false
+      no_verify:
+        description: 'Desativar roundtrip-equivalence test'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  bootstrap:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Free disk space
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /usr/local/share/powershell /usr/share/swift \
+                      "$AGENT_TOOLSDIRECTORY" || true
+          sudo apt-get clean
+          df -h /
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        working-directory: etl
+        run: uv python install 3.11
+
+      - name: Install deps
+        working-directory: etl
+        run: uv sync --frozen
+
+      - name: Resolve target month
+        id: month
+        env:
+          INPUT_MONTH: ${{ inputs.month }}
+        run: |
+          MONTH="${INPUT_MONTH:-$(date -u +%Y-%m)}"
+          if ! [[ "$MONTH" =~ ^[0-9]{4}-(0[1-9]|1[0-2])$ ]]; then
+            echo "::error::Invalid month '$MONTH' — expected YYYY-MM"
+            exit 1
+          fi
+          echo "value=$MONTH" >> "$GITHUB_OUTPUT"
+
+      - name: Run pipeline
+        id: run
+        working-directory: etl
+        env:
+          IA_ACCESS_KEY: ${{ secrets.IA_ACCESS_KEY }}
+          IA_SECRET_KEY: ${{ secrets.IA_SECRET_KEY }}
+          CNPJ_SHARE_TOKEN: ${{ secrets.CNPJ_SHARE_TOKEN }}
+          MONTH: ${{ steps.month.outputs.value }}
+          SKIP_UPLOAD: ${{ inputs.skip_upload }}
+          NO_VERIFY: ${{ inputs.no_verify }}
+        run: |
+          set -o pipefail
+          EXTRA_ARGS=""
+          [ "$SKIP_UPLOAD" = "true" ] && EXTRA_ARGS="$EXTRA_ARGS --skip-upload"
+          [ "$NO_VERIFY"   = "true" ] && EXTRA_ARGS="$EXTRA_ARGS --no-verify"
+          uv run ficha-etl run --month "$MONTH" $EXTRA_ARGS 2>&1 | tee run.log
+
+      - name: Capture log tail
+        if: always()
+        id: tail
+        run: |
+          {
+            echo 'log<<TAIL_EOF'
+            tail -c 12000 etl/run.log 2>/dev/null || echo '(no run.log produced)'
+            echo TAIL_EOF
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Read manifest
+        if: always()
+        id: manifest
+        run: |
+          if [ -f web/public/manifest.json ]; then
+            {
+              echo 'body<<MAN_EOF'
+              cat web/public/manifest.json
+              echo MAN_EOF
+            } >> "$GITHUB_OUTPUT"
+          else
+            echo 'body=(manifest.json not generated)' >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Comment on PR
+        if: always()
+        uses: actions/github-script@v7
+        env:
+          MONTH: ${{ steps.month.outputs.value }}
+          OUTCOME: ${{ steps.run.outcome }}
+          LOG: ${{ steps.tail.outputs.log }}
+          MANIFEST: ${{ steps.manifest.outputs.body }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        with:
+          script: |
+            const branch = context.ref.replace('refs/heads/', '');
+            const { data: prs } = await github.rest.pulls.list({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              head: `${context.repo.owner}:${branch}`,
+              state: 'open',
+            });
+            if (!prs.length) {
+              core.warning(`No open PR for branch ${branch} — skipping comment`);
+              return;
+            }
+            const icon = process.env.OUTCOME === 'success' ? '✅' : '❌';
+            const body = [
+              `## ${icon} ETL bootstrap — \`${process.env.MONTH}\``,
+              ``,
+              `**Outcome:** \`${process.env.OUTCOME}\` · [run logs](${process.env.RUN_URL})`,
+              ``,
+              `<details><summary>Pipeline log (last 12 KB)</summary>`,
+              ``,
+              '```',
+              process.env.LOG || '(empty)',
+              '```',
+              ``,
+              `</details>`,
+              ``,
+              `<details><summary>web/public/manifest.json</summary>`,
+              ``,
+              '```json',
+              process.env.MANIFEST || '(missing)',
+              '```',
+              ``,
+              `</details>`,
+            ].join('\n');
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: prs[0].number,
+              body,
+            });
+
+      - name: Commit manifest back to PR branch
+        if: steps.run.outcome == 'success'
+        env:
+          MONTH: ${{ steps.month.outputs.value }}
+        run: |
+          git add web/public/manifest.json
+          if git diff --cached --quiet -- web/public/manifest.json; then
+            echo "manifest unchanged — nothing to commit"
+            exit 0
+          fi
+          git config user.name  "ficha-etl-bot"
+          git config user.email "ficha-etl-bot@users.noreply.github.com"
+          git commit -m "chore(etl): bootstrap manifest for $MONTH [skip ci]"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
+
+      - name: Propagate pipeline failure
+        if: steps.run.outcome != 'success'
+        run: |
+          echo "::error::ETL bootstrap failed — see PR comment + run logs"
+          exit 1
