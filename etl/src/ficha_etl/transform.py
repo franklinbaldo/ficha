@@ -224,7 +224,8 @@ def _create_table_from_csvs(
                     encoding='{encoding}',
                     columns={cols_clause},
                     null_padding=true,
-                    strict_mode=false
+                    strict_mode=false,
+                    max_line_size=16777216
                 )
                 """
             )
