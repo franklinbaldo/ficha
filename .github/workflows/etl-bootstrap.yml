@@ -66,10 +66,21 @@ jobs:
 
       - name: Resolve target month
         id: month
+        working-directory: etl
         env:
           INPUT_MONTH: ${{ inputs.month }}
+          CNPJ_SHARE_TOKEN: ${{ secrets.CNPJ_SHARE_TOKEN }}
         run: |
-          MONTH="${INPUT_MONTH:-$(date -u +%Y-%m)}"
+          # Default to the latest snapshot RFB actually has on Nextcloud,
+          # not the current calendar month — RFB publishes around day 5
+          # and the bootstrap should never race that window.
+          if [ -n "$INPUT_MONTH" ]; then
+            MONTH="$INPUT_MONTH"
+            echo "Using user-provided month: $MONTH"
+          else
+            MONTH=$(uv run ficha-etl list-snapshots 2>/dev/null | sort | tail -n 1)
+            echo "Latest snapshot on RFB upstream: $MONTH"
+          fi
           if ! [[ "$MONTH" =~ ^[0-9]{4}-(0[1-9]|1[0-2])$ ]]; then
             echo "::error::Invalid month '$MONTH' — expected YYYY-MM"
             exit 1
