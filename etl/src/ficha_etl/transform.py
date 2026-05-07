@@ -645,6 +645,14 @@ def transform_snapshot(
     log.info("=== PHASE 2/4: load into DuckDB (%s) ===", db_path)
     t0 = time.monotonic()
     con = duckdb.connect(str(db_path))
+    # Cap memory and force on-disk spill. GH Actions ubuntu-latest has ~7 GB
+    # of RAM; loading 15 GB of estabelecimento CSV with `ignore_errors=true`
+    # OOM-killed the runner (PR #24, run 25514278003). DuckDB's default is
+    # ~80% of system RAM with limited spill -- explicit limit + dedicated
+    # temp dir on the same partition as db_path makes spill behavior
+    # predictable.
+    con.execute("PRAGMA memory_limit='4GB'")
+    con.execute(f"PRAGMA temp_directory='{db_path.parent / 'duckdb_tmp'}'")
     try:
         # Lookups primeiro (necessárias pros JOINs dos parquets)
         for ef in extracted:
