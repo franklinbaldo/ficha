@@ -1,0 +1,136 @@
+name: Claude — Jules session
+
+# Spawn a Jules session via API and poll its activities, posting each one
+# as a PR comment. Exits non-zero on terminal failure or when Jules is
+# blocked on user input, so PR subscribers (mcp__github__subscribe_pr_activity)
+# wake up.
+#
+# Auth: JULES_API_KEY secret (X-Goog-Api-Key header).
+# Source: sources/github/${{ github.repository }} — must already be
+# registered via the Jules web app + GitHub install.
+#
+# Triggered manually only (no push trigger — running this on every push
+# would spam Jules quota and create dozens of PRs).
+
+on:
+  workflow_dispatch:
+    inputs:
+      title:
+        description: 'Session title (shown in Jules UI)'
+        required: true
+        type: string
+      prompt_file:
+        description: 'Path under etl/scripts/jules/prompts/ (without .md). Use this for long prompts.'
+        required: false
+        type: string
+      prompt:
+        description: 'Inline prompt (used if prompt_file is empty)'
+        required: false
+        type: string
+      starting_branch:
+        description: 'Branch Jules starts from (default main)'
+        required: false
+        type: string
+        default: 'main'
+      target_pr:
+        description: 'PR number to post activity comments on (default 31)'
+        required: false
+        type: string
+        default: '31'
+      automation_mode:
+        description: 'AUTO_CREATE_PR or MANUAL'
+        required: false
+        type: choice
+        options:
+          - AUTO_CREATE_PR
+          - MANUAL
+        default: AUTO_CREATE_PR
+      require_plan_approval:
+        description: 'Require plan approval before execution (default false)'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  jules:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360  # Jules sessions can run an hour or more
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        working-directory: etl
+        run: uv python install 3.11
+
+      - name: Install deps
+        working-directory: etl
+        run: uv sync --frozen
+
+      - name: Resolve prompt
+        id: prompt
+        run: |
+          if [ -n "${{ inputs.prompt_file }}" ]; then
+            FILE="etl/scripts/jules/prompts/${{ inputs.prompt_file }}.md"
+            if [ ! -f "$FILE" ]; then
+              echo "::error::prompt_file not found: $FILE"
+              exit 2
+            fi
+            echo "Using prompt from $FILE"
+            cp "$FILE" /tmp/prompt.txt
+          elif [ -n "${{ inputs.prompt }}" ]; then
+            printf '%s' "${{ inputs.prompt }}" > /tmp/prompt.txt
+          else
+            echo "::error::Either prompt or prompt_file must be provided"
+            exit 2
+          fi
+          echo "Prompt size: $(wc -c < /tmp/prompt.txt) bytes"
+
+      - name: Spawn Jules session and poll activities
+        id: jules
+        working-directory: etl
+        env:
+          JULES_API_KEY: ${{ secrets.JULES_API_KEY }}
+          JULES_TITLE: ${{ inputs.title }}
+          JULES_STARTING_BRANCH: ${{ inputs.starting_branch }}
+          JULES_AUTOMATION_MODE: ${{ inputs.automation_mode }}
+          JULES_REQUIRE_PLAN_APPROVAL: ${{ inputs.require_plan_approval }}
+          JULES_SOURCE: sources/github/${{ github.repository }}
+          JULES_TARGET_PR: ${{ inputs.target_pr }}
+          JULES_REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PYTHONIOENCODING: utf-8
+          PYTHONUTF8: '1'
+        run: |
+          set -o pipefail
+          uv run python scripts/jules/spawn_and_poll.py /tmp/prompt.txt 2>&1 | tee /tmp/jules.log
+
+      - name: Post final summary comment
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ inputs.target_pr }}
+        run: |
+          {
+            echo "## Jules session — \`${{ inputs.title }}\`"
+            echo ""
+            echo "**Workflow run:** [\`${{ github.run_id }}\`](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})"
+            echo "**Outcome:** \`${{ steps.jules.outcome }}\`"
+            echo ""
+            echo "<details><summary>Tail of run log (last 100 lines)</summary>"
+            echo ""
+            echo '```'
+            tail -n 100 /tmp/jules.log 2>/dev/null || echo "(no log captured)"
+            echo '```'
+            echo ""
+            echo "</details>"
+          } > /tmp/summary.md
+          gh pr comment "$PR" --repo "${{ github.repository }}" --body-file /tmp/summary.md
