@@ -184,9 +184,7 @@ def main() -> int:
             failed.append(
                 {
                     "entry": entry,
-                    "reason": (
-                        f"unknown type: {action!r} (supported: send_message, approve_plan)"
-                    ),
+                    "reason": (f"unknown type: {action!r} (supported: send_message, approve_plan)"),
                 }
             )
 
