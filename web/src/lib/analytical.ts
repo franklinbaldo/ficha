@@ -38,3 +38,22 @@ export async function attachCnpjs(db: duckdb.AsyncDuckDB, url: string): Promise<
     await conn.close();
   }
 }
+
+/**
+ * Registra as URLs de cada lookup parquet e cria a VIEW correspondente (ex: lookup_municipios).
+ *
+ * Ver perf-plan-2026-05.md §10.
+ */
+export async function attachLookups(db: duckdb.AsyncDuckDB, manifest: any): Promise<void> {
+  if (!manifest.lookups) return;
+  const conn = await db.connect();
+  try {
+    for (const [kind, info] of Object.entries(manifest.lookups)) {
+      const typedInfo = info as { url: string };
+      await db.registerFileURL(`${kind}.parquet`, typedInfo.url, duckdb.DuckDBDataProtocol.HTTP, false);
+      await conn.query(`CREATE OR REPLACE VIEW lookup_${kind} AS SELECT * FROM '${kind}.parquet'`);
+    }
+  } finally {
+    await conn.close();
+  }
+}

@@ -40,6 +40,10 @@ def output_dir(tmp_path: Path) -> Path:
     _write_parquet(d / "raizes.parquet", 3)
     _write_parquet(d / "socios.parquet", 7)
     (d / "lookups.json").write_text('{"schema_version":"1.0.0"}', encoding="utf-8")
+
+    from ficha_etl.transform import _LOOKUP_KINDS
+    for kind in _LOOKUP_KINDS:
+        _write_parquet(d / "lookups" / f"{kind}.parquet", 5)
     return d
 
 

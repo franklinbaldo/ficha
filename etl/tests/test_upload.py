@@ -24,11 +24,17 @@ def _make_response(status: int = 200, url: str = "https://s3.us.archive.org/test
 
 
 def _make_outputs(output_dir: Path) -> None:
-    """Cria os 4 arquivos de output com conteúdo mínimo."""
+    """Cria os arquivos de output (incluindo lookups/*.parquet) com conteúdo mínimo."""
     output_dir.mkdir(parents=True, exist_ok=True)
     for name in ("cnpjs.parquet", "raizes.parquet", "socios.parquet"):
         (output_dir / name).write_bytes(b"PAR1" + b"\x00" * 20)  # header mínimo falso
     (output_dir / "lookups.json").write_text('{"schema_version":"1.0.0"}')
+
+    from ficha_etl.transform import _LOOKUP_KINDS
+    lookups_dir = output_dir / "lookups"
+    lookups_dir.mkdir(parents=True, exist_ok=True)
+    for kind in _LOOKUP_KINDS:
+        (lookups_dir / f"{kind}.parquet").write_bytes(b"PAR1" + b"\x00" * 20)
 
 
 def _make_raw_zips(cache_dir: Path, month: str) -> list[str]:

@@ -18,7 +18,8 @@ from pathlib import Path
 
 import duckdb
 
-from .mirror import lookups_url, parquet_url
+from .mirror import lookups_url, parquet_url, lookup_parquet_url
+from .transform import _LOOKUP_KINDS
 
 log = logging.getLogger(__name__)
 
@@ -103,6 +104,13 @@ def build_snapshot_entry(month: str, output_dir: Path) -> dict:
             "raizes": _file_entry(raizes, parquet_url(month, "raizes")),
             "socios": _file_entry(socios, parquet_url(month, "socios")),
             "lookups": _file_entry(lookups, lookups_url(month)),
+        },
+        "lookups": {
+            kind: _file_entry(
+                output_dir / "lookups" / f"{kind}.parquet",
+                lookup_parquet_url(month, kind)
+            )
+            for kind in _LOOKUP_KINDS
         },
     }
 

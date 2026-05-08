@@ -472,6 +472,11 @@ def test_transform_snapshot_writes_lookups_and_3_parquets(tmp_path, all_zips_dir
     assert raizes_path.exists()
     assert socios_path.exists()
 
+    # E os parquets de lookup também
+    for kind in transform._LOOKUP_KINDS:
+        lookup_pq = output_dir / "lookups" / f"{kind}.parquet"
+        assert lookup_pq.exists()
+
     # Lê de volta com DuckDB pra validar conteúdo.
     con = duckdb.connect()
     try:
@@ -567,6 +572,18 @@ def test_transform_snapshot_writes_lookups_and_3_parquets(tmp_path, all_zips_dir
         assert ext[2] == "estrangeiro"
         assert ext[4] is None  # sem cpf_mascarado
         assert ext[5] is None  # sem cnpj_socio
+
+        # Valida um dos parquets de lookup (ex: motivos)
+        motivos_pq = output_dir / "lookups" / "motivos.parquet"
+        motivos = con.execute(f"SELECT codigo, descricao, descricao_normalizada FROM '{motivos_pq}' ORDER BY codigo").fetchall()
+        assert len(motivos) == len(LOOKUP_FIXTURES["motivos"])
+        assert motivos[0][0] == "00"
+        assert motivos[0][1] == "Sem motivo"
+        assert motivos[0][2] == "SEM MOTIVO"
+        assert motivos[1][0] == "01"
+        assert motivos[1][1] == "Extinção por encerramento liquidação voluntária"
+        assert motivos[1][2] == "EXTINCAO POR ENCERRAMENTO LIQUIDACAO VOLUNTARIA"
+
     finally:
         con.close()
 
