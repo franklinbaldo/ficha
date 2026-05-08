@@ -217,6 +217,73 @@ time reduction. **Effort:** trivial.
 
 ---
 
+## 7. Reverse lookup: CNPJs by address / município
+
+Currently `cnpjs.parquet` is unsorted (per §5.2), with bloom only on
+`cnpj`. Queries like "who's at Av. Paulista 1000?" or "all CNPJs in
+município 7107" must full-scan ~1 GB. New use cases on the roadmap →
+add a fourth specialized parquet, parallel to `raizes.parquet`.
+
+### 7.1 `enderecos.parquet` — minimal viable shape
+Columns: `uf, municipio_codigo, logradouro_normalizado, numero, cep,
+bairro, cnpj`. Sort by `(uf, municipio_codigo,
+logradouro_normalizado, numero)`. Bloom on
+`logradouro_normalizado` and `municipio_codigo`.
+
+This single layout serves three patterns:
+- **Município lookup** (`WHERE uf=? AND municipio_codigo=?`) — sort
+  prefix gives row-group min/max pruning; bloom on
+  `municipio_codigo` rejects 99%+ of groups. ~5–50 MB downloaded
+  depending on município size (São Paulo capital ≈ 5M rows is the
+  worst case).
+- **Address lookup** (`WHERE uf=? AND municipio_codigo=? AND
+  logradouro_normalizado=? AND numero=?`) — same prefix, then
+  bloom + range on logradouro lands a single row group. <1 MB.
+- **Street prefix / typo-tolerant search** — within a (uf, município)
+  range, `logradouro_normalizado LIKE 'PAULISTA%'` is a sequential
+  scan over a few MB.
+
+**Effort:** 2 days. New `write_enderecos_parquet` in
+`transform.py`, manifest entry, frontend `attachEnderecos` mirroring
+`analytical.ts:32–40`.
+
+### 7.2 Address normalization — pragmatic, not perfect
+RFB addresses are dirty (`R.`, `RUA`, `R`, accents, trailing
+whitespace). Aim for *recall*, not canonical dedup:
+
+```sql
+UPPER(strip_accents(
+  regexp_replace(
+    regexp_replace(logradouro, '\s+', ' ', 'g'),
+    '^(R|AV|TV|AL|PCA|PC|EST|ROD)\.?\s', <expansion>, 'i'
+  )
+)) AS logradouro_normalizado
+```
+
+Top ~10 abbreviations cover ≥90% of variation. Same-street-different-
+spellings ("R DAS FLORES" vs "RUA DAS FLORES") collapse cleanly;
+genuinely different streets stay distinct. **Don't** attempt fuzzy
+dedup (Levenshtein/phonetic) in v1 — it's a separate project and
+the parquet is small enough that frontend-side fuzzy match (e.g.
+trigram on the loaded row group) is viable later.
+
+### 7.3 Município as a separate parquet?
+Not needed if §7.1 ships — `enderecos.parquet` already serves
+município queries via the sort prefix. A standalone
+`municipios.parquet` (just `cnpj, municipio_codigo, uf, situacao`)
+would be ~6× smaller (~150 MB vs ~1 GB) and faster for
+município-only queries that don't care about the address columns.
+Worth it only if usage data shows município-list queries dominate.
+Defer.
+
+### 7.4 Schema cost
+Adding `enderecos.parquet` adds one phase 3 write. Built from
+`estabelecimento` alone (no joins), it's the cheapest of the four —
+~10 min wall, ~2 GB peak memory. No interaction with the §1.1 OOM
+fix.
+
+---
+
 ## What I'd do first
 
 **Land §1.1 in one PR.** Concretely, in
@@ -253,6 +320,8 @@ Run it on the existing 7 GB runner before considering §6.
 - **Ibis migration (ADR 0017).** Useful refactor, not a perf win.
 - **`raizes.parquet` razao_social secondary index.** Deferred until
   §4.1 measurements show name-search is the next bottleneck.
+- **Fuzzy address dedup** (Levenshtein, phonetic). §7.2 punts to
+  frontend-side trigram search; revisit if accuracy complaints arrive.
 - **Switching parquet compression (ZSTD → SNAPPY) or row group size.**
   ZSTD at 200k is well-tuned; gains are <10%.
 - **DuckDB-WASM upgrade tracking.** Out-of-scope; orthogonal.
