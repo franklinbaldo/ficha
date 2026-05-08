@@ -78,6 +78,24 @@ jobs:
             echo "::error::Invalid month '$MONTH' - expected YYYY-MM"
             exit 1
           fi
+
+          # Freshness guard: when MONTH was auto-resolved (no INPUT_MONTH)
+          # and it equals the latest already in manifest.json, RFB hasn't
+          # published a new snapshot yet -- the cron fired at day 5 but
+          # the new month is overdue. Re-processing the same month is a
+          # no-op (parquets are deterministic, manifest detects "no
+          # change", workflow reports green) so the missed snapshot
+          # would go unnoticed until the next month's cron, a month of
+          # stale data. Fail loud instead. Operator-provided
+          # INPUT_MONTH always succeeds (operator knows what they want).
+          if [ -z "$INPUT_MONTH" ]; then
+            CURRENT=$(jq -r '.current // ""' ../web/public/manifest.json 2>/dev/null || echo "")
+            if [ -n "$CURRENT" ] && [ "$MONTH" = "$CURRENT" ]; then
+              echo "::error::Auto-resolved month '$MONTH' is already in manifest.json (current=$CURRENT). RFB hasn't published a new snapshot yet. Re-run manually with inputs.month once the new snapshot is up, or wait for next month's cron."
+              exit 1
+            fi
+          fi
+
           echo "value=$MONTH" >> "$GITHUB_OUTPUT"
 
       # Cache restrito aos ZIPs crus (≤ ~7 GB) — exclui extracted/ (~25-30 GB)

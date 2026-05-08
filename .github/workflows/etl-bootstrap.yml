@@ -70,6 +70,16 @@ jobs:
         working-directory: etl
         run: uv sync --frozen
 
+      # NB: deliberately no `actions/cache@v4` step for raw RFB ZIPs here
+      # (etl-monthly.yml has one). Bootstrap is one-shot AND
+      # disk-constrained -- the cnpjs.parquet join needs every spare GB
+      # of the runner's ~70 GiB filesystem, and `FICHA_DROP_ZIPS_AFTER_LOAD=1`
+      # below `unlink()`s the ZIPs mid-job to claim that headroom.
+      # Cache+drop would defeat each other: post-step would find an
+      # empty path and save nothing. Re-fetch from IA (~2 min) is cheap
+      # enough that adding cache here would be net-negative for this
+      # workflow specifically.
+
       - name: Resolve target month
         id: month
         working-directory: etl
@@ -326,7 +336,27 @@ jobs:
           git config user.name  "ficha-etl-bot"
           git config user.email "ficha-etl-bot@users.noreply.github.com"
           git commit -m "chore(etl): bootstrap manifest for $MONTH [skip ci]"
-          git push origin "HEAD:${GITHUB_REF_NAME}"
+
+          # ETL ran for ~1 hour; concurrent commits on the PR branch
+          # during that window would make a plain push non-fast-forward.
+          # 3 attempts with rebase + exponential backoff, mirrors the
+          # pattern in etl-monthly.yml's manifest-commit step.
+          for attempt in 1 2 3; do
+            git fetch origin "$GITHUB_REF_NAME"
+            git rebase "origin/$GITHUB_REF_NAME" || {
+              echo "::error::git rebase failed on attempt $attempt - aborting"
+              git rebase --abort || true
+              exit 1
+            }
+            if git push origin "HEAD:${GITHUB_REF_NAME}"; then
+              echo "Pushed manifest on attempt $attempt"
+              exit 0
+            fi
+            echo "Push rejected on attempt $attempt; retrying in $((attempt * 5))s"
+            sleep $((attempt * 5))
+          done
+          echo "::error::failed to push manifest after 3 attempts"
+          exit 1
 
       - name: Propagate pipeline failure
         # always() ensures the failure signal isn't swallowed when an
