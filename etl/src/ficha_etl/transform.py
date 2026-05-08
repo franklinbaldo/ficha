@@ -408,34 +408,45 @@ def write_cnpjs_parquet(
     # an unnest+JOIN+re-aggregate would lose registration order across
     # GROUP BY. Indexing into a precomputed MAP keeps the original
     # str_split order intact. The MAP is small (~1300 cnaes × short
-    # descricao ≈ <100 KB) so the (SELECT m FROM _cnae_map) subselect
-    # gets inlined as a constant by DuckDB's optimizer. See
-    # docs/perf-plan-2026-05.md §9.3.
+    # descricao ≈ <100 KB) so DuckDB can inline it as a constant.
+    # See docs/perf-plan-2026-05.md §9.3.
+    #
+    # GROUP BY codigo + ANY_VALUE(descricao) defends against duplicate
+    # codigos in lookup_cnaes — DuckDB's MAP() throws on duplicate keys
+    # ("Map keys must be unique"), which would crash the entire
+    # write_cnpjs_parquet step on a single dirty row. The RFB CNAE
+    # reference table is small (~1300 rows) and historically clean,
+    # but this guards against future drift. Per Kilo PR #28 review.
     con.execute(
         """
         CREATE OR REPLACE TEMP TABLE _cnae_map AS
-        SELECT MAP(list(codigo), list(descricao)) AS m FROM lookup_cnaes
+        SELECT MAP(list(codigo), list(descricao)) AS m FROM (
+            SELECT codigo, ANY_VALUE(descricao) AS descricao
+            FROM lookup_cnaes
+            GROUP BY codigo
+        )
         """
     )
-    con.execute(
-        f"""
-        COPY (
-            SELECT
-                est.cnpj_basico || est.cnpj_ordem || est.cnpj_dv AS cnpj,
-                est.cnpj_basico AS cnpj_base,
-                est.cnpj_ordem,
-                est.cnpj_dv,
-                est.identificador_matriz_filial,
+    try:
+        con.execute(
+            f"""
+            COPY (
+                SELECT
+                    est.cnpj_basico || est.cnpj_ordem || est.cnpj_dv AS cnpj,
+                    est.cnpj_basico AS cnpj_base,
+                    est.cnpj_ordem,
+                    est.cnpj_dv,
+                    est.identificador_matriz_filial,
 
-                -- Empresa (denormalizado)
-                emp.razao_social,
-                UPPER(strip_accents(emp.razao_social)) AS razao_social_normalizada,
-                emp.natureza_juridica AS natureza_juridica_codigo,
-                COALESCE(nj.descricao, '') AS natureza_juridica_descricao,
-                emp.qualificacao_responsavel AS qualificacao_responsavel_codigo,
-                COALESCE(qr.descricao, '') AS qualificacao_responsavel_descricao,
-                {_CAPITAL_SOCIAL_EXPR} AS capital_social,
-                emp.porte_empresa,
+                    -- Empresa (denormalizado)
+                    emp.razao_social,
+                    UPPER(strip_accents(emp.razao_social)) AS razao_social_normalizada,
+                    emp.natureza_juridica AS natureza_juridica_codigo,
+                    COALESCE(nj.descricao, '') AS natureza_juridica_descricao,
+                    emp.qualificacao_responsavel AS qualificacao_responsavel_codigo,
+                    COALESCE(qr.descricao, '') AS qualificacao_responsavel_descricao,
+                    {_CAPITAL_SOCIAL_EXPR} AS capital_social,
+                    emp.porte_empresa,
                 emp.ente_federativo_responsavel,
 
                 -- Estabelecimento
@@ -521,11 +532,17 @@ def write_cnpjs_parquet(
             -- aren't primary FICHA queries (exact match dominates;
             -- razao_social search uses raizes.parquet). Revisit if
             -- range workloads materialize.
-        ) TO ? (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 200000)
-        """,
-        [str(output_path)],
-    )
-    con.execute("DROP TABLE IF EXISTS _cnae_map")
+            ) TO ? (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 200000)
+            """,
+            [str(output_path)],
+        )
+    finally:
+        # try/finally guarantees _cnae_map is cleaned up even if COPY
+        # raises mid-write — important because the same con is reused
+        # across write_raizes_parquet / write_socios_parquet, and a
+        # lingering _cnae_map could shadow a future re-run of this
+        # function. Per Kilo PR #28 review.
+        con.execute("DROP TABLE IF EXISTS _cnae_map")
 
 
 def write_raizes_parquet(
