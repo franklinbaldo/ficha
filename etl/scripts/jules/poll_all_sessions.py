@@ -40,8 +40,17 @@ GITHUB_REPO = os.environ.get("GITHUB_REPOSITORY", "")  # owner/repo (set by Acti
 def _key() -> str:
     k = os.environ.get("JULES_API_KEY", "").strip()
     if not k:
-        sys.exit("::error::JULES_API_KEY secret is not set")
+        # Graceful no-op when the secret isn't configured. The poller is
+        # push-triggered on this branch, so every script edit fires it;
+        # before JULES_API_KEY is actually set we don't want each push to
+        # produce a "failed CI" notification. Caller (main()) checks for
+        # this sentinel via _api_key_available().
+        return ""
     return k
+
+
+def _api_key_available() -> bool:
+    return bool(os.environ.get("JULES_API_KEY", "").strip())
 
 
 def _api(method: str, path: str, body: dict | None = None) -> dict:
@@ -154,6 +163,15 @@ def _summary_index(triggers: list[tuple[str, str, dict]]) -> None:
 
 
 def main() -> int:
+    if not _api_key_available():
+        print("::warning::JULES_API_KEY is not set; poller exiting cleanly (no-op).")
+        ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
+        (ARTIFACTS_DIR / "INDEX.md").write_text(
+            "# Poller no-op\n\nJULES_API_KEY secret is not configured yet. "
+            "The poller will resume tracking once the secret is set in repo settings."
+        )
+        return 0
+
     ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
     print(f"=== Jules poller for {_own_source()} ===")
     print(f"  poll interval: {POLL_INTERVAL_S}s")

@@ -22,7 +22,10 @@ JULES_API_BASE = os.environ.get("JULES_API_BASE", "https://jules.googleapis.com/
 def _key() -> str:
     k = os.environ.get("JULES_API_KEY", "").strip()
     if not k:
-        sys.exit("::error::JULES_API_KEY secret is not set")
+        sys.exit(
+            "::error::JULES_API_KEY secret is not set. Configure it under "
+            "Settings → Secrets and variables → Actions before invoking this workflow."
+        )
     return k
 
 
