@@ -27,10 +27,10 @@ on:
         type: string
         default: 'phase1'
       target_pr:
-        description: 'PR number to comment on (default 26)'
+        description: 'PR number to comment on (default 31)'
         required: false
         type: string
-        default: '26'
+        default: '31'
       month:
         description: 'Snapshot month YYYY-MM for diagnostics that need one'
         required: false
@@ -47,14 +47,6 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
-
-      - name: Free disk space
-        run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
-                      /usr/local/share/powershell /usr/share/swift \
-                      "$AGENT_TOOLSDIRECTORY" || true
-          sudo apt-get clean
-          df -h /
 
       - name: Install uv
         uses: astral-sh/setup-uv@v3
@@ -100,6 +92,13 @@ jobs:
             exit 2
           fi
           uv run python "$SCRIPT" 2>&1 | tee /tmp/diag.log
+        # continue-on-error: capture log → post PR comment → propagate
+        # exit code via the final "Propagate script exit code" step.
+        # Failures are NOT swallowed — they reach the PR via the comment
+        # AND the workflow fails on the last step. Removing this would
+        # make the workflow fail mid-job before the comment posts,
+        # losing the diagnostic output that's the whole point of this
+        # workflow.
         continue-on-error: true
 
       - name: Build PR comment
