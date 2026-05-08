@@ -211,6 +211,13 @@ def main() -> int:
     #                             "awaiting_approval": bool } }
     state: dict[str, dict] = {}
     triggers: list[tuple[str, str, dict]] = []
+    # Baseline pass: the first iteration records current state for every
+    # active session WITHOUT triggering exits. Each push to this branch
+    # restarts the poller — without this gate, sessions that completed
+    # before the poller started would re-trigger on every restart and
+    # produce permanent CI-noise. Triggers fire only on transitions
+    # OBSERVED while the poller is live.
+    baselined = False
 
     while True:
         elapsed_min = (time.monotonic() - started_at) / 60
@@ -233,6 +240,7 @@ def main() -> int:
             sid = sess.get("id") or sess.get("name", "").removeprefix("sessions/")
             if not sid:
                 continue
+            new_session = sid not in state
             st = state.setdefault(
                 sid,
                 {
@@ -240,6 +248,9 @@ def main() -> int:
                     "last_activity_id": None,
                     "completed": False,
                     "awaiting_approval": False,
+                    # baselined: state was recorded at poller start without
+                    # triggering. New transitions after this trigger normally.
+                    "baselined": False,
                 },
             )
             if st["completed"]:
@@ -254,7 +265,42 @@ def main() -> int:
                 st["last_activity_at"] = time.monotonic()
                 st["last_activity_id"] = newest_id
 
-            # Detect: sessionCompleted
+            # Baseline pass for the very first iteration: don't trigger on
+            # state that already existed when the poller started. Mark these
+            # sessions as already-completed/-approved so we silently skip
+            # them. New activities AFTER baselining will reset these flags.
+            if not baselined:
+                for a in acts:
+                    if "sessionCompleted" in a:
+                        st["completed"] = True
+                        print(f"  baseline: {sid} already COMPLETED — silenced")
+                        break
+                if st["completed"]:
+                    continue
+                require_approval = sess.get("requirePlanApproval", False)
+                if require_approval:
+                    latest_plan_idx = next(
+                        (i for i, a in enumerate(acts) if "planGenerated" in a), None
+                    )
+                    latest_approve_idx = next(
+                        (i for i, a in enumerate(acts) if "planApproved" in a), None
+                    )
+                    if latest_plan_idx is not None and (
+                        latest_approve_idx is None or latest_plan_idx < latest_approve_idx
+                    ):
+                        st["awaiting_approval"] = True
+                        print(f"  baseline: {sid} already AWAITING APPROVAL — silenced")
+                st["baselined"] = True
+                continue
+
+            # Sessions appearing for the first time AFTER baselining (e.g.,
+            # newly spawned mid-poll) get the same one-iteration grace
+            # period to record their initial state.
+            if new_session and not st["baselined"]:
+                st["baselined"] = True
+                continue
+
+            # Detect: sessionCompleted (new transition)
             for a in acts:
                 if "sessionCompleted" in a:
                     st["completed"] = True
@@ -266,18 +312,15 @@ def main() -> int:
             if st["completed"]:
                 continue
 
-            # Detect: planGenerated awaiting approval (when requirePlanApproval=true)
+            # Detect: planGenerated awaiting approval (new transition)
             require_approval = sess.get("requirePlanApproval", False)
             if require_approval and not st["awaiting_approval"]:
-                # Find newest planGenerated; if no planApproved follows, it's awaiting.
-                latest_plan_idx = None
-                latest_approve_idx = None
-                for i, a in enumerate(acts):
-                    if "planGenerated" in a and latest_plan_idx is None:
-                        latest_plan_idx = i
-                    if "planApproved" in a and latest_approve_idx is None:
-                        latest_approve_idx = i
-                # API returns newest-first, so smaller index = newer.
+                latest_plan_idx = next(
+                    (i for i, a in enumerate(acts) if "planGenerated" in a), None
+                )
+                latest_approve_idx = next(
+                    (i for i, a in enumerate(acts) if "planApproved" in a), None
+                )
                 if latest_plan_idx is not None and (
                     latest_approve_idx is None or latest_plan_idx < latest_approve_idx
                 ):
@@ -293,6 +336,10 @@ def main() -> int:
                 st["awaiting_approval"] = True  # mark to avoid re-trigger
                 _dump_session(sid, sess, acts, f"idle {idle_min:.0f} min")
                 print(f"  → session {sid} IDLE for {idle_min:.0f}m")
+
+        if not baselined:
+            print(f"  baseline pass complete ({len(state)} sessions snapshotted, no triggers)")
+            baselined = True
 
         if triggers:
             print(f"=== {len(triggers)} session(s) triggered exit ===")
