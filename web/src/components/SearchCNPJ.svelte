@@ -60,30 +60,49 @@
   async function search() {
     if (!db || !cnpj.trim()) return;
     loading = true;
-    const cleanCNPJ = stripCNPJ(cnpj);
-    const searchTerm = cnpj.trim();
+    const clean = stripCNPJ(cnpj);
 
     try {
       const conn = await db.connect();
-      // Prepared statement com binds — evita SQL injection.
-      const stmt = await conn.prepare(`
-        SELECT
-          cnpj,
-          razao_social,
-          nome_fantasia,
-          uf,
-          cnae_principal_codigo,
-          cnae_principal_descricao,
-          municipio_nome,
-          capital_social
-        FROM cnpjs
-        WHERE cnpj LIKE ?
-           OR razao_social ILIKE ?
-        LIMIT 20
-      `);
-      const res = await stmt.query(`%${cleanCNPJ}%`, `%${searchTerm}%`);
+      let res;
+
+      if (clean.length === 14) {
+        const stmt = await conn.prepare(`
+          SELECT
+            cnpj,
+            razao_social,
+            nome_fantasia,
+            uf,
+            cnae_principal_codigo,
+            cnae_principal_descricao,
+            municipio_nome,
+            capital_social
+          FROM cnpjs
+          WHERE cnpj = ?
+          LIMIT 1
+        `);
+        res = await stmt.query(clean);
+        await stmt.close();
+      } else {
+        const stmt = await conn.prepare(`
+          SELECT
+            cnpj,
+            razao_social,
+            nome_fantasia,
+            uf,
+            cnae_principal_codigo,
+            cnae_principal_descricao,
+            municipio_nome,
+            capital_social
+          FROM cnpjs
+          WHERE razao_social ILIKE ?
+          LIMIT 20
+        `);
+        res = await stmt.query(`%${cnpj.trim()}%`);
+        await stmt.close();
+      }
+
       results = res.toArray().map((r) => r.toJSON() as EmpresaRow);
-      await stmt.close();
       await conn.close();
     } catch (e) {
       console.error('Erro na busca:', e);
