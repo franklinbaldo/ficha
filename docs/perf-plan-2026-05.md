@@ -27,6 +27,33 @@ still OOMs at 5.5 GiB on the same operator, W1.1 is required.
 This document assumes the latter; verify before committing
 implementation effort.
 
+## Phase 1 results (2026-05-08)
+
+Two of the four diagnostic steps completed in this session; two
+remain blocked on external resources.
+
+| Step | Result |
+|------|--------|
+| 1.1 — re-run bootstrap on `main` | **Pending.** Requires GitHub Actions run; ~6h. Trigger via `workflow_dispatch` on `etl-bootstrap.yml`. Outcome reshapes Phase 2: if it completes, W1.1 becomes optional polish. |
+| 1.2 — simples cardinality query | **Pending.** Requires a partial estabelecimento + simples load on disk. Cheapest path: re-run a *month with skip_upload=true and short-circuit before phase 3*; collect the `GROUP BY 1 HAVING COUNT(*) > 1` count. Outcome decides whether PR 3a (silent LEFT JOIN fix) is needed. |
+| 1.3 — runner tier check | ✅ **Done.** `.github/workflows/etl-bootstrap.yml:46` is `runs-on: ubuntu-latest` — inherits the post-2026-01 free-tier 4 vCPU / 16 GB. So *PR 2a is concretely viable*: bumping `memory_limit='12GB'` is safe; bumping `threads` is not (per `transform.py:703–704`'s spillability brake). |
+| 1.4 — FIFO probe | ✅ **Done.** Local script wrote 1M rows through `mkfifo`'d FIFO into DuckDB 1.5.2's `read_csv` from a separate Python thread; result was correct (counts/sum match) and ran in ~0.8s. **DuckDB's CSV reader streams cleanly through a FIFO without seeking.** W3.1 / PR 4d is viable; FIFO probe code archived at `/tmp/fifo_probe.py` in this session for reference. |
+
+**Implications for the plan:**
+
+- **PR 2a is unblocked and trivial** — one line change in
+  `transform.py:690` (`'6GB'` → `'12GB'`). Ship before PR 2c so
+  W1.1 has more headroom.
+- **PR 4d is unblocked at the technical-feasibility level** —
+  FIFO works. Implementation still needs the `zipfile.open()`
+  reader thread + per-CSV cleanup logic; that's PR 4d's actual
+  scope.
+- **Steps 1.1 + 1.2 still need a real ETL run.** Both can be
+  triggered with one `workflow_dispatch` if the workflow's
+  short-circuit logic is exposed (or quickly added).
+
+---
+
 ## Plan summary
 
 | Milestone | Goal | Workstreams | Depends on |
@@ -321,6 +348,12 @@ simultaneously across two reviewer queues:
 The only sequential constraint inside this band is **PR 2d
 (`threads=2`) waits on PR 2c** — but 2d isn't in M0; it's a
 follow-up benchmark after W1.1 stabilizes.
+
+*Caveat:* logical independence ≠ no merge conflicts. PRs 2b, 2c,
+3a, 3b all touch `transform.py` (the first three near
+`write_raizes_parquet`/`write_cnpjs_parquet`, 3b in the SELECT
+list around line 441). Expect minor rebases when whichever PR
+lands second; reviewers shouldn't block on rebase noise.
 
 #### Track C — Phase 4 fan-out (after M0)
 Phase 4's four PRs split cleanly:
