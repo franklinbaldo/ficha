@@ -448,6 +448,82 @@ so the TODO doesn't outlive its context.
 
 ---
 
+## 10. Per-lookup parquets for SQL composability
+
+Today lookups ship as a single `lookups.json` (`transform.py:333–352`)
+loaded synchronously by the frontend. That works for *render glue*
+(codigo→descricao for already-fetched rows) but blocks SQL queries
+that need to filter or aggregate *by description*: today the frontend
+would have to do a JS-side name→codigo translation before issuing
+the DuckDB query, and that machinery isn't built.
+
+### 10.1 Shape
+Emit one parquet per lookup, alongside the JSON:
+
+```
+output_dir/
+├── cnpjs.parquet
+├── raizes.parquet
+├── socios.parquet
+├── enderecos.parquet           # §7
+├── pessoas.parquet             # §8
+├── lookups.json                # keep for synchronous render
+└── lookups/
+    ├── cnaes.parquet
+    ├── motivos.parquet
+    ├── municipios.parquet
+    ├── naturezas.parquet
+    ├── paises.parquet
+    └── qualificacoes.parquet
+```
+
+Each is `(codigo VARCHAR, descricao VARCHAR)`, sorted by `codigo`,
+bloom on `codigo`, bloom on
+`descricao_normalizada = UPPER(strip_accents(descricao))` for prefix
+search. Largest (`municipios`, ~5500 rows) is < 100 KB; whole bundle
+< 500 KB. Single row group each → effectively memory-resident on
+first read.
+
+### 10.2 Frontend pattern
+Mount-time: `attachLookups(db)` registers all six in parallel,
+creates `VIEW lookup_<kind>` per file (mirrors
+`analytical.ts:32–40`). Queries that previously required JS
+translation become single round-trips:
+
+```sql
+-- "companies in cities matching 'BRAS'"
+SELECT c.cnpj, c.razao_social, m.descricao AS municipio
+FROM cnpjs c
+JOIN lookup_municipios m ON m.codigo = c.municipio_codigo
+WHERE m.descricao_normalizada LIKE 'BRAS%'
+LIMIT 50
+```
+
+### 10.3 Don't drop `lookups.json`
+DuckDB-WASM cold-start is ~hundreds of ms. Search-result rows that
+display `municipio_nome`/`pais_nome` need a synchronous JS map
+*before* DuckDB is ready. `lookups.json` (still tiny, ~300 KB) keeps
+that path instant. The two serve different layers: JSON for render
+glue, parquet for SQL composition. Cost of duplication is < 1 MB
+total; not worth optimizing away.
+
+### 10.4 Interaction with §9.3
+This is the prerequisite for §9.3's "consistency: A everywhere"
+direction — once every lookup is queryable as a parquet table,
+denormalizing `*_descricao` columns into the big parquets becomes
+truly redundant (any query can JOIN), and dropping them frees ~5–10%
+parquet bytes. Order: land §10 first, then §9.3's schema-v2 ADR.
+
+### 10.5 Effort
+Trivial — one helper that loops `_LOOKUP_KINDS` and emits a parquet
+per `lookup_<kind>` table already in DuckDB. ~20 lines in
+`transform.py`. New `attachLookups` in `web/src/lib/analytical.ts`
+~30 lines. Manifest entry under a `lookups:` map. Schema docs
+need a sentence saying "lookups available both as JSON and as
+parquet."
+
+---
+
 ## What I'd do first
 
 **Land §1.1 in one PR.** Concretely, in
