@@ -67,7 +67,7 @@ jobs:
           SCRIPT="${{ inputs.script }}"
           [ -z "$SCRIPT" ] && SCRIPT="phase1"
           TARGET_PR="${{ inputs.target_pr }}"
-          [ -z "$TARGET_PR" ] && TARGET_PR="26"
+          [ -z "$TARGET_PR" ] && TARGET_PR="31"
           MONTH="${{ inputs.month }}"
           echo "script=$SCRIPT" >> "$GITHUB_OUTPUT"
           echo "target_pr=$TARGET_PR" >> "$GITHUB_OUTPUT"
