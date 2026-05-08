@@ -31,11 +31,12 @@ implementation effort.
 
 | Milestone | Goal | Workstreams | Depends on |
 |-----------|------|-------------|------------|
-| **M0** | Unblock bootstrap | W1.1, W1.6, W6 | — |
-| **M1** | Phase-3 reshape (sustainable monthly) | W1.3, W2.1, W3.1, W5.2 | M0 produces a baseline |
+| **Phase 1** | Diagnose (no code) | runner check, simples cardinality, bootstrap re-run, FIFO probe | — |
+| **M0** | Unblock bootstrap | W1.1, W1.6, W6 | Phase 1 |
+| **M1** | Phase-3 reshape (sustainable monthly) | W1.3, W2.1, W3.1, W5.2 | M0 |
 | **M2** | Frontend query perf | W4.1, W4.2 | M0 |
-| **M3** | Correctness sweep | W9.3 (CNAE secundário), W13.1a (simples cardinality / LEFT JOIN bug) | independent |
-| **M4** | New analytical parquets | W10, W11, W12, W7, W8 | M0 (don't multiply outputs while phase 3 is broken) |
+| **M3** | Correctness sweep | W9.3 (CNAE secundário), W13.1a (simples cardinality / LEFT JOIN bug) | Phase 1 (step 2 result) |
+| **M4** | New analytical parquets | W10, W11, W12, W7, W8 | M0 |
 | **M5** | Deferred — temporal & graph | W13.1b (cross-snapshot), W13.2 (graph) | M4 |
 
 W-numbers map 1:1 to the prior §-numbering for traceability;
@@ -160,8 +161,17 @@ code yet:
    Result decides whether Phase 3 needs the silent-LEFT-JOIN fix.
 3. **Check `etl-bootstrap.yml` runner tier.** If
    `runs-on: ubuntu-latest` already inherits the post-2026-01 4 vCPU
-   / 16 GB tier, just bumping `memory_limit='12GB'` and `threads=2`
-   may be the entire fix — write that PR before W1.1.
+   / 16 GB tier, bumping `memory_limit='12GB'` is safe; bumping
+   `threads` is *not* (see Phase 2 PR 2a — `threads=1` is currently
+   load-bearing for LIST(DISTINCT) memory headroom per the in-tree
+   comment at `transform.py:703–704`, not purely a legacy-runner
+   artifact).
+4. **FIFO probe** for W3.1 / Phase 4d: a 5-line script that opens
+   `mkfifo /tmp/p`, writes a 100 MB CSV through it from one Python
+   thread, and runs `con.execute("SELECT count(*) FROM
+   read_csv('/tmp/p', …)")` from another. Confirms DuckDB's CSV
+   reader doesn't try to seek the FIFO. Runs locally; doesn't need
+   the runner.
 
 **Gate:** documented findings in a follow-up issue or PR description.
 **Risk:** none — observational.
@@ -171,13 +181,18 @@ code yet:
 Only run if Phase 1 confirms bootstrap still OOMs. One PR per item
 to keep blast radius small:
 
-- **PR 2a:** W6 — bump `memory_limit` / `threads` PRAGMAs in
-  `transform.py:690–705` if Phase 1 step 3 says runner has more.
-  *Trivial. Ship first; may close M0 by itself.*
+- **PR 2a:** W6 — bump only `memory_limit` PRAGMA in
+  `transform.py:690` if Phase 1 step 3 says runner has more RAM.
+  **Do not bump `threads` here.** The in-tree comment at
+  `transform.py:703–704` makes `threads=1` load-bearing for
+  LIST(DISTINCT) memory headroom — bumping it before PR 2c lands
+  re-triggers the OOM W6 hopes to sidestep. *Trivial; uncontroversial.*
 - **PR 2b:** W1.6 — `estabelecimento_slim` projection before
   `write_raizes_parquet`. *Trivial; uncontroversial.*
 - **PR 2c:** W1.1 — pre-dedup before `list()`. *The
-  "What I'd do first" PR sketch at the bottom of this doc.*
+  "What I'd do first" PR sketch at the bottom of this doc.* Once
+  this lands, a follow-up PR 2d can experimentally restore
+  `threads=2` if the new aggregation is genuinely spillable.
 
 **Gate:** bootstrap produces all three parquets + `lookups.json`
 end-to-end on a single workflow run within the 350-min ceiling.
@@ -214,8 +229,7 @@ first and validate the partitioning approach last:
   behind a feature flag (`FICHA_PARTITIONED_WRITE=1`) so monthly
   cron can opt in after one successful run.*
 - **PR 4d:** W3.1 — stream-from-ZIP (FIFO). *Eliminates the 25 GB
-  cleanup; needs Phase 1 confirmation that FIFO works under
-  DuckDB's CSV reader on the runner.*
+  cleanup; gated on Phase 1 step 4's FIFO probe result.*
 
 **Gate:** monthly run < 4 h, peak temp spill < 30 GB, manifest
 schema migration tested.
@@ -488,18 +502,28 @@ into 1.3.
 
 ---
 
-## 6. Bootstrap workflow runner
+## 6. Bootstrap workflow runner *(verify via Phase 1 step 3)*
 
-ubuntu-latest: 4 vCPU / 16 GB on free public repos as of 2026-01.
-Current config caps at 6 GB and threads=1 due to *historical* 7 GB
-runner. Verify in `.github/workflows/etl-bootstrap.yml` — if it's
-already on `ubuntu-latest`, just bump `memory_limit='12GB'` and
-`threads=2`. If still legacy 7 GB, `ubuntu-latest-4-cores` (16 GB,
-$0.016/min) at ~6h = ~$6 for the one-shot bootstrap is trivial vs.
-engineering cost. Monthly cron stays on free-tier.
+GitHub bumped free-tier `ubuntu-latest` to 4 vCPU / 16 GB for public
+repos in 2026-01. Current config in `transform.py:690–705` caps at
+6 GB / threads=1, originally tuned for the legacy 7 GB runner.
 
-**Gain:** unblocks bootstrap *today* without code changes; ~3× wall
-time reduction. **Effort:** trivial.
+**Important:** `threads=1` is *not* purely a legacy artifact — the
+in-tree comment at `transform.py:703–704` documents that it also
+brakes LIST(DISTINCT) memory growth. So the workstream is:
+
+1. Phase 1 step 3 confirms which runner tier the workflow inherits.
+2. If 16 GB: PR 2a bumps **only** `memory_limit` (e.g. to `12GB`).
+   Leave `threads=1` until W1.1 makes the aggregation spillable.
+3. If still 7 GB: option of moving to `ubuntu-latest-4-cores`
+   (16 GB, ~$0.016/min ≈ $6 for one-shot bootstrap) for cost-vs-
+   engineering trivial. Monthly cron stays free-tier.
+4. After W1.1 lands (Phase 2 PR 2c), follow-up PR 2d may try
+   `threads=2` and benchmark.
+
+**Gain:** unblocks bootstrap without code changes if step 2 alone
+suffices; ~3× wall time reduction in the best case. **Effort:**
+trivial.
 
 ---
 
@@ -1056,7 +1080,9 @@ the self-join pattern works on data we already produce.
 
 This is mechanical, ~30 lines, and addresses the documented OOM
 without touching workflow files, manifest schema, or the frontend.
-Run it on the existing 7 GB runner before considering §6.
+This is the W1.1 implementation. Run it after Phase 1 confirms it's
+needed (i.e. bootstrap re-run on `main` still OOMs at 5.5 GiB on the
+LIST(DISTINCT) operator).
 
 ---
 
