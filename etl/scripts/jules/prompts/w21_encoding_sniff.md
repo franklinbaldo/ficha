@@ -68,8 +68,9 @@ This PR is independent of M0 — encoding sniff doesn't touch
 
 ## Branch + PR
 
-- Start from `main`.
-- Open PR against `main` titled
+- Start from `claude/ficha-perf-plan-v2` (the active perf-plan
+  working branch).
+- Open PR against `claude/ficha-perf-plan-v2` titled
   `perf(etl): W2.1 encoding sniff in _create_table_from_csvs (Phase 4 PR 4a)`.
 - PR body should reference this prompt file and link
   `docs/perf-plan-2026-05.md` §2.1.

@@ -3,7 +3,24 @@
     "id": "w41-2026-05-08",
     "title": "W4.1 length-14 branch in SearchCNPJ",
     "prompt_file": "w41_search_length14_branch",
-    "starting_branch": "main",
+    "starting_branch": "claude/ficha-perf-plan-v2",
+    "automation_mode": "AUTO_CREATE_PR",
+    "require_plan_approval": false,
+    "_done": "merged in 3d2c4c1; entry kept for de-dup history"
+  },
+  {
+    "id": "w21-2026-05-08",
+    "title": "W2.1 encoding sniff in _create_table_from_csvs",
+    "prompt_file": "w21_encoding_sniff",
+    "starting_branch": "claude/ficha-perf-plan-v2",
+    "automation_mode": "AUTO_CREATE_PR",
+    "require_plan_approval": false
+  },
+  {
+    "id": "w10-2026-05-08",
+    "title": "W10 per-lookup parquets + attachLookups",
+    "prompt_file": "w10_per_lookup_parquets",
+    "starting_branch": "claude/ficha-perf-plan-v2",
     "automation_mode": "AUTO_CREATE_PR",
     "require_plan_approval": false
   }

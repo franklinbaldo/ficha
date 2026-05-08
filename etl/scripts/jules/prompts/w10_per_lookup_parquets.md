@@ -101,10 +101,12 @@ enderecos, W8 pessoas) reuse.
 ## Branch + PR
 
 - Start from `claude/ficha-perf-plan-v2` (the active perf-plan
-  branch in PR #31). Why: §10 references the existing plan
+  working branch in PR #31). Why: §10 references the existing plan
   document and the schemas currently tracked there.
-- Open PR against `main` titled
+- Open PR against `claude/ficha-perf-plan-v2` titled
   `feat: W10 per-lookup parquets + attachLookups (Phase 6 / M4)`.
+  The maintainer will integrate it into the working branch first;
+  M4 work consolidates there before reaching main.
 - PR body should reference this prompt file and the plan §10.
 
 ## Out of scope

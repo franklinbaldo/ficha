@@ -66,11 +66,17 @@ Independent of M0 — frontend-only change. Safe to merge any time.
 
 ## Branch + PR
 
-- Start from `main`.
-- Open PR against `main` titled
+- Start from `claude/ficha-perf-plan-v2` (the active perf-plan
+  working branch).
+- Open PR against `claude/ficha-perf-plan-v2` titled
   `perf(web): W4.1 length-14 branch in SearchCNPJ (Phase 5 PR 5a)`.
 - PR body should reference this prompt file and `docs/perf-plan-2026-05.md`
   §4.1.
+
+**NB (2026-05-08):** Already implemented and merged via Jules
+session 17972302499631745815 (PR #32, squash-merged as 3d2c4c1).
+Kept here for de-dup history; do not respawn unless the merged
+implementation needs revisiting.
 
 ## Out of scope
 
