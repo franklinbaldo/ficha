@@ -401,6 +401,22 @@ def write_cnpjs_parquet(
     Ver ADR 0008 e schema `web/src/schemas/v1/estabelecimento.ts`.
     """
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    # Pre-build a MAP scalar (codigo -> descricao) from lookup_cnaes so the
+    # secondary-CNAE descriptions can be resolved order-preservingly inside
+    # the SELECT. A correlated JOIN-per-element via list_transform doesn't
+    # work because list_transform's lambda can't reference outer tables;
+    # an unnest+JOIN+re-aggregate would lose registration order across
+    # GROUP BY. Indexing into a precomputed MAP keeps the original
+    # str_split order intact. The MAP is small (~1300 cnaes × short
+    # descricao ≈ <100 KB) so the (SELECT m FROM _cnae_map) subselect
+    # gets inlined as a constant by DuckDB's optimizer. See
+    # docs/perf-plan-2026-05.md §9.3.
+    con.execute(
+        """
+        CREATE OR REPLACE TEMP TABLE _cnae_map AS
+        SELECT MAP(list(codigo), list(descricao)) AS m FROM lookup_cnaes
+        """
+    )
     con.execute(
         f"""
         COPY (
@@ -438,8 +454,20 @@ def write_cnpjs_parquet(
                      THEN []::VARCHAR[]
                      ELSE list_transform(str_split(est.cnae_fiscal_secundaria, ','), x -> trim(x)) END
                     AS cnae_secundario_codigos,
-                -- TODO: descricoes resolvidas no client via lookups.json (v0.1)
-                []::VARCHAR[] AS cnae_secundario_descricoes,
+                -- Resolve via _cnae_map cross-joined below. DuckDB rejects
+                -- subqueries inside list_transform lambdas, so the MAP
+                -- must be in column-scope: `_cm.m` is a regular column
+                -- reference (single-row CROSS JOIN broadcasts it onto
+                -- every estabelecimento row). MAP indexing returns NULL
+                -- for missing codes; COALESCE to '' to match the
+                -- convention used by other lookups in this SELECT.
+                CASE WHEN est.cnae_fiscal_secundaria IS NULL OR est.cnae_fiscal_secundaria = ''
+                     THEN []::VARCHAR[]
+                     ELSE list_transform(
+                            list_transform(str_split(est.cnae_fiscal_secundaria, ','), x -> trim(x)),
+                            c -> COALESCE(_cm.m[c], '')
+                          ) END
+                    AS cnae_secundario_descricoes,
 
                 -- Endereço
                 est.tipo_logradouro,
@@ -474,6 +502,7 @@ def write_cnpjs_parquet(
                 {_date_expr("s.data_exclusao_mei")} AS data_exclusao_mei
 
             FROM estabelecimento est
+            CROSS JOIN _cnae_map _cm
             LEFT JOIN empresa emp ON emp.cnpj_basico = est.cnpj_basico
             LEFT JOIN simples s ON s.cnpj_basico = est.cnpj_basico
             LEFT JOIN lookup_naturezas nj ON nj.codigo = emp.natureza_juridica
@@ -496,6 +525,7 @@ def write_cnpjs_parquet(
         """,
         [str(output_path)],
     )
+    con.execute("DROP TABLE IF EXISTS _cnae_map")
 
 
 def write_raizes_parquet(

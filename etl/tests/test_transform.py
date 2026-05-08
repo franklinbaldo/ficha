@@ -521,15 +521,25 @@ def test_transform_snapshot_writes_lookups_and_3_parquets(tmp_path, all_zips_dir
 
         # cnae_secundario_codigos: ACME matriz tem "6201500" como secundário
         acme_cnae = con.execute(
-            f"SELECT cnae_secundario_codigos FROM '{cnpjs_path}' WHERE cnpj = '11111111000100'"
-        ).fetchone()[0]
-        assert acme_cnae == ["6201500"], f"esperado ['6201500'], got {acme_cnae}"
+            f"SELECT cnae_secundario_codigos, cnae_secundario_descricoes "
+            f"FROM '{cnpjs_path}' WHERE cnpj = '11111111000100'"
+        ).fetchone()
+        assert acme_cnae[0] == ["6201500"], f"esperado ['6201500'], got {acme_cnae[0]}"
+        # cnae_secundario_descricoes: now populated from lookup_cnaes via
+        # _cnae_map cross-join (PR 3b / §9.3). Assert non-empty descriptions
+        # — exact text depends on the test fixture's lookup_cnaes content.
+        assert len(acme_cnae[1]) == 1
+        assert acme_cnae[1][0] != "", (
+            f"description for 6201500 should be populated, got {acme_cnae[1]}"
+        )
 
         # CNAE secundário com espaços (trim): ACME filial não tem secundário → []
         filial_cnae = con.execute(
-            f"SELECT cnae_secundario_codigos FROM '{cnpjs_path}' WHERE cnpj = '11111111000200'"
-        ).fetchone()[0]
-        assert filial_cnae == []
+            f"SELECT cnae_secundario_codigos, cnae_secundario_descricoes "
+            f"FROM '{cnpjs_path}' WHERE cnpj = '11111111000200'"
+        ).fetchone()
+        assert filial_cnae[0] == []
+        assert filial_cnae[1] == []
 
         # Socios — agora 4 (PF + PJ + estrangeiro em ACME, PF em TECH)
         socios = con.execute(
