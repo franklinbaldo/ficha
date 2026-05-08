@@ -1,0 +1,53 @@
+name: Claude — Jules fan-out spawner
+
+# Push-triggered fan-out: reads etl/scripts/jules/spawn_queue.json
+# and spawns one Jules session per entry. Idempotent — already-spawned
+# entries (matched by title-suffix [<id>]) are skipped.
+#
+# This lets Claude (or anyone) queue parallel Jules sessions by
+# committing to the queue file. The poller workflow then watches
+# all spawned sessions globally.
+
+on:
+  push:
+    branches: [claude/ficha-perf-plan-v2]
+    paths:
+      - 'etl/scripts/jules/spawn_queue.json'
+      - 'etl/scripts/jules/fanout_spawner.py'
+      - '.github/workflows/claude-jules-fanout.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  fanout:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        working-directory: etl
+        run: uv python install 3.11
+
+      - name: Install deps
+        working-directory: etl
+        run: uv sync --frozen
+
+      - name: Fan-out spawn
+        env:
+          JULES_API_KEY: ${{ secrets.JULES_API_KEY }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          FANOUT_TARGET_PR: '31'
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PYTHONIOENCODING: utf-8
+          PYTHONUTF8: '1'
+        run: uv run python scripts/jules/fanout_spawner.py
+        working-directory: etl

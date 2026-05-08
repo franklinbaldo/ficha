@@ -1,0 +1,10 @@
+[
+  {
+    "id": "w41-2026-05-08",
+    "title": "W4.1 length-14 branch in SearchCNPJ",
+    "prompt_file": "w41_search_length14_branch",
+    "starting_branch": "main",
+    "automation_mode": "AUTO_CREATE_PR",
+    "require_plan_approval": false
+  }
+]
