@@ -401,25 +401,52 @@ def write_cnpjs_parquet(
     Ver ADR 0008 e schema `web/src/schemas/v1/estabelecimento.ts`.
     """
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    # Pre-build a MAP scalar (codigo -> descricao) from lookup_cnaes so the
+    # secondary-CNAE descriptions can be resolved order-preservingly inside
+    # the SELECT. A correlated JOIN-per-element via list_transform doesn't
+    # work because list_transform's lambda can't reference outer tables;
+    # an unnest+JOIN+re-aggregate would lose registration order across
+    # GROUP BY. Indexing into a precomputed MAP keeps the original
+    # str_split order intact. The MAP is small (~1300 cnaes × short
+    # descricao ≈ <100 KB) so DuckDB can inline it as a constant.
+    # See docs/perf-plan-2026-05.md §9.3.
+    #
+    # GROUP BY codigo + ANY_VALUE(descricao) defends against duplicate
+    # codigos in lookup_cnaes — DuckDB's MAP() throws on duplicate keys
+    # ("Map keys must be unique"), which would crash the entire
+    # write_cnpjs_parquet step on a single dirty row. The RFB CNAE
+    # reference table is small (~1300 rows) and historically clean,
+    # but this guards against future drift. Per Kilo PR #28 review.
     con.execute(
-        f"""
-        COPY (
-            SELECT
-                est.cnpj_basico || est.cnpj_ordem || est.cnpj_dv AS cnpj,
-                est.cnpj_basico AS cnpj_base,
-                est.cnpj_ordem,
-                est.cnpj_dv,
-                est.identificador_matriz_filial,
+        """
+        CREATE OR REPLACE TEMP TABLE _cnae_map AS
+        SELECT MAP(list(codigo), list(descricao)) AS m FROM (
+            SELECT codigo, ANY_VALUE(descricao) AS descricao
+            FROM lookup_cnaes
+            GROUP BY codigo
+        )
+        """
+    )
+    try:
+        con.execute(
+            f"""
+            COPY (
+                SELECT
+                    est.cnpj_basico || est.cnpj_ordem || est.cnpj_dv AS cnpj,
+                    est.cnpj_basico AS cnpj_base,
+                    est.cnpj_ordem,
+                    est.cnpj_dv,
+                    est.identificador_matriz_filial,
 
-                -- Empresa (denormalizado)
-                emp.razao_social,
-                UPPER(strip_accents(emp.razao_social)) AS razao_social_normalizada,
-                emp.natureza_juridica AS natureza_juridica_codigo,
-                COALESCE(nj.descricao, '') AS natureza_juridica_descricao,
-                emp.qualificacao_responsavel AS qualificacao_responsavel_codigo,
-                COALESCE(qr.descricao, '') AS qualificacao_responsavel_descricao,
-                {_CAPITAL_SOCIAL_EXPR} AS capital_social,
-                emp.porte_empresa,
+                    -- Empresa (denormalizado)
+                    emp.razao_social,
+                    UPPER(strip_accents(emp.razao_social)) AS razao_social_normalizada,
+                    emp.natureza_juridica AS natureza_juridica_codigo,
+                    COALESCE(nj.descricao, '') AS natureza_juridica_descricao,
+                    emp.qualificacao_responsavel AS qualificacao_responsavel_codigo,
+                    COALESCE(qr.descricao, '') AS qualificacao_responsavel_descricao,
+                    {_CAPITAL_SOCIAL_EXPR} AS capital_social,
+                    emp.porte_empresa,
                 emp.ente_federativo_responsavel,
 
                 -- Estabelecimento
@@ -438,8 +465,20 @@ def write_cnpjs_parquet(
                      THEN []::VARCHAR[]
                      ELSE list_transform(str_split(est.cnae_fiscal_secundaria, ','), x -> trim(x)) END
                     AS cnae_secundario_codigos,
-                -- TODO: descricoes resolvidas no client via lookups.json (v0.1)
-                []::VARCHAR[] AS cnae_secundario_descricoes,
+                -- Resolve via _cnae_map cross-joined below. DuckDB rejects
+                -- subqueries inside list_transform lambdas, so the MAP
+                -- must be in column-scope: `_cm.m` is a regular column
+                -- reference (single-row CROSS JOIN broadcasts it onto
+                -- every estabelecimento row). MAP indexing returns NULL
+                -- for missing codes; COALESCE to '' to match the
+                -- convention used by other lookups in this SELECT.
+                CASE WHEN est.cnae_fiscal_secundaria IS NULL OR est.cnae_fiscal_secundaria = ''
+                     THEN []::VARCHAR[]
+                     ELSE list_transform(
+                            list_transform(str_split(est.cnae_fiscal_secundaria, ','), x -> trim(x)),
+                            c -> COALESCE(_cm.m[c], '')
+                          ) END
+                    AS cnae_secundario_descricoes,
 
                 -- Endereço
                 est.tipo_logradouro,
@@ -474,6 +513,7 @@ def write_cnpjs_parquet(
                 {_date_expr("s.data_exclusao_mei")} AS data_exclusao_mei
 
             FROM estabelecimento est
+            CROSS JOIN _cnae_map _cm
             LEFT JOIN empresa emp ON emp.cnpj_basico = est.cnpj_basico
             LEFT JOIN simples s ON s.cnpj_basico = est.cnpj_basico
             LEFT JOIN lookup_naturezas nj ON nj.codigo = emp.natureza_juridica
@@ -492,10 +532,17 @@ def write_cnpjs_parquet(
             -- aren't primary FICHA queries (exact match dominates;
             -- razao_social search uses raizes.parquet). Revisit if
             -- range workloads materialize.
-        ) TO ? (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 200000)
-        """,
-        [str(output_path)],
-    )
+            ) TO ? (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 200000)
+            """,
+            [str(output_path)],
+        )
+    finally:
+        # try/finally guarantees _cnae_map is cleaned up even if COPY
+        # raises mid-write — important because the same con is reused
+        # across write_raizes_parquet / write_socios_parquet, and a
+        # lingering _cnae_map could shadow a future re-run of this
+        # function. Per Kilo PR #28 review.
+        con.execute("DROP TABLE IF EXISTS _cnae_map")
 
 
 def write_raizes_parquet(
