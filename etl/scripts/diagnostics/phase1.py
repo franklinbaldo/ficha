@@ -36,29 +36,40 @@ def section(title: str) -> None:
     print("=" * 72)
 
 
+_FICHA_ID_RE = __import__("re").compile(r"^ficha-\d{4}-(0[1-9]|1[0-2])$")
+
+
 def ia_inventory() -> list[dict]:
-    """Query IA advanced search for all ficha-* items."""
-    section("IA inventory: ficha-* items")
+    """Query IA for FICHA project items (creator: franklinbaldo,
+    identifier matches ficha-YYYY-MM)."""
+    section("IA inventory: FICHA project items")
+    # Filter by creator AND identifier prefix; archive.org's identifier
+    # namespace is shared globally so a bare `ficha-*` match returns
+    # cookbooks, character sheets, etc. (verified in run 25534709223).
     url = (
         "https://archive.org/advancedsearch.php?"
-        "q=identifier:ficha-*"
+        "q=creator%3Afranklinbaldo+AND+identifier%3Aficha-*"
         "&fl[]=identifier&fl[]=item_size&fl[]=publicdate&fl[]=files_count"
-        "&output=json&rows=100&sort[]=identifier+desc"
+        "&output=json&rows=200&sort[]=identifier+desc"
     )
     req = urllib.request.Request(url, headers={"User-Agent": "ficha-claude-diag/1"})
     with urllib.request.urlopen(req, timeout=30) as resp:
         body = resp.read().decode("utf-8")
     data = json.loads(body)
-    docs = data.get("response", {}).get("docs", [])
-    print(f"found {len(docs)} ficha-* items on IA")
-    for d in docs:
+    raw_docs = data.get("response", {}).get("docs", [])
+    # Tighten further: only ficha-YYYY-MM identifiers
+    docs = [d for d in raw_docs if _FICHA_ID_RE.match(d.get("identifier", ""))]
+    print(f"creator=franklinbaldo: {len(raw_docs)} items; ficha-YYYY-MM: {len(docs)}")
+    for d in sorted(docs, key=lambda d: d.get("identifier", "")):
         size_gb = (d.get("item_size") or 0) / (1024**3)
         print(
-            f"  {d.get('identifier'):30s}  "
-            f"{size_gb:6.2f} GB  "
+            f"  {d.get('identifier'):20s}  "
+            f"{size_gb:7.2f} GB  "
             f"{d.get('files_count', '?'):>5} files  "
             f"{d.get('publicdate', '')}"
         )
+    if not docs:
+        print("(no FICHA project items found yet — bootstrap hasn't completed)")
     return docs
 
 
@@ -68,14 +79,11 @@ def pick_month(docs: list[dict]) -> str | None:
     if env_month:
         log.info("using MONTH from env: %s", env_month)
         return env_month
-    candidates = sorted(
-        d.get("identifier", "") for d in docs if d.get("identifier", "").startswith("ficha-")
-    )
+    # docs is already filtered to ficha-YYYY-MM identifiers in ia_inventory
+    candidates = sorted(d.get("identifier", "") for d in docs)
     if not candidates:
         return None
-    # identifier like ficha-2026-04
-    latest = candidates[-1]
-    return latest.removeprefix("ficha-") if latest.startswith("ficha-") else None
+    return candidates[-1].removeprefix("ficha-")
 
 
 def find_simples_zip(month: str) -> str | None:
