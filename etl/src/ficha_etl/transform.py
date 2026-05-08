@@ -556,12 +556,43 @@ def write_raizes_parquet(
     """
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Pre-materialize the heavy CTEs separately. As inline CTEs in a single
-    # COPY query, the 50M-group LIST_DISTINCT aggregation competed for
-    # memory with the empresa JOIN and OOM'd at 5.5 GiB (PR #24, run
-    # 25522678418). Splitting into temp tables forces DuckDB to spill
-    # each step to disk independently, then the final query is just
-    # a chain of small JOINs.
+    # W1.1 (docs/perf-plan-2026-05.md §1.1): pre-dedup before list().
+    # The previous shape used LIST(DISTINCT est.uf) and
+    # LIST(DISTINCT est.cnae_fiscal_principal) inside _raizes_agg, but
+    # DuckDB's hash-aggregate cannot spill the per-group hash-set state
+    # that DISTINCT-inside-LIST builds — with ~50M cnpj_basico groups
+    # and a few distinct UFs each, the in-memory state grew unbounded
+    # and OOM'd at 5.5 GiB (PR #24, run 25522678418), even after PR #24
+    # split the aggregation into a temp table.
+    #
+    # Replacing with two-step pre-dedup (SELECT DISTINCT → flat list())
+    # uses regular GROUP BYs that DuckDB *can* spill cleanly. Each step
+    # is a vanilla aggregate; peak memory drops to ~2 GiB for the
+    # 60M-row → 50M-group reduction. See plan §1.1 for the full
+    # rationale and an explanation of why splitting alone wasn't
+    # sufficient.
+    log.info("    materializing _ufs / _cnaes pre-dedup tables...")
+    con.execute("""
+        CREATE OR REPLACE TEMP TABLE _ufs AS
+        SELECT DISTINCT cnpj_basico, uf FROM estabelecimento
+        WHERE uf IS NOT NULL AND uf <> ''
+    """)
+    con.execute("""
+        CREATE OR REPLACE TEMP TABLE _ufs_agg AS
+        SELECT cnpj_basico, list(uf) AS ufs_atuacao
+        FROM _ufs GROUP BY cnpj_basico
+    """)
+    con.execute("""
+        CREATE OR REPLACE TEMP TABLE _cnaes_principais AS
+        SELECT DISTINCT cnpj_basico, cnae_fiscal_principal FROM estabelecimento
+        WHERE cnae_fiscal_principal IS NOT NULL AND cnae_fiscal_principal <> ''
+    """)
+    con.execute("""
+        CREATE OR REPLACE TEMP TABLE _cnaes_principais_agg AS
+        SELECT cnpj_basico, list(cnae_fiscal_principal) AS cnaes_principais_distintos
+        FROM _cnaes_principais GROUP BY cnpj_basico
+    """)
+
     log.info("    materializing raizes_agg...")
     con.execute("""
         CREATE OR REPLACE TEMP TABLE _raizes_agg AS
@@ -569,9 +600,7 @@ def write_raizes_parquet(
             est.cnpj_basico AS cnpj_base,
             COUNT(*)::INTEGER AS qtd_estabelecimentos,
             COUNT(*) FILTER (WHERE est.situacao_cadastral = '02')::INTEGER
-                AS qtd_estabelecimentos_ativos,
-            LIST(DISTINCT est.uf) AS ufs_atuacao,
-            LIST(DISTINCT est.cnae_fiscal_principal) AS cnaes_principais_distintos
+                AS qtd_estabelecimentos_ativos
         FROM estabelecimento est
         GROUP BY est.cnpj_basico
     """)
@@ -595,8 +624,6 @@ def write_raizes_parquet(
     con.execute(
         f"""
         COPY (
-            WITH agg AS (SELECT * FROM _raizes_agg),
-            matriz AS (SELECT * FROM _raizes_matriz)
             SELECT
                 emp.cnpj_basico AS cnpj_base,
                 emp.razao_social,
@@ -608,8 +635,8 @@ def write_raizes_parquet(
                 emp.ente_federativo_responsavel,
                 COALESCE(agg.qtd_estabelecimentos, 0) AS qtd_estabelecimentos,
                 COALESCE(agg.qtd_estabelecimentos_ativos, 0) AS qtd_estabelecimentos_ativos,
-                COALESCE(agg.ufs_atuacao, []) AS ufs_atuacao,
-                COALESCE(agg.cnaes_principais_distintos, []) AS cnaes_principais_distintos,
+                COALESCE(ufs.ufs_atuacao, []) AS ufs_atuacao,
+                COALESCE(cnae_agg.cnaes_principais_distintos, []) AS cnaes_principais_distintos,
                 matriz.data_inicio_atividade_matriz,
                 matriz.uf_matriz,
                 matriz.municipio_matriz_codigo,
@@ -617,8 +644,10 @@ def write_raizes_parquet(
                 matriz.cnae_principal_matriz_codigo,
                 COALESCE(cn.descricao, '') AS cnae_principal_matriz_descricao
             FROM empresa emp
-            LEFT JOIN agg ON agg.cnpj_base = emp.cnpj_basico
-            LEFT JOIN matriz ON matriz.cnpj_basico = emp.cnpj_basico
+            LEFT JOIN _raizes_agg agg ON agg.cnpj_base = emp.cnpj_basico
+            LEFT JOIN _ufs_agg ufs ON ufs.cnpj_basico = emp.cnpj_basico
+            LEFT JOIN _cnaes_principais_agg cnae_agg ON cnae_agg.cnpj_basico = emp.cnpj_basico
+            LEFT JOIN _raizes_matriz matriz ON matriz.cnpj_basico = emp.cnpj_basico
             LEFT JOIN lookup_naturezas nj ON nj.codigo = emp.natureza_juridica
             LEFT JOIN lookup_municipios mn ON mn.codigo = matriz.municipio_matriz_codigo
             LEFT JOIN lookup_cnaes cn ON cn.codigo = matriz.cnae_principal_matriz_codigo
@@ -636,8 +665,15 @@ def write_raizes_parquet(
         [str(output_path)],
     )
     # Free the temp tables now that raizes.parquet is on disk.
-    con.execute("DROP TABLE IF EXISTS _raizes_agg")
-    con.execute("DROP TABLE IF EXISTS _raizes_matriz")
+    for tbl in (
+        "_raizes_agg",
+        "_raizes_matriz",
+        "_ufs",
+        "_ufs_agg",
+        "_cnaes_principais",
+        "_cnaes_principais_agg",
+    ):
+        con.execute(f"DROP TABLE IF EXISTS {tbl}")
 
 
 def write_socios_parquet(
