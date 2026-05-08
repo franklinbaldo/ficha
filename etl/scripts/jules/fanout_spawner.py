@@ -151,16 +151,28 @@ def main() -> int:
         title = entry.get("title", "(no title)")
         decorated_title = f"{title} [{eid}]"
 
-        # Hard skip: explicit `_done` marker. Honored independently of
-        # the live-session de-dup because Jules sessions.list pagination
-        # caps at 5 pages and old completed sessions can fall out of
-        # that window — making the title-based de-dup unreliable for
-        # entries that already shipped (e.g., W4.1 spawned a duplicate
-        # in fan-out run #4 because the original 17972302499... was
-        # past page 5).
+        # Hard skip: explicit `_done` (terminal: merged/discarded) or
+        # `_spawning` (currently in flight) marker. Honored independently
+        # of the live-session de-dup because Jules sessions.list pagination
+        # caps at 5 pages — sessions older than that window or running on
+        # a busy account can be missed by the title-based check, which
+        # caused W2.1 and W10 to spawn duplicates after the _done fix
+        # commit (9a98cf07) re-triggered the fanout.
+        #
+        # State machine for a queue entry:
+        #   pending  → no _spawning, no _done   (will spawn)
+        #   running  → _spawning: <session_id>  (skip; awaiting completion)
+        #   terminal → _done: <merged|discarded|note>  (skip; remember)
+        # After the fan-out posts a "Spawned" comment, the maintainer
+        # should manually edit the entry to set _spawning. After the PR
+        # is merged or the session is discarded, swap _spawning → _done.
         if entry.get("_done"):
             print(f"  SKIP (_done={entry['_done']}): {decorated_title}")
             skipped.append({"id": eid, "title": title, "reason": "_done"})
+            continue
+        if entry.get("_spawning"):
+            print(f"  SKIP (_spawning={entry['_spawning']}): {decorated_title}")
+            skipped.append({"id": eid, "title": title, "reason": "_spawning"})
             continue
 
         # De-dup by id-suffixed title (best-effort against active sessions)
@@ -215,6 +227,12 @@ def main() -> int:
         md.append(f"### Spawned ({len(spawned)})\n")
         for s in spawned:
             md.append(f"- [`{s['session_id']}`]({s['url']}) — **{s['title']}**")
+        md.append(
+            "\n**Reminder:** add `\"_spawning\": \"<session_id>\"` to each "
+            "spawned entry in `spawn_queue.json` to prevent re-fires on the "
+            "next push. Swap to `_done` once the session's PR is merged "
+            "or discarded."
+        )
     if skipped:
         md.append(f"\n### Skipped (already running) ({len(skipped)})\n")
         for s in skipped:

@@ -14,7 +14,9 @@
     "prompt_file": "w21_encoding_sniff",
     "starting_branch": "claude/ficha-perf-plan-v2",
     "automation_mode": "AUTO_CREATE_PR",
-    "require_plan_approval": false
+    "require_plan_approval": false,
+    "_spawning": "17967018632018838778",
+    "_note_dup": "Duplicate spawn 15401189606457262357 ran without a _spawning gate; will likely open a redundant PR (close as dup of the original session's PR when it appears)."
   },
   {
     "id": "w10-2026-05-08",
@@ -22,6 +24,8 @@
     "prompt_file": "w10_per_lookup_parquets",
     "starting_branch": "claude/ficha-perf-plan-v2",
     "automation_mode": "AUTO_CREATE_PR",
-    "require_plan_approval": false
+    "require_plan_approval": false,
+    "_spawning": "4741416671646003104",
+    "_note_dup": "Duplicate spawn 7421718966605916421 also running; close redundant PR if it appears."
   }
 ]
