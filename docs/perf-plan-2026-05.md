@@ -287,6 +287,93 @@ captured in their own ADRs:
 **Gate:** "CNPJs at this address" and "companies where this person
 appears" demo queries work in DuckDB-WASM.
 
+### Parallel work tracks
+
+The phases above are sequential at the *milestone* level (M0 gates
+M1/M2/M4) but most individual PRs within and across phases are
+independent. Concrete parallelism opportunities, ordered by when in
+the timeline they unlock:
+
+#### Track A — Phase 1 (all 4 steps in parallel)
+All four diagnostic steps are independent and can run on the same
+afternoon:
+- 1.1 bootstrap re-run (~6h, mostly idle GitHub Actions wait)
+- 1.2 simples cardinality query (minutes, on a partial load)
+- 1.3 runner tier check (30 seconds, just open
+  `etl-bootstrap.yml`)
+- 1.4 FIFO probe (~10 min local script)
+
+Steps 1.2 and 1.3 inform PRs that can ship *while 1.1 is still
+running*.
+
+#### Track B — Phase 2 + Phase 3 in parallel (after Phase 1)
+Once Phase 1's diagnostic results are in, four PRs can be in flight
+simultaneously across two reviewer queues:
+
+| PR | Workstream | Independent of |
+|----|------------|----------------|
+| 2a | `memory_limit` bump (W6) | 2b, 2c, 3a, 3b |
+| 2b | `estabelecimento_slim` (W1.6) | 2a, 2c, 3a, 3b |
+| 2c | pre-dedup (W1.1) | 2a, 2b, 3a, 3b |
+| 3a | simples LEFT JOIN fix (W13.1a, *if Phase 1 step 2 surfaced it*) | all |
+| 3b | populate `cnae_secundario_descricoes` (W9.3) | all |
+
+The only sequential constraint inside this band is **PR 2d
+(`threads=2`) waits on PR 2c** — but 2d isn't in M0; it's a
+follow-up benchmark after W1.1 stabilizes.
+
+#### Track C — Phase 4 fan-out (after M0)
+Phase 4's four PRs split cleanly:
+
+| PR | Parallel with | Sequential constraint |
+|----|---------------|----------------------|
+| 4a | encoding sniff | independent of everything in Phase 4 |
+| 4c | partition write | independent of 4a, 4d |
+| 4d | FIFO streaming | independent of 4a, 4c (different code path) |
+| 4b | partition-local sort | **must wait on 4c** (sort needs partitions to live within) |
+
+So after M0, you can land **4a + 4c + 4d in parallel**, then 4b. PR
+4a (encoding sniff) is also safe to ship *before* M0 lands —
+nothing about it touches phase 3 — moving it earlier reclaims ~3
+min of phase-2 wall time during Phase 1's bootstrap re-run.
+
+#### Track D — Phase 5 (after M0)
+- 5a (length-14 branch) and 5b (summary parquet) are independent of
+  each other; both gated only on `cnpjs.parquet` existing (i.e.
+  M0). They can ship in parallel reviewer queues alongside Phase 4.
+- 5b's schema bump should coordinate with PR 4c if both land in the
+  same release — the manifest entry update is in the same file.
+
+#### Track E — Phases 6/7/8 fan-out (after M0)
+Once M0 lands, the analytical-parquet additions are mostly
+independent of each other and of Phase 4/5:
+
+| Phase | PRs that can be concurrent | Notes |
+|-------|---------------------------|-------|
+| 6 | PR 6 (W10 lookups) | smallest; ship first to validate `attachLookups` pattern |
+| 7 | PR 7a + 7b (cnpj_cnaes + cnpj_contatos) | both built only from `estabelecimento`, no joins; trivially parallel |
+| 8 | PR 8a + 8b (enderecos + pessoas) | both larger; each needs its own ADR; trivially parallel |
+
+Each phase's PRs share a frontend `attachX` pattern; reuse the
+review pattern established by PR 6 to compress later review cycles.
+
+#### Maximum concurrent PR count
+Realistic upper bound: **~6 PRs in flight** during the post-M0
+period (4a/4c/4d, 5a, 6, 3b for example), assuming reviewer
+bandwidth and a single integration branch. The dependency graph
+admits more in theory; the constraint is human review throughput,
+not topology.
+
+#### Things that *must* be sequential
+- 4c → 4b (sort needs partitions)
+- 2c → 2d (threads bump needs spillable aggregation)
+- M0 → M4 entry (don't multiply outputs while phase 3 is broken)
+- 5b ↔ 4c (manifest schema coordination if same release)
+
+Everything else is parallelizable.
+
+---
+
 ### Phase 9 — Deferred (M5)
 
 Open-ended; do not start without explicit ADR:
