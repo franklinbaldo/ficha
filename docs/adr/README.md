@@ -25,3 +25,4 @@ Formato: cada ADR é um markdown curto (ideal: 1 página) com **contexto**, **de
 | [0015](0015-nextcloud-webdav-canonical.md) | Nextcloud WebDAV é a fonte canônica (com histórico desde 2023-05) | Accepted |
 | [0016](0016-backfill-strategy.md) | Estratégia de backfill dos 35 snapshots históricos | Proposed |
 | [0017](0017-ibis-shared-analytical-layer.md) | Ibis como camada analítica compartilhada (`ficha-py`) | Proposed |
+| [0018](0018-raizes-municipios-atuacao.md) | `raizes.parquet` v2: `municipios_atuacao` substitui `ufs_atuacao` | Proposed |
