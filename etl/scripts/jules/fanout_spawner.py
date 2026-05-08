@@ -66,21 +66,35 @@ def _api(method: str, path: str, body: dict | None = None) -> dict:
         },
     )
     try:
-        with urllib.request.urlopen(req, timeout=60) as resp:
+        with urllib.request.urlopen(req, timeout=30) as resp:
             raw = resp.read().decode("utf-8")
             return json.loads(raw) if raw else {}
     except urllib.error.HTTPError as e:
         body_text = e.read().decode("utf-8", errors="replace")
         print(f"::error::Jules API {method} {path} → HTTP {e.code}: {body_text[:500]}")
         return {}
+    except (urllib.error.URLError, TimeoutError, OSError) as e:
+        # Don't let a single slow paginated request stall the whole
+        # fan-out — the de-dup is best-effort. Log and treat as empty.
+        print(f"::warning::Jules API {method} {path} timed out / network error: {e}")
+        return {}
 
 
 def _list_existing_titles(repo: str) -> set[str]:
-    """Titles of all sessions for this repo's source. Paginate."""
+    """Titles of all sessions for this repo's source.
+
+    Paginates the global session list filtered client-side. Capped at 5
+    pages (250 sessions) — the Jules API doesn't expose a server-side
+    source filter, so a maintainer with many sessions across other
+    projects would otherwise pay 20 × HTTP-roundtrip per fan-out. 250
+    is enough to de-dup against the last few weeks of activity for any
+    one repo; the fan-out de-dup is best-effort, not safety-critical
+    (worst case: a duplicate session, easy to cancel).
+    """
     own = f"sources/github/{repo}"
     titles: set[str] = set()
     page_token = None
-    for _ in range(20):
+    for _ in range(5):
         path = "/sessions?pageSize=50"
         if page_token:
             path += f"&pageToken={page_token}"
