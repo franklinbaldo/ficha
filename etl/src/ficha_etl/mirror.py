@@ -66,6 +66,11 @@ def lookups_url(month: str) -> str:
     return f"{item_root(month)}/lookups.json"
 
 
+def lookup_parquet_url(month: str, kind: str) -> str:
+    """URL de um parquet de lookup transformado dentro do item."""
+    return f"{item_root(month)}/lookups/{kind}.parquet"
+
+
 def raw_files_for_month(month: str) -> list[RemoteFile]:
     """Mesma lista de 37 arquivos do `canonical_inventory`, mas com URLs IA."""
     return [

@@ -1,4 +1,5 @@
 import * as duckdb from '@duckdb/duckdb-wasm';
+import type { Snapshot } from '../schemas/v1/manifest';
 
 /**
  * Instancia uma DuckDB-WASM via JsDelivr bundle (CDN público; sem precisar
@@ -34,6 +35,23 @@ export async function attachCnpjs(db: duckdb.AsyncDuckDB, url: string): Promise<
   const conn = await db.connect();
   try {
     await conn.query(`CREATE OR REPLACE VIEW cnpjs AS SELECT * FROM 'cnpjs.parquet'`);
+  } finally {
+    await conn.close();
+  }
+}
+
+/**
+ * Registra cada parquet de lookup definido no manifest como file URL
+ * no DuckDB e cria a respectiva VIEW `lookup_{kind}`.
+ */
+export async function attachLookups(db: duckdb.AsyncDuckDB, manifest: Snapshot): Promise<void> {
+  if (!manifest.lookups) return;
+  const conn = await db.connect();
+  try {
+    for (const [kind, info] of Object.entries(manifest.lookups)) {
+      await db.registerFileURL(`${kind}.parquet`, info.url, duckdb.DuckDBDataProtocol.HTTP, false);
+      await conn.query(`CREATE OR REPLACE VIEW lookup_${kind} AS SELECT * FROM '${kind}.parquet'`);
+    }
   } finally {
     await conn.close();
   }

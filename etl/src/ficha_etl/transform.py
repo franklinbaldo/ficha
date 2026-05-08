@@ -352,6 +352,19 @@ def write_lookups_json(
     output_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2))
 
 
+def write_lookup_parquets(con: duckdb.DuckDBPyConnection, output_dir: Path) -> None:
+    """Escreve um parquet para cada lookup, para composição SQL."""
+    (output_dir / "lookups").mkdir(parents=True, exist_ok=True)
+    for kind in _LOOKUP_KINDS:
+        con.execute(
+            "COPY (SELECT codigo, descricao, "
+            "UPPER(strip_accents(descricao)) AS descricao_normalizada "
+            f"FROM lookup_{kind} ORDER BY codigo) "
+            "TO ? (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 100000)",
+            [str(output_dir / "lookups" / f"{kind}.parquet")],
+        )
+
+
 # -----------------------------------------------------------------------------
 # Helpers SQL reutilizados nas queries dos parquets
 # -----------------------------------------------------------------------------
@@ -866,6 +879,9 @@ def transform_snapshot(
             snapshot_date=month,
         )
         log.info("wrote lookups.json")
+
+        write_lookup_parquets(con, output_dir)
+        log.info("wrote lookup parquets")
 
         log.info("=== PHASE 3/4: write parquets ===")
         t0 = time.monotonic()

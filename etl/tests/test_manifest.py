@@ -35,11 +35,17 @@ def _sha256(path: Path) -> str:
 
 @pytest.fixture
 def output_dir(tmp_path: Path) -> Path:
+    from ficha_etl.transform import _LOOKUP_KINDS
+
     d = tmp_path / "output"
     _write_parquet(d / "cnpjs.parquet", 10)
     _write_parquet(d / "raizes.parquet", 3)
     _write_parquet(d / "socios.parquet", 7)
     (d / "lookups.json").write_text('{"schema_version":"1.0.0"}', encoding="utf-8")
+
+    (d / "lookups").mkdir(parents=True, exist_ok=True)
+    for kind in _LOOKUP_KINDS:
+        _write_parquet(d / "lookups" / f"{kind}.parquet", 5)
     return d
 
 
