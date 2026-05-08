@@ -1,0 +1,106 @@
+name: Claude — Jules poller
+
+# Long-running watcher for ALL active Jules sessions on this repo.
+# Polls every 60s; exits non-zero (and uploads an artifact) as soon
+# as ANY session reaches a notable state:
+#   - sessionCompleted
+#   - awaiting plan approval (requirePlanApproval=true)
+#   - idle (no new activity in IDLE_THRESHOLD_MIN minutes)
+#
+# Subscribers (mcp__github__subscribe_pr_activity) wake on workflow
+# failure. The artifact contains per-session session.json,
+# activities.json, and a SUMMARY.md so the next session can read
+# what happened without re-querying Jules.
+#
+# Trigger: push to the working branch (so iterating on the script
+# auto-restarts the watcher) + workflow_dispatch.
+
+on:
+  push:
+    branches: [claude/ficha-perf-plan-v2]
+    paths:
+      - '.github/workflows/claude-jules-poller.yml'
+      - 'etl/scripts/jules/poll_all_sessions.py'
+  workflow_dispatch:
+    inputs:
+      idle_threshold_min:
+        description: 'Minutes of activity-silence before declaring idle'
+        required: false
+        type: string
+        default: '15'
+      poll_interval_s:
+        description: 'Seconds between polls'
+        required: false
+        type: string
+        default: '60'
+
+permissions:
+  contents: read
+  pull-requests: write
+  actions: write  # for artifact upload
+
+jobs:
+  poll:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        working-directory: etl
+        run: uv python install 3.11
+
+      - name: Install deps
+        working-directory: etl
+        run: uv sync --frozen
+
+      - name: Poll Jules sessions
+        id: poll
+        working-directory: etl
+        env:
+          JULES_API_KEY: ${{ secrets.JULES_API_KEY }}
+          POLL_INTERVAL_S: ${{ inputs.poll_interval_s || '60' }}
+          IDLE_THRESHOLD_MIN: ${{ inputs.idle_threshold_min || '15' }}
+          MAX_TOTAL_MIN: '330'
+          ARTIFACTS_DIR: ${{ github.workspace }}/artifacts
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          PYTHONIOENCODING: utf-8
+          PYTHONUTF8: '1'
+        run: |
+          set -o pipefail
+          uv run python scripts/jules/poll_all_sessions.py 2>&1 | tee /tmp/poll.log
+        continue-on-error: true
+        # continue-on-error: ensures the artifact upload below always
+        # runs even when the poller exits non-zero (its happy path
+        # for "session triggered exit"). The final step propagates
+        # the failure so PR subscribers get woken up.
+
+      - name: Upload session artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: jules-sessions-${{ github.run_id }}
+          path: artifacts/
+          retention-days: 14
+          if-no-files-found: warn
+
+      - name: Upload poller log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: jules-poller-log-${{ github.run_id }}
+          path: /tmp/poll.log
+          retention-days: 14
+
+      - name: Propagate poller exit code
+        if: always()
+        run: |
+          if [ "${{ steps.poll.outcome }}" != "success" ]; then
+            echo "::error::Jules poller detected a session state change. See uploaded artifact 'jules-sessions-${{ github.run_id }}' for details."
+            exit 1
+          fi
