@@ -151,10 +151,22 @@ def main() -> int:
         title = entry.get("title", "(no title)")
         decorated_title = f"{title} [{eid}]"
 
-        # De-dup by id-suffixed title
+        # Hard skip: explicit `_done` marker. Honored independently of
+        # the live-session de-dup because Jules sessions.list pagination
+        # caps at 5 pages and old completed sessions can fall out of
+        # that window — making the title-based de-dup unreliable for
+        # entries that already shipped (e.g., W4.1 spawned a duplicate
+        # in fan-out run #4 because the original 17972302499... was
+        # past page 5).
+        if entry.get("_done"):
+            print(f"  SKIP (_done={entry['_done']}): {decorated_title}")
+            skipped.append({"id": eid, "title": title, "reason": "_done"})
+            continue
+
+        # De-dup by id-suffixed title (best-effort against active sessions)
         if any(decorated_title in t for t in existing):
             print(f"  SKIP (already exists): {decorated_title}")
-            skipped.append({"id": eid, "title": title})
+            skipped.append({"id": eid, "title": title, "reason": "already exists"})
             continue
 
         prompt_file = entry.get("prompt_file")
