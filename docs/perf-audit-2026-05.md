@@ -97,14 +97,23 @@ buffer pool. **Fix:** `CREATE TEMP TABLE estabelecimento_slim AS SELECT
 For estabelecimento (~15 GB) that's ~90 s wasted before falling to
 utf-8 fail (~90 s more) before utf-8+ignore_errors finally loads.
 
-**Fix:** sniff first MB on Python side:
+**Fix:** sniff first MB on Python side. Note `bytes.decode('latin-1')`
+*never* raises (every byte is valid latin-1), so the test must be
+"is this strict utf-8?" with latin-1 as the fallback:
 ```python
-sample = pathlib.Path(p).read_bytes()[:1<<20]
-try:    sample.decode('latin-1'); enc, ie = 'latin-1', False
-except: enc, ie = 'utf-8', True
+with open(p, 'rb') as f: sample = f.read(1 << 20)
+try:
+    sample.decode('utf-8')
+    enc, ie = 'utf-8', True   # whole-file may still have stray bytes
+except UnicodeDecodeError:
+    enc, ie = 'latin-1', False
 ```
-RFB is reliably one-encoding-per-snapshot, so sampling one of N partitioned
-CSVs is enough. **Gain:** saves ~3 min/snapshot. **Effort:** trivial.
+Keep `ignore_errors=True` on the utf-8 branch because a 1 MB sample
+can't prove the rest of a 15 GB file is clean — RFB occasionally emits
+mixed-encoding rows mid-file (per the existing comment at
+`transform.py:217–222`). RFB is reliably one-dominant-encoding per
+snapshot, so sampling one of N partitioned CSVs is enough to pick the
+right branch. **Gain:** saves ~3 min/snapshot. **Effort:** trivial.
 
 ### 2.2 `_create_table_from_csvs` loads all partitions in one statement
 That's correct (DuckDB reads in parallel). Keep.
