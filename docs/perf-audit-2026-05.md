@@ -673,25 +673,37 @@ email), ~300 MB compressed.
 Beyond the per-snapshot externalizations above, two larger projects
 are valuable but out of scope for unblocking bootstrap:
 
-### 13.1 `simples_history.parquet` (cross-snapshot)
-RFB's monthly snapshot is *not* a full history of Simples
-participation — `simples` is 1:1 with `cnpj_basico` within any
-given snapshot (`transform.py:103–111` carries only one
-`data_opcao` + one `data_exclusao` per regime). Companies that
-enter and exit Simples multiple times have prior events
-overwritten in the latest RFB CSV.
+### 13.1 `simples_history.parquet` — and an empirical question first
 
-**The data is recoverable** by accumulating across monthly
-snapshots stored in IA: every change in `(opcao_simples,
-data_opcao_simples, data_exclusao_simples, opcao_mei, …)`
-between consecutive months is a real Simples lifecycle event.
-Shape:
-`(cnpj_base, regime ∈ {'SN','MEI'}, evento ∈ {'opcao','exclusao'},
-data, snapshot_observed_at)`. Sort by `(cnpj_base, data)`.
+The shape of Simples data needs verification before designing this
+externalization. The schema at `transform.py:103–111` has only
+`cnpj_basico` as a candidate key, and `write_cnpjs_parquet` at
+line 478 does `LEFT JOIN simples s ON s.cnpj_basico = est.cnpj_basico`
+— which assumes 1:1, but would silently multiply estabelecimento
+rows if simples carries multiple rows per cnpj_basico. The
+roundtrip-equivalence count check (`transform.py:857–862`) would
+catch that on a completed run; bootstrap hasn't completed
+end-to-end, so we have **no empirical confirmation** of which case
+holds.
 
-Requires a new ETL stage that opens the prior month's IA item
-and diffs against the current snapshot. Out of scope for the
-monthly cron as-is; new ADR needed.
+**Action before designing simples_history:**
+1. Run `SELECT cnpj_basico, COUNT(*) FROM simples GROUP BY 1
+   HAVING COUNT(*) > 1 LIMIT 10` on a partial load. The result
+   tells us whether RFB emits one row per CNPJ (current
+   assumption), one row per opção/exclusão event (multi-row
+   per CNPJ within a snapshot), or has data-quality dupes.
+2. If multi-row per snapshot: a within-snapshot
+   `cnpj_simples.parquet` (`(cnpj_base, regime, evento, data,
+   posicao)`) already captures the lifecycle; cross-snapshot
+   accumulation is secondary. Also: the current
+   `write_cnpjs_parquet` LEFT JOIN is buggy and silently
+   inflating row counts — a real bug separate from the audit.
+3. If 1:1 within snapshot: the cross-snapshot accumulator is
+   the only path to lifecycle history, as previously framed.
+
+Either way the parquet shape (`cnpj_base, regime, evento, data,
+…`) is similar; the *source* of the multi-row data differs.
+Don't design further until step 1 lands.
 
 ### 13.2 `socio_edges.parquet` (graph)
 Self-join `socios` on `(nome_normalizado, cpf_mascarado)` (the
