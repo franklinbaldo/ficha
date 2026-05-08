@@ -33,7 +33,14 @@ JULES_API_BASE = os.environ.get("JULES_API_BASE", "https://jules.googleapis.com/
 POLL_INTERVAL_S = int(os.environ.get("POLL_INTERVAL_S", "60"))
 IDLE_THRESHOLD_MIN = int(os.environ.get("IDLE_THRESHOLD_MIN", "15"))
 MAX_TOTAL_MIN = int(os.environ.get("MAX_TOTAL_MIN", "330"))
-ARTIFACTS_DIR = Path(os.environ.get("ARTIFACTS_DIR", "./artifacts"))
+# ARTIFACTS_DIR resolves to an absolute path so the upload-artifact step
+# (which expects `path: artifacts/` relative to GITHUB_WORKSPACE) can find
+# the files regardless of the script's cwd. The env var is set explicitly
+# in claude-jules-poller.yml; falling back to a script-relative path
+# avoids landing in etl/artifacts/ when run with working-directory: etl.
+_HERE = Path(__file__).resolve().parent
+_DEFAULT_ARTIFACTS = _HERE.parents[2] / "artifacts"  # repo root /artifacts
+ARTIFACTS_DIR = Path(os.environ.get("ARTIFACTS_DIR", str(_DEFAULT_ARTIFACTS))).resolve()
 GITHUB_REPO = os.environ.get("GITHUB_REPOSITORY", "")  # owner/repo (set by Actions)
 
 

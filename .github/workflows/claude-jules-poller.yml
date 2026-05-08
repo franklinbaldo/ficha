@@ -85,7 +85,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: jules-sessions-${{ github.run_id }}
-          path: artifacts/
+          path: ${{ github.workspace }}/artifacts/
           retention-days: 14
           if-no-files-found: warn
 
