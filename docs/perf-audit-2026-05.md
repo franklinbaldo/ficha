@@ -284,6 +284,98 @@ fix.
 
 ---
 
+## 8. Reverse lookup: companies by person (`pessoas.parquet`)
+
+Currently `socios.parquet` is sorted/bloomed by `cnpj_base`, so
+"sócios of company X" is fast but the inverse — "companies where
+person X appears" — is a full scan. Two columns in
+`_SOCIO_COLUMNS` (`transform.py:90–102`) carry person identity:
+
+- `cnpj_cpf_socio` (masked CPF when `identificador_socio='2'`,
+  full CNPJ when `'1'`)
+- `representante_legal` (CPF of the legal rep — present *also* when
+  the sócio itself is a PJ, since every PJ-sócio has a human rep)
+
+So every `socio` row contributes 0–2 person identities. Externalize
+both roles into one parquet:
+
+### 8.1 Shape
+Columns: `cpf_mascarado, nome_normalizado, nome_original, papel
+(socio_pf|representante), cnpj_base, qualificacao_codigo,
+data_entrada_sociedade, faixa_etaria`. Built by `UNION ALL` of:
+
+```sql
+-- sócios PF
+SELECT cnpj_cpf_socio AS cpf_mascarado,
+       UPPER(strip_accents(nome_socio_razao_social)) AS nome_normalizado,
+       nome_socio_razao_social AS nome_original,
+       'socio_pf' AS papel,
+       cnpj_basico AS cnpj_base, qualificacao_socio,
+       data_entrada_sociedade, faixa_etaria
+FROM socio WHERE identificador_socio = '2'
+UNION ALL
+-- representantes legais (whether sócio é PF, PJ ou estrangeiro)
+SELECT representante_legal,
+       UPPER(strip_accents(nome_representante_legal)),
+       nome_representante_legal,
+       'representante',
+       cnpj_basico, qualificacao_representante_legal,
+       NULL, NULL
+FROM socio
+WHERE representante_legal IS NOT NULL AND representante_legal <> ''
+```
+
+Sort by `(cpf_mascarado, nome_normalizado)`. Bloom on both columns.
+
+### 8.2 Identity caveat — masked CPF is not unique
+RFB exposes only the middle 6 digits of CPF (e.g. `***.123.456-**`).
+That's ~1M possible values across ~200M Brazilian CPFs, so masked-CPF
+collisions are common. Don't treat `cpf_mascarado` as a primary key:
+the user-facing query should always be `(cpf_mascarado, nome)` together.
+This is fine — the bloom on either column prunes; the row-group sort
+keeps name-collisions adjacent. Document the limitation in the schema
+file (`web/src/schemas/v1/`) so the frontend doesn't claim "X is on N
+boards" when it's actually "X *or someone with the same masked CPF
+and similar name* is on N boards."
+
+### 8.3 Why union vs. two parquets
+Two parquets (`socios_pf.parquet` + `representantes.parquet`) would
+be fine, but a single `pessoas.parquet` lets one query catch both
+roles ("everywhere this person appears"), which is the actual
+transparency use case (catching the pattern where a person
+represents company A and is sócio of company B). One bloom check,
+not two.
+
+### 8.4 Effort
+~1 day. Pure read from already-loaded `socio` table; no joins,
+~30M-row output, sorted output fits in 6 GiB cap because input is
+small relative to estabelecimento. New
+`write_pessoas_parquet` + manifest entry + frontend
+`attachPessoas` mirroring `analytical.ts:32–40`.
+
+### 8.5 What stays in `socios.parquet`
+Don't deprecate it — `socios.parquet` keeps the cnpj_base→sócios
+direction (forward lookup, denormalized with PJ sócios + país lookup
+joined). `pessoas.parquet` is the inverse index; redundant but
+cheap and serves a genuinely different access pattern, same way
+`raizes.parquet` and `cnpjs.parquet` coexist (ADR 0008).
+
+### 8.6 PJ-as-sócio and estrangeiro
+`identificador_socio` has three values: `'1'` PJ, `'2'` PF, `'3'`
+estrangeiro. `pessoas.parquet` deliberately excludes PJ (they're
+companies, not persons). The parallel reverse query — "company X is
+sócia of which other companies?" — doesn't need a new parquet:
+**add a bloom filter on `cnpj_socio` to the existing
+`socios.parquet`** at write time (`transform.py:606–643`). Same
+file, one extra bloom column, lookup-by-PJ-sócio becomes free.
+Estrangeiros (`'3'`) carry no CPF/CNPJ, only name + país; they
+live in `socios.parquet` via the existing `nome_socio_razao_social`
+column. A bloom on that column would enable reverse-lookup by
+foreign-investor name, but cardinality is high and the use case
+narrow — defer.
+
+---
+
 ## What I'd do first
 
 **Land §1.1 in one PR.** Concretely, in
