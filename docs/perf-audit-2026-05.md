@@ -327,16 +327,31 @@ WHERE representante_legal IS NOT NULL AND representante_legal <> ''
 
 Sort by `(cpf_mascarado, nome_normalizado)`. Bloom on both columns.
 
-### 8.2 Identity caveat — masked CPF is not unique
-RFB exposes only the middle 6 digits of CPF (e.g. `***.123.456-**`).
-That's ~1M possible values across ~200M Brazilian CPFs, so masked-CPF
-collisions are common. Don't treat `cpf_mascarado` as a primary key:
-the user-facing query should always be `(cpf_mascarado, nome)` together.
-This is fine — the bloom on either column prunes; the row-group sort
-keeps name-collisions adjacent. Document the limitation in the schema
-file (`web/src/schemas/v1/`) so the frontend doesn't claim "X is on N
-boards" when it's actually "X *or someone with the same masked CPF
-and similar name* is on N boards."
+### 8.2 Identity: `(nome_normalizado, cpf_mascarado)` as composite PK
+RFB exposes only the middle 6 digits of CPF (e.g. `***.123.456-**`)
+— ~1M values across ~200M Brazilian CPFs, so masked-CPF *alone*
+collides ~200×. Full name *alone* collides massively too (many
+"JOSÉ DA SILVA"s). But the **pair** is essentially unique: two
+distinct people sharing both an identical normalized name AND the
+same middle-6 CPF digits is astronomically rare (back-of-envelope:
+< 1 in 10⁶ for common names, far less for distinctive ones).
+
+Treat `(nome_normalizado, cpf_mascarado)` as the composite primary
+key of `pessoas.parquet`:
+
+- Group by it to compute "this person appears in N companies."
+- Use it as the URL slug for person-detail pages
+  (`/pessoa/<cpf_mascarado>/<nome_slug>`).
+- Sort the parquet by `(cpf_mascarado, nome_normalizado)` — keeps
+  per-person rows contiguous, so a single row group serves the
+  whole person.
+- Bloom on `cpf_mascarado` for cheap "does this person exist" probe;
+  bloom on `nome_normalizado` for name-search.
+
+Document in the schema file (`web/src/schemas/v1/pessoa.ts`) that the
+PK is composite and the residual false-positive rate is "two namesakes
+sharing the same masked CPF" — small enough to surface counts honestly
+("aparece em 7 empresas") without weaselly hedging.
 
 ### 8.3 Why union vs. two parquets
 Two parquets (`socios_pf.parquet` + `representantes.parquet`) would
