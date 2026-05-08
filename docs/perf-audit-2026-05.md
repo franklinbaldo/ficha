@@ -628,6 +628,95 @@ read from `estabelecimento`, no joins beyond the `UNION ALL`.
 
 ---
 
+## 12. CNPJ↔contatos association (`cnpj_contatos.parquet`)
+
+`cnpjs.parquet` carries 7 columns of contact data per estabelecimento
+(`ddd_1, telefone_1, ddd_2, telefone_2, ddd_fax, fax,
+correio_eletronico` — `transform.py:459–460`). They're naturally a
+multi-valued list collapsed into wide columns. Externalize:
+
+### 12.1 Shape
+Columns: `cnpj, cnpj_base, tipo, valor, posicao`.
+- `tipo ∈ {'telefone', 'fax', 'email'}`
+- For phones: `valor = ddd_N || telefone_N`, `posicao ∈ {1, 2}`
+- For fax: `posicao = 0`
+- For email: `posicao = 0`, one row per CNPJ when present
+
+Sort by `(tipo, valor, cnpj)`. Bloom on `valor` and on
+`split_part(valor, '@', 2)` (email domain) for the
+"all CNPJs at @prefeitura.sp.gov.br" pattern flagged earlier.
+
+### 12.2 Use cases
+- **Reverse phone lookup** ("who owns this number?") — bloom on
+  `valor` lands the row group; <1 MB downloaded.
+- **Email-domain analytics** — bloom on the domain expression
+  enables public-sector mapping.
+- **Detect shared contacts** — `GROUP BY valor HAVING count(*) > 1`
+  surfaces phone numbers shared across CNPJs (a real
+  fraud-investigation signal).
+
+### 12.3 Privacy posture
+Phones and emails are PII but RFB publishes them publicly already.
+Document in the schema file that this parquet is a re-shape of
+publicly-available RFB data with no enrichment. No new exposure;
+just better queryability of what's already public.
+
+### 12.4 Effort
+1 day. Pure read from `estabelecimento`, no joins, ~5 UNION ALL
+arms. ~120M rows after exploding (most CNPJs have 1 phone + 1
+email), ~300 MB compressed.
+
+---
+
+## 13. Deferred: temporal + graph layer
+
+Beyond the per-snapshot externalizations above, two larger projects
+are valuable but out of scope for unblocking bootstrap:
+
+### 13.1 `simples_history.parquet` (cross-snapshot)
+RFB's monthly snapshot is *not* a full history of Simples
+participation — `simples` is 1:1 with `cnpj_basico` within any
+given snapshot (`transform.py:103–111` carries only one
+`data_opcao` + one `data_exclusao` per regime). Companies that
+enter and exit Simples multiple times have prior events
+overwritten in the latest RFB CSV.
+
+**The data is recoverable** by accumulating across monthly
+snapshots stored in IA: every change in `(opcao_simples,
+data_opcao_simples, data_exclusao_simples, opcao_mei, …)`
+between consecutive months is a real Simples lifecycle event.
+Shape:
+`(cnpj_base, regime ∈ {'SN','MEI'}, evento ∈ {'opcao','exclusao'},
+data, snapshot_observed_at)`. Sort by `(cnpj_base, data)`.
+
+Requires a new ETL stage that opens the prior month's IA item
+and diffs against the current snapshot. Out of scope for the
+monthly cron as-is; new ADR needed.
+
+### 13.2 `socio_edges.parquet` (graph)
+Self-join `socios` on `(nome_normalizado, cpf_mascarado)` (the
+§8.2 composite PK) to materialize "company A and company B
+share a sócio" edges. Columns:
+`(cnpj_base_a, cnpj_base_b, via_cpf_mascarado, via_nome_normalizado)`.
+Sort by `cnpj_base_a`; bloom on both endpoints.
+
+Unlocks the corruption-investigation use case ("show companies
+linked to this one through shared sócios, 2 hops"). Edge count
+explodes for highly-connected hubs (~100k partners on holding
+boards), so needs a degree-cap or hub-eviction policy. Depends
+on §8 landing first; full-fledged graph traversal in DuckDB-WASM
+also needs benchmarking before committing.
+
+### 13.3 Both share the "depends on multiple snapshots / multiple
+files" property
+The current ETL is single-month, single-input. Both temporal and
+graph layers need a different orchestration shape (read multiple
+IA items, diff/join, write derived parquet). Probably one new
+workflow distinct from `etl-monthly.yml`; tracked here so the
+patterns aren't lost.
+
+---
+
 ## What I'd do first
 
 **Land §1.1 in one PR.** Concretely, in
