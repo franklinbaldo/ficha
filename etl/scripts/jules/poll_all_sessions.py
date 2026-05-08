@@ -37,6 +37,30 @@ ARTIFACTS_DIR = Path(os.environ.get("ARTIFACTS_DIR", "./artifacts"))
 GITHUB_REPO = os.environ.get("GITHUB_REPOSITORY", "")  # owner/repo (set by Actions)
 
 
+_MAX_FIELD_BYTES = 20_000  # cap any single string in dumped activities
+
+
+def _truncate_strings(obj, limit: int = _MAX_FIELD_BYTES):
+    """Recursively cap any string field in an activity to `limit` bytes.
+
+    Without this, a single Jules session with verbose bash outputs +
+    unidiff patches can produce a 100+ MB activities.json — the
+    triggering run #25558857719 emitted a 290 MB artifact for ~12
+    min of polling. Truncation keeps artifacts under ~10 MB even with
+    15 concurrent sessions while preserving the structural keys we
+    actually use to reason about state.
+    """
+    if isinstance(obj, str):
+        if len(obj) > limit:
+            return obj[:limit] + f"...[truncated {len(obj) - limit} bytes]"
+        return obj
+    if isinstance(obj, dict):
+        return {k: _truncate_strings(v, limit) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_truncate_strings(v, limit) for v in obj]
+    return obj
+
+
 def _key() -> str:
     k = os.environ.get("JULES_API_KEY", "").strip()
     if not k:
@@ -128,8 +152,10 @@ def _dump_session(sid: str, session: dict, activities: list[dict], reason: str) 
     """Write artifact files for a triggering session."""
     out = ARTIFACTS_DIR / sid
     out.mkdir(parents=True, exist_ok=True)
-    (out / "session.json").write_text(json.dumps(session, indent=2))
-    (out / "activities.json").write_text(json.dumps({"activities": activities}, indent=2))
+    (out / "session.json").write_text(json.dumps(_truncate_strings(session), indent=2))
+    (out / "activities.json").write_text(
+        json.dumps({"activities": _truncate_strings(activities)}, indent=2)
+    )
 
     title = session.get("title", "(no title)")
     web = f"https://jules.google.com/task/{sid}"
