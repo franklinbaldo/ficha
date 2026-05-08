@@ -178,16 +178,15 @@ change.
 ## 5. Schema / cross-cutting
 
 ### 5.1 All-VARCHAR loading — `transform.py:181–184, 49–111`
-Loading numeric/date columns as VARCHAR is fine for *load* (avoids
-parser failures on RFB junk) but inflates memory during the join in
-phase 3 because every key/value carries pointer + length overhead.
-Specifically `cnpj_basico` (8 chars) as VARCHAR ≈ 24 B in DuckDB's
-string heap vs 8 B as `BIGINT`. Across 60M estabelecimento rows × the
-join, that's ~1 GB.
-
-**Fix:** post-load `ALTER TABLE estabelecimento ALTER cnpj_basico
-TYPE BIGINT` (and same on empresa, simples, socio). Other VARCHARs
-stay. **Gain:** ~15% memory on phase 3 hash join. **Effort:** trivial.
+Loading numeric/date columns as VARCHAR is fine. The tempting "make
+`cnpj_basico` a BIGINT to shrink the join key" doesn't work: RFB ships
+it zero-padded (`"00123456"`) and `write_cnpjs_parquet` at
+`transform.py:408` concatenates `cnpj_basico || cnpj_ordem || cnpj_dv`
+to form the 14-char CNPJ. BIGINT round-trip loses the padding and
+produces wrong CNPJs; frontend schemas (`web/src/schemas/v1/{raiz,
+estabelecimento,socio}.ts`) also expect `z.string()`. Skip this
+optimization. (DuckDB's dictionary encoding on the join key already
+captures most of the would-be win.)
 
 ### 5.2 Bloom filter without sort — `transform.py:485–494`
 Bloom filter is per-row-group; effectiveness depends on
@@ -220,7 +219,7 @@ time reduction. **Effort:** trivial.
 
 ## What I'd do first
 
-**Land §1.1 + §5.1 in one PR.** Concretely, in
+**Land §1.1 in one PR.** Concretely, in
 `etl/src/ficha_etl/transform.py:write_raizes_parquet`:
 
 1. Before `_raizes_agg`, add:
