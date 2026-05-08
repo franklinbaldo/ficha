@@ -1,0 +1,63 @@
+name: Claude — Jules reply dispatcher
+
+# Push-triggered reply / cancel dispatcher: reads
+# etl/scripts/jules/reply_queue.json and runs one of:
+#   - sendMessage  → POST /v1alpha/sessions/{id}:sendMessage
+#   - cancel       → POST /v1alpha/sessions/{id}:cancel
+#
+# Inverse direction of claude-jules-fanout.yml: this lets Claude
+# *reply* to existing sessions (e.g., when the poller surfaces an
+# "awaiting plan approval" or an idle session that needs guidance)
+# without leaving the chat.
+#
+# Workflow:
+# 1. Poller catches an awaiting/idle session, uploads artifact, fails.
+# 2. I download the artifact, read SUMMARY.md, decide what to reply.
+# 3. I commit a new entry in reply_queue.json (id, session_id, type,
+#    message), push.
+# 4. This workflow fires, sends the reply via Jules API.
+# 5. Poller picks up Jules' next activity on its next 60s tick.
+
+on:
+  push:
+    branches: [claude/ficha-perf-plan-v2]
+    paths:
+      - 'etl/scripts/jules/reply_queue.json'
+      - 'etl/scripts/jules/reply_dispatcher.py'
+      - '.github/workflows/claude-jules-reply.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  reply:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        working-directory: etl
+        run: uv python install 3.11
+
+      - name: Install deps
+        working-directory: etl
+        run: uv sync --frozen
+
+      - name: Dispatch replies
+        env:
+          JULES_API_KEY: ${{ secrets.JULES_API_KEY }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          REPLY_TARGET_PR: '31'
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PYTHONIOENCODING: utf-8
+          PYTHONUTF8: '1'
+        run: uv run python scripts/jules/reply_dispatcher.py
+        working-directory: etl

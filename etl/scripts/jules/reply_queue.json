@@ -1,0 +1,9 @@
+[
+  {
+    "id": "cancel-duplicate-w41-2026-05-08",
+    "type": "cancel",
+    "session_id": "9821037508487127161",
+    "_note": "Duplicate W4.1 spawned by fanout run #4 because de-dup pagination missed the original (already merged in 3d2c4c1 via PR #32). _done gate added in 9a98cf07 prevents future dups; this entry cancels the running stray.",
+    "_sent": false
+  }
+]
