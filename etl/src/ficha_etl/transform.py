@@ -681,13 +681,15 @@ def transform_snapshot(
     log.info("=== PHASE 2/4: load into DuckDB (%s) ===", db_path)
     t0 = time.monotonic()
     con = duckdb.connect(str(db_path))
-    # Cap memory and force on-disk spill. GH Actions ubuntu-latest has ~7 GB
-    # of RAM; loading 15 GB of estabelecimento CSV with `ignore_errors=true`
-    # OOM-killed the runner (PR #24, run 25514278003). DuckDB's default is
-    # ~80% of system RAM with limited spill -- explicit limit + dedicated
-    # temp dir on the same partition as db_path makes spill behavior
-    # predictable.
-    con.execute("PRAGMA memory_limit='6GB'")
+    # Cap memory and force on-disk spill. GH Actions `ubuntu-latest` has
+    # 16 GB of RAM as of 2026-01 (verified for `etl-bootstrap.yml` which
+    # uses the free-tier public-repo runner). The original 6 GB limit
+    # was tuned for the legacy 7 GB tier (PR #24, run 25514278003); 12 GB
+    # gives DuckDB ~3 GB of headroom for buffer cache + Python while
+    # still leaving room for the kernel, runner agent, and `tee` buffer.
+    # Explicit limit + dedicated temp dir on the same partition as
+    # db_path makes spill behavior predictable.
+    con.execute("PRAGMA memory_limit='12GB'")
     con.execute(f"PRAGMA temp_directory='{db_path.parent / 'duckdb_tmp'}'")
     # Reduce per-query memory pressure during the big JOIN at phase 3.
     # DuckDB's default preserves input ordering, which buffers more in
