@@ -427,24 +427,35 @@ SQL, but the correlated subquery in a list_transform is expensive at
 to stay cheap. **Gain:** none beyond consistency with how
 `pais_nome`/`municipio_nome` are handled today.
 
-### 9.3 Pick A, and consider the broader cleanup
-The schema is currently inconsistent: secondary CNAEs are
-client-resolved (option A pattern) while every other lookup
-(`naturezas`, `qualificacoes`, `motivos`, `municipios`, `paises`,
-*primary* `cnae`) is denormalized at write time. Either pattern is
-defensible, but the mix isn't. If we go with §9.1, file a follow-up
-ADR to either:
+### 9.3 Pick B — match the existing denormalization pattern
+Every other lookup (`naturezas`, `qualificacoes`, `motivos`,
+`municipios`, `paises`, *primary* `cnae`) is denormalized at write
+time. Parquet's per-row-group dictionary encoding makes the
+redundancy nearly free (~1 KB dict per row group + 1–2 bytes per
+row for a small lookup). Forcing every query to JOIN to recover
+the description is a worse trade than carrying the denormalized
+column. So: populate `cnae_secundario_descricoes` server-side per
+§9.2, using a shape that scales to 60M rows:
 
-- **(consistency: A everywhere)** — drop all `*_descricao`
-  columns from parquets, resolve via `lookups.json` in the
-  frontend. Saves ~5–10% parquet size after dictionary encoding.
-- **(consistency: B everywhere)** — populate
-  `cnae_secundario_descricoes` per option B. Largest schema bump,
-  smallest perf delta.
+```sql
+-- pre-explode → join → re-aggregate (avoids correlated subquery)
+WITH expanded AS (
+  SELECT cnpj_basico, cnpj_ordem, cnpj_dv,
+         trim(s.value) AS cnae_codigo
+  FROM estabelecimento, unnest(str_split(cnae_fiscal_secundaria, ',')) s
+  WHERE cnae_fiscal_secundaria IS NOT NULL AND cnae_fiscal_secundaria <> ''
+)
+SELECT cnpj_basico, cnpj_ordem, cnpj_dv,
+       list(cnae_codigo) AS cnae_secundario_codigos,
+       list(COALESCE(c.descricao, '')) AS cnae_secundario_descricoes
+FROM expanded LEFT JOIN lookup_cnaes c ON c.codigo = cnae_codigo
+GROUP BY 1,2,3
+```
 
-Default recommendation: A everywhere, in a separate
-schema-v2 PR. Out of scope for the bootstrap unblock; tracked here
-so the TODO doesn't outlive its context.
+Then LEFT JOIN this aggregate into the main `write_cnpjs_parquet`
+SELECT, replacing lines 437–442. **Effort:** trivial. **Gain:**
+closes the TODO; rows stay self-contained; no client-side lookup
+machinery needed.
 
 ---
 
@@ -507,12 +518,16 @@ that path instant. The two serve different layers: JSON for render
 glue, parquet for SQL composition. Cost of duplication is < 1 MB
 total; not worth optimizing away.
 
-### 10.4 Interaction with §9.3
-This is the prerequisite for §9.3's "consistency: A everywhere"
-direction — once every lookup is queryable as a parquet table,
-denormalizing `*_descricao` columns into the big parquets becomes
-truly redundant (any query can JOIN), and dropping them frees ~5–10%
-parquet bytes. Order: land §10 first, then §9.3's schema-v2 ADR.
+### 10.4 Don't use §10 to justify dropping `*_descricao` columns
+The earlier draft of this audit suggested per-lookup parquets would
+let us purge denormalized description columns from the big parquets.
+Walked back: parquet dictionary encoding already deduplicates those
+descriptions to near-zero cost, and self-contained rows beat JOIN-
+on-every-query at the frontend layer. §10 stands on its own merit
+(filter-by-description queries) — it's *additive*, not a stepping
+stone to denormalization removal. §9.3 now recommends populating
+the secondary-CNAE descriptions to *match* the denormalization
+pattern, not undo it.
 
 ### 10.5 Effort
 Trivial — one helper that loops `_LOOKUP_KINDS` and emits a parquet
