@@ -549,24 +549,26 @@ many-to-many into its own parquet, same architectural pattern as
 §7 (enderecos) and §8 (pessoas).
 
 ### 11.1 Shape
-Columns: `cnpj, cnpj_base, cnae_codigo, posicao, is_principal`.
+Columns: `cnpj, cnpj_base, cnae_codigo, posicao`.
 - `posicao = 0` → primary CNAE (`cnae_fiscal_principal`)
 - `posicao = 1, 2, …` → secondary in registration order from
   `cnae_fiscal_secundaria`
-- `is_principal = (posicao = 0)` — redundant but enables
-  bloom-friendly filters
 
-Sort by `(cnae_codigo, posicao, cnpj_base)`. Bloom on `cnae_codigo`,
-on `cnpj_base`. ~60M estabelecimentos × avg ~3 CNAEs ≈ 180M rows;
-~500 MB compressed after dict encoding.
+Sort by `(cnae_codigo, posicao, cnpj_base)`. Bloom on `cnae_codigo`
+and `cnpj_base`. "Principal-only" queries use `WHERE posicao = 0` —
+row-group min/max stats already prune efficiently because all
+posicao=0 rows for each CNAE are contiguous; no separate
+`is_principal` column needed (a bloom on a boolean is meaningless).
+~60M estabelecimentos × avg ~3 CNAEs ≈ 180M rows; ~500 MB
+compressed after dict encoding.
 
 ### 11.2 Use cases unlocked
 - **Reverse lookup, any position:** "all CNPJs with CNAE 5611-2"
   (restaurants) — bloom + range on `cnae_codigo` lands a few row
   groups, ~MBs downloaded.
-- **Reverse lookup, primary only:** add `WHERE is_principal` —
-  bloom on `is_principal` partitions row groups so the 1-in-N
-  primary-only filter doesn't scan the secondary entries.
+- **Reverse lookup, primary only:** add `WHERE posicao = 0` —
+  row-group min/max stats prune secondary entries because the sort
+  keeps primaries clustered.
 - **Position analytics:** "for companies whose primary is 5611-2,
   what's the most common position-1 secondary?" Pure SQL aggregate
   over a small filtered set.
@@ -584,8 +586,7 @@ COPY (
     cnpj_basico || cnpj_ordem || cnpj_dv AS cnpj,
     cnpj_basico AS cnpj_base,
     cnae_fiscal_principal AS cnae_codigo,
-    0::INTEGER AS posicao,
-    TRUE AS is_principal
+    0::INTEGER AS posicao
   FROM estabelecimento
   WHERE cnae_fiscal_principal IS NOT NULL
     AND cnae_fiscal_principal <> ''
@@ -595,8 +596,7 @@ COPY (
     cnpj_basico || cnpj_ordem || cnpj_dv AS cnpj,
     cnpj_basico,
     trim(s.value) AS cnae_codigo,
-    s.idx::INTEGER AS posicao,
-    FALSE AS is_principal
+    s.idx::INTEGER AS posicao
   FROM estabelecimento,
        LATERAL (
          SELECT idx, value
