@@ -1,9 +1,150 @@
-# FICHA performance audit — 2026-05-08
+# FICHA performance & shape plan — 2026-05-08
 
-Scope: end-to-end, anchored on the bootstrap OOM that has blocked
-`raizes.parquet`. References point to `main` at `6ca382c4`.
+Scope: a sequenced plan to (a) unblock the bootstrap OOM, (b) reshape
+phase 3 for sustainable monthly runs, and (c) add new analytical
+parquets that the architecture has been pointing toward.
 
-## Executive summary
+References point to `main` at `6ca382c4`. Originally framed as an
+audit; reframed as a plan because most findings translate directly
+to deliverables and the dependency ordering matters.
+
+## Status of the bootstrap OOM (read first)
+
+The bootstrap workflow has **not completed end-to-end on `main`**.
+PR #24 already attempted to fix the 5.5 GiB OOM by splitting
+`LIST_DISTINCT` out of the JOIN into a temp table — see the
+existing in-tree commentary at `transform.py:512–517`. That refactor
+ships, but bootstrap has not been re-run to confirm whether it's
+sufficient on its own.
+
+W1.1 below proposes a *further* change (pre-dedup before
+`list()`) on the hypothesis that the temp-table split alone is
+insufficient because `LIST(DISTINCT)`'s per-group state still
+doesn't spill regardless of which CTE/temp table it lives in. **Run
+bootstrap on current `main` first** — if PR #24's split actually
+holds, W1.1 becomes optional polish rather than a blocker. If it
+still OOMs at 5.5 GiB on the same operator, W1.1 is required.
+This document assumes the latter; verify before committing
+implementation effort.
+
+## Plan summary
+
+| Milestone | Goal | Workstreams | Depends on |
+|-----------|------|-------------|------------|
+| **M0** | Unblock bootstrap | W1.1, W1.6, W6 | — |
+| **M1** | Phase-3 reshape (sustainable monthly) | W1.3, W2.1, W3.1, W5.2 | M0 produces a baseline |
+| **M2** | Frontend query perf | W4.1, W4.2 | M0 |
+| **M3** | Correctness sweep | W9.3 (CNAE secundário), W13.1a (simples cardinality / LEFT JOIN bug) | independent |
+| **M4** | New analytical parquets | W10, W11, W12, W7, W8 | M0 (don't multiply outputs while phase 3 is broken) |
+| **M5** | Deferred — temporal & graph | W13.1b (cross-snapshot), W13.2 (graph) | M4 |
+
+W-numbers map 1:1 to the prior §-numbering for traceability;
+section headers retain both. Sequence below presents milestones in
+priority order, not reading order.
+
+## M0 — Unblock bootstrap
+
+Top three findings that, together, get bootstrap to first complete
+end-to-end run:
+
+- **W1.1** — pre-dedup before `list()` (replaces `LIST(DISTINCT)`).
+  Headline finding; details in §1.1. Implementation sketch in "What
+  I'd do first" near the end of this doc.
+- **W1.6** — `estabelecimento_slim` projection before phase 3
+  (~30% memory headroom). Details in §1.6.
+- **W6** — verify the runner tier. As of 2026-01 GitHub bumped
+  free-tier `ubuntu-latest` to 4 vCPU / 16 GB; if
+  `etl-bootstrap.yml` is still capping at 6 GB / threads=1 from the
+  legacy 7 GB era, just bumping the PRAGMAs may suffice without
+  paid runners. Take 30 seconds to check before designing around
+  the old constraint. Details in §6.
+
+**Acceptance:** bootstrap produces `cnpjs.parquet`, `raizes.parquet`,
+`socios.parquet`, and `lookups.json` end-to-end on a single GitHub
+Actions run. Runtime budget: < 350 min (the workflow ceiling).
+
+## M1 — Phase-3 reshape
+
+Once a baseline run exists, reshape for sustainable monthly cron
+behavior:
+
+- **W1.3** partition by `cnpj_basico` prefix → §1.3
+- **W2.1** encoding sniff → §2.1
+- **W3.1** stream-from-ZIP, eliminate intermediate CSV → §3.1
+- **W5.2** restore partition-local sort + bloom efficacy → §5.2
+
+**Acceptance:** monthly run finishes in < 4 h with peak temp spill
+< 30 GB (vs. current 70 GB exhaustion).
+
+## M2 — Frontend query perf
+
+- **W4.1** length-14 cnpj branch (skip the `LIKE '%…%'` that
+  defeats the bloom) → §4.1
+- **W4.2** summary/detail parquet split → §4.2
+
+**Acceptance:** typical search downloads < 100 MB on cold cache.
+
+## M3 — Correctness sweep (independent of bootstrap)
+
+Two findings that aren't perf but are correctness, surfaced by the
+audit:
+
+- **W13.1a — simples cardinality** *(silent LEFT JOIN bug if
+  multi-row per cnpj_basico)*. Run the diagnostic query on a
+  partial load:
+  ```sql
+  SELECT cnpj_basico, COUNT(*) FROM simples
+  GROUP BY 1 HAVING COUNT(*) > 1 LIMIT 10
+  ```
+  If non-empty, `write_cnpjs_parquet` at line 478 is silently
+  multiplying estabelecimento rows. **The roundtrip-equivalence
+  check at `transform.py:857–862` would catch this on a completed
+  run** — but bootstrap hasn't completed, so the bug is unobserved
+  rather than disproved. This is independent of the OOM; can
+  run on any successful partial load.
+- **W9.3 — populate `cnae_secundario_descricoes`** to match the
+  denormalization pattern of every other lookup. Closes the TODO
+  at `transform.py:441–442`. See §9 for the order-preserving
+  query shape.
+
+## M4 — New analytical parquets
+
+These are *new feature designs*, not perf fixes — kept in this doc
+because the audit surfaced them and the architectural pattern is
+consistent (additive specialized parquets, ADR 0008 lineage). Each
+deserves its own ADR before implementation:
+
+- **W10** — per-lookup parquets (§10)
+- **W11** — `cnpj_cnaes.parquet` position-aware association (§11)
+- **W12** — `cnpj_contatos.parquet` reverse contact lookup (§12)
+- **W7** — `enderecos.parquet` reverse address & município (§7)
+- **W8** — `pessoas.parquet` person reverse-lookup (§8)
+
+Sequencing within M4: W10 first (smallest, validates the lookup
+attach pattern in the frontend), then W11/W12 (built from
+`estabelecimento` only, no joins), then W7/W8 (slightly larger,
+require normalization decisions).
+
+**Don't start M4 until M0 lands.** Multiplying parquet outputs
+while phase 3 is OOM-prone just multiplies the failure surface.
+
+## M5 — Deferred
+
+- **W13.1b** — cross-snapshot `simples_history.parquet` (§13.1).
+  Requires a new ETL stage outside the monthly cron shape.
+- **W13.2** — graph queries via self-join on `pessoas.parquet`
+  (§13.2). No materialization needed initially; only revisit if
+  recursive 2-hop traversal proves too slow in DuckDB-WASM.
+
+---
+
+## Workstream details
+
+The numbered sections below are the original technical findings
+referenced by the milestones above. Headers preserve both the
+original § number and the M-milestone they belong to.
+
+## Executive summary (workstream highlights)
 
 1. **Phase 3 raizes OOM is structural, not tuning-related.** `LIST(DISTINCT
    est.uf)` over 50M groups in `transform.py:526–527` materializes all
@@ -147,7 +288,7 @@ parallelizing unless 3.1 lands and changes the cost shape.
 
 ## 4. Frontend (`web/`)
 
-### 4.1 Search fans out two unindexable predicates — `SearchCNPJ.svelte:80–82`
+### 4.1 Search fans out two unindexable predicates — `web/src/components/SearchCNPJ.svelte:80–82`
 ```sql
 WHERE cnpj LIKE ? OR razao_social ILIKE ?
 ```
