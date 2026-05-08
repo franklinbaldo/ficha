@@ -705,27 +705,41 @@ Either way the parquet shape (`cnpj_base, regime, evento, data,
 …`) is similar; the *source* of the multi-row data differs.
 Don't design further until step 1 lands.
 
-### 13.2 `socio_edges.parquet` (graph)
-Self-join `socios` on `(nome_normalizado, cpf_mascarado)` (the
-§8.2 composite PK) to materialize "company A and company B
-share a sócio" edges. Columns:
-`(cnpj_base_a, cnpj_base_b, via_cpf_mascarado, via_nome_normalizado)`.
-Sort by `cnpj_base_a`; bloom on both endpoints.
+### 13.2 Graph traversal — start with self-joins, materialize only if needed
+The earlier draft proposed a `socio_edges.parquet` of pre-computed
+`(cnpj_a, cnpj_b, via_pessoa)` edges. Walking that back: with §8's
+`pessoas.parquet` sorted by `(cpf_mascarado, nome_normalizado)` and
+bloomed on both, the 1-hop "companies sharing a sócio with X"
+query is a trivial self-join:
 
-Unlocks the corruption-investigation use case ("show companies
-linked to this one through shared sócios, 2 hops"). Edge count
-explodes for highly-connected hubs (~100k partners on holding
-boards), so needs a degree-cap or hub-eviction policy. Depends
-on §8 landing first; full-fledged graph traversal in DuckDB-WASM
-also needs benchmarking before committing.
+```sql
+SELECT b.cnpj_base, b.nome_original, b.papel
+FROM pessoas a
+JOIN pessoas b USING (cpf_mascarado, nome_normalizado)
+WHERE a.cnpj_base = ? AND b.cnpj_base <> a.cnpj_base
+```
 
-### 13.3 Both share the "depends on multiple snapshots / multiple
-files" property
-The current ETL is single-month, single-input. Both temporal and
-graph layers need a different orchestration shape (read multiple
-IA items, diff/join, write derived parquet). Probably one new
-workflow distinct from `etl-monthly.yml`; tracked here so the
-patterns aren't lost.
+DuckDB-WASM serves this in MBs of bytes downloaded. No new parquet
+needed. **Pre-materialize edges only if** one of these proves true
+in practice:
+- 2-hop / N-hop traversal (recursive CTE on `pessoas`) is too slow
+  in the browser → consider a precomputed BFS layer like
+  `(cnpj_base, related_cnpj_base, hop_distance)` with **degree
+  caps** (drop hub-pessoas with >K connections so traversal doesn't
+  fan out across holding-board pessoas with ~100k connections).
+- Global graph analytics are required (connected components, hub
+  detection, centrality) — those need a different shape entirely
+  and probably a non-WASM compute path.
+
+Either path needs benchmarking against `pessoas.parquet` self-joins
+first; don't design until that's measured.
+
+### 13.3 Orchestration note
+§13.1 specifically needs cross-snapshot orchestration (read prior
+month's IA item, diff against current). The current ETL is
+single-month/single-input — a temporal layer needs a new workflow
+distinct from `etl-monthly.yml`. §13.2 stays single-snapshot;
+the self-join pattern works on data we already produce.
 
 ---
 
