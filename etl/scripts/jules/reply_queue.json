@@ -1,9 +1,10 @@
 [
   {
-    "id": "cancel-duplicate-w41-2026-05-08",
-    "type": "cancel",
+    "id": "stop-duplicate-w41-2026-05-08",
+    "type": "send_message",
     "session_id": "9821037508487127161",
-    "_note": "Duplicate W4.1 spawned by fanout run #4 because de-dup pagination missed the original (already merged in 3d2c4c1 via PR #32). _done gate added in 9a98cf07 prevents future dups; this entry cancels the running stray.",
+    "message": "STOP — this is a duplicate spawn. The W4.1 work was already completed by an earlier session (17972302499631745815) and merged in commit 3d2c4c1 (PR #32). Please do NOT make any code changes, do NOT commit, and do NOT open a PR. Acknowledge this message and exit.",
+    "_note": "v1alpha API has no cancel endpoint — using sendMessage to ask Jules to stop. Manual fallback: cancel from jules.google.com/task/9821037508487127161",
     "_sent": false
   }
 ]

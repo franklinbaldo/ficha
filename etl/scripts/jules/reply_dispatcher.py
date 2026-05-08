@@ -30,9 +30,16 @@ doesn't commit back — keeps blast radius small).
 Pushing the same entry twice (without marking _sent) WILL send the
 message twice — Jules treats them as distinct user messages.
 
-Endpoints used (per developers.google.com/jules/api):
+Endpoints used (per developers.google.com/jules/api/reference/rest):
 - POST /v1alpha/sessions/{id}:sendMessage  body: {"prompt": "..."}
-- POST /v1alpha/sessions/{id}:cancel       (best-guess; falls back to log)
+- POST /v1alpha/sessions/{id}:approvePlan  body: {}
+
+The v1alpha API does NOT expose a cancel/delete operation on
+sessions. To stop a running session, either:
+  (a) send a sendMessage asking the agent to stop and not commit
+      anything (best-effort — Jules may still emit one more
+      activity before parking)
+  (b) cancel manually from jules.google.com/task/{id}
 """
 
 from __future__ import annotations
@@ -152,9 +159,9 @@ def main() -> int:
                     {"entry": entry, "reason": f"HTTP {status}", "response": str(resp)[:200]}
                 )
 
-        elif action == "cancel":
-            print(f"  CANCEL: {eid} → {sid}")
-            status, resp = _api("POST", f"/sessions/{sid}:cancel", {})
+        elif action == "approve_plan":
+            print(f"  APPROVE_PLAN: {eid} → {sid}")
+            status, resp = _api("POST", f"/sessions/{sid}:approvePlan", {})
             if 200 <= status < 300:
                 sent.append(
                     {
@@ -170,7 +177,18 @@ def main() -> int:
                 )
 
         else:
-            failed.append({"entry": entry, "reason": f"unknown type: {action}"})
+            # 'cancel' is intentionally not implemented — the v1alpha API
+            # has no cancel/delete endpoint. Use type=send_message with
+            # a stop instruction, or cancel manually from
+            # jules.google.com/task/{session_id}.
+            failed.append(
+                {
+                    "entry": entry,
+                    "reason": (
+                        f"unknown type: {action!r} (supported: send_message, approve_plan)"
+                    ),
+                }
+            )
 
     md = ["## 📨 Jules reply dispatch result\n"]
     if sent:
