@@ -556,6 +556,30 @@ def write_raizes_parquet(
     """
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
+    # W1.6 (docs/perf-plan-2026-05.md §1.6): project estabelecimento down
+    # to only the columns raizes needs *before* the aggregations run.
+    # The wide table has 29 VARCHAR columns; raizes only ever reads 8 of
+    # them. DuckDB's column store + projection-pushdown already reads the
+    # narrow set per-scan, but each scan re-pulls from the underlying
+    # column store and competes for buffer-pool slots with the other
+    # columns kept warm by `cnpjs.parquet`'s upstream write. Materializing
+    # the slim projection once reduces that pressure by ~3.5× during the
+    # raizes phase. Released after the temp aggregates are built.
+    log.info("    materializing estabelecimento_slim (8 cols of 29)...")
+    con.execute("""
+        CREATE OR REPLACE TEMP TABLE _estabelecimento_slim AS
+        SELECT
+            cnpj_basico,
+            cnpj_ordem,
+            identificador_matriz_filial,
+            situacao_cadastral,
+            data_inicio_atividade,
+            cnae_fiscal_principal,
+            uf,
+            municipio
+        FROM estabelecimento
+    """)
+
     # W1.1 (docs/perf-plan-2026-05.md §1.1): pre-dedup before list().
     # The previous shape used LIST(DISTINCT est.uf) and
     # LIST(DISTINCT est.cnae_fiscal_principal) inside _raizes_agg, but
@@ -574,7 +598,7 @@ def write_raizes_parquet(
     log.info("    materializing _ufs / _cnaes pre-dedup tables...")
     con.execute("""
         CREATE OR REPLACE TEMP TABLE _ufs AS
-        SELECT DISTINCT cnpj_basico, uf FROM estabelecimento
+        SELECT DISTINCT cnpj_basico, uf FROM _estabelecimento_slim
         WHERE uf IS NOT NULL AND uf <> ''
     """)
     con.execute("""
@@ -584,7 +608,7 @@ def write_raizes_parquet(
     """)
     con.execute("""
         CREATE OR REPLACE TEMP TABLE _cnaes_principais AS
-        SELECT DISTINCT cnpj_basico, cnae_fiscal_principal FROM estabelecimento
+        SELECT DISTINCT cnpj_basico, cnae_fiscal_principal FROM _estabelecimento_slim
         WHERE cnae_fiscal_principal IS NOT NULL AND cnae_fiscal_principal <> ''
     """)
     con.execute("""
@@ -593,7 +617,7 @@ def write_raizes_parquet(
         FROM _cnaes_principais GROUP BY cnpj_basico
     """)
 
-    log.info("    materializing raizes_agg...")
+    log.info("    materializing raizes_agg (counts only — list aggs split off)...")
     con.execute("""
         CREATE OR REPLACE TEMP TABLE _raizes_agg AS
         SELECT
@@ -601,7 +625,7 @@ def write_raizes_parquet(
             COUNT(*)::INTEGER AS qtd_estabelecimentos,
             COUNT(*) FILTER (WHERE est.situacao_cadastral = '02')::INTEGER
                 AS qtd_estabelecimentos_ativos
-        FROM estabelecimento est
+        FROM _estabelecimento_slim est
         GROUP BY est.cnpj_basico
     """)
     log.info("    materializing raizes_matriz...")
@@ -613,12 +637,14 @@ def write_raizes_parquet(
             est.uf AS uf_matriz,
             est.municipio AS municipio_matriz_codigo,
             est.cnae_fiscal_principal AS cnae_principal_matriz_codigo
-        FROM estabelecimento est
+        FROM _estabelecimento_slim est
         WHERE est.identificador_matriz_filial = '1'
         QUALIFY ROW_NUMBER() OVER (
             PARTITION BY est.cnpj_basico ORDER BY est.cnpj_ordem
         ) = 1
     """)
+    # Slim projection no longer needed once both aggregates are built.
+    con.execute("DROP TABLE IF EXISTS _estabelecimento_slim")
 
     log.info("    joining + writing raizes.parquet...")
     con.execute(
