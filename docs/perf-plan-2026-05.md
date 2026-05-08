@@ -136,9 +136,154 @@ while phase 3 is OOM-prone just multiplies the failure surface.
   (§13.2). No materialization needed initially; only revisit if
   recursive 2-hop traversal proves too slow in DuckDB-WASM.
 
----
+## Implementation phases
 
-## Workstream details
+The milestones above describe *what* to do; the phases below describe
+*how to ship it* — sequenced into reviewable PRs with explicit
+acceptance gates. Each phase produces a measurable outcome before
+the next starts. Phases 1–5 are critical path; Phases 6–9 are
+additive features that can run in parallel once Phase 4 lands.
+
+### Phase 1 — Diagnose (1 day, no code changes)
+
+Empirical questions whose answers reshape later phases. Don't write
+code yet:
+
+1. **Re-run bootstrap on current `main`** to see whether PR #24's
+   temp-table split alone is sufficient. If it completes, W1.1
+   becomes optional and Phase 2 collapses to `n/a`.
+2. **Run the simples cardinality query** on a partial load:
+   ```sql
+   SELECT cnpj_basico, COUNT(*) FROM simples
+   GROUP BY 1 HAVING COUNT(*) > 1 LIMIT 10
+   ```
+   Result decides whether Phase 3 needs the silent-LEFT-JOIN fix.
+3. **Check `etl-bootstrap.yml` runner tier.** If
+   `runs-on: ubuntu-latest` already inherits the post-2026-01 4 vCPU
+   / 16 GB tier, just bumping `memory_limit='12GB'` and `threads=2`
+   may be the entire fix — write that PR before W1.1.
+
+**Gate:** documented findings in a follow-up issue or PR description.
+**Risk:** none — observational.
+
+### Phase 2 — Unblock bootstrap (M0)
+
+Only run if Phase 1 confirms bootstrap still OOMs. One PR per item
+to keep blast radius small:
+
+- **PR 2a:** W6 — bump `memory_limit` / `threads` PRAGMAs in
+  `transform.py:690–705` if Phase 1 step 3 says runner has more.
+  *Trivial. Ship first; may close M0 by itself.*
+- **PR 2b:** W1.6 — `estabelecimento_slim` projection before
+  `write_raizes_parquet`. *Trivial; uncontroversial.*
+- **PR 2c:** W1.1 — pre-dedup before `list()`. *The
+  "What I'd do first" PR sketch at the bottom of this doc.*
+
+**Gate:** bootstrap produces all three parquets + `lookups.json`
+end-to-end on a single workflow run within the 350-min ceiling.
+**Risk:** medium on PR 2c (changes data shape of an in-flight
+parquet); roundtrip-equivalence (`transform.py:842–902`) must pass.
+
+### Phase 3 — Correctness sweep (M3, parallelizable with Phase 2)
+
+Independent of OOM; can be in parallel review with Phase 2:
+
+- **PR 3a:** W13.1a — if Phase 1 step 2 surfaced multi-row simples,
+  fix `write_cnpjs_parquet`'s LEFT JOIN at `transform.py:478` to
+  collapse via window function or subquery before the join.
+  *Schema unchanged; correctness only.*
+- **PR 3b:** W9.3 — populate `cnae_secundario_descricoes` per the
+  order-preserving query in §9.3. Bumps `schema_version` and
+  cascades to `web/src/schemas/v1/estabelecimento.ts`.
+
+**Gate:** roundtrip-equivalence passes; frontend renders secondary
+CNAE descriptions without client-side lookup.
+
+### Phase 4 — Phase-3 reshape (M1)
+
+The biggest sustained-perf wins. Order chosen to ship low-risk PRs
+first and validate the partitioning approach last:
+
+- **PR 4a:** W2.1 — encoding sniff on first 1 MB. *Low risk;
+  removes ~3 min of phase-2 wall time.*
+- **PR 4b:** W5.2 — partition-local sort restoration **only after
+  4c lands** (sort-within-partition needs partitions).
+- **PR 4c:** W1.3 — partition write by `cnpj_basico` prefix +
+  manifest schema update. *Highest risk in phase 4: changes
+  manifest shape; frontend must learn to glob row-group parts. Land
+  behind a feature flag (`FICHA_PARTITIONED_WRITE=1`) so monthly
+  cron can opt in after one successful run.*
+- **PR 4d:** W3.1 — stream-from-ZIP (FIFO). *Eliminates the 25 GB
+  cleanup; needs Phase 1 confirmation that FIFO works under
+  DuckDB's CSV reader on the runner.*
+
+**Gate:** monthly run < 4 h, peak temp spill < 30 GB, manifest
+schema migration tested.
+
+### Phase 5 — Frontend perf (M2)
+
+After Phase 4 stabilizes the parquet shape:
+
+- **PR 5a:** W4.1 — branch search by `length(cleanCNPJ) === 14` in
+  `web/src/components/SearchCNPJ.svelte:60–93`. *Trivial; biggest
+  cold-cache win.*
+- **PR 5b:** W4.2 — split `cnpjs_summary.parquet` from full
+  `cnpjs.parquet`. *Schema bump; coordinate with PR 4c if both
+  land in the same release.*
+
+**Gate:** Lighthouse / manual: cold-cache CNPJ search downloads
+< 100 MB.
+
+### Phase 6 — Per-lookup parquets (M4 entry point)
+
+Smallest of the new-parquet workstreams; validates the
+`attachLookups` frontend pattern that later phases reuse.
+
+- **PR 6:** W10 — emit one parquet per lookup table; add
+  `attachLookups()` to `web/src/lib/analytical.ts`. ADR for
+  the dual JSON+parquet shape.
+
+**Gate:** demo query "filter by município description prefix" works
+in DuckDB-WASM with `JOIN lookup_municipios`.
+
+### Phase 7 — Position-aware association parquets
+
+Built only from `estabelecimento` (no joins, low memory pressure;
+safe to add to phase 3):
+
+- **PR 7a:** W11 — `cnpj_cnaes.parquet`. ADR.
+- **PR 7b:** W12 — `cnpj_contatos.parquet`. ADR (privacy posture).
+
+Can ship in parallel; same review reviewer.
+
+**Gate:** reverse-CNAE and reverse-phone demo queries work.
+
+### Phase 8 — Reverse-lookup parquets
+
+Largest of the additive parquets; require normalization decisions
+captured in their own ADRs:
+
+- **PR 8a:** W7 — `enderecos.parquet` + abbreviation expansion.
+  ADR documents which abbreviations are expanded and why no fuzzy
+  dedup.
+- **PR 8b:** W8 — `pessoas.parquet` + composite PK
+  `(nome_normalizado, cpf_mascarado)`. ADR documents PII posture
+  and the masked-CPF collision rate.
+
+**Gate:** "CNPJs at this address" and "companies where this person
+appears" demo queries work in DuckDB-WASM.
+
+### Phase 9 — Deferred (M5)
+
+Open-ended; do not start without explicit ADR:
+
+- W13.1b — cross-snapshot `simples_history.parquet`. Requires a
+  new ETL workflow shape distinct from the monthly cron.
+- W13.2 — graph traversal beyond 1-hop self-join. Only if
+  measurement on `pessoas.parquet` shows recursive CTEs are too
+  slow in DuckDB-WASM.
+
+---
 
 The numbered sections below are the original technical findings
 referenced by the milestones above. Headers preserve both the
