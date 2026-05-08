@@ -735,9 +735,7 @@ def test_write_cnpjs_parquet_handles_duplicate_cnae_codigo(tmp_path):
     """
     con = duckdb.connect()
     try:
-        con.execute(
-            "CREATE TABLE lookup_cnaes (codigo VARCHAR, descricao VARCHAR)"
-        )
+        con.execute("CREATE TABLE lookup_cnaes (codigo VARCHAR, descricao VARCHAR)")
         con.execute(
             "INSERT INTO lookup_cnaes VALUES "
             "('6201500', 'Desenvolvimento de software'), "
@@ -775,15 +773,19 @@ def test_write_cnpjs_parquet_handles_duplicate_cnae_codigo(tmp_path):
             "'6201500','5611201',"
             "'','','','','','','SP','3550308','','','','','','','','','')"
         )
-        con.execute("CREATE TABLE empresa (cnpj_basico VARCHAR, razao_social VARCHAR, "
-                    "natureza_juridica VARCHAR, qualificacao_responsavel VARCHAR, "
-                    "capital_social VARCHAR, porte_empresa VARCHAR, "
-                    "ente_federativo_responsavel VARCHAR)")
+        con.execute(
+            "CREATE TABLE empresa (cnpj_basico VARCHAR, razao_social VARCHAR, "
+            "natureza_juridica VARCHAR, qualificacao_responsavel VARCHAR, "
+            "capital_social VARCHAR, porte_empresa VARCHAR, "
+            "ente_federativo_responsavel VARCHAR)"
+        )
         con.execute("INSERT INTO empresa VALUES ('11111111','ACME','','','0','','')")
-        con.execute("CREATE TABLE simples (cnpj_basico VARCHAR, opcao_simples VARCHAR, "
-                    "data_opcao_simples VARCHAR, data_exclusao_simples VARCHAR, "
-                    "opcao_mei VARCHAR, data_opcao_mei VARCHAR, "
-                    "data_exclusao_mei VARCHAR)")
+        con.execute(
+            "CREATE TABLE simples (cnpj_basico VARCHAR, opcao_simples VARCHAR, "
+            "data_opcao_simples VARCHAR, data_exclusao_simples VARCHAR, "
+            "opcao_mei VARCHAR, data_opcao_mei VARCHAR, "
+            "data_exclusao_mei VARCHAR)"
+        )
 
         out_path = tmp_path / "cnpjs_dup.parquet"
         # Should not raise despite the duplicate '6201500' in lookup_cnaes.
@@ -791,8 +793,7 @@ def test_write_cnpjs_parquet_handles_duplicate_cnae_codigo(tmp_path):
         assert out_path.exists()
 
         descricoes = con.execute(
-            f"SELECT cnae_secundario_descricoes FROM '{out_path}' "
-            "WHERE cnpj = '11111111000100'"
+            f"SELECT cnae_secundario_descricoes FROM '{out_path}' WHERE cnpj = '11111111000100'"
         ).fetchone()[0]
         # Whichever winning descricao GROUP BY picked, the lookup must
         # have produced something non-empty for '5611201'.
