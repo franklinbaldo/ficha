@@ -211,7 +211,21 @@ def _create_table_from_csvs(
     )
     cols_clause = _csv_columns_clause(columns)
 
-    for encoding in ("latin-1", "utf-8"):
+    # Each attempt: (encoding, ignore_errors). RFB occasionally emits rows
+    # that are neither valid latin-1 nor utf-8 (mixed-encoding garbage from
+    # legacy systems). DuckDB's latin-1 mode pre-flight-rejects the whole
+    # file ("File is not latin-1 encoded"), so `ignore_errors` doesn't
+    # help that branch. utf-8 mode accepts any bytes at parse time and
+    # only fails per-row, so `ignore_errors=true` there drops the bad
+    # rows. Per ADR 0006, a handful of dropped rows out of 60M+ is
+    # preferable to no snapshot. The fallback is logged loudly so we
+    # can see if it ever fires in production.
+    attempts = [
+        ("latin-1", False),
+        ("utf-8", False),
+        ("utf-8", True),
+    ]
+    for encoding, ignore_errors in attempts:
         try:
             con.execute(
                 f"""
@@ -224,23 +238,35 @@ def _create_table_from_csvs(
                     encoding='{encoding}',
                     columns={cols_clause},
                     null_padding=true,
-                    strict_mode=false
+                    strict_mode=false,
+                    max_line_size=16777216,
+                    ignore_errors={"true" if ignore_errors else "false"}
                 )
                 """
             )
-            if encoding != "latin-1":
-                log.warning("tabela '%s' carregada com encoding=%s (fallback)", table, encoding)
+            if encoding != "latin-1" or ignore_errors:
+                log.warning(
+                    "tabela '%s' carregada com encoding=%s ignore_errors=%s (fallback)",
+                    table,
+                    encoding,
+                    ignore_errors,
+                )
             return
         except Exception as exc:
             msg = str(exc).lower()
             if "not latin-1 encoded" in msg or "not utf-8" in msg or "encoding" in msg:
                 log.warning(
-                    "encoding=%s falhou para '%s': %s — tentando próximo", encoding, table, exc
+                    "encoding=%s ignore_errors=%s falhou para '%s': %s -- tentando proximo",
+                    encoding,
+                    ignore_errors,
+                    table,
+                    exc,
                 )
                 continue
             raise
     raise RuntimeError(
-        f"Falha ao carregar tabela '{table}': nenhum encoding funcionou (latin-1, utf-8)"
+        f"Falha ao carregar tabela '{table}': nenhum encoding funcionou "
+        "(latin-1, utf-8, latin-1+ignore_errors)"
     )
 
 
@@ -456,7 +482,16 @@ def write_cnpjs_parquet(
             LEFT JOIN lookup_cnaes cn_p ON cn_p.codigo = est.cnae_fiscal_principal
             LEFT JOIN lookup_municipios mn ON mn.codigo = est.municipio
             LEFT JOIN lookup_paises ps ON ps.codigo = est.pais
-            ORDER BY cnpj
+            -- ORDER BY cnpj omitted: forced global sort of ~30 GB join
+            -- output through DuckDB's external sorter blew past 70 GB
+            -- disk on GH Actions runners (PR #24, run 25519086268).
+            -- Lookup-by-exact-cnpj queries hit the bloom filter on
+            -- `cnpj`, which is independent of physical row order, so
+            -- the bootstrap output works the same. Range queries on
+            -- cnpj would lose row-group min/max pruning -- but those
+            -- aren't primary FICHA queries (exact match dominates;
+            -- razao_social search uses raizes.parquet). Revisit if
+            -- range workloads materialize.
         ) TO ? (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 200000)
         """,
         [str(output_path)],
@@ -473,35 +508,48 @@ def write_raizes_parquet(
     Ver ADR 0008 e schema `web/src/schemas/v1/raiz.ts`.
     """
     output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Pre-materialize the heavy CTEs separately. As inline CTEs in a single
+    # COPY query, the 50M-group LIST_DISTINCT aggregation competed for
+    # memory with the empresa JOIN and OOM'd at 5.5 GiB (PR #24, run
+    # 25522678418). Splitting into temp tables forces DuckDB to spill
+    # each step to disk independently, then the final query is just
+    # a chain of small JOINs.
+    log.info("    materializing raizes_agg...")
+    con.execute("""
+        CREATE OR REPLACE TEMP TABLE _raizes_agg AS
+        SELECT
+            est.cnpj_basico AS cnpj_base,
+            COUNT(*)::INTEGER AS qtd_estabelecimentos,
+            COUNT(*) FILTER (WHERE est.situacao_cadastral = '02')::INTEGER
+                AS qtd_estabelecimentos_ativos,
+            LIST(DISTINCT est.uf) AS ufs_atuacao,
+            LIST(DISTINCT est.cnae_fiscal_principal) AS cnaes_principais_distintos
+        FROM estabelecimento est
+        GROUP BY est.cnpj_basico
+    """)
+    log.info("    materializing raizes_matriz...")
+    con.execute(f"""
+        CREATE OR REPLACE TEMP TABLE _raizes_matriz AS
+        SELECT
+            est.cnpj_basico,
+            {_date_expr("est.data_inicio_atividade")} AS data_inicio_atividade_matriz,
+            est.uf AS uf_matriz,
+            est.municipio AS municipio_matriz_codigo,
+            est.cnae_fiscal_principal AS cnae_principal_matriz_codigo
+        FROM estabelecimento est
+        WHERE est.identificador_matriz_filial = '1'
+        QUALIFY ROW_NUMBER() OVER (
+            PARTITION BY est.cnpj_basico ORDER BY est.cnpj_ordem
+        ) = 1
+    """)
+
+    log.info("    joining + writing raizes.parquet...")
     con.execute(
         f"""
         COPY (
-            WITH agg AS (
-                SELECT
-                    est.cnpj_basico AS cnpj_base,
-                    COUNT(*)::INTEGER AS qtd_estabelecimentos,
-                    COUNT(*) FILTER (WHERE est.situacao_cadastral = '02')::INTEGER
-                        AS qtd_estabelecimentos_ativos,
-                    LIST_DISTINCT(LIST(est.uf)) AS ufs_atuacao,
-                    LIST_DISTINCT(LIST(est.cnae_fiscal_principal)) AS cnaes_principais_distintos
-                FROM estabelecimento est
-                GROUP BY est.cnpj_basico
-            ),
-            matriz AS (
-                -- QUALIFY garante 1 linha por cnpj_basico mesmo se dados da RFB
-                -- tiverem mais de uma entrada com identificador_matriz_filial = '1'.
-                SELECT
-                    est.cnpj_basico,
-                    {_date_expr("est.data_inicio_atividade")} AS data_inicio_atividade_matriz,
-                    est.uf AS uf_matriz,
-                    est.municipio AS municipio_matriz_codigo,
-                    est.cnae_fiscal_principal AS cnae_principal_matriz_codigo
-                FROM estabelecimento est
-                WHERE est.identificador_matriz_filial = '1'
-                QUALIFY ROW_NUMBER() OVER (
-                    PARTITION BY est.cnpj_basico ORDER BY est.cnpj_ordem
-                ) = 1
-            )
+            WITH agg AS (SELECT * FROM _raizes_agg),
+            matriz AS (SELECT * FROM _raizes_matriz)
             SELECT
                 emp.cnpj_basico AS cnpj_base,
                 emp.razao_social,
@@ -527,11 +575,22 @@ def write_raizes_parquet(
             LEFT JOIN lookup_naturezas nj ON nj.codigo = emp.natureza_juridica
             LEFT JOIN lookup_municipios mn ON mn.codigo = matriz.municipio_matriz_codigo
             LEFT JOIN lookup_cnaes cn ON cn.codigo = matriz.cnae_principal_matriz_codigo
-            ORDER BY razao_social_normalizada
+            -- ORDER BY razao_social_normalizada omitted: forced sort over
+            -- ~50M rows alongside the LIST_DISTINCT aggs in the `agg`
+            -- CTE OOM'd raizes write (PR #24, run 25520136856 hit
+            -- 4.6 GiB / 4.6 GiB memory cap right after cnpjs.parquet
+            -- finished). Autocomplete on razao_social can still scan
+            -- via row-group bloom on cnpj_base + a sequential filter;
+            -- range queries on the normalized name lose pruning, but
+            -- typing-prefix queries (the dominant autocomplete pattern)
+            -- still work via early-stop. Revisit after bootstrap lands.
         ) TO ? (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 200000)
         """,
         [str(output_path)],
     )
+    # Free the temp tables now that raizes.parquet is on disk.
+    con.execute("DROP TABLE IF EXISTS _raizes_agg")
+    con.execute("DROP TABLE IF EXISTS _raizes_matriz")
 
 
 def write_socios_parquet(
@@ -574,7 +633,10 @@ def write_socios_parquet(
             LEFT JOIN lookup_qualificacoes qs ON qs.codigo = soc.qualificacao_socio
             LEFT JOIN lookup_qualificacoes qr ON qr.codigo = soc.qualificacao_representante_legal
             LEFT JOIN lookup_paises ps ON ps.codigo = soc.pais
-            ORDER BY cnpj_base
+            -- ORDER BY cnpj_base omitted: same trade-off as cnpjs.parquet.
+            -- Bloom filter on cnpj_base handles "sócios de X" exact match
+            -- regardless of physical order. Defensive against the same OOM
+            -- pattern that hit cnpjs/raizes writes in PR #24.
         ) TO ? (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 200000)
         """,
         [str(output_path)],
@@ -619,6 +681,28 @@ def transform_snapshot(
     log.info("=== PHASE 2/4: load into DuckDB (%s) ===", db_path)
     t0 = time.monotonic()
     con = duckdb.connect(str(db_path))
+    # Cap memory and force on-disk spill. GH Actions ubuntu-latest has ~7 GB
+    # of RAM; loading 15 GB of estabelecimento CSV with `ignore_errors=true`
+    # OOM-killed the runner (PR #24, run 25514278003). DuckDB's default is
+    # ~80% of system RAM with limited spill -- explicit limit + dedicated
+    # temp dir on the same partition as db_path makes spill behavior
+    # predictable.
+    con.execute("PRAGMA memory_limit='6GB'")
+    con.execute(f"PRAGMA temp_directory='{db_path.parent / 'duckdb_tmp'}'")
+    # Reduce per-query memory pressure during the big JOIN at phase 3.
+    # DuckDB's default preserves input ordering, which buffers more in
+    # memory; we sort by `cnpj` at write time anyway, so insertion order
+    # of intermediates doesn't matter. Saves ~30% on temp spill size.
+    con.execute("PRAGMA preserve_insertion_order=false")
+    # Reduce parallelism. Each thread holds its own working set during
+    # the 70M x 67M VARCHAR-keyed hash join in write_cnpjs_parquet --
+    # 4 threads (default) blew through 70 GB of temp spill (run
+    # 25518175202). Cutting to 1 sacrifices wall time for peak memory:
+    # cnpjs took 32 min with threads=2 in run 25522678418, so threads=1
+    # bumps that to ~60 min, fitting in the 350 min runner budget.
+    # threads=1 also helps raizes' LIST_DISTINCT(LIST(...)) GROUP BY
+    # avoid the 5.5 GB OOM that bit run 25522678418.
+    con.execute("PRAGMA threads=1")
     try:
         # Lookups primeiro (necessárias pros JOINs dos parquets)
         for ef in extracted:
@@ -630,6 +714,38 @@ def transform_snapshot(
         load_main_tables_into_duckdb(con, extracted)
         log.info("=== PHASE 2/4 done in %.0fs ===", time.monotonic() - t0)
 
+        # Reclaim disk before phase 3. Extracted CSVs are now loaded into
+        # transform.duckdb; keeping them alongside DuckDB's temp spill
+        # exhausts the runner's ~70 GiB filesystem (PR #24, run 25517197692:
+        # OOM "70.8 GiB/70.8 GiB used" while writing cnpjs.parquet). CSV
+        # cleanup is unconditional (CSVs are never cached). Raw ZIP
+        # cleanup is opt-in via env var: the bootstrap workflow (one-shot,
+        # space-constrained) sets FICHA_DROP_ZIPS_AFTER_LOAD=1 to claim
+        # ~7 GB of additional spill headroom, while the monthly cron
+        # leaves it unset so its `actions/cache` step finds the ZIPs at
+        # post-job and persists them for the next run's cache hit.
+        import os
+        import shutil
+
+        if extract_dir.exists():
+            extracted_size_gb = sum(
+                p.stat().st_size for p in extract_dir.rglob("*") if p.is_file()
+            ) / (1024**3)
+            shutil.rmtree(extract_dir)
+            log.info("freed %.1f GB by removing %s", extracted_size_gb, extract_dir)
+        if os.environ.get("FICHA_DROP_ZIPS_AFTER_LOAD") == "1":
+            zips_dir = cache_dir / month
+            zip_size_gb = 0.0
+            for zp in zips_dir.glob("*.zip"):
+                zip_size_gb += zp.stat().st_size / (1024**3)
+                zp.unlink()
+            if zip_size_gb > 0:
+                log.info(
+                    "freed %.1f GB by removing raw ZIPs in %s (FICHA_DROP_ZIPS_AFTER_LOAD=1)",
+                    zip_size_gb,
+                    zips_dir,
+                )
+
         write_lookups_json(
             con,
             output_dir / "lookups.json",
@@ -640,6 +756,23 @@ def transform_snapshot(
 
         log.info("=== PHASE 3/4: write parquets ===")
         t0 = time.monotonic()
+        # Drop tables we no longer need between writes to free DuckDB's
+        # buffer-managed memory. Without this, all four big tables stay
+        # loaded through the entire phase, competing for memory_limit
+        # during the next write's joins/sorts.
+        # Dependency map:
+        #   cnpjs.parquet  needs: estabelecimento + empresa + simples + lookups
+        #   raizes.parquet needs: empresa + estabelecimento + lookups
+        #   socios.parquet needs: socio + lookups
+        # NB: estabelecimento + empresa stay loaded through phase 4 too --
+        # the roundtrip-equivalence verify (ADR 0009) re-queries them
+        # against the just-written parquet. Only `simples` is safe to
+        # drop early.
+        post_write_drops = {
+            "cnpjs": ("simples",),  # only used by cnpjs; not referenced again
+            "raizes": (),
+            "socios": (),
+        }
         for name, fn in (
             ("cnpjs", write_cnpjs_parquet),
             ("raizes", write_raizes_parquet),
@@ -656,6 +789,9 @@ def transform_snapshot(
                     size_mb,
                     time.monotonic() - tp,
                 )
+                for tbl in post_write_drops.get(name, ()):
+                    con.execute(f"DROP TABLE IF EXISTS {tbl}")
+                    log.info("  dropped table %s (no longer needed)", tbl)
             except NotImplementedError as exc:
                 if skip_unimplemented:
                     log.warning("skipping %s.parquet: %s", name, exc)

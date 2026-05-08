@@ -178,3 +178,256 @@ def test_upload_raw_zips_raises_on_http_error(mock_upload, tmp_path):
 
     with pytest.raises(RuntimeError, match="500"):
         upload_mod.upload_raw_zips(month, tmp_path, access_key="A", secret_key="S")
+
+
+# ---------------------------------------------------------------------------
+# Streaming retry path (zero-disk)
+# ---------------------------------------------------------------------------
+
+
+def test_ias3_error_message_is_ascii():
+    """Error messages must be ASCII so they survive a runner with stderr=ascii.
+
+    Production was hitting `'ascii' codec can't encode character '\\u2014'`
+    because the original RuntimeError contained an em-dash.
+    """
+    exc = upload_mod._IAS3Error(500, "https://s3.us.archive.org/x/y", body="boom")
+    str(exc).encode("ascii")  # raises if any non-ASCII char slipped in
+    assert exc.status == 500
+
+
+def test_ia_s3_put_metadata_headers_are_ascii(monkeypatch):
+    """`x-archive-meta-*` headers go on the wire as HTTP headers, which must
+    be ASCII. A single em-dash in the title crashes httpx with
+    UnicodeEncodeError BEFORE the PUT goes out — see PR #24, run
+    25502969568 where 36/37 ZIPs uploaded but the is_first worker died.
+    """
+    sent_headers: dict[str, str] = {}
+
+    class _FakeClient:
+        def __init__(self, *a, **kw):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def put(self, url, content=None, headers=None):
+            sent_headers.update(headers or {})
+            return _FakeResp(200)
+
+    class _FakeResp:
+        def __init__(self, status):
+            self.status_code = status
+            self.text = ""
+
+    monkeypatch.setattr(upload_mod.httpx, "Client", _FakeClient)
+
+    upload_mod._ia_s3_put(
+        "ficha-2026-04",
+        "raw/Empresas0.zip",
+        iter([b"x"]),
+        content_length="1",
+        access_key="A",
+        secret_key="S",
+        is_first=True,
+    )
+
+    assert sent_headers, "headers should have been captured"
+    for k, v in sent_headers.items():
+        try:
+            v.encode("ascii")
+        except UnicodeEncodeError:
+            pytest.fail(f"header {k!r} has non-ASCII value: {v!r}")
+
+
+def test_stream_one_zip_with_retry_retries_transient(monkeypatch):
+    """Transient IA S3 errors (5xx, 409) should be retried up to _RETRIES."""
+    calls = {"n": 0}
+
+    def fake_stream_one_zip(spec, **_kw):
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise upload_mod._IAS3Error(500, "https://s3.us.archive.org/x/y")
+        return spec.name
+
+    monkeypatch.setattr(upload_mod, "_stream_one_zip", fake_stream_one_zip)
+    monkeypatch.setattr(upload_mod.time, "sleep", lambda *_: None)
+
+    spec = next(iter(canonical_inventory()))
+    name = upload_mod._stream_one_zip_with_retry(
+        spec,
+        rfb_token="t",
+        month="2026-04",
+        identifier=item_id("2026-04"),
+        access_key="A",
+        secret_key="S",
+        is_first=True,
+    )
+    assert name == spec.name
+    assert calls["n"] == 3
+
+
+def test_stream_one_zip_with_retry_does_not_retry_non_transient(monkeypatch):
+    """Non-transient client errors (e.g. 401, 403) should fail immediately."""
+    calls = {"n": 0}
+
+    def fake_stream_one_zip(spec, **_kw):
+        calls["n"] += 1
+        raise upload_mod._IAS3Error(401, "https://s3.us.archive.org/x/y")
+
+    monkeypatch.setattr(upload_mod, "_stream_one_zip", fake_stream_one_zip)
+    monkeypatch.setattr(upload_mod.time, "sleep", lambda *_: None)
+
+    spec = next(iter(canonical_inventory()))
+    with pytest.raises(upload_mod._IAS3Error) as ei:
+        upload_mod._stream_one_zip_with_retry(
+            spec,
+            rfb_token="t",
+            month="2026-04",
+            identifier=item_id("2026-04"),
+            access_key="A",
+            secret_key="S",
+            is_first=False,
+        )
+    assert ei.value.status == 401
+    assert calls["n"] == 1
+
+
+def test_existing_raw_files_on_ia_parses_metadata(monkeypatch):
+    """Existence check should return only `raw/*` names with non-zero size."""
+
+    payload = {
+        "files": [
+            {"name": "raw/Empresas0.zip", "size": "494200000"},
+            {"name": "raw/Empresas1.zip", "size": "74300000"},
+            {"name": "raw/Cnaes.zip", "size": "0"},  # zero-size: not yet uploaded
+            {"name": "cnpjs.parquet", "size": "3000000000"},  # not a raw zip
+            {"name": "raw/Estabelecimentos0.zip"},  # missing size
+        ]
+    }
+
+    class _FakeResp:
+        status_code = 200
+
+        def json(self):
+            return payload
+
+    class _FakeClient:
+        def __init__(self, *a, **kw):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def get(self, url):
+            return _FakeResp()
+
+    monkeypatch.setattr(upload_mod.httpx, "Client", _FakeClient)
+    out = upload_mod._existing_raw_files_on_ia("ficha-2026-04")
+    assert out == {"raw/Empresas0.zip", "raw/Empresas1.zip"}
+
+
+def test_existing_raw_files_on_ia_returns_empty_on_404(monkeypatch):
+    class _FakeResp:
+        status_code = 404
+
+        def json(self):
+            return {}
+
+    class _FakeClient:
+        def __init__(self, *a, **kw):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def get(self, url):
+            return _FakeResp()
+
+    monkeypatch.setattr(upload_mod.httpx, "Client", _FakeClient)
+    assert upload_mod._existing_raw_files_on_ia("ficha-2099-01") == set()
+
+
+def test_existing_raw_files_on_ia_returns_empty_on_network_error(monkeypatch):
+    """A flaky IA metadata API shouldn't block streaming -- fall back to "stream all"."""
+
+    class _FakeClient:
+        def __init__(self, *a, **kw):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def get(self, url):
+            raise upload_mod.httpx.ConnectError("boom")
+
+    monkeypatch.setattr(upload_mod.httpx, "Client", _FakeClient)
+    assert upload_mod._existing_raw_files_on_ia("ficha-2026-04") == set()
+
+
+def test_stream_raw_zips_to_ia_skips_existing(monkeypatch):
+    """When all ZIPs are already on IA, stream returns immediately AND does
+    not contact RFB for a token. Recovery from a transform/upload failure
+    must succeed even when RFB upstream is down or has rotated its token.
+    """
+
+    all_names = {f"raw/{spec.name}" for spec in canonical_inventory()}
+    monkeypatch.setattr(upload_mod, "_existing_raw_files_on_ia", lambda _id: all_names)
+
+    token_calls = {"n": 0}
+
+    def fake_discover_token():
+        token_calls["n"] += 1
+        raise upload_mod.upstream.NoTokenError("RFB is hypothetically down")
+
+    monkeypatch.setattr(upload_mod.upstream, "discover_token", fake_discover_token)
+
+    streamed = {"n": 0}
+
+    def fake_stream(*a, **kw):
+        streamed["n"] += 1
+        return "x"
+
+    monkeypatch.setattr(upload_mod, "_stream_one_zip_with_retry", fake_stream)
+
+    # Should be a no-op -- no streaming, no token lookup, no exception.
+    upload_mod.stream_raw_zips_to_ia("2026-04", access_key="A", secret_key="S")
+    assert streamed["n"] == 0
+    assert token_calls["n"] == 0, "should not contact RFB when nothing to stream"
+
+
+def test_stream_one_zip_with_retry_gives_up_after_max_attempts(monkeypatch):
+    calls = {"n": 0}
+
+    def fake_stream_one_zip(spec, **_kw):
+        calls["n"] += 1
+        raise upload_mod._IAS3Error(503, "https://s3.us.archive.org/x/y")
+
+    monkeypatch.setattr(upload_mod, "_stream_one_zip", fake_stream_one_zip)
+    monkeypatch.setattr(upload_mod.time, "sleep", lambda *_: None)
+
+    spec = next(iter(canonical_inventory()))
+    with pytest.raises(upload_mod._IAS3Error) as ei:
+        upload_mod._stream_one_zip_with_retry(
+            spec,
+            rfb_token="t",
+            month="2026-04",
+            identifier=item_id("2026-04"),
+            access_key="A",
+            secret_key="S",
+            is_first=False,
+        )
+    assert ei.value.status == 503
+    assert calls["n"] == upload_mod._RETRIES

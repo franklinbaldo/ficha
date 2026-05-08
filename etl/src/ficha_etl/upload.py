@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
@@ -35,6 +36,26 @@ _CHUNK = 1024 * 1024  # 1 MiB
 
 _RETRIES = 5
 _RETRY_SLEEP = 30  # segundos entre tentativas
+
+# IA S3 occasionally returns 5xx (transient backend error) or 409 (bucket-create
+# race when multiple workers fire `auto-make-bucket` simultaneously). Both are
+# retriable — we re-issue the whole RFB GET + IA PUT pair.
+_TRANSIENT_STATUS = frozenset({409, 500, 502, 503, 504})
+
+
+class _IAS3Error(RuntimeError):
+    """PUT to IA S3 returned a non-2xx response. Carries status for retry logic."""
+
+    def __init__(self, status: int, url: str, body: str = "") -> None:
+        self.status = status
+        self.url = url
+        # ASCII-only message — runners can default stderr to ascii encoding
+        # (LANG=C), and an em-dash in an error message is enough to trigger
+        # UnicodeEncodeError when the exception is printed.
+        snippet = body.strip()[:200].encode("ascii", "replace").decode("ascii")
+        suffix = f" :: {snippet}" if snippet else ""
+        super().__init__(f"IA S3 PUT failed: HTTP {status} - {url}{suffix}")
+
 
 _IA_METADATA_BASE: dict[str, object] = {
     "mediatype": "data",
@@ -69,21 +90,30 @@ def _ia_s3_put(
         "x-archive-auto-make-bucket": "1",
     }
     if is_first:
-        # Metadados do item — enviados uma vez só no primeiro PUT
+        # Metadados do item — enviados uma vez só no primeiro PUT.
+        # NB: IA S3 metadata vai em headers HTTP, que precisam ser ASCII.
+        # Em-dash / acentos aqui crasham com UnicodeEncodeError dentro do
+        # httpx ANTES do PUT sair (ver PR #24, run 25502969568).
         headers.update(
             {
                 "x-archive-meta-mediatype": "data",
-                "x-archive-meta-title": f"FICHA CNPJ — {identifier}",
+                "x-archive-meta-title": f"FICHA CNPJ - {identifier}",
                 "x-archive-meta-subject": "CNPJ;Receita Federal;dados abertos;Brasil",
                 "x-archive-meta-creator": "franklinbaldo",
                 "x-archive-meta-licenseurl": ("https://creativecommons.org/publicdomain/zero/1.0/"),
             }
         )
     url = f"{_IA_S3_BASE}/{identifier}/{remote_name}"
+    # Defense: every header value MUST be ASCII (IA S3 spec + httpx).
+    for k, v in headers.items():
+        try:
+            v.encode("ascii")
+        except UnicodeEncodeError as exc:
+            raise _IAS3Error(0, url, f"non-ASCII header {k!r}: {v!r} ({exc.reason})") from exc
     with httpx.Client(timeout=_STREAM_TIMEOUT) as client:
         resp = client.put(url, content=body_iter, headers=headers)
     if resp.status_code not in (200, 201):
-        raise RuntimeError(f"IA S3 PUT failed: HTTP {resp.status_code} — {url}")
+        raise _IAS3Error(resp.status_code, url, resp.text)
 
 
 def _stream_one_zip(
@@ -126,6 +156,101 @@ def _stream_one_zip(
     return spec.name
 
 
+def _stream_one_zip_with_retry(
+    spec,
+    *,
+    rfb_token: str,
+    month: str,
+    identifier: str,
+    access_key: str,
+    secret_key: str,
+    is_first: bool,
+) -> str:
+    """`_stream_one_zip` with exponential backoff on transient IA S3 errors.
+
+    The PUT body is a one-shot iterator off the RFB GET stream, so retrying
+    means re-issuing the whole GET+PUT pair. RFB GETs are cheap relative to
+    IA PUTs, so this is fine.
+    """
+    last_exc: Exception | None = None
+    for attempt in range(1, _RETRIES + 1):
+        try:
+            return _stream_one_zip(
+                spec,
+                rfb_token=rfb_token,
+                month=month,
+                identifier=identifier,
+                access_key=access_key,
+                secret_key=secret_key,
+                is_first=is_first,
+            )
+        except _IAS3Error as exc:
+            last_exc = exc
+            if exc.status not in _TRANSIENT_STATUS or attempt == _RETRIES:
+                raise
+            sleep_s = min(_RETRY_SLEEP * (2 ** (attempt - 1)), 300)
+            log.warning(
+                "%s: HTTP %d (attempt %d/%d) — retrying in %ds",
+                spec.name,
+                exc.status,
+                attempt,
+                _RETRIES,
+                sleep_s,
+            )
+            time.sleep(sleep_s)
+        except httpx.TransportError as exc:
+            last_exc = exc
+            if attempt == _RETRIES:
+                raise
+            sleep_s = min(_RETRY_SLEEP * (2 ** (attempt - 1)), 300)
+            log.warning(
+                "%s: %s (attempt %d/%d) — retrying in %ds",
+                spec.name,
+                type(exc).__name__,
+                attempt,
+                _RETRIES,
+                sleep_s,
+            )
+            time.sleep(sleep_s)
+    assert last_exc is not None
+    raise last_exc
+
+
+_IA_METADATA_URL = "https://archive.org/metadata/{identifier}"
+
+
+def _existing_raw_files_on_ia(identifier: str) -> set[str]:
+    """Returns the set of `raw/*` file names already on ia:{identifier}.
+
+    Empty set when the item doesn't exist yet, or when the metadata API
+    fails (502/timeout) -- in that case we fall back to streaming
+    everything, which is correct (PUTs are idempotent overwrites at IA).
+    """
+    url = _IA_METADATA_URL.format(identifier=identifier)
+    try:
+        with httpx.Client(timeout=30.0) as client:
+            resp = client.get(url)
+        if resp.status_code != 200:
+            log.info(
+                "ia:%s metadata returned HTTP %d -- assuming new item", identifier, resp.status_code
+            )
+            return set()
+        data = resp.json()
+    except (httpx.HTTPError, ValueError) as exc:
+        log.warning("ia:%s metadata fetch failed (%s) -- will stream all", identifier, exc)
+        return set()
+
+    files = data.get("files") or []
+    raw = {
+        f["name"]
+        for f in files
+        if isinstance(f, dict)
+        and f.get("name", "").startswith("raw/")
+        and int(f.get("size", 0) or 0) > 0
+    }
+    return raw
+
+
 def stream_raw_zips_to_ia(
     month: str,
     *,
@@ -148,17 +273,47 @@ def stream_raw_zips_to_ia(
     if not is_valid_month(month):
         raise ValueError(f"month must be YYYY-MM, got {month!r}")
 
+    identifier = item_id(month)
+    all_specs = list(canonical_inventory())
+
+    # Skip ZIPs already present on IA. Idempotent re-runs (e.g. retry after
+    # transform failure, or backfill resuming a partial month) avoid
+    # ~30 min and ~7 GB of pointless re-streaming. RFB historical files
+    # are immutable per ADR 0015, so name-based existence is sufficient.
+    # IMPORTANT: this runs BEFORE upstream.discover_token() so a recovery
+    # run with all files already on IA succeeds even if RFB is down or
+    # has rotated its share token.
+    existing = _existing_raw_files_on_ia(identifier)
+    specs = [s for s in all_specs if f"raw/{s.name}" not in existing]
+    skipped = len(all_specs) - len(specs)
+    if skipped:
+        log.info(
+            "skipping %d/%d ZIPs already on ia:%s/raw/",
+            skipped,
+            len(all_specs),
+            identifier,
+        )
+    if not specs:
+        log.info("all %d ZIPs already on ia:%s — stream is a no-op", len(all_specs), identifier)
+        return
+
+    # Only contact RFB if we actually need to stream from it.
     try:
         rfb_token = upstream.discover_token()
     except upstream.NoTokenError as exc:
         raise RuntimeError(f"sem token RFB para streaming: {exc}") from exc
 
-    identifier = item_id(month)
-    specs = list(canonical_inventory())
     total = len(specs)
     done = 0
     lock = threading.Lock()
     first_lock = threading.Lock()
+    # `is_first` carries item metadata (title, subject, license, etc.).
+    # We always send it on the first task of every run -- if a prior
+    # run created the item but its `is_first` worker died (e.g. em-dash
+    # crash, see PR #24), the item could exist with files but no
+    # metadata. Re-sending the metadata headers on a PUT is idempotent
+    # at IA's end (overwrite with same values). Cost: 5 extra header
+    # keys on exactly one PUT per run.
     first_sent = False
 
     log.info(
@@ -174,7 +329,7 @@ def stream_raw_zips_to_ia(
             is_first = not first_sent
             if is_first:
                 first_sent = True
-        name = _stream_one_zip(
+        name = _stream_one_zip_with_retry(
             spec,
             rfb_token=rfb_token,
             month=month,

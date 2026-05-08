@@ -1,0 +1,44 @@
+[project]
+name = "ficha-py"
+version = "0.1.0"
+description = "Python analytical layer for FICHA: Ibis expressions over CNPJ parquets on the Internet Archive."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "CC0-1.0" }
+authors = [{ name = "franklinbaldo" }]
+keywords = ["cnpj", "receita-federal", "brasil", "ibis", "duckdb"]
+classifiers = [
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Database",
+    "Topic :: Scientific/Engineering",
+]
+dependencies = [
+    "ibis-framework[duckdb] >=9.0",
+    "duckdb >=1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest >=8",
+    "ruff >=0.5",
+]
+
+[project.urls]
+Homepage = "https://github.com/franklinbaldo/ficha"
+Issues = "https://github.com/franklinbaldo/ficha/issues"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/ficha_py"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
