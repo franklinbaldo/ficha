@@ -509,6 +509,30 @@ def write_raizes_parquet(
     """
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
+    # W1.6 (docs/perf-plan-2026-05.md §1.6): project estabelecimento down
+    # to only the columns raizes needs *before* the aggregations run.
+    # The wide table has 29 VARCHAR columns; raizes only ever reads 8 of
+    # them. DuckDB's column store + projection-pushdown already reads the
+    # narrow set per-scan, but each scan re-pulls from the underlying
+    # column store and competes for buffer-pool slots with the other
+    # columns kept warm by `cnpjs.parquet`'s upstream write. Materializing
+    # the slim projection once reduces that pressure by ~3.5× during the
+    # raizes phase. Released after the temp aggregates are built.
+    log.info("    materializing estabelecimento_slim (8 cols of 29)...")
+    con.execute("""
+        CREATE OR REPLACE TEMP TABLE _estabelecimento_slim AS
+        SELECT
+            cnpj_basico,
+            cnpj_ordem,
+            identificador_matriz_filial,
+            situacao_cadastral,
+            data_inicio_atividade,
+            cnae_fiscal_principal,
+            uf,
+            municipio
+        FROM estabelecimento
+    """)
+
     # Pre-materialize the heavy CTEs separately. As inline CTEs in a single
     # COPY query, the 50M-group LIST_DISTINCT aggregation competed for
     # memory with the empresa JOIN and OOM'd at 5.5 GiB (PR #24, run
@@ -525,7 +549,7 @@ def write_raizes_parquet(
                 AS qtd_estabelecimentos_ativos,
             LIST(DISTINCT est.uf) AS ufs_atuacao,
             LIST(DISTINCT est.cnae_fiscal_principal) AS cnaes_principais_distintos
-        FROM estabelecimento est
+        FROM _estabelecimento_slim est
         GROUP BY est.cnpj_basico
     """)
     log.info("    materializing raizes_matriz...")
@@ -537,12 +561,14 @@ def write_raizes_parquet(
             est.uf AS uf_matriz,
             est.municipio AS municipio_matriz_codigo,
             est.cnae_fiscal_principal AS cnae_principal_matriz_codigo
-        FROM estabelecimento est
+        FROM _estabelecimento_slim est
         WHERE est.identificador_matriz_filial = '1'
         QUALIFY ROW_NUMBER() OVER (
             PARTITION BY est.cnpj_basico ORDER BY est.cnpj_ordem
         ) = 1
     """)
+    # Slim projection no longer needed once both aggregates are built.
+    con.execute("DROP TABLE IF EXISTS _estabelecimento_slim")
 
     log.info("    joining + writing raizes.parquet...")
     con.execute(
