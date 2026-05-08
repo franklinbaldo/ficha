@@ -391,6 +391,63 @@ narrow — defer.
 
 ---
 
+## 9. Resolve the `cnae_secundario_descricoes` TODO
+
+`transform.py:441–442` carries an explicit TODO:
+
+```python
+-- TODO: descricoes resolvidas no client via lookups.json (v0.1)
+[]::VARCHAR[] AS cnae_secundario_descricoes,
+```
+
+The column ships as an always-empty array of the wrong width — every
+row pays parquet metadata + an empty list marker for nothing. Two
+ways to close it; pick one:
+
+### 9.1 Option A — drop the column (recommended)
+Aligns with the comment's stated intent. Frontend already loads
+`lookups.json`; resolving secondary CNAEs is one `Map.get()` call per
+code. **Effort:** trivial — delete lines 437–442, bump
+`schema_version` in `web/src/schemas/v1/estabelecimento.ts`, update
+the renderer in `EmpresaFicha.svelte` to do `cnaes` lookup
+client-side. **Gain:** removes a junk column; ~0 perf, +1 schema
+hygiene.
+
+### 9.2 Option B — actually populate it server-side
+JOIN against `lookup_cnaes` per secondary code:
+```sql
+list_transform(
+  list_transform(str_split(est.cnae_fiscal_secundaria, ','), x -> trim(x)),
+  c -> COALESCE((SELECT descricao FROM lookup_cnaes WHERE codigo = c), '')
+)
+```
+Self-contained rows, no client-side resolution. **Effort:** trivial
+SQL, but the correlated subquery in a list_transform is expensive at
+60M rows — would need a different shape (e.g. unnest → join → re-agg)
+to stay cheap. **Gain:** none beyond consistency with how
+`pais_nome`/`municipio_nome` are handled today.
+
+### 9.3 Pick A, and consider the broader cleanup
+The schema is currently inconsistent: secondary CNAEs are
+client-resolved (option A pattern) while every other lookup
+(`naturezas`, `qualificacoes`, `motivos`, `municipios`, `paises`,
+*primary* `cnae`) is denormalized at write time. Either pattern is
+defensible, but the mix isn't. If we go with §9.1, file a follow-up
+ADR to either:
+
+- **(consistency: A everywhere)** — drop all `*_descricao`
+  columns from parquets, resolve via `lookups.json` in the
+  frontend. Saves ~5–10% parquet size after dictionary encoding.
+- **(consistency: B everywhere)** — populate
+  `cnae_secundario_descricoes` per option B. Largest schema bump,
+  smallest perf delta.
+
+Default recommendation: A everywhere, in a separate
+schema-v2 PR. Out of scope for the bootstrap unblock; tracked here
+so the TODO doesn't outlive its context.
+
+---
+
 ## What I'd do first
 
 **Land §1.1 in one PR.** Concretely, in
