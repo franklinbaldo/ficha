@@ -523,8 +523,8 @@ def write_raizes_parquet(
             COUNT(*)::INTEGER AS qtd_estabelecimentos,
             COUNT(*) FILTER (WHERE est.situacao_cadastral = '02')::INTEGER
                 AS qtd_estabelecimentos_ativos,
-            LIST_DISTINCT(LIST(est.uf)) AS ufs_atuacao,
-            LIST_DISTINCT(LIST(est.cnae_fiscal_principal)) AS cnaes_principais_distintos
+            LIST(DISTINCT est.uf) AS ufs_atuacao,
+            LIST(DISTINCT est.cnae_fiscal_principal) AS cnaes_principais_distintos
         FROM estabelecimento est
         GROUP BY est.cnpj_basico
     """)
