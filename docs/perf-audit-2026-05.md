@@ -539,6 +539,95 @@ parquet."
 
 ---
 
+## 11. CNPJ↔CNAE association parquet (`cnpj_cnaes.parquet`)
+
+Storing secondary CNAEs as an array in `cnpjs.parquet` preserves
+order (§9.3 fix) but makes position-aware queries expensive — every
+"CNPJs where X is the *primary*" or "rank-2 CNAEs of restaurants"
+needs `unnest` + filter over 60M rows. Externalize the
+many-to-many into its own parquet, same architectural pattern as
+§7 (enderecos) and §8 (pessoas).
+
+### 11.1 Shape
+Columns: `cnpj, cnpj_base, cnae_codigo, posicao, is_principal`.
+- `posicao = 0` → primary CNAE (`cnae_fiscal_principal`)
+- `posicao = 1, 2, …` → secondary in registration order from
+  `cnae_fiscal_secundaria`
+- `is_principal = (posicao = 0)` — redundant but enables
+  bloom-friendly filters
+
+Sort by `(cnae_codigo, posicao, cnpj_base)`. Bloom on `cnae_codigo`,
+on `cnpj_base`. ~60M estabelecimentos × avg ~3 CNAEs ≈ 180M rows;
+~500 MB compressed after dict encoding.
+
+### 11.2 Use cases unlocked
+- **Reverse lookup, any position:** "all CNPJs with CNAE 5611-2"
+  (restaurants) — bloom + range on `cnae_codigo` lands a few row
+  groups, ~MBs downloaded.
+- **Reverse lookup, primary only:** add `WHERE is_principal` —
+  bloom on `is_principal` partitions row groups so the 1-in-N
+  primary-only filter doesn't scan the secondary entries.
+- **Position analytics:** "for companies whose primary is 5611-2,
+  what's the most common position-1 secondary?" Pure SQL aggregate
+  over a small filtered set.
+- **JOIN to `lookup_cnaes`:** "all CNPJs in *Atividades de
+  restaurantes* by description prefix" — composes with §10's
+  `lookup_cnaes.parquet`.
+
+### 11.3 Build
+From already-loaded `estabelecimento`:
+
+```sql
+COPY (
+  -- primary
+  SELECT
+    cnpj_basico || cnpj_ordem || cnpj_dv AS cnpj,
+    cnpj_basico AS cnpj_base,
+    cnae_fiscal_principal AS cnae_codigo,
+    0::INTEGER AS posicao,
+    TRUE AS is_principal
+  FROM estabelecimento
+  WHERE cnae_fiscal_principal IS NOT NULL
+    AND cnae_fiscal_principal <> ''
+  UNION ALL
+  -- secondary, with explicit position via generate_subscripts-like trick
+  SELECT
+    cnpj_basico || cnpj_ordem || cnpj_dv AS cnpj,
+    cnpj_basico,
+    trim(s.value) AS cnae_codigo,
+    s.idx::INTEGER AS posicao,
+    FALSE AS is_principal
+  FROM estabelecimento,
+       LATERAL (
+         SELECT idx, value
+         FROM (
+           SELECT generate_subscripts(arr, 1) AS idx, unnest(arr) AS value
+           FROM (SELECT str_split(cnae_fiscal_secundaria, ',') AS arr) t
+         )
+       ) s
+  WHERE cnae_fiscal_secundaria IS NOT NULL
+    AND cnae_fiscal_secundaria <> ''
+) TO ? (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 200000)
+```
+
+(DuckDB has `unnest(... , recursive => true)` and `generate_subscripts`
+support — exact syntax may need tweaking; the shape is what matters.)
+
+### 11.4 Coexistence with §9.3
+The denormalized array in `cnpjs.parquet` (`cnae_secundario_codigos`,
+`cnae_secundario_descricoes`) stays — it's the cheap path for
+displaying the lâmina without a JOIN. `cnpj_cnaes.parquet` is the
+inverse/analytical index. Same pattern as `socios.parquet` (forward,
+denormalized) coexisting with the proposed `pessoas.parquet`
+(inverse).
+
+### 11.5 Effort
+1 day. New `write_cnpj_cnaes_parquet` in `transform.py`, manifest
+entry, optional frontend `attachCnpjCnaes`. Memory budget: cheap —
+read from `estabelecimento`, no joins beyond the `UNION ALL`.
+
+---
+
 ## What I'd do first
 
 **Land §1.1 in one PR.** Concretely, in
