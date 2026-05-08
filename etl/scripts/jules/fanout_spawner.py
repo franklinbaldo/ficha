@@ -228,7 +228,7 @@ def main() -> int:
         for s in spawned:
             md.append(f"- [`{s['session_id']}`]({s['url']}) — **{s['title']}**")
         md.append(
-            "\n**Reminder:** add `\"_spawning\": \"<session_id>\"` to each "
+            '\n**Reminder:** add `"_spawning": "<session_id>"` to each '
             "spawned entry in `spawn_queue.json` to prevent re-fires on the "
             "next push. Swap to `_done` once the session's PR is merged "
             "or discarded."
