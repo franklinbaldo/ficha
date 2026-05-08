@@ -36,8 +36,13 @@ import urllib.request
 from pathlib import Path
 
 JULES_API_BASE = os.environ.get("JULES_API_BASE", "https://jules.googleapis.com/v1alpha")
-QUEUE_PATH = Path(os.environ.get("SPAWN_QUEUE", "etl/scripts/jules/spawn_queue.json"))
-PROMPTS_DIR = Path("etl/scripts/jules/prompts")
+# Path resolution: when this script runs from the GHA workflow, cwd is
+# the etl/ subdirectory; when run from the repo root, cwd is repo root.
+# Resolve the queue and prompts dir relative to *this file* so both
+# work — the layout is fixed: etl/scripts/jules/{spawn_queue.json, prompts/}.
+_HERE = Path(__file__).resolve().parent
+QUEUE_PATH = Path(os.environ.get("SPAWN_QUEUE", _HERE / "spawn_queue.json"))
+PROMPTS_DIR = _HERE / "prompts"
 
 
 def _key() -> str:
