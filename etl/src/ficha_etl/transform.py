@@ -684,12 +684,14 @@ def transform_snapshot(
     # Cap memory and force on-disk spill. GH Actions `ubuntu-latest` has
     # 16 GB of RAM as of 2026-01 (verified for `etl-bootstrap.yml` which
     # uses the free-tier public-repo runner). The original 6 GB limit
-    # was tuned for the legacy 7 GB tier (PR #24, run 25514278003); 12 GB
-    # gives DuckDB ~3 GB of headroom for buffer cache + Python while
-    # still leaving room for the kernel, runner agent, and `tee` buffer.
+    # was tuned for the legacy 7 GB tier (PR #24, run 25514278003). 10 GB
+    # leaves ~6 GB for OS, runner agent, Python heap, the `tee` buffer,
+    # and DuckDB's brief overshoots during large hash joins (memory_limit
+    # is a target, not a strict cap). Per Kilo Code Review on PR #27:
+    # 12 GB on a 16 GB runner trims the safety margin too thin.
     # Explicit limit + dedicated temp dir on the same partition as
     # db_path makes spill behavior predictable.
-    con.execute("PRAGMA memory_limit='12GB'")
+    con.execute("PRAGMA memory_limit='10GB'")
     con.execute(f"PRAGMA temp_directory='{db_path.parent / 'duckdb_tmp'}'")
     # Reduce per-query memory pressure during the big JOIN at phase 3.
     # DuckDB's default preserves input ordering, which buffers more in
