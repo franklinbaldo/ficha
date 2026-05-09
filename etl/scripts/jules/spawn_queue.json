@@ -27,5 +27,21 @@
     "require_plan_approval": false,
     "_spawning": "4741416671646003104",
     "_note_dup": "Duplicate spawn 7421718966605916421 also running; close redundant PR if it appears."
+  },
+  {
+    "id": "w11-2026-05-08",
+    "title": "W11 cnpj_cnaes.parquet position-aware association",
+    "prompt_file": "w11_cnpj_cnaes",
+    "starting_branch": "claude/ficha-perf-plan-v2",
+    "automation_mode": "AUTO_CREATE_PR",
+    "require_plan_approval": false
+  },
+  {
+    "id": "w12-2026-05-08",
+    "title": "W12 cnpj_contatos.parquet reverse contact lookup",
+    "prompt_file": "w12_cnpj_contatos",
+    "starting_branch": "claude/ficha-perf-plan-v2",
+    "automation_mode": "AUTO_CREATE_PR",
+    "require_plan_approval": false
   }
 ]
