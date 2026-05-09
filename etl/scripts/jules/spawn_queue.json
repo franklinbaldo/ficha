@@ -54,6 +54,7 @@
     "starting_branch": "main",
     "automation_mode": "AUTO_CREATE_PR",
     "require_plan_approval": false,
+    "_spawning": "832015432790769359",
     "_note": "Cross-repo session targeting verne. Won't be tracked by claude-jules-poller.yml (which filters to ficha only). Use claude-jules-inspect.yml to monitor on-demand."
   },
   {
@@ -64,6 +65,17 @@
     "starting_branch": "main",
     "automation_mode": "AUTO_CREATE_PR",
     "require_plan_approval": false,
+    "_spawning": "9331275596781491185",
     "_note": "Cross-repo session targeting verne. Adds the missing primitive that ficha's poll_all_sessions.py reinvents."
+  },
+  {
+    "id": "verne-activity-summary-2026-05-08",
+    "title": "Verne — compact activity summary by default",
+    "prompt_file": "verne_activity_summary",
+    "source": "sources/github/franklinbaldo/verne",
+    "starting_branch": "main",
+    "automation_mode": "AUTO_CREATE_PR",
+    "require_plan_approval": false,
+    "_note": "Cross-repo session targeting verne. Truncate verbose activity payloads (bashOutput, unidiffPatch, descriptions) by default; --full opt-in. Mirrors ficha's poll_all_sessions.py _truncate_strings + _format_activity helpers."
   }
 ]
