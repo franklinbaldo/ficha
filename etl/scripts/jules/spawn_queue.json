@@ -34,7 +34,8 @@
     "prompt_file": "w11_cnpj_cnaes",
     "starting_branch": "claude/ficha-perf-plan-v2",
     "automation_mode": "AUTO_CREATE_PR",
-    "require_plan_approval": false
+    "require_plan_approval": false,
+    "_spawning": "15310983401866107420"
   },
   {
     "id": "w12-2026-05-08",
@@ -42,6 +43,7 @@
     "prompt_file": "w12_cnpj_contatos",
     "starting_branch": "claude/ficha-perf-plan-v2",
     "automation_mode": "AUTO_CREATE_PR",
-    "require_plan_approval": false
+    "require_plan_approval": false,
+    "_spawning": "7189397436599279392"
   }
 ]
