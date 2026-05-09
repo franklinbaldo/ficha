@@ -45,5 +45,25 @@
     "automation_mode": "AUTO_CREATE_PR",
     "require_plan_approval": false,
     "_spawning": "7189397436599279392"
+  },
+  {
+    "id": "verne-strict-json-2026-05-08",
+    "title": "Verne — emit strict JSON from --json flags",
+    "prompt_file": "verne_strict_json",
+    "source": "sources/github/franklinbaldo/verne",
+    "starting_branch": "main",
+    "automation_mode": "AUTO_CREATE_PR",
+    "require_plan_approval": false,
+    "_note": "Cross-repo session targeting verne. Won't be tracked by claude-jules-poller.yml (which filters to ficha only). Use claude-jules-inspect.yml to monitor on-demand."
+  },
+  {
+    "id": "verne-wait-cmd-2026-05-08",
+    "title": "Verne — verne sessions wait (block until state change)",
+    "prompt_file": "verne_wait_until_attention",
+    "source": "sources/github/franklinbaldo/verne",
+    "starting_branch": "main",
+    "automation_mode": "AUTO_CREATE_PR",
+    "require_plan_approval": false,
+    "_note": "Cross-repo session targeting verne. Adds the missing primitive that ficha's poll_all_sessions.py reinvents."
   }
 ]

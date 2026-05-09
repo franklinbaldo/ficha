@@ -193,13 +193,21 @@ def main() -> int:
             continue
         prompt = prompt_path.read_text()
 
+        # `source` defaults to the workflow's own repo, but a queue entry
+        # may target a different Jules-registered source (e.g.,
+        # 'sources/github/franklinbaldo/verne' to delegate work on the
+        # verne CLI from this ficha repo's queue). NB: cross-source
+        # sessions won't be picked up by claude-jules-poller.yml (which
+        # filters to this repo's source); use claude-jules-inspect.yml
+        # to monitor them on-demand.
+        source = entry.get("source") or f"sources/github/{repo}"
         body = {
             "title": decorated_title,
             "prompt": prompt,
             "requirePlanApproval": entry.get("require_plan_approval", False),
             "automationMode": entry.get("automation_mode", "AUTO_CREATE_PR"),
             "sourceContext": {
-                "source": f"sources/github/{repo}",
+                "source": source,
                 "githubRepoContext": {"startingBranch": entry.get("starting_branch", "main")},
             },
         }
