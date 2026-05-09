@@ -39,6 +39,7 @@ def output_dir(tmp_path: Path) -> Path:
     _write_parquet(d / "cnpjs.parquet", 10)
     _write_parquet(d / "raizes.parquet", 3)
     _write_parquet(d / "socios.parquet", 7)
+    _write_parquet(d / "cnpj_contatos.parquet", 5)
     (d / "lookups.json").write_text('{"schema_version":"1.0.0"}', encoding="utf-8")
     return d
 
@@ -60,7 +61,7 @@ def test_build_snapshot_entry_shape(output_dir: Path) -> None:
 
 def test_build_snapshot_entry_row_counts(output_dir: Path) -> None:
     entry = manifest_mod.build_snapshot_entry("2026-04", output_dir)
-    assert entry["row_counts"] == {"cnpjs": 10, "raizes": 3, "socios": 7}
+    assert entry["row_counts"] == {"cnpjs": 10, "cnpj_contatos": 5, "raizes": 3, "socios": 7}
 
 
 def test_build_snapshot_entry_file_hashes(output_dir: Path) -> None:

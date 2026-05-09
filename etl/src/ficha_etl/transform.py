@@ -545,6 +545,67 @@ def write_cnpjs_parquet(
         con.execute("DROP TABLE IF EXISTS _cnae_map")
 
 
+def write_cnpj_contatos_parquet(
+    con: duckdb.DuckDBPyConnection,
+    output_path: Path,
+) -> None:
+    """Produz `cnpj_contatos.parquet`: reverse contact lookup (telefones, fax, email).
+
+    Privacy posture: phones and emails are PII, but RFB publishes them publicly already.
+    This parquet is just a re-shape of public data with no enrichment, no new exposure.
+    Ver docs/perf-plan-2026-05.md §12.
+    """
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    log.info("    writing cnpj_contatos.parquet...")
+
+    con.execute(
+        """
+        COPY (
+          -- telefone_1
+          SELECT cnpj_basico || cnpj_ordem || cnpj_dv AS cnpj,
+                 cnpj_basico AS cnpj_base,
+                 'telefone' AS tipo,
+                 ddd_1 || telefone_1 AS valor,
+                 1::INTEGER AS posicao
+          FROM estabelecimento
+          WHERE telefone_1 IS NOT NULL AND telefone_1 <> ''
+            AND ddd_1 IS NOT NULL AND ddd_1 <> ''
+          UNION ALL
+          -- telefone_2
+          SELECT cnpj_basico || cnpj_ordem || cnpj_dv,
+                 cnpj_basico,
+                 'telefone',
+                 ddd_2 || telefone_2,
+                 2::INTEGER
+          FROM estabelecimento
+          WHERE telefone_2 IS NOT NULL AND telefone_2 <> ''
+            AND ddd_2 IS NOT NULL AND ddd_2 <> ''
+          UNION ALL
+          -- fax
+          SELECT cnpj_basico || cnpj_ordem || cnpj_dv,
+                 cnpj_basico,
+                 'fax',
+                 ddd_fax || fax,
+                 0::INTEGER
+          FROM estabelecimento
+          WHERE fax IS NOT NULL AND fax <> ''
+            AND ddd_fax IS NOT NULL AND ddd_fax <> ''
+          UNION ALL
+          -- email
+          SELECT cnpj_basico || cnpj_ordem || cnpj_dv,
+                 cnpj_basico,
+                 'email',
+                 correio_eletronico,
+                 0::INTEGER
+          FROM estabelecimento
+          WHERE correio_eletronico IS NOT NULL AND correio_eletronico <> ''
+          ORDER BY tipo, valor, cnpj
+        ) TO ? (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 200000)
+        """,
+        [str(output_path)],
+    )
+
+
 def write_raizes_parquet(
     con: duckdb.DuckDBPyConnection,
     output_path: Path,
@@ -883,11 +944,13 @@ def transform_snapshot(
         # drop early.
         post_write_drops = {
             "cnpjs": ("simples",),  # only used by cnpjs; not referenced again
+            "cnpj_contatos": (),
             "raizes": (),
             "socios": (),
         }
         for name, fn in (
             ("cnpjs", write_cnpjs_parquet),
+            ("cnpj_contatos", write_cnpj_contatos_parquet),
             ("raizes", write_raizes_parquet),
             ("socios", write_socios_parquet),
         ):
