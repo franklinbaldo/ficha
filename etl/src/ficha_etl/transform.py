@@ -211,6 +211,17 @@ def _create_table_from_csvs(
     )
     cols_clause = _csv_columns_clause(columns)
 
+    # Pre-sniff the first 1 MB of the first non-empty CSV to guess encoding.
+    # RFB uses latin-1 historically but some partitions are utf-8.
+    first_file = paths[0]
+    with open(first_file, "rb") as f:
+        sample = f.read(1024 * 1024)
+    try:
+        sample.decode("utf-8")
+        primary_attempt = ("utf-8", True)
+    except UnicodeDecodeError:
+        primary_attempt = ("latin-1", False)
+
     # Each attempt: (encoding, ignore_errors). RFB occasionally emits rows
     # that are neither valid latin-1 nor utf-8 (mixed-encoding garbage from
     # legacy systems). DuckDB's latin-1 mode pre-flight-rejects the whole
@@ -220,11 +231,9 @@ def _create_table_from_csvs(
     # rows. Per ADR 0006, a handful of dropped rows out of 60M+ is
     # preferable to no snapshot. The fallback is logged loudly so we
     # can see if it ever fires in production.
-    attempts = [
-        ("latin-1", False),
-        ("utf-8", False),
-        ("utf-8", True),
-    ]
+    attempts = [primary_attempt]
+    if primary_attempt != ("utf-8", True):
+        attempts.append(("utf-8", True))
     for encoding, ignore_errors in attempts:
         try:
             con.execute(

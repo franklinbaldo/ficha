@@ -800,3 +800,44 @@ def test_write_cnpjs_parquet_handles_duplicate_cnae_codigo(tmp_path):
         assert descricoes == ["Restaurantes"]
     finally:
         con.close()
+
+
+# -----------------------------------------------------------------------------
+# Encoding sniffing tests
+# -----------------------------------------------------------------------------
+
+
+def test_create_table_from_csvs_sniffs_utf8(tmp_path, caplog):
+    import logging
+
+    caplog.set_level(logging.WARNING)
+
+    csv = tmp_path / "data.csv"
+    # Write valid utf-8 that isn't plain ascii
+    csv.write_bytes("1;Açaí\n2;Maçã\n".encode("utf-8"))
+
+    con = duckdb.connect()
+    try:
+        transform._create_table_from_csvs(con, "test_table", [csv], ("id", "nome"))
+        result = con.execute("SELECT id, nome FROM test_table ORDER BY id").fetchall()
+        assert result == [("1", "Açaí"), ("2", "Maçã")]
+    finally:
+        con.close()
+
+
+def test_create_table_from_csvs_sniffs_latin1(tmp_path, caplog):
+    import logging
+
+    caplog.set_level(logging.WARNING)
+
+    csv = tmp_path / "data.csv"
+    # Write valid latin-1 that fails to decode as utf-8 (0xC7 0xE1 are invalid standalone in utf-8)
+    csv.write_bytes(b"1;\xc7\xe1\n")
+
+    con = duckdb.connect()
+    try:
+        transform._create_table_from_csvs(con, "test_table", [csv], ("id", "nome"))
+        result = con.execute("SELECT id, nome FROM test_table").fetchall()
+        assert result == [("1", "Çá")]
+    finally:
+        con.close()
