@@ -93,7 +93,10 @@ jobs:
             python3 -c "
           import json, sys
           try:
-              d = json.load(open('artifacts/$SID/session.json'))
+              # strict=False permits literal control chars (newlines, tabs)
+              # inside JSON string values — verne's dump can include
+              # bashOutput.output / unidiffPatch with raw newlines.
+              d = json.loads(open('artifacts/$SID/session.json').read(), strict=False)
           except Exception as e:
               print(f'parse error: {e}'); sys.exit(0)
           state = d.get('state', '?')
