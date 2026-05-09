@@ -2,6 +2,22 @@
   {
     "id": "inspect-w21-dup-2026-05-08",
     "session_id": "15401189606457262357",
-    "_note": "Duplicate W2.1 spawn. User reports it's awaiting input on .github/workflows/claude-jules-reply.yml — fetch activities to see the question."
+    "_note": "Duplicate W2.1 — already inspected, was AWAITING_USER_FEEDBACK; sent submit message",
+    "_done": "inspected at 23:22"
+  },
+  {
+    "id": "inspect-verne-strict-json-2026-05-08",
+    "session_id": "832015432790769359",
+    "_note": "verne-strict-json session — checking progress"
+  },
+  {
+    "id": "inspect-verne-wait-cmd-2026-05-08",
+    "session_id": "9331275596781491185",
+    "_note": "verne-wait-cmd session — checking progress"
+  },
+  {
+    "id": "inspect-verne-activity-summary-2026-05-08",
+    "session_id": "9344198573087876860",
+    "_note": "verne-activity-summary session — checking progress"
   }
 ]
