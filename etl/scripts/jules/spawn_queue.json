@@ -76,6 +76,7 @@
     "starting_branch": "main",
     "automation_mode": "AUTO_CREATE_PR",
     "require_plan_approval": false,
+    "_spawning": "9344198573087876860",
     "_note": "Cross-repo session targeting verne. Truncate verbose activity payloads (bashOutput, unidiffPatch, descriptions) by default; --full opt-in. Mirrors ficha's poll_all_sessions.py _truncate_strings + _format_activity helpers."
   }
 ]
