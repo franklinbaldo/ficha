@@ -513,10 +513,12 @@ def test_transform_snapshot_writes_lookups_and_4_parquets(tmp_path, all_zips_dir
 
     # Os 4 parquets existem
     cnpjs_path = output_dir / "cnpjs.parquet"
+    cnpj_cnaes_path = output_dir / "cnpj_cnaes.parquet"
     raizes_path = output_dir / "raizes.parquet"
     socios_path = output_dir / "socios.parquet"
     cnpj_contatos_path = output_dir / "cnpj_contatos.parquet"
     assert cnpjs_path.exists()
+    assert cnpj_cnaes_path.exists()
     assert raizes_path.exists()
     assert socios_path.exists()
     assert cnpj_contatos_path.exists()
@@ -571,6 +573,16 @@ def test_transform_snapshot_writes_lookups_and_4_parquets(tmp_path, all_zips_dir
         assert first[5] == "Ativa"
         assert first[6] == "São Paulo"
         assert first[7] is True  # opcao_simples 'S'
+
+        # Verifica cnpj_cnaes da matriz ACME
+        acme_cnaes = con.execute(
+            f"SELECT cnae_codigo, posicao FROM '{cnpj_cnaes_path}' "
+            f"WHERE cnpj = '11111111000100' ORDER BY posicao"
+        ).fetchall()
+        assert acme_cnaes == [
+            ("4711301", 0),  # principal
+            ("6201500", 1),  # secundário
+        ]
 
         # ACME tem 2 estabelecimentos (matriz + filial)
         acme_count = con.execute(
@@ -925,3 +937,34 @@ def test_create_table_from_csvs_sniff_latin1(tmp_path, caplog):
         assert res == [("1", "2", "Olá Mundo")]
     finally:
         con.close()
+
+
+def test_write_cnpj_cnaes_parquet_position_ordering(tmp_path):
+    con = duckdb.connect()
+    con.execute("""
+        CREATE TABLE estabelecimento (
+            cnpj_basico VARCHAR,
+            cnpj_ordem VARCHAR,
+            cnpj_dv VARCHAR,
+            cnae_fiscal_principal VARCHAR,
+            cnae_fiscal_secundaria VARCHAR
+        )
+    """)
+    con.execute("""
+        INSERT INTO estabelecimento VALUES
+        ('99999999', '0001', '99', '1111111', '5611201,4711301,9311500')
+    """)
+
+    output_path = tmp_path / "cnpj_cnaes.parquet"
+    transform.write_cnpj_cnaes_parquet(con, output_path)
+
+    rows = con.execute(
+        f"SELECT cnae_codigo, posicao FROM '{output_path}' ORDER BY posicao"
+    ).fetchall()
+
+    assert rows == [
+        ("1111111", 0),
+        ("5611201", 1),
+        ("4711301", 2),
+        ("9311500", 3),
+    ]

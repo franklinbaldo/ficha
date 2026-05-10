@@ -634,6 +634,45 @@ def write_cnpj_contatos_parquet(
     )
 
 
+def write_cnpj_cnaes_parquet(
+    con: duckdb.DuckDBPyConnection,
+    output_path: Path,
+) -> None:
+    """Produz `cnpj_cnaes.parquet`: tabela associativa para buscas reversas por CNAE."""
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    log.info("writing %s", output_path.name)
+
+    con.execute(f"""
+        COPY (
+          SELECT
+            cnpj_basico || cnpj_ordem || cnpj_dv AS cnpj,
+            cnpj_basico AS cnpj_base,
+            cnae_fiscal_principal AS cnae_codigo,
+            0::INTEGER AS posicao
+          FROM estabelecimento
+          WHERE cnae_fiscal_principal IS NOT NULL
+            AND cnae_fiscal_principal <> ''
+          UNION ALL
+          SELECT
+            cnpj_basico || cnpj_ordem || cnpj_dv,
+            cnpj_basico,
+            trim(s.value) AS cnae_codigo,
+            s.idx::INTEGER AS posicao
+          FROM estabelecimento,
+               LATERAL (
+                 SELECT idx, unnest AS value
+                 FROM (
+                   SELECT generate_subscripts(arr, 1) AS idx, unnest(arr) AS unnest
+                   FROM (SELECT str_split(cnae_fiscal_secundaria, ',') AS arr) t
+                 )
+               ) s
+          WHERE cnae_fiscal_secundaria IS NOT NULL
+            AND cnae_fiscal_secundaria <> ''
+          ORDER BY cnae_codigo, posicao, cnpj_base
+        ) TO '{output_path}' (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 200000)
+    """)
+
+
 def write_raizes_parquet(
     con: duckdb.DuckDBPyConnection,
     output_path: Path,
@@ -976,12 +1015,14 @@ def transform_snapshot(
         post_write_drops = {
             "cnpjs": ("simples",),  # only used by cnpjs; not referenced again
             "cnpj_contatos": (),
+            "cnpj_cnaes": (),
             "raizes": (),
             "socios": (),
         }
         for name, fn in (
             ("cnpjs", write_cnpjs_parquet),
             ("cnpj_contatos", write_cnpj_contatos_parquet),
+            ("cnpj_cnaes", write_cnpj_cnaes_parquet),
             ("raizes", write_raizes_parquet),
             ("socios", write_socios_parquet),
         ):
