@@ -800,3 +800,50 @@ def test_write_cnpjs_parquet_handles_duplicate_cnae_codigo(tmp_path):
         assert descricoes == ["Restaurantes"]
     finally:
         con.close()
+
+
+def test_create_table_from_csvs_sniff_utf8(tmp_path, caplog):
+    import logging
+    from ficha_etl.transform import _create_table_from_csvs
+    import duckdb
+
+    csv_path = tmp_path / "data_utf8.csv"
+    # Write some utf-8 characters
+    csv_path.write_bytes('1;2;"Olá Mundo"'.encode("utf-8"))
+
+    con = duckdb.connect()
+    try:
+        with caplog.at_level(logging.WARNING):
+            _create_table_from_csvs(con, "test_table", [csv_path], ("c1", "c2", "c3"))
+
+        assert (
+            "tabela 'test_table' carregada com encoding=utf-8 ignore_errors=True (fallback)"
+            in caplog.text
+        )
+
+        res = con.execute("SELECT * FROM test_table").fetchall()
+        assert res == [("1", "2", "Olá Mundo")]
+    finally:
+        con.close()
+
+
+def test_create_table_from_csvs_sniff_latin1(tmp_path, caplog):
+    import logging
+    from ficha_etl.transform import _create_table_from_csvs
+    import duckdb
+
+    csv_path = tmp_path / "data_latin1.csv"
+    # Write some latin-1 characters that are invalid utf-8
+    csv_path.write_bytes('1;2;"Olá Mundo"'.encode("latin-1"))
+
+    con = duckdb.connect()
+    try:
+        with caplog.at_level(logging.WARNING):
+            _create_table_from_csvs(con, "test_table_latin", [csv_path], ("c1", "c2", "c3"))
+
+        assert "fallback" not in caplog.text  # latin-1 without ignore_errors does not log fallback
+
+        res = con.execute("SELECT * FROM test_table_latin").fetchall()
+        assert res == [("1", "2", "Olá Mundo")]
+    finally:
+        con.close()

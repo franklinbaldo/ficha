@@ -220,11 +220,26 @@ def _create_table_from_csvs(
     # rows. Per ADR 0006, a handful of dropped rows out of 60M+ is
     # preferable to no snapshot. The fallback is logged loudly so we
     # can see if it ever fires in production.
-    attempts = [
-        ("latin-1", False),
-        ("utf-8", False),
-        ("utf-8", True),
-    ]
+
+    attempts = []
+    # Sniff the first 1 MB of the first non-empty CSV.
+    first_path = paths[0]
+    with open(first_path, "rb") as f:
+        sample = f.read(1024 * 1024)
+
+    try:
+        sample.decode("utf-8", errors="strict")
+        # If utf-8 succeeds, use it directly with ignore_errors=True since
+        # mid-file bad bytes can still exist.
+        attempts.append(("utf-8", True))
+    except UnicodeDecodeError:
+        # If utf-8 fails to decode strictly, use latin-1.
+        attempts.append(("latin-1", False))
+
+    # Safety net: fall through to the byte-tolerant utf-8 + ignore_errors=True
+    if attempts[0] != ("utf-8", True):
+        attempts.append(("utf-8", True))
+
     for encoding, ignore_errors in attempts:
         try:
             con.execute(
@@ -266,7 +281,7 @@ def _create_table_from_csvs(
             raise
     raise RuntimeError(
         f"Falha ao carregar tabela '{table}': nenhum encoding funcionou "
-        "(latin-1, utf-8, latin-1+ignore_errors)"
+        "(latin-1, utf-8, utf-8+ignore_errors)"
     )
 
 
