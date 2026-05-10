@@ -15,8 +15,8 @@
     "starting_branch": "claude/ficha-perf-plan-v2",
     "automation_mode": "AUTO_CREATE_PR",
     "require_plan_approval": false,
-    "_spawning": "17967018632018838778",
-    "_note_dup": "Duplicate spawn 15401189606457262357 ran without a _spawning gate; will likely open a redundant PR (close as dup of the original session's PR when it appears)."
+    "_done": "PR #33 squash-merged as a116414f; dup PR #38 closed",
+    "_session_id": "17967018632018838778"
   },
   {
     "id": "w10-2026-05-08",
@@ -25,8 +25,8 @@
     "starting_branch": "claude/ficha-perf-plan-v2",
     "automation_mode": "AUTO_CREATE_PR",
     "require_plan_approval": false,
-    "_spawning": "4741416671646003104",
-    "_note_dup": "Duplicate spawn 7421718966605916421 also running; close redundant PR if it appears."
+    "_done": "PR #34 squash-merged as 76960235; dup PR #35 closed",
+    "_session_id": "4741416671646003104"
   },
   {
     "id": "w11-2026-05-08",
@@ -35,7 +35,8 @@
     "starting_branch": "claude/ficha-perf-plan-v2",
     "automation_mode": "AUTO_CREATE_PR",
     "require_plan_approval": false,
-    "_spawning": "15310983401866107420"
+    "_done": "PR #36 merged locally as df5c72d1 (4-file conflict resolution with W12)",
+    "_session_id": "15310983401866107420"
   },
   {
     "id": "w12-2026-05-08",
@@ -44,7 +45,8 @@
     "starting_branch": "claude/ficha-perf-plan-v2",
     "automation_mode": "AUTO_CREATE_PR",
     "require_plan_approval": false,
-    "_spawning": "7189397436599279392"
+    "_done": "PR #37 squash-merged as 9393797e",
+    "_session_id": "7189397436599279392"
   },
   {
     "id": "verne-strict-json-2026-05-08",
