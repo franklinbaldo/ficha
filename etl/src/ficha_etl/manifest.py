@@ -75,11 +75,12 @@ def build_snapshot_entry(month: str, output_dir: Path) -> dict:
         dict pronto para ser inserido em manifest["snapshots"].
     """
     cnpjs = output_dir / "cnpjs.parquet"
+    cnpj_contatos = output_dir / "cnpj_contatos.parquet"
     raizes = output_dir / "raizes.parquet"
     socios = output_dir / "socios.parquet"
     lookups = output_dir / "lookups.json"
 
-    for path in (cnpjs, raizes, socios, lookups):
+    for path in (cnpjs, cnpj_contatos, raizes, socios, lookups):
         if not path.exists():
             raise FileNotFoundError(f"arquivo ausente para manifest: {path}")
 
@@ -91,6 +92,7 @@ def build_snapshot_entry(month: str, output_dir: Path) -> dict:
     log.info("computing row counts for %s", month)
     row_counts = {
         "cnpjs": _row_count(cnpjs),
+        "cnpj_contatos": _row_count(cnpj_contatos),
         "raizes": _row_count(raizes),
         "socios": _row_count(socios),
     }
@@ -106,6 +108,7 @@ def build_snapshot_entry(month: str, output_dir: Path) -> dict:
         "row_counts": row_counts,
         "files": {
             "cnpjs": _file_entry(cnpjs, parquet_url(month, "cnpjs")),
+            "cnpj_contatos": _file_entry(cnpj_contatos, parquet_url(month, "cnpj_contatos")),
             "raizes": _file_entry(raizes, parquet_url(month, "raizes")),
             "socios": _file_entry(socios, parquet_url(month, "socios")),
             "lookups": _file_entry(lookups, lookups_url(month)),

@@ -19,11 +19,13 @@ export const SnapshotEntrySchema = z.object({
   generator: z.string(),
   row_counts: z.object({
     cnpjs: z.number().int().nonnegative(),
+    cnpj_contatos: z.number().int().nonnegative(),
     raizes: z.number().int().nonnegative(),
     socios: z.number().int().nonnegative(),
   }),
   files: z.object({
     cnpjs: FileEntrySchema,
+    cnpj_contatos: FileEntrySchema,
     raizes: FileEntrySchema,
     socios: FileEntrySchema,
     lookups: FileEntrySchema,
