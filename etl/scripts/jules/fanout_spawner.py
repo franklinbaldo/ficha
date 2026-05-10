@@ -242,9 +242,10 @@ def main() -> int:
             "or discarded."
         )
     if skipped:
-        md.append(f"\n### Skipped (already running) ({len(skipped)})\n")
+        md.append(f"\n### Skipped ({len(skipped)})\n")
         for s in skipped:
-            md.append(f"- `{s['id']}` — {s['title']}")
+            reason = s.get("reason", "?")
+            md.append(f"- `{s['id']}` ({reason}) — {s['title']}")
     if failed:
         md.append(f"\n### Failed ({len(failed)})\n")
         for f in failed:
