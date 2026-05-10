@@ -3,7 +3,7 @@
   import type * as duckdb from '@duckdb/duckdb-wasm';
   import { strip as stripCNPJ } from '../lib/cnpj';
   import { fetchManifest, currentSnapshot } from '../lib/manifest';
-  import { createDuckDB, attachCnpjs } from '../lib/analytical';
+  import { createDuckDB, attachCnpjs, attachLookups } from '../lib/analytical';
   import EmpresaFicha from './EmpresaFicha.svelte';
 
   type EmpresaRow = {
@@ -44,6 +44,7 @@
 
       status = `Anexando snapshot ${snap.date}…`;
       await attachCnpjs(duckDB, snap.files.cnpjs.url);
+      await attachLookups(duckDB, snap);
 
       db = duckDB;
       status = `Pronto para consultas — snapshot ${snap.date}`;

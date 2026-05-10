@@ -28,6 +28,7 @@ export const SnapshotEntrySchema = z.object({
     socios: FileEntrySchema,
     lookups: FileEntrySchema,
   }),
+  lookups: z.record(z.string(), z.object({ url: z.string().url() })).optional(),
 });
 
 export const ManifestSchema = z.object({

@@ -472,6 +472,24 @@ def test_transform_snapshot_writes_lookups_and_3_parquets(tmp_path, all_zips_dir
     assert raizes_path.exists()
     assert socios_path.exists()
 
+    # E os 6 parquets de lookups
+    con = duckdb.connect()
+    try:
+        for kind in transform._LOOKUP_KINDS:
+            pq_path = output_dir / "lookups" / f"{kind}.parquet"
+            assert pq_path.exists()
+            rows = con.execute(f"SELECT codigo, descricao, descricao_normalizada FROM '{pq_path}' ORDER BY codigo").fetchall()
+            expected_fixture = sorted(LOOKUP_FIXTURES[kind])
+            assert len(rows) == len(expected_fixture)
+            for i, (expected_codigo, expected_descricao) in enumerate(expected_fixture):
+                assert rows[i][0] == expected_codigo
+                assert rows[i][1] == expected_descricao
+                # just check it has upper chars and strip accents (basic check)
+                assert rows[i][2] is not None
+                assert isinstance(rows[i][2], str)
+    finally:
+        con.close()
+
     # Lê de volta com DuckDB pra validar conteúdo.
     con = duckdb.connect()
     try:
