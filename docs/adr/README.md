@@ -26,3 +26,7 @@ Formato: cada ADR é um markdown curto (ideal: 1 página) com **contexto**, **de
 | [0016](0016-backfill-strategy.md) | Estratégia de backfill dos 35 snapshots históricos | Proposed |
 | [0017](0017-ibis-shared-analytical-layer.md) | Ibis como camada analítica compartilhada (`ficha-py`) | Proposed |
 | [0018](0018-raizes-municipios-atuacao.md) | `raizes.parquet` v2: `municipios_atuacao` substitui `ufs_atuacao` | Proposed |
+| [0019](0019-per-lookup-parquets.md) | Per-lookup parquets alongside lookups.json | Accepted |
+| [0020](0020-cnpj-cnaes-association.md) | `cnpj_cnaes.parquet` — position-aware CNAE association | Accepted |
+| [0021](0021-cnpj-contatos-reverse-lookup.md) | `cnpj_contatos.parquet` — reverse contact lookup | Accepted |
+| [0022](0022-cnpjs-summary-detail-split.md) | `cnpjs_summary.parquet` for autocomplete / search | Proposed |
