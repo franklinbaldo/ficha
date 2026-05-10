@@ -1,0 +1,106 @@
+name: Claude — Jules spawn
+
+# Spawn a Jules session via API and exit immediately. Polling for
+# state changes is handled centrally by `claude-jules-poller.yml`,
+# which watches ALL active sessions for this repo and uploads a
+# snapshot artifact whenever any session completes / awaits / idles.
+#
+# This workflow's only responsibility is the POST + initial comment.
+# Designed for parallel use — fire 15 of these concurrently from the
+# UI or `gh workflow run claude-jules.yml ...` and the poller will
+# track every one.
+
+on:
+  workflow_dispatch:
+    inputs:
+      title:
+        description: 'Session title (shown in Jules UI)'
+        required: true
+        type: string
+      prompt_file:
+        description: 'Path under etl/scripts/jules/prompts/ (without .md). Use this for long prompts.'
+        required: false
+        type: string
+      prompt:
+        description: 'Inline prompt (used if prompt_file is empty)'
+        required: false
+        type: string
+      starting_branch:
+        description: 'Branch Jules starts from (default main)'
+        required: false
+        type: string
+        default: 'main'
+      target_pr:
+        description: 'PR number for the spawn-comment (default 31)'
+        required: false
+        type: string
+        default: '31'
+      automation_mode:
+        description: 'AUTO_CREATE_PR or MANUAL'
+        required: false
+        type: choice
+        options:
+          - AUTO_CREATE_PR
+          - MANUAL
+        default: AUTO_CREATE_PR
+      require_plan_approval:
+        description: 'Require plan approval before execution (default false)'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  spawn:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        working-directory: etl
+        run: uv python install 3.11
+
+      - name: Install deps
+        working-directory: etl
+        run: uv sync --frozen
+
+      - name: Resolve prompt
+        run: |
+          if [ -n "${{ inputs.prompt_file }}" ]; then
+            FILE="etl/scripts/jules/prompts/${{ inputs.prompt_file }}.md"
+            if [ ! -f "$FILE" ]; then
+              echo "::error::prompt_file not found: $FILE"
+              exit 2
+            fi
+            cp "$FILE" /tmp/prompt.txt
+          elif [ -n "${{ inputs.prompt }}" ]; then
+            printf '%s' "${{ inputs.prompt }}" > /tmp/prompt.txt
+          else
+            echo "::error::Either prompt or prompt_file must be provided"
+            exit 2
+          fi
+
+      - name: Spawn Jules session
+        working-directory: etl
+        env:
+          JULES_API_KEY: ${{ secrets.JULES_API_KEY }}
+          JULES_TITLE: ${{ inputs.title }}
+          JULES_STARTING_BRANCH: ${{ inputs.starting_branch }}
+          JULES_AUTOMATION_MODE: ${{ inputs.automation_mode }}
+          JULES_REQUIRE_PLAN_APPROVAL: ${{ inputs.require_plan_approval }}
+          JULES_SOURCE: sources/github/${{ github.repository }}
+          JULES_TARGET_PR: ${{ inputs.target_pr }}
+          JULES_REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PYTHONIOENCODING: utf-8
+          PYTHONUTF8: '1'
+        run: uv run python scripts/jules/spawn_session.py /tmp/prompt.txt

@@ -220,11 +220,26 @@ def _create_table_from_csvs(
     # rows. Per ADR 0006, a handful of dropped rows out of 60M+ is
     # preferable to no snapshot. The fallback is logged loudly so we
     # can see if it ever fires in production.
-    attempts = [
-        ("latin-1", False),
-        ("utf-8", False),
-        ("utf-8", True),
-    ]
+
+    attempts = []
+    # Sniff the first 1 MB of the first non-empty CSV.
+    first_path = paths[0]
+    with open(first_path, "rb") as f:
+        sample = f.read(1024 * 1024)
+
+    try:
+        sample.decode("utf-8", errors="strict")
+        # If utf-8 succeeds, use it directly with ignore_errors=True since
+        # mid-file bad bytes can still exist.
+        attempts.append(("utf-8", True))
+    except UnicodeDecodeError:
+        # If utf-8 fails to decode strictly, use latin-1.
+        attempts.append(("latin-1", False))
+
+    # Safety net: fall through to the byte-tolerant utf-8 + ignore_errors=True
+    if attempts[0] != ("utf-8", True):
+        attempts.append(("utf-8", True))
+
     for encoding, ignore_errors in attempts:
         try:
             con.execute(
@@ -266,7 +281,7 @@ def _create_table_from_csvs(
             raise
     raise RuntimeError(
         f"Falha ao carregar tabela '{table}': nenhum encoding funcionou "
-        "(latin-1, utf-8, latin-1+ignore_errors)"
+        "(latin-1, utf-8, utf-8+ignore_errors)"
     )
 
 
@@ -352,6 +367,19 @@ def write_lookups_json(
     output_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2))
 
 
+def write_lookup_parquets(con: duckdb.DuckDBPyConnection, output_dir: Path) -> None:
+    """Escreve um parquet para cada lookup, para composição SQL."""
+    (output_dir / "lookups").mkdir(parents=True, exist_ok=True)
+    for kind in _LOOKUP_KINDS:
+        con.execute(
+            "COPY (SELECT codigo, descricao, "
+            "UPPER(strip_accents(descricao)) AS descricao_normalizada "
+            f"FROM lookup_{kind} ORDER BY codigo) "
+            "TO ? (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 100000)",
+            [str(output_dir / "lookups" / f"{kind}.parquet")],
+        )
+
+
 # -----------------------------------------------------------------------------
 # Helpers SQL reutilizados nas queries dos parquets
 # -----------------------------------------------------------------------------
@@ -401,25 +429,52 @@ def write_cnpjs_parquet(
     Ver ADR 0008 e schema `web/src/schemas/v1/estabelecimento.ts`.
     """
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    # Pre-build a MAP scalar (codigo -> descricao) from lookup_cnaes so the
+    # secondary-CNAE descriptions can be resolved order-preservingly inside
+    # the SELECT. A correlated JOIN-per-element via list_transform doesn't
+    # work because list_transform's lambda can't reference outer tables;
+    # an unnest+JOIN+re-aggregate would lose registration order across
+    # GROUP BY. Indexing into a precomputed MAP keeps the original
+    # str_split order intact. The MAP is small (~1300 cnaes × short
+    # descricao ≈ <100 KB) so DuckDB can inline it as a constant.
+    # See docs/perf-plan-2026-05.md §9.3.
+    #
+    # GROUP BY codigo + ANY_VALUE(descricao) defends against duplicate
+    # codigos in lookup_cnaes — DuckDB's MAP() throws on duplicate keys
+    # ("Map keys must be unique"), which would crash the entire
+    # write_cnpjs_parquet step on a single dirty row. The RFB CNAE
+    # reference table is small (~1300 rows) and historically clean,
+    # but this guards against future drift. Per Kilo PR #28 review.
     con.execute(
-        f"""
-        COPY (
-            SELECT
-                est.cnpj_basico || est.cnpj_ordem || est.cnpj_dv AS cnpj,
-                est.cnpj_basico AS cnpj_base,
-                est.cnpj_ordem,
-                est.cnpj_dv,
-                est.identificador_matriz_filial,
+        """
+        CREATE OR REPLACE TEMP TABLE _cnae_map AS
+        SELECT MAP(list(codigo), list(descricao)) AS m FROM (
+            SELECT codigo, ANY_VALUE(descricao) AS descricao
+            FROM lookup_cnaes
+            GROUP BY codigo
+        )
+        """
+    )
+    try:
+        con.execute(
+            f"""
+            COPY (
+                SELECT
+                    est.cnpj_basico || est.cnpj_ordem || est.cnpj_dv AS cnpj,
+                    est.cnpj_basico AS cnpj_base,
+                    est.cnpj_ordem,
+                    est.cnpj_dv,
+                    est.identificador_matriz_filial,
 
-                -- Empresa (denormalizado)
-                emp.razao_social,
-                UPPER(strip_accents(emp.razao_social)) AS razao_social_normalizada,
-                emp.natureza_juridica AS natureza_juridica_codigo,
-                COALESCE(nj.descricao, '') AS natureza_juridica_descricao,
-                emp.qualificacao_responsavel AS qualificacao_responsavel_codigo,
-                COALESCE(qr.descricao, '') AS qualificacao_responsavel_descricao,
-                {_CAPITAL_SOCIAL_EXPR} AS capital_social,
-                emp.porte_empresa,
+                    -- Empresa (denormalizado)
+                    emp.razao_social,
+                    UPPER(strip_accents(emp.razao_social)) AS razao_social_normalizada,
+                    emp.natureza_juridica AS natureza_juridica_codigo,
+                    COALESCE(nj.descricao, '') AS natureza_juridica_descricao,
+                    emp.qualificacao_responsavel AS qualificacao_responsavel_codigo,
+                    COALESCE(qr.descricao, '') AS qualificacao_responsavel_descricao,
+                    {_CAPITAL_SOCIAL_EXPR} AS capital_social,
+                    emp.porte_empresa,
                 emp.ente_federativo_responsavel,
 
                 -- Estabelecimento
@@ -438,8 +493,20 @@ def write_cnpjs_parquet(
                      THEN []::VARCHAR[]
                      ELSE list_transform(str_split(est.cnae_fiscal_secundaria, ','), x -> trim(x)) END
                     AS cnae_secundario_codigos,
-                -- TODO: descricoes resolvidas no client via lookups.json (v0.1)
-                []::VARCHAR[] AS cnae_secundario_descricoes,
+                -- Resolve via _cnae_map cross-joined below. DuckDB rejects
+                -- subqueries inside list_transform lambdas, so the MAP
+                -- must be in column-scope: `_cm.m` is a regular column
+                -- reference (single-row CROSS JOIN broadcasts it onto
+                -- every estabelecimento row). MAP indexing returns NULL
+                -- for missing codes; COALESCE to '' to match the
+                -- convention used by other lookups in this SELECT.
+                CASE WHEN est.cnae_fiscal_secundaria IS NULL OR est.cnae_fiscal_secundaria = ''
+                     THEN []::VARCHAR[]
+                     ELSE list_transform(
+                            list_transform(str_split(est.cnae_fiscal_secundaria, ','), x -> trim(x)),
+                            c -> COALESCE(_cm.m[c], '')
+                          ) END
+                    AS cnae_secundario_descricoes,
 
                 -- Endereço
                 est.tipo_logradouro,
@@ -474,6 +541,7 @@ def write_cnpjs_parquet(
                 {_date_expr("s.data_exclusao_mei")} AS data_exclusao_mei
 
             FROM estabelecimento est
+            CROSS JOIN _cnae_map _cm
             LEFT JOIN empresa emp ON emp.cnpj_basico = est.cnpj_basico
             LEFT JOIN simples s ON s.cnpj_basico = est.cnpj_basico
             LEFT JOIN lookup_naturezas nj ON nj.codigo = emp.natureza_juridica
@@ -492,10 +560,117 @@ def write_cnpjs_parquet(
             -- aren't primary FICHA queries (exact match dominates;
             -- razao_social search uses raizes.parquet). Revisit if
             -- range workloads materialize.
+            ) TO ? (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 200000)
+            """,
+            [str(output_path)],
+        )
+    finally:
+        # try/finally guarantees _cnae_map is cleaned up even if COPY
+        # raises mid-write — important because the same con is reused
+        # across write_raizes_parquet / write_socios_parquet, and a
+        # lingering _cnae_map could shadow a future re-run of this
+        # function. Per Kilo PR #28 review.
+        con.execute("DROP TABLE IF EXISTS _cnae_map")
+
+
+def write_cnpj_contatos_parquet(
+    con: duckdb.DuckDBPyConnection,
+    output_path: Path,
+) -> None:
+    """Produz `cnpj_contatos.parquet`: reverse contact lookup (telefones, fax, email).
+
+    Privacy posture: phones and emails are PII, but RFB publishes them publicly already.
+    This parquet is just a re-shape of public data with no enrichment, no new exposure.
+    Ver docs/perf-plan-2026-05.md §12.
+    """
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    log.info("    writing cnpj_contatos.parquet...")
+
+    con.execute(
+        """
+        COPY (
+          -- telefone_1
+          SELECT cnpj_basico || cnpj_ordem || cnpj_dv AS cnpj,
+                 cnpj_basico AS cnpj_base,
+                 'telefone' AS tipo,
+                 ddd_1 || telefone_1 AS valor,
+                 1::INTEGER AS posicao
+          FROM estabelecimento
+          WHERE telefone_1 IS NOT NULL AND telefone_1 <> ''
+            AND ddd_1 IS NOT NULL AND ddd_1 <> ''
+          UNION ALL
+          -- telefone_2
+          SELECT cnpj_basico || cnpj_ordem || cnpj_dv,
+                 cnpj_basico,
+                 'telefone',
+                 ddd_2 || telefone_2,
+                 2::INTEGER
+          FROM estabelecimento
+          WHERE telefone_2 IS NOT NULL AND telefone_2 <> ''
+            AND ddd_2 IS NOT NULL AND ddd_2 <> ''
+          UNION ALL
+          -- fax
+          SELECT cnpj_basico || cnpj_ordem || cnpj_dv,
+                 cnpj_basico,
+                 'fax',
+                 ddd_fax || fax,
+                 0::INTEGER
+          FROM estabelecimento
+          WHERE fax IS NOT NULL AND fax <> ''
+            AND ddd_fax IS NOT NULL AND ddd_fax <> ''
+          UNION ALL
+          -- email
+          SELECT cnpj_basico || cnpj_ordem || cnpj_dv,
+                 cnpj_basico,
+                 'email',
+                 correio_eletronico,
+                 0::INTEGER
+          FROM estabelecimento
+          WHERE correio_eletronico IS NOT NULL AND correio_eletronico <> ''
+          ORDER BY tipo, valor, cnpj
         ) TO ? (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 200000)
         """,
         [str(output_path)],
     )
+
+
+def write_cnpj_cnaes_parquet(
+    con: duckdb.DuckDBPyConnection,
+    output_path: Path,
+) -> None:
+    """Produz `cnpj_cnaes.parquet`: tabela associativa para buscas reversas por CNAE."""
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    log.info("writing %s", output_path.name)
+
+    con.execute(f"""
+        COPY (
+          SELECT
+            cnpj_basico || cnpj_ordem || cnpj_dv AS cnpj,
+            cnpj_basico AS cnpj_base,
+            cnae_fiscal_principal AS cnae_codigo,
+            0::INTEGER AS posicao
+          FROM estabelecimento
+          WHERE cnae_fiscal_principal IS NOT NULL
+            AND cnae_fiscal_principal <> ''
+          UNION ALL
+          SELECT
+            cnpj_basico || cnpj_ordem || cnpj_dv,
+            cnpj_basico,
+            trim(s.value) AS cnae_codigo,
+            s.idx::INTEGER AS posicao
+          FROM estabelecimento,
+               LATERAL (
+                 SELECT idx, unnest AS value
+                 FROM (
+                   SELECT generate_subscripts(arr, 1) AS idx, unnest(arr) AS unnest
+                   FROM (SELECT str_split(cnae_fiscal_secundaria, ',') AS arr) t
+                 )
+               ) s
+          WHERE cnae_fiscal_secundaria IS NOT NULL
+            AND cnae_fiscal_secundaria <> ''
+          ORDER BY cnae_codigo, posicao, cnpj_base
+        ) TO '{output_path}' (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 200000)
+    """)
 
 
 def write_raizes_parquet(
@@ -509,23 +684,76 @@ def write_raizes_parquet(
     """
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Pre-materialize the heavy CTEs separately. As inline CTEs in a single
-    # COPY query, the 50M-group LIST_DISTINCT aggregation competed for
-    # memory with the empresa JOIN and OOM'd at 5.5 GiB (PR #24, run
-    # 25522678418). Splitting into temp tables forces DuckDB to spill
-    # each step to disk independently, then the final query is just
-    # a chain of small JOINs.
-    log.info("    materializing raizes_agg...")
+    # W1.6 (docs/perf-plan-2026-05.md §1.6): project estabelecimento down
+    # to only the columns raizes needs *before* the aggregations run.
+    # The wide table has 29 VARCHAR columns; raizes only ever reads 8 of
+    # them. DuckDB's column store + projection-pushdown already reads the
+    # narrow set per-scan, but each scan re-pulls from the underlying
+    # column store and competes for buffer-pool slots with the other
+    # columns kept warm by `cnpjs.parquet`'s upstream write. Materializing
+    # the slim projection once reduces that pressure by ~3.5× during the
+    # raizes phase. Released after the temp aggregates are built.
+    log.info("    materializing estabelecimento_slim (8 cols of 29)...")
+    con.execute("""
+        CREATE OR REPLACE TEMP TABLE _estabelecimento_slim AS
+        SELECT
+            cnpj_basico,
+            cnpj_ordem,
+            identificador_matriz_filial,
+            situacao_cadastral,
+            data_inicio_atividade,
+            cnae_fiscal_principal,
+            uf,
+            municipio
+        FROM estabelecimento
+    """)
+
+    # W1.1 (docs/perf-plan-2026-05.md §1.1): pre-dedup before list().
+    # The previous shape used LIST(DISTINCT est.uf) and
+    # LIST(DISTINCT est.cnae_fiscal_principal) inside _raizes_agg, but
+    # DuckDB's hash-aggregate cannot spill the per-group hash-set state
+    # that DISTINCT-inside-LIST builds — with ~50M cnpj_basico groups
+    # and a few distinct UFs each, the in-memory state grew unbounded
+    # and OOM'd at 5.5 GiB (PR #24, run 25522678418), even after PR #24
+    # split the aggregation into a temp table.
+    #
+    # Replacing with two-step pre-dedup (SELECT DISTINCT → flat list())
+    # uses regular GROUP BYs that DuckDB *can* spill cleanly. Each step
+    # is a vanilla aggregate; peak memory drops to ~2 GiB for the
+    # 60M-row → 50M-group reduction. See plan §1.1 for the full
+    # rationale and an explanation of why splitting alone wasn't
+    # sufficient.
+    log.info("    materializing _ufs / _cnaes pre-dedup tables...")
+    con.execute("""
+        CREATE OR REPLACE TEMP TABLE _ufs AS
+        SELECT DISTINCT cnpj_basico, uf FROM _estabelecimento_slim
+        WHERE uf IS NOT NULL AND uf <> ''
+    """)
+    con.execute("""
+        CREATE OR REPLACE TEMP TABLE _ufs_agg AS
+        SELECT cnpj_basico, list(uf) AS ufs_atuacao
+        FROM _ufs GROUP BY cnpj_basico
+    """)
+    con.execute("""
+        CREATE OR REPLACE TEMP TABLE _cnaes_principais AS
+        SELECT DISTINCT cnpj_basico, cnae_fiscal_principal FROM _estabelecimento_slim
+        WHERE cnae_fiscal_principal IS NOT NULL AND cnae_fiscal_principal <> ''
+    """)
+    con.execute("""
+        CREATE OR REPLACE TEMP TABLE _cnaes_principais_agg AS
+        SELECT cnpj_basico, list(cnae_fiscal_principal) AS cnaes_principais_distintos
+        FROM _cnaes_principais GROUP BY cnpj_basico
+    """)
+
+    log.info("    materializing raizes_agg (counts only — list aggs split off)...")
     con.execute("""
         CREATE OR REPLACE TEMP TABLE _raizes_agg AS
         SELECT
             est.cnpj_basico AS cnpj_base,
             COUNT(*)::INTEGER AS qtd_estabelecimentos,
             COUNT(*) FILTER (WHERE est.situacao_cadastral = '02')::INTEGER
-                AS qtd_estabelecimentos_ativos,
-            LIST(DISTINCT est.uf) AS ufs_atuacao,
-            LIST(DISTINCT est.cnae_fiscal_principal) AS cnaes_principais_distintos
-        FROM estabelecimento est
+                AS qtd_estabelecimentos_ativos
+        FROM _estabelecimento_slim est
         GROUP BY est.cnpj_basico
     """)
     log.info("    materializing raizes_matriz...")
@@ -537,19 +765,19 @@ def write_raizes_parquet(
             est.uf AS uf_matriz,
             est.municipio AS municipio_matriz_codigo,
             est.cnae_fiscal_principal AS cnae_principal_matriz_codigo
-        FROM estabelecimento est
+        FROM _estabelecimento_slim est
         WHERE est.identificador_matriz_filial = '1'
         QUALIFY ROW_NUMBER() OVER (
             PARTITION BY est.cnpj_basico ORDER BY est.cnpj_ordem
         ) = 1
     """)
+    # Slim projection no longer needed once both aggregates are built.
+    con.execute("DROP TABLE IF EXISTS _estabelecimento_slim")
 
     log.info("    joining + writing raizes.parquet...")
     con.execute(
         f"""
         COPY (
-            WITH agg AS (SELECT * FROM _raizes_agg),
-            matriz AS (SELECT * FROM _raizes_matriz)
             SELECT
                 emp.cnpj_basico AS cnpj_base,
                 emp.razao_social,
@@ -561,8 +789,8 @@ def write_raizes_parquet(
                 emp.ente_federativo_responsavel,
                 COALESCE(agg.qtd_estabelecimentos, 0) AS qtd_estabelecimentos,
                 COALESCE(agg.qtd_estabelecimentos_ativos, 0) AS qtd_estabelecimentos_ativos,
-                COALESCE(agg.ufs_atuacao, []) AS ufs_atuacao,
-                COALESCE(agg.cnaes_principais_distintos, []) AS cnaes_principais_distintos,
+                COALESCE(ufs.ufs_atuacao, []) AS ufs_atuacao,
+                COALESCE(cnae_agg.cnaes_principais_distintos, []) AS cnaes_principais_distintos,
                 matriz.data_inicio_atividade_matriz,
                 matriz.uf_matriz,
                 matriz.municipio_matriz_codigo,
@@ -570,8 +798,10 @@ def write_raizes_parquet(
                 matriz.cnae_principal_matriz_codigo,
                 COALESCE(cn.descricao, '') AS cnae_principal_matriz_descricao
             FROM empresa emp
-            LEFT JOIN agg ON agg.cnpj_base = emp.cnpj_basico
-            LEFT JOIN matriz ON matriz.cnpj_basico = emp.cnpj_basico
+            LEFT JOIN _raizes_agg agg ON agg.cnpj_base = emp.cnpj_basico
+            LEFT JOIN _ufs_agg ufs ON ufs.cnpj_basico = emp.cnpj_basico
+            LEFT JOIN _cnaes_principais_agg cnae_agg ON cnae_agg.cnpj_basico = emp.cnpj_basico
+            LEFT JOIN _raizes_matriz matriz ON matriz.cnpj_basico = emp.cnpj_basico
             LEFT JOIN lookup_naturezas nj ON nj.codigo = emp.natureza_juridica
             LEFT JOIN lookup_municipios mn ON mn.codigo = matriz.municipio_matriz_codigo
             LEFT JOIN lookup_cnaes cn ON cn.codigo = matriz.cnae_principal_matriz_codigo
@@ -589,8 +819,15 @@ def write_raizes_parquet(
         [str(output_path)],
     )
     # Free the temp tables now that raizes.parquet is on disk.
-    con.execute("DROP TABLE IF EXISTS _raizes_agg")
-    con.execute("DROP TABLE IF EXISTS _raizes_matriz")
+    for tbl in (
+        "_raizes_agg",
+        "_raizes_matriz",
+        "_ufs",
+        "_ufs_agg",
+        "_cnaes_principais",
+        "_cnaes_principais_agg",
+    ):
+        con.execute(f"DROP TABLE IF EXISTS {tbl}")
 
 
 def write_socios_parquet(
@@ -681,13 +918,17 @@ def transform_snapshot(
     log.info("=== PHASE 2/4: load into DuckDB (%s) ===", db_path)
     t0 = time.monotonic()
     con = duckdb.connect(str(db_path))
-    # Cap memory and force on-disk spill. GH Actions ubuntu-latest has ~7 GB
-    # of RAM; loading 15 GB of estabelecimento CSV with `ignore_errors=true`
-    # OOM-killed the runner (PR #24, run 25514278003). DuckDB's default is
-    # ~80% of system RAM with limited spill -- explicit limit + dedicated
-    # temp dir on the same partition as db_path makes spill behavior
-    # predictable.
-    con.execute("PRAGMA memory_limit='6GB'")
+    # Cap memory and force on-disk spill. GH Actions `ubuntu-latest` has
+    # 16 GB of RAM as of 2026-01 (verified for `etl-bootstrap.yml` which
+    # uses the free-tier public-repo runner). The original 6 GB limit
+    # was tuned for the legacy 7 GB tier (PR #24, run 25514278003). 10 GB
+    # leaves ~6 GB for OS, runner agent, Python heap, the `tee` buffer,
+    # and DuckDB's brief overshoots during large hash joins (memory_limit
+    # is a target, not a strict cap). Per Kilo Code Review on PR #27:
+    # 12 GB on a 16 GB runner trims the safety margin too thin.
+    # Explicit limit + dedicated temp dir on the same partition as
+    # db_path makes spill behavior predictable.
+    con.execute("PRAGMA memory_limit='10GB'")
     con.execute(f"PRAGMA temp_directory='{db_path.parent / 'duckdb_tmp'}'")
     # Reduce per-query memory pressure during the big JOIN at phase 3.
     # DuckDB's default preserves input ordering, which buffers more in
@@ -754,6 +995,9 @@ def transform_snapshot(
         )
         log.info("wrote lookups.json")
 
+        write_lookup_parquets(con, output_dir)
+        log.info("wrote lookup parquets")
+
         log.info("=== PHASE 3/4: write parquets ===")
         t0 = time.monotonic()
         # Drop tables we no longer need between writes to free DuckDB's
@@ -770,11 +1014,15 @@ def transform_snapshot(
         # drop early.
         post_write_drops = {
             "cnpjs": ("simples",),  # only used by cnpjs; not referenced again
+            "cnpj_contatos": (),
+            "cnpj_cnaes": (),
             "raizes": (),
             "socios": (),
         }
         for name, fn in (
             ("cnpjs", write_cnpjs_parquet),
+            ("cnpj_contatos", write_cnpj_contatos_parquet),
+            ("cnpj_cnaes", write_cnpj_cnaes_parquet),
             ("raizes", write_raizes_parquet),
             ("socios", write_socios_parquet),
         ):

@@ -1,0 +1,139 @@
+name: Claude — Phase 1 diagnostics
+
+# Workflow harness for Claude to run diagnostic / debugging code with
+# IA secret access. Always posts a comment on the target PR with the
+# stdout/stderr summary and exits with the script's exit code so PR
+# subscribers (e.g. mcp__github__subscribe_pr_activity) get woken up
+# on failure.
+#
+# Currently runs Phase 1 step 1.2 (simples cardinality probe) +
+# 1.1-lite (IA inventory check). See docs/perf-plan-2026-05.md.
+
+on:
+  # Auto-trigger on the audit/plan branch so updates to the script run
+  # without needing manual workflow_dispatch from a Claude session that
+  # doesn't have a dispatch tool surfaced. Other branches must use
+  # workflow_dispatch explicitly.
+  push:
+    branches: [claude/ficha-performance-audit-U4YJn]
+    paths:
+      - '.github/workflows/claude-diagnostics.yml'
+      - 'etl/scripts/diagnostics/**'
+  workflow_dispatch:
+    inputs:
+      script:
+        description: 'Script under etl/scripts/diagnostics/ to run (without .py)'
+        required: false
+        type: string
+        default: 'phase1'
+      target_pr:
+        description: 'PR number to comment on (default 31)'
+        required: false
+        type: string
+        default: '31'
+      month:
+        description: 'Snapshot month YYYY-MM for diagnostics that need one'
+        required: false
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        working-directory: etl
+        run: uv python install 3.11
+
+      - name: Install deps
+        working-directory: etl
+        run: uv sync --frozen
+
+      - name: Resolve inputs (defaults when triggered by push)
+        id: cfg
+        run: |
+          SCRIPT="${{ inputs.script }}"
+          [ -z "$SCRIPT" ] && SCRIPT="phase1"
+          TARGET_PR="${{ inputs.target_pr }}"
+          [ -z "$TARGET_PR" ] && TARGET_PR="31"
+          MONTH="${{ inputs.month }}"
+          echo "script=$SCRIPT" >> "$GITHUB_OUTPUT"
+          echo "target_pr=$TARGET_PR" >> "$GITHUB_OUTPUT"
+          echo "month=$MONTH" >> "$GITHUB_OUTPUT"
+          echo "Resolved: script=$SCRIPT target_pr=$TARGET_PR month='$MONTH'"
+
+      - name: Run diagnostic script
+        id: run
+        working-directory: etl
+        env:
+          IA_ACCESS_KEY: ${{ secrets.IA_ACCESS_KEY }}
+          IA_SECRET_KEY: ${{ secrets.IA_SECRET_KEY }}
+          CNPJ_SHARE_TOKEN: ${{ secrets.CNPJ_SHARE_TOKEN }}
+          MONTH: ${{ steps.cfg.outputs.month }}
+          PYTHONIOENCODING: utf-8
+          PYTHONUTF8: '1'
+        run: |
+          set -o pipefail
+          SCRIPT="scripts/diagnostics/${{ steps.cfg.outputs.script }}.py"
+          if [ ! -f "$SCRIPT" ]; then
+            echo "::error::script not found: etl/$SCRIPT"
+            exit 2
+          fi
+          uv run python "$SCRIPT" 2>&1 | tee /tmp/diag.log
+        # continue-on-error: capture log → post PR comment → propagate
+        # exit code via the final "Propagate script exit code" step.
+        # Failures are NOT swallowed — they reach the PR via the comment
+        # AND the workflow fails on the last step. Removing this would
+        # make the workflow fail mid-job before the comment posts,
+        # losing the diagnostic output that's the whole point of this
+        # workflow.
+        continue-on-error: true
+
+      - name: Build PR comment
+        if: always()
+        id: build
+        run: |
+          {
+            echo "## Phase 1 diagnostics — \`${{ steps.cfg.outputs.script }}\`"
+            echo ""
+            echo "**Run:** [\`${{ github.run_id }}\`](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})"
+            echo "**Trigger:** \`${{ github.event_name }}\`"
+            echo "**Status:** \`${{ steps.run.outcome }}\`"
+            echo ""
+            echo "<details><summary>Output (last 200 lines)</summary>"
+            echo ""
+            echo '```'
+            tail -n 200 /tmp/diag.log 2>/dev/null || echo "(no output captured)"
+            echo '```'
+            echo ""
+            echo "</details>"
+          } > /tmp/comment.md
+          cat /tmp/comment.md
+
+      - name: Post comment on PR
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ steps.cfg.outputs.target_pr }}
+        run: |
+          gh pr comment "$PR" --repo "${{ github.repository }}" --body-file /tmp/comment.md
+
+      - name: Propagate script exit code
+        if: always()
+        run: |
+          if [ "${{ steps.run.outcome }}" != "success" ]; then
+            echo "::error::diagnostic script failed; see PR comment + run log"
+            exit 1
+          fi

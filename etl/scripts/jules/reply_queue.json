@@ -1,0 +1,20 @@
+[
+  {
+    "id": "stop-duplicate-w41-2026-05-08",
+    "type": "send_message",
+    "session_id": "9821037508487127161",
+    "message": "STOP — this is a duplicate spawn. The W4.1 work was already completed by an earlier session (17972302499631745815) and merged in commit 3d2c4c1 (PR #32). Please do NOT make any code changes, do NOT commit, and do NOT open a PR. Acknowledge this message and exit.",
+    "_note": "v1alpha API has no cancel endpoint — using sendMessage to ask Jules to stop. Manual fallback: cancel from jules.google.com/task/9821037508487127161",
+    "_sent": true,
+    "_sent_at": "2026-05-08"
+  },
+  {
+    "id": "submit-w21-dup-2026-05-08",
+    "type": "send_message",
+    "session_id": "15401189606457262357",
+    "message": "Looks good — please submit the PR now. Open it against `claude/ficha-perf-plan-v2` (NOT main). PR title: `perf(etl): W2.1 encoding sniff in _create_table_from_csvs (Phase 4 PR 4a) — duplicate of original session, may be closed in favor of 17967018632018838778`. Mention this is a duplicate spawn so the maintainer can close as dup if the parallel session finishes too.",
+    "_note": "Inspect of session 15401189606457262357 showed AWAITING_USER_FEEDBACK with the work already done. Telling it to submit so the maintainer can compare against the parallel session 17967018632018838778's output.",
+    "_sent": true,
+    "_sent_at": "2026-05-08"
+  }
+]

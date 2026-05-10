@@ -1,0 +1,166 @@
+name: Claude — Jules inspect (on-demand session snapshot via verne)
+
+# On-demand inspector: dump full state + activities of a specific
+# Jules session and upload as artifact. Useful when:
+#   - The poller hasn't caught a session in ATTENTION_STATES yet
+#     (e.g., AWAITING_USER_INPUT after a sendMessage prompted a
+#     question)
+#   - Need to debug a session that completed before the poller
+#     came online (out of baseline window)
+#
+# Uses franklinbaldo/verne CLI via uvx so we don't pin verne as a
+# repo dep — `uvx --from git+...` runs it ephemerally.
+#
+# Trigger: workflow_dispatch with session_id, or push to
+# etl/scripts/jules/inspect_request.json (idempotent — entries
+# with _done are skipped).
+
+on:
+  workflow_dispatch:
+    inputs:
+      session_id:
+        description: 'Jules session ID to inspect'
+        required: true
+        type: string
+      target_pr:
+        description: 'PR number to comment on (default 31)'
+        required: false
+        type: string
+        default: '31'
+  push:
+    branches: [claude/ficha-perf-plan-v2]
+    paths:
+      - 'etl/scripts/jules/inspect_request.json'
+      - '.github/workflows/claude-jules-inspect.yml'
+
+permissions:
+  contents: read
+  pull-requests: write
+  actions: write
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+
+      - name: Resolve session IDs
+        id: cfg
+        run: |
+          IDS=""
+          if [ -n "${{ inputs.session_id }}" ]; then
+            IDS="${{ inputs.session_id }}"
+          fi
+          if [ -f etl/scripts/jules/inspect_request.json ]; then
+            # Append every entry without _done
+            FILE_IDS=$(python3 -c "
+          import json
+          data = json.load(open('etl/scripts/jules/inspect_request.json'))
+          for e in data:
+              if not e.get('_done'):
+                  print(e['session_id'])
+          ")
+            IDS="$IDS $FILE_IDS"
+          fi
+          IDS=$(echo "$IDS" | tr ' ' '\n' | sort -u | tr '\n' ' ')
+          echo "Session IDs to inspect: $IDS"
+          echo "ids=$IDS" >> "$GITHUB_OUTPUT"
+
+      - name: Run verne via uvx
+        if: steps.cfg.outputs.ids != ''
+        env:
+          JULES_API_KEY: ${{ secrets.JULES_API_KEY }}
+          VERNE_HTTP_TIMEOUT: '60'
+          PYTHONIOENCODING: utf-8
+          PYTHONUTF8: '1'
+        run: |
+          mkdir -p artifacts
+          for SID in ${{ steps.cfg.outputs.ids }}; do
+            echo "::group::session $SID"
+            mkdir -p "artifacts/$SID"
+            # `verne sessions show <id> --json` includes activities in the dump
+            uvx --from "git+https://github.com/franklinbaldo/verne" \
+              verne sessions show "$SID" --activities --json \
+              > "artifacts/$SID/session.json" 2> "artifacts/$SID/stderr.log" || \
+              echo "verne failed for $SID — stderr: $(cat artifacts/$SID/stderr.log)"
+            # Compact summary readable without parsing JSON
+            python3 -c "
+          import json, sys
+          try:
+              # strict=False permits literal control chars (newlines, tabs)
+              # inside JSON string values — verne's dump can include
+              # bashOutput.output / unidiffPatch with raw newlines.
+              d = json.loads(open('artifacts/$SID/session.json').read(), strict=False)
+          except Exception as e:
+              print(f'parse error: {e}'); sys.exit(0)
+          state = d.get('state', '?')
+          title = d.get('title', '')
+          acts = d.get('activities', [])
+          print(f'# Session $SID')
+          print(f'**State:** {state}')
+          print(f'**Title:** {title}')
+          print(f'**Activities:** {len(acts)}')
+          # Latest 5 activities
+          print()
+          print('## Latest activities (newest first)')
+          for a in acts[:5]:
+              when = a.get('createTime', '')
+              orig = a.get('originator', '?')
+              kind = next((k for k in a if k not in ('id','name','createTime','originator','artifacts')), '?')
+              print(f'- [{when}] {orig}: {kind}')
+              if 'agentMessage' in a:
+                  txt = a['agentMessage'].get('text', '')[:600]
+                  print(f'  > {txt}')
+              if 'progressUpdated' in a:
+                  pu = a['progressUpdated']
+                  print(f'  - title: {pu.get(\"title\", \"\")[:120]}')
+                  if pu.get('description'):
+                      print(f'  - desc: {pu[\"description\"][:300]}')
+              if 'planGenerated' in a:
+                  steps = a['planGenerated'].get('plan', {}).get('steps', [])
+                  for s in steps:
+                      print(f'  {s.get(\"index\", 0)+1}. {s.get(\"title\", \"\")[:120]}')
+          " > "artifacts/$SID/SUMMARY.md"
+            cat "artifacts/$SID/SUMMARY.md"
+            echo "::endgroup::"
+          done
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: jules-inspect-${{ github.run_id }}
+          path: artifacts/
+          retention-days: 14
+          if-no-files-found: warn
+
+      - name: Post PR comment with summary
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ inputs.target_pr || '31' }}
+        run: |
+          {
+            echo "## 🔍 Jules inspect"
+            echo ""
+            echo "Run: [\`${{ github.run_id }}\`](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})"
+            echo ""
+            for d in artifacts/*/; do
+              SID=$(basename "$d")
+              echo "### Session \`$SID\`"
+              echo ""
+              if [ -f "$d/SUMMARY.md" ]; then
+                cat "$d/SUMMARY.md"
+              else
+                echo "(no summary captured — see uploaded artifact)"
+              fi
+              echo ""
+            done
+          } > /tmp/inspect_comment.md
+          gh pr comment "$PR" --repo "${{ github.repository }}" --body-file /tmp/inspect_comment.md || true

@@ -1,0 +1,111 @@
+[
+  {
+    "id": "w41-2026-05-08",
+    "title": "W4.1 length-14 branch in SearchCNPJ",
+    "prompt_file": "w41_search_length14_branch",
+    "starting_branch": "claude/ficha-perf-plan-v2",
+    "automation_mode": "AUTO_CREATE_PR",
+    "require_plan_approval": false,
+    "_done": "merged in 3d2c4c1; entry kept for de-dup history"
+  },
+  {
+    "id": "w21-2026-05-08",
+    "title": "W2.1 encoding sniff in _create_table_from_csvs",
+    "prompt_file": "w21_encoding_sniff",
+    "starting_branch": "claude/ficha-perf-plan-v2",
+    "automation_mode": "AUTO_CREATE_PR",
+    "require_plan_approval": false,
+    "_done": "PR #33 squash-merged as a116414f; dup PR #38 closed",
+    "_session_id": "17967018632018838778"
+  },
+  {
+    "id": "w10-2026-05-08",
+    "title": "W10 per-lookup parquets + attachLookups",
+    "prompt_file": "w10_per_lookup_parquets",
+    "starting_branch": "claude/ficha-perf-plan-v2",
+    "automation_mode": "AUTO_CREATE_PR",
+    "require_plan_approval": false,
+    "_done": "PR #34 squash-merged as 76960235; dup PR #35 closed",
+    "_session_id": "4741416671646003104"
+  },
+  {
+    "id": "w11-2026-05-08",
+    "title": "W11 cnpj_cnaes.parquet position-aware association",
+    "prompt_file": "w11_cnpj_cnaes",
+    "starting_branch": "claude/ficha-perf-plan-v2",
+    "automation_mode": "AUTO_CREATE_PR",
+    "require_plan_approval": false,
+    "_done": "PR #36 merged locally as df5c72d1 (4-file conflict resolution with W12)",
+    "_session_id": "15310983401866107420"
+  },
+  {
+    "id": "w12-2026-05-08",
+    "title": "W12 cnpj_contatos.parquet reverse contact lookup",
+    "prompt_file": "w12_cnpj_contatos",
+    "starting_branch": "claude/ficha-perf-plan-v2",
+    "automation_mode": "AUTO_CREATE_PR",
+    "require_plan_approval": false,
+    "_done": "PR #37 squash-merged as 9393797e",
+    "_session_id": "7189397436599279392"
+  },
+  {
+    "id": "verne-strict-json-2026-05-08",
+    "title": "Verne — emit strict JSON from --json flags",
+    "prompt_file": "verne_strict_json",
+    "source": "sources/github/franklinbaldo/verne",
+    "starting_branch": "main",
+    "automation_mode": "AUTO_CREATE_PR",
+    "require_plan_approval": false,
+    "_done": "session COMPLETED 2026-05-09 01:39; PR opened on franklinbaldo/verne",
+    "_session_id": "832015432790769359"
+  },
+  {
+    "id": "verne-wait-cmd-2026-05-08",
+    "title": "Verne — verne sessions wait (block until state change)",
+    "prompt_file": "verne_wait_until_attention",
+    "source": "sources/github/franklinbaldo/verne",
+    "starting_branch": "main",
+    "automation_mode": "AUTO_CREATE_PR",
+    "require_plan_approval": false,
+    "_done": "session COMPLETED 2026-05-09 01:28; PR opened on franklinbaldo/verne",
+    "_session_id": "9331275596781491185"
+  },
+  {
+    "id": "verne-activity-summary-2026-05-08",
+    "title": "Verne — compact activity summary by default",
+    "prompt_file": "verne_activity_summary",
+    "source": "sources/github/franklinbaldo/verne",
+    "starting_branch": "main",
+    "automation_mode": "AUTO_CREATE_PR",
+    "require_plan_approval": false,
+    "_done": "session COMPLETED 2026-05-09 01:27; PR opened on franklinbaldo/verne",
+    "_session_id": "9344198573087876860"
+  },
+  {
+    "id": "w42-2026-05-09",
+    "title": "W4.2 cnpjs_summary.parquet split",
+    "prompt_file": "w42_cnpjs_summary_split",
+    "starting_branch": "claude/ficha-perf-plan-v2",
+    "automation_mode": "AUTO_CREATE_PR",
+    "require_plan_approval": false,
+    "_spawning": "11140020776141276886"
+  },
+  {
+    "id": "playwright-e2e-2026-05-09",
+    "title": "Hardening — Playwright e2e for analytical parquets",
+    "prompt_file": "playwright_e2e_analytical_parquets",
+    "starting_branch": "claude/ficha-perf-plan-v2",
+    "automation_mode": "AUTO_CREATE_PR",
+    "require_plan_approval": false,
+    "_spawning": "445481388064792178"
+  },
+  {
+    "id": "adrs-new-parquets-2026-05-09",
+    "title": "Hardening — ADRs 0019-0022 for new analytical parquets",
+    "prompt_file": "adrs_for_new_parquets",
+    "starting_branch": "claude/ficha-perf-plan-v2",
+    "automation_mode": "AUTO_CREATE_PR",
+    "require_plan_approval": false,
+    "_spawning": "14451103043257352139"
+  }
+]

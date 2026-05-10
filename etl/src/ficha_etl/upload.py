@@ -25,6 +25,7 @@ import internetarchive as ia
 
 from .mirror import item_id
 from .sources import canonical_inventory, is_valid_month
+from .transform import _LOOKUP_KINDS
 from . import upstream
 
 log = logging.getLogger(__name__)
@@ -382,6 +383,9 @@ def upload_outputs(
         "socios.parquet": output_dir / "socios.parquet",
         "lookups.json": output_dir / "lookups.json",
     }
+
+    for kind in _LOOKUP_KINDS:
+        outputs[f"lookups/{kind}.parquet"] = output_dir / "lookups" / f"{kind}.parquet"
 
     missing = [name for name, path in outputs.items() if not path.exists()]
     if missing:
