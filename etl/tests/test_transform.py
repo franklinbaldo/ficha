@@ -527,7 +527,9 @@ def test_transform_snapshot_writes_lookups_and_4_parquets(tmp_path, all_zips_dir
         for kind in transform._LOOKUP_KINDS:
             pq_path = output_dir / "lookups" / f"{kind}.parquet"
             assert pq_path.exists()
-            rows = con.execute(f"SELECT codigo, descricao, descricao_normalizada FROM '{pq_path}' ORDER BY codigo").fetchall()
+            rows = con.execute(
+                f"SELECT codigo, descricao, descricao_normalizada FROM '{pq_path}' ORDER BY codigo"
+            ).fetchall()
             expected_fixture = sorted(LOOKUP_FIXTURES[kind])
             assert len(rows) == len(expected_fixture)
             for i, (expected_codigo, expected_descricao) in enumerate(expected_fixture):
