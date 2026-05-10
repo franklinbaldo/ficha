@@ -80,5 +80,29 @@
     "require_plan_approval": false,
     "_done": "session COMPLETED 2026-05-09 01:27; PR opened on franklinbaldo/verne",
     "_session_id": "9344198573087876860"
+  },
+  {
+    "id": "w42-2026-05-09",
+    "title": "W4.2 cnpjs_summary.parquet split",
+    "prompt_file": "w42_cnpjs_summary_split",
+    "starting_branch": "claude/ficha-perf-plan-v2",
+    "automation_mode": "AUTO_CREATE_PR",
+    "require_plan_approval": false
+  },
+  {
+    "id": "playwright-e2e-2026-05-09",
+    "title": "Hardening — Playwright e2e for analytical parquets",
+    "prompt_file": "playwright_e2e_analytical_parquets",
+    "starting_branch": "claude/ficha-perf-plan-v2",
+    "automation_mode": "AUTO_CREATE_PR",
+    "require_plan_approval": false
+  },
+  {
+    "id": "adrs-new-parquets-2026-05-09",
+    "title": "Hardening — ADRs 0019-0022 for new analytical parquets",
+    "prompt_file": "adrs_for_new_parquets",
+    "starting_branch": "claude/ficha-perf-plan-v2",
+    "automation_mode": "AUTO_CREATE_PR",
+    "require_plan_approval": false
   }
 ]
