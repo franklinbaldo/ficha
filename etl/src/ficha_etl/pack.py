@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import zipfile
 from pathlib import Path
 from typing import Iterator
@@ -88,9 +89,6 @@ def _cpf_meio(v) -> int:
     digits = "".join(c for c in s if c.isdigit())
     if len(digits) == 6:
         return int(digits)
-    # fallback: try to extract any 6-digit run
-    import re
-
     m = re.search(r"\d{6}", _str(v))
     return int(m.group()) if m else 0
 
@@ -107,7 +105,12 @@ def _porte(v) -> int:
 
 
 def _tipo_estab(v) -> int:
-    return TipoEstabelecimento.MATRIZ if _int(v) == 1 else TipoEstabelecimento.FILIAL
+    code = _int(v)
+    if code == 1:
+        return TipoEstabelecimento.MATRIZ
+    if code == 2:
+        return TipoEstabelecimento.FILIAL
+    return TipoEstabelecimento.TIPO_ESTAB_UNSPECIFIED
 
 
 def _tipo_socio(v) -> int:
