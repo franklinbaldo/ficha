@@ -145,7 +145,7 @@ def fetch_sample(month: str, uf: str, n: int) -> list[dict]:
         so AS (
             SELECT
                 cnpj_base,
-                list({{
+                list({
                     'nome':                                     nome_socio_razao_social,
                     'qualificacao_codigo':                      qualificacao_codigo,
                     'qualificacao_descricao':                   qualificacao_descricao,
@@ -158,7 +158,7 @@ def fetch_sample(month: str, uf: str, n: int) -> list[dict]:
                     'representante_legal_cpf':                  representante_legal_cpf,
                     'representante_legal_nome':                 representante_legal_nome,
                     'representante_legal_qualificacao_codigo':  representante_legal_qualificacao_codigo,
-                }}) AS socios
+                }) AS socios
             FROM read_parquet(?)
             WHERE cnpj_base IN (SELECT DISTINCT cnpj_base FROM s)
             GROUP BY cnpj_base
@@ -169,7 +169,7 @@ def fetch_sample(month: str, uf: str, n: int) -> list[dict]:
             s.cnae_principal_codigo, s.uf, s.municipio_codigo,
             s.logradouro, s.numero, s.bairro, s.cep,
             s.opcao_simples, s.opcao_mei, s.capital_social,
-            {{
+            {
                 'razao_social':                  r.razao_social,
                 'natureza_juridica_codigo':      r.natureza_juridica_codigo,
                 'porte_empresa':                 r.porte_empresa,
@@ -179,7 +179,7 @@ def fetch_sample(month: str, uf: str, n: int) -> list[dict]:
                 'uf_matriz':                     r.uf_matriz,
                 'municipio_matriz_codigo':       r.municipio_matriz_codigo,
                 'data_inicio_atividade_matriz':  r.data_inicio_atividade_matriz,
-            }} AS raiz,
+            } AS raiz,
             so.socios AS socios
         FROM s
         LEFT JOIN r  USING (cnpj_base)

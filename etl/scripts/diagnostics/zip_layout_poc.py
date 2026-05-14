@@ -71,7 +71,7 @@ def fetch_company_sample(month: str, uf: str, n: int) -> list[dict]:
         estabs AS (
             SELECT
                 cnpj_base,
-                list({{
+                list({
                     'cnpj_ordem': cnpj_ordem,
                     'cnpj_dv': cnpj_dv,
                     'identificador_matriz_filial': identificador_matriz_filial,
@@ -107,7 +107,7 @@ def fetch_company_sample(month: str, uf: str, n: int) -> list[dict]:
                     'opcao_mei': opcao_mei,
                     'data_opcao_mei': data_opcao_mei,
                     'data_exclusao_mei': data_exclusao_mei
-                }}) AS estabelecimentos
+                }) AS estabelecimentos
             FROM read_parquet(?)
             WHERE cnpj_base IN (SELECT cnpj_base FROM bases)
             GROUP BY cnpj_base
@@ -115,7 +115,7 @@ def fetch_company_sample(month: str, uf: str, n: int) -> list[dict]:
         sos AS (
             SELECT
                 cnpj_base,
-                list({{
+                list({
                     'tipo': tipo,
                     'nome_socio_razao_social': nome_socio_razao_social,
                     'cpf_mascarado': cpf_mascarado,
@@ -127,7 +127,7 @@ def fetch_company_sample(month: str, uf: str, n: int) -> list[dict]:
                     'representante_legal_cpf': representante_legal_cpf,
                     'representante_legal_nome': representante_legal_nome,
                     'representante_legal_qualificacao_codigo': representante_legal_qualificacao_codigo
-                }}) AS socios
+                }) AS socios
             FROM read_parquet(?)
             WHERE cnpj_base IN (SELECT cnpj_base FROM bases)
             GROUP BY cnpj_base
