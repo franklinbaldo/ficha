@@ -63,20 +63,79 @@ def section(title: str) -> None:
     print("=" * 72)
 
 
+def _ia_session():
+    """Authenticated `internetarchive` session if IA_ACCESS_KEY/SECRET
+    are set, otherwise None. Authenticated scrapes/metadata see items
+    immediately without waiting for the public search index."""
+    import internetarchive as ia
+
+    access = os.environ.get("IA_ACCESS_KEY", "").strip()
+    secret = os.environ.get("IA_SECRET_KEY", "").strip()
+    if access and secret:
+        log.info("using authenticated IA session")
+        return ia.get_session(config={"s3": {"access": access, "secret": secret}})
+    log.info("no IA_ACCESS_KEY/IA_SECRET_KEY in env — anonymous session")
+    return ia.get_session()
+
+
 def ia_inventory() -> list[dict]:
-    section("IA inventory: FICHA project items")
-    url = (
-        "https://archive.org/advancedsearch.php?"
-        "q=creator%3Afranklinbaldo+AND+identifier%3Aficha-*"
-        "&fl[]=identifier&fl[]=item_size&fl[]=publicdate&fl[]=files_count"
-        "&output=json&rows=200&sort[]=identifier+desc"
-    )
-    req = urllib.request.Request(url, headers=UA)
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        data = json.loads(resp.read())
-    raw = data.get("response", {}).get("docs", [])
-    docs = [d for d in raw if _FICHA_ID_RE.match(d.get("identifier", ""))]
-    print(f"creator=franklinbaldo: {len(raw)} items; ficha-YYYY-MM: {len(docs)}")
+    """Authenticated scrape for FICHA items. Falls back to per-month
+    direct metadata probes for the last 12 months so we still find
+    items that the public search index hasn't surfaced yet."""
+    section("IA inventory: FICHA project items (authenticated scrape)")
+    sess = _ia_session()
+    docs: list[dict] = []
+    try:
+        for entry in sess.search_items(
+            "creator:franklinbaldo AND identifier:ficha-*",
+            fields=["identifier", "item_size", "publicdate", "files_count"],
+        ):
+            if _FICHA_ID_RE.match(entry.get("identifier", "")):
+                docs.append(dict(entry))
+    except Exception as exc:
+        log.warning("scrape search failed: %s — falling back to direct metadata probes", exc)
+
+    print(f"scrape returned {len(docs)} ficha-YYYY-MM items")
+
+    # Direct metadata probe — bypasses *all* indexing.
+    section("Direct metadata probe (last 12 months)")
+    from datetime import date
+
+    today = date.today()
+    seen = {d.get("identifier") for d in docs}
+    for offset in range(0, 13):
+        # walk backwards from current month
+        y = today.year
+        m = today.month - offset
+        while m <= 0:
+            m += 12
+            y -= 1
+        ident = f"ficha-{y:04d}-{m:02d}"
+        if ident in seen:
+            continue
+        url = f"https://archive.org/metadata/{ident}"
+        try:
+            req = urllib.request.Request(url, headers=UA)
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                meta = json.loads(resp.read())
+        except Exception as exc:
+            print(f"  {ident:20s}  metadata fetch failed: {exc}")
+            continue
+        files = meta.get("files") or []
+        if not files and not meta.get("metadata"):
+            print(f"  {ident:20s}  (no such item)")
+            continue
+        item_meta = meta.get("metadata") or {}
+        size = sum(int(f.get("size") or 0) for f in files)
+        docs.append({
+            "identifier": ident,
+            "item_size": size,
+            "files_count": len(files),
+            "publicdate": item_meta.get("publicdate", "?"),
+        })
+        seen.add(ident)
+        print(f"  {ident:20s}  FOUND via metadata  ({len(files)} files, {size/(1024**3):.2f} GB)")
+
     for d in sorted(docs, key=lambda d: d.get("identifier", "")):
         size_gb = (d.get("item_size") or 0) / (1024**3)
         print(f"  {d.get('identifier'):20s}  {size_gb:7.2f} GB  {d.get('files_count','?'):>5} files")
@@ -136,6 +195,48 @@ def probe_artifacts(month: str, files: dict[str, dict]) -> dict:
         print(f"  {name:36s}  status={h.get('status')}  {size_mb:8.2f} MB  ranges={ar}")
         report[name] = {"present": present, "url": url, **h}
     return report
+
+
+def probe_raw_zips(month: str, files: dict[str, dict]) -> dict:
+    """Inventory the raw RFB ZIPs mirrored at `ficha-{month}/raw/*.zip`,
+    plus HEAD the first one to confirm Accept-Ranges / Content-Length."""
+    section(f"Raw RFB ZIPs at ficha-{month}/raw/")
+    base = f"https://archive.org/download/ficha-{month}"
+    raw_files = {name: meta for name, meta in files.items() if name.startswith("raw/") and name.endswith(".zip")}
+    print(f"  {len(raw_files)} raw ZIP(s) in item metadata")
+
+    by_kind: dict[str, list[str]] = {}
+    for name in sorted(raw_files):
+        # raw/Empresas3.zip → kind=Empresas
+        leaf = name.removeprefix("raw/").removesuffix(".zip").rstrip("0123456789")
+        by_kind.setdefault(leaf or "?", []).append(name)
+    for kind, names in sorted(by_kind.items()):
+        total_mb = sum(int(raw_files[n].get("size") or 0) for n in names) / (1024**2)
+        print(f"    {kind:18s}  {len(names):>2} ZIP(s)  {total_mb:>9.1f} MB")
+
+    if not raw_files:
+        return {"count": 0}
+
+    # HEAD the smallest non-Estabelecimento zip first (lookups), or the
+    # first one alphabetically as fallback. We want to confirm IA serves
+    # Range requests on the ZIPs.
+    probe_name = sorted(raw_files, key=lambda n: int(raw_files[n].get("size") or 0))[0]
+    probe_url = f"{base}/{probe_name}"
+    h = head(probe_url)
+    print(f"  HEAD {probe_name}: status={h.get('status')}  size={h.get('size',0)/(1024**2):.2f} MB  ranges={h.get('accept_ranges','?')}")
+
+    # IA serves transparent unzip via `<zip>/<member>` paths. Try
+    # listing members by hitting the directory-like URL (returns HTML)
+    # — we just check status + content-type.
+    listing_url = f"{probe_url}/"
+    h2 = head(listing_url)
+    print(f"  HEAD {probe_name}/ (unzip listing): status={h2.get('status')}  content_type={h2.get('content_type')}")
+
+    return {
+        "count": len(raw_files),
+        "by_kind": {k: len(v) for k, v in by_kind.items()},
+        "probe": {"name": probe_name, "head": h, "listing_head": h2},
+    }
 
 
 def duckdb_probes(month: str, report: dict) -> dict:
@@ -241,6 +342,14 @@ def main() -> int:
         return 1
 
     report["artifacts"] = probe_artifacts(month, files)
+
+    try:
+        report["raw_zips"] = probe_raw_zips(month, files)
+    except Exception as exc:
+        log.exception("probe_raw_zips failed")
+        print(f"::error::probe_raw_zips failed: {exc}")
+        failures.append("raw_zips")
+        report["raw_zips"] = {"error": str(exc)}
 
     for name in CANONICAL_ARTIFACTS:
         if not report["artifacts"].get(name, {}).get("present"):

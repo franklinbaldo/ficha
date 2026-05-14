@@ -67,14 +67,25 @@ jobs:
         id: cfg
         run: |
           SCRIPT="${{ inputs.script }}"
-          [ -z "$SCRIPT" ] && SCRIPT="phase1"
           TARGET_PR="${{ inputs.target_pr }}"
+          # Branch-aware defaults on push: this branch runs the IA
+          # practicality probe and comments on its own PR (#41). Force
+          # fail at the end so a subscribed Claude session is notified
+          # via the github-webhook-activity event even on success.
+          FORCE_FAIL=0
+          if [ "$GITHUB_EVENT_NAME" = "push" ] && [ "$GITHUB_REF_NAME" = "claude/plan-next-steps-l7Dt6" ]; then
+            [ -z "$SCRIPT" ] && SCRIPT="ia_practicality"
+            [ -z "$TARGET_PR" ] && TARGET_PR="41"
+            FORCE_FAIL=1
+          fi
+          [ -z "$SCRIPT" ] && SCRIPT="phase1"
           [ -z "$TARGET_PR" ] && TARGET_PR="31"
           MONTH="${{ inputs.month }}"
           echo "script=$SCRIPT" >> "$GITHUB_OUTPUT"
           echo "target_pr=$TARGET_PR" >> "$GITHUB_OUTPUT"
           echo "month=$MONTH" >> "$GITHUB_OUTPUT"
-          echo "Resolved: script=$SCRIPT target_pr=$TARGET_PR month='$MONTH'"
+          echo "force_fail=$FORCE_FAIL" >> "$GITHUB_OUTPUT"
+          echo "Resolved: script=$SCRIPT target_pr=$TARGET_PR month='$MONTH' force_fail=$FORCE_FAIL"
 
       - name: Run diagnostic script
         id: run
@@ -137,5 +148,9 @@ jobs:
         run: |
           if [ "${{ steps.run.outcome }}" != "success" ]; then
             echo "::error::diagnostic script failed; see PR comment + run log"
+            exit 1
+          fi
+          if [ "${{ steps.cfg.outputs.force_fail }}" = "1" ]; then
+            echo "::notice::force_fail=1 — exiting non-zero to wake the subscribed Claude session"
             exit 1
           fi
