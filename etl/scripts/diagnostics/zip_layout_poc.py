@@ -61,12 +61,12 @@ def fetch_company_sample(month: str, uf: str, n: int) -> list[dict]:
     log.info("fetching %d empresas (company-shaped) from uf=%s on %s", n, uf, month)
     t0 = time.monotonic()
     rows = con.execute(
-        f"""
+        """
         WITH bases AS (
             SELECT DISTINCT cnpj_base
             FROM read_parquet(?)
             WHERE uf = ?
-            LIMIT {n}
+            LIMIT ?
         ),
         estabs AS (
             SELECT
@@ -150,9 +150,10 @@ def fetch_company_sample(month: str, uf: str, n: int) -> list[dict]:
         LEFT JOIN sos s USING (cnpj_base)
         """,
         [
-            f"{base}/cnpjs.parquet",
+            f"{base}/cnpjs.parquet",  # bases CTE
             uf,
-            f"{base}/cnpjs.parquet",
+            n,  # LIMIT
+            f"{base}/cnpjs.parquet",  # estabs CTE
             f"{base}/socios.parquet",
             f"{base}/raizes.parquet",
         ],

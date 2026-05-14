@@ -122,14 +122,14 @@ def fetch_sample(month: str, uf: str, n: int) -> list[dict]:
     log.info("fetching %d empresas from uf=%s on %s", n, uf, month)
     t0 = time.monotonic()
     rows = con.execute(
-        f"""
+        """
         WITH bases AS (
             -- Codex P1 on PR #41: apply LIMIT to *distinct* cnpj_base, not
             -- to estabelecimento rows. Multi-estab companies otherwise
             -- consume multiple LIMIT slots and the sample is skewed.
             SELECT DISTINCT cnpj_base FROM read_parquet(?)
             WHERE uf = ?
-            LIMIT {n}
+            LIMIT ?
         ),
         s AS (
             -- For each chosen cnpj_base, take *all* its estabs; downstream
@@ -188,6 +188,7 @@ def fetch_sample(month: str, uf: str, n: int) -> list[dict]:
         [
             f"{base}/cnpjs.parquet",  # bases CTE: DISTINCT cnpj_base
             uf,
+            n,  # LIMIT
             f"{base}/cnpjs.parquet",  # s CTE: estab rows for chosen bases
             f"{base}/raizes.parquet",
             f"{base}/socios.parquet",
