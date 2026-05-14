@@ -80,7 +80,7 @@ jobs:
             # default to the per-company doc-format POC so this push
             # exercises that. Override with workflow_dispatch.script if
             # you want to re-run the practicality probe.
-            [ -z "$SCRIPT" ] && SCRIPT="doc_format_poc"
+            [ -z "$SCRIPT" ] && SCRIPT="zip_layout_poc"
             [ -z "$TARGET_PR" ] && TARGET_PR="41"
           fi
           [ -z "$SCRIPT" ] && SCRIPT="phase1"
