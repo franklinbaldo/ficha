@@ -349,9 +349,27 @@ def main() -> int:
     n = int(os.environ.get("SAMPLE_SIZE", str(SAMPLE_SIZE)))
 
     section(f"doc_format_poc — month={month} uf={uf} n={n}")
-    docs = fetch_sample(month, uf, n)
-    if not docs:
+    raw_docs = fetch_sample(month, uf, n)
+    if not raw_docs:
         print("::error::no docs returned from sample query")
+        return 1
+
+    # Codex P1 on PR #41: fetch_sample's SQL is `LIMIT n` over estabelecimentos,
+    # so empresas with multiple estabs appear N times — each copy carrying
+    # the same socios list. That double-counts payload bytes in the
+    # format comparison and makes the 70M extrapolation off. Dedupe in
+    # Python by cnpj_base, keeping the first row seen per empresa.
+    seen: set = set()
+    docs: list = []
+    for d in raw_docs:
+        cb = d.get("cnpj_base")
+        if not cb or cb in seen:
+            continue
+        seen.add(cb)
+        docs.append(d)
+    log.info("deduplicated %d -> %d distinct cnpj_base", len(raw_docs), len(docs))
+    if not docs:
+        print("::error::no distinct cnpj_base in sample")
         return 1
 
     n_socios = [len(d.get("socios") or []) for d in docs]

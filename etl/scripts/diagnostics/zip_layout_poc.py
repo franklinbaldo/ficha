@@ -284,12 +284,20 @@ def main() -> int:
         zbuf = build_zip(payloads, comp, layout, ext)
         build_s = time.monotonic() - t0
         eocd = parse_eocd(zbuf)
+        # Sum actual compressed bytes per entry (Codex P2: local_size
+        # mixes compressed payload + headers; subtracting uncompressed
+        # payload gives bogus / negative "overhead" for DEFLATE).
+        import io as _io
+
+        with zipfile.ZipFile(_io.BytesIO(zbuf), "r") as _zf:
+            compressed_total = sum(info.compress_size for info in _zf.infolist())
         results.append(
             {
                 "label": label,
                 "size": len(zbuf),
                 "cd_size": eocd.get("cd_size", 0),
                 "local_size": eocd.get("local_headers_size", 0),
+                "compressed_total": compressed_total,
                 "entries": eocd.get("entries_total", 0),
                 "build_s": build_s,
             }
@@ -310,12 +318,13 @@ def main() -> int:
         )
 
     section("Per-entry overhead (ZIP plumbing per file)")
+    # Overhead = total ZIP size - actual compressed payload bytes.
+    # Includes local file headers, central directory entries, EOCD, and
+    # any per-entry extra fields. Independent of compression because
+    # compressed_total tracks what's actually on disk per entry.
     for r in results:
-        per_entry = (
-            r["cd_size"]
-            + r["local_size"]
-            - sum(len(p) for p in (pb_payloads if "PB" in r["label"] else json_payloads).values())
-        ) / max(r["entries"], 1)
+        plumbing = r["size"] - r["compressed_total"]
+        per_entry = plumbing / max(r["entries"], 1)
         print(f"  {r['label']:30s}  {per_entry:6.1f} B/entry")
 
     section("Extrapolation to 67M cnpj_base (raízes)")
