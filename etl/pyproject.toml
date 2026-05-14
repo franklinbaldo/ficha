@@ -15,9 +15,10 @@ dependencies = [
     "msgpack>=1.0.0",
     "pure-protobuf>=3.0.0",
     # pack.py (per-company ZIP producer) uses google.protobuf runtime.
-    # grpcio-tools (dev) bundles protoc + this same library, but the
-    # generated _pb2.py needs it at runtime too.
-    "protobuf>=5.0.0",
+    # Floor must match the generated company_pb2.py runtime version check
+    # (currently 6.31.1) — installing an older protobuf raises ImportError
+    # at module load before any ETL code runs.
+    "protobuf>=6.31.1",
 ]
 
 [project.optional-dependencies]

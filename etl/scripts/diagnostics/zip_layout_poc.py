@@ -28,8 +28,10 @@ import time
 import zipfile
 from pathlib import Path
 
+import duckdb
+
 sys.path.insert(0, str(Path(__file__).parent))
-from doc_format_poc import fetch_sample  # noqa: E402
+from doc_format_poc import _pick_mem_gb  # noqa: E402
 
 from ficha_etl.pack import cnpjpath, row_to_company
 
@@ -39,6 +41,125 @@ log = logging.getLogger(__name__)
 DEFAULT_MONTH = "2026-04"
 DEFAULT_UF = "RR"
 DEFAULT_N = 10_000
+
+
+def fetch_company_sample(month: str, uf: str, n: int) -> list[dict]:
+    """Pull a sample of N empresas (cnpj_base) from IA, returning rows
+    in the shape pack.row_to_company expects: top-level Company fields
+    plus `estabelecimentos` (list of struct) and `socios` (list of
+    struct) nested.
+
+    Strategy: pick N distinct cnpj_base from the chosen uf, then join
+    raizes/socios and group estabelecimentos into a list per cnpj_base.
+    """
+    base = f"https://archive.org/download/ficha-{month}"
+    con = duckdb.connect()
+    con.execute("INSTALL httpfs; LOAD httpfs;")
+    con.execute("SET enable_progress_bar=false;")
+    con.execute(f"SET memory_limit='{_pick_mem_gb()}GB';")
+
+    log.info("fetching %d empresas (company-shaped) from uf=%s on %s", n, uf, month)
+    t0 = time.monotonic()
+    rows = con.execute(
+        f"""
+        WITH bases AS (
+            SELECT DISTINCT cnpj_base
+            FROM read_parquet(?)
+            WHERE uf = ?
+            LIMIT {n}
+        ),
+        estabs AS (
+            SELECT
+                cnpj_base,
+                list({{
+                    'cnpj_ordem': cnpj_ordem,
+                    'cnpj_dv': cnpj_dv,
+                    'identificador_matriz_filial': identificador_matriz_filial,
+                    'nome_fantasia': nome_fantasia,
+                    'situacao_cadastral': situacao_cadastral,
+                    'data_situacao_cadastral': data_situacao_cadastral,
+                    'motivo_situacao_cadastral_codigo': motivo_situacao_cadastral_codigo,
+                    'situacao_especial': situacao_especial,
+                    'data_situacao_especial': data_situacao_especial,
+                    'data_inicio_atividade': data_inicio_atividade,
+                    'cnae_principal_codigo': cnae_principal_codigo,
+                    'cnaes_secundarios_codigos': cnae_secundario_codigos,
+                    'tipo_logradouro': tipo_logradouro,
+                    'logradouro': logradouro,
+                    'numero': numero,
+                    'complemento': complemento,
+                    'bairro': bairro,
+                    'cep': cep,
+                    'uf': uf,
+                    'municipio_codigo': municipio_codigo,
+                    'nome_cidade_exterior': nome_cidade_exterior,
+                    'pais_codigo': pais_codigo,
+                    'ddd_1': ddd_1,
+                    'telefone_1': telefone_1,
+                    'ddd_2': ddd_2,
+                    'telefone_2': telefone_2,
+                    'ddd_fax': ddd_fax,
+                    'fax': fax,
+                    'correio_eletronico': correio_eletronico,
+                    'opcao_simples': opcao_simples,
+                    'data_opcao_simples': data_opcao_simples,
+                    'data_exclusao_simples': data_exclusao_simples,
+                    'opcao_mei': opcao_mei,
+                    'data_opcao_mei': data_opcao_mei,
+                    'data_exclusao_mei': data_exclusao_mei
+                }}) AS estabelecimentos
+            FROM read_parquet(?)
+            WHERE cnpj_base IN (SELECT cnpj_base FROM bases)
+            GROUP BY cnpj_base
+        ),
+        sos AS (
+            SELECT
+                cnpj_base,
+                list({{
+                    'tipo': tipo,
+                    'nome_socio_razao_social': nome_socio_razao_social,
+                    'cpf_mascarado': cpf_mascarado,
+                    'cnpj_socio': cnpj_socio,
+                    'qualificacao_codigo': qualificacao_codigo,
+                    'data_entrada_sociedade': data_entrada_sociedade,
+                    'pais_codigo': pais_codigo,
+                    'faixa_etaria': faixa_etaria,
+                    'representante_legal_cpf': representante_legal_cpf,
+                    'representante_legal_nome': representante_legal_nome,
+                    'representante_legal_qualificacao_codigo': representante_legal_qualificacao_codigo
+                }}) AS socios
+            FROM read_parquet(?)
+            WHERE cnpj_base IN (SELECT cnpj_base FROM bases)
+            GROUP BY cnpj_base
+        )
+        SELECT
+            b.cnpj_base,
+            r.razao_social,
+            r.razao_social_normalizada,
+            r.natureza_juridica_codigo,
+            r.porte_empresa,
+            r.capital_social,
+            r.ente_federativo_responsavel,
+            r.qtd_estabelecimentos,
+            r.qtd_estabelecimentos_ativos,
+            e.estabelecimentos AS estabelecimentos,
+            s.socios AS socios
+        FROM bases b
+        LEFT JOIN read_parquet(?) r USING (cnpj_base)
+        LEFT JOIN estabs e USING (cnpj_base)
+        LEFT JOIN sos s USING (cnpj_base)
+        """,
+        [
+            f"{base}/cnpjs.parquet",
+            uf,
+            f"{base}/cnpjs.parquet",
+            f"{base}/socios.parquet",
+            f"{base}/raizes.parquet",
+        ],
+    ).fetchall()
+    cols = [d[0] for d in con.description]
+    log.info("fetched %d company-shaped rows in %.1fs", len(rows), time.monotonic() - t0)
+    return [dict(zip(cols, r)) for r in rows]
 
 
 def section(title: str) -> None:
@@ -110,7 +231,12 @@ def main() -> int:
     n = int(os.environ.get("SAMPLE_SIZE", str(DEFAULT_N)))
 
     section(f"zip_layout_poc — month={month} uf={uf} n={n}")
-    docs = fetch_sample(month, uf, n)
+    # fetch_company_sample returns one row per cnpj_base with nested
+    # estabelecimentos[] + socios[] — matching the shape row_to_company
+    # expects. Previous version used doc_format_poc.fetch_sample which
+    # is estabelecimento-shaped (flat) and dropped all estab fields from
+    # the PB payload, biasing the size comparison (Codex P1 on PR #41).
+    docs = fetch_company_sample(month, uf, n)
     if not docs:
         print("::error::no docs returned from sample query")
         return 1
@@ -118,14 +244,12 @@ def main() -> int:
     # Build payloads keyed by cnpj_base string (zero-padded 8 digits).
     # Uses the real schema from pack.row_to_company — same code path the
     # ETL will use in production.
-    seen: set[str] = set()
     pb_payloads: dict[str, bytes] = {}
     json_payloads: dict[str, bytes] = {}
     for d in docs:
         cb = str(d.get("cnpj_base") or "").zfill(8)
-        if cb in seen or cb == "00000000":
+        if cb == "00000000" or cb in pb_payloads:
             continue
-        seen.add(cb)
         company = row_to_company(d)
         pb_payloads[cb] = company.SerializeToString()
         json_payloads[cb] = json.dumps(d, default=str, separators=(",", ":")).encode()
