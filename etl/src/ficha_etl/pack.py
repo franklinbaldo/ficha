@@ -290,7 +290,10 @@ def pack_companies(
         )
 
     count = 0
-    seen_cnpj_bases: set[int] = set()
+    # O(1) duplicate guard: requires input sorted by cnpj_base (pack_from_parquets
+    # guarantees this via ORDER BY; external callers must sort too). A full set
+    # would grow to tens of millions of entries on production snapshots.
+    prev_cnpj_base: int | None = None
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     with zipfile.ZipFile(output_path, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
@@ -306,16 +309,16 @@ def pack_companies(
         # company docs
         for row in rows:
             company = row_to_company(row)
-            # Reject duplicate cnpj_base (Codex P2 on PR #41). zipfile
-            # silently writes both entries under the same name and
-            # different ZIP readers resolve the conflict differently —
-            # safer to fail at pack time than ship an ambiguous archive.
-            if company.cnpj_base in seen_cnpj_bases:
+            # Reject adjacent duplicate cnpj_base. zipfile silently writes
+            # both entries under the same name and different ZIP readers
+            # resolve the conflict differently — safer to fail at pack time.
+            # Input must be sorted by cnpj_base for this check to be complete.
+            if company.cnpj_base == prev_cnpj_base:
                 raise ValueError(
                     f"duplicate cnpj_base in input rows: {company.cnpj_base:08d} "
-                    f"— caller must group by cnpj_base before packing"
+                    f"— caller must sort and deduplicate by cnpj_base before packing"
                 )
-            seen_cnpj_bases.add(company.cnpj_base)
+            prev_cnpj_base = company.cnpj_base
             company.snapshot_yyyymm = snapshot_yyyymm
             pb_bytes = company.SerializeToString()
             zf.writestr(cnpjpath(company.cnpj_base), pb_bytes)
@@ -410,6 +413,7 @@ LEFT JOIN (
     FROM read_parquet(?)
     GROUP BY cnpj_base
 ) s USING (cnpj_base)
+ORDER BY r.cnpj_base
 """
 
 
