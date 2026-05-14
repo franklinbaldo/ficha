@@ -11,11 +11,13 @@ dependencies = [
     "httpx>=0.27.0",
     "internetarchive>=4.0.0",
     # Diagnostics-only: doc_format_poc compares JSON vs MessagePack vs
-    # Protobuf wire size for the per-company ZIP design. Cheap deps
-    # (msgpack is a C extension already in pyarrow's transitive set;
-    # pure-protobuf is pure-Python and has no codegen step).
+    # Protobuf wire size for the per-company ZIP design.
     "msgpack>=1.0.0",
     "pure-protobuf>=3.0.0",
+    # pack.py (per-company ZIP producer) uses google.protobuf runtime.
+    # grpcio-tools (dev) bundles protoc + this same library, but the
+    # generated _pb2.py needs it at runtime too.
+    "protobuf>=5.0.0",
 ]
 
 [project.optional-dependencies]

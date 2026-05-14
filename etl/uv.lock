@@ -167,6 +167,7 @@ dependencies = [
     { name = "httpx" },
     { name = "internetarchive" },
     { name = "msgpack" },
+    { name = "protobuf" },
     { name = "pure-protobuf" },
     { name = "pyarrow" },
 ]
@@ -185,6 +186,7 @@ requires-dist = [
     { name = "httpx", specifier = ">=0.27.0" },
     { name = "internetarchive", specifier = ">=4.0.0" },
     { name = "msgpack", specifier = ">=1.0.0" },
+    { name = "protobuf", specifier = ">=5.0.0" },
     { name = "pure-protobuf", specifier = ">=3.0.0" },
     { name = "pyarrow", specifier = ">=17.0.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0.0" },
