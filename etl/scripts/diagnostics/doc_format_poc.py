@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import io
 import json
+
 import logging
 import os
 import statistics
@@ -279,9 +280,7 @@ def to_protobuf(doc: dict) -> bytes:
             for s in socios
         ],
     )
-    buf = io.BytesIO()
-    msg.dump(buf)
-    return buf.getvalue()
+    return msg.dumps()
 
 
 def build_payloads(docs: list[dict]) -> dict[str, list[bytes]]:
@@ -326,7 +325,7 @@ def bench_decode(payloads: dict[str, list[bytes]]) -> dict[str, float]:
 
     t0 = time.monotonic()
     for p in payloads["protobuf"]:
-        Company.load(io.BytesIO(p))
+        Company.loads(p)
     out["protobuf"] = time.monotonic() - t0
 
     return out
