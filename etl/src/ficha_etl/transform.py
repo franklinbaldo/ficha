@@ -322,7 +322,9 @@ def pick_memory_limit_gb() -> int:
             if n >= _MIN_MEMORY_GB:
                 log.info("FICHA_MEMORY_LIMIT_GB override: %d GB", n)
                 return n
-            log.warning("FICHA_MEMORY_LIMIT_GB=%s below floor %d — ignoring", override, _MIN_MEMORY_GB)
+            log.warning(
+                "FICHA_MEMORY_LIMIT_GB=%s below floor %d — ignoring", override, _MIN_MEMORY_GB
+            )
         except ValueError:
             log.warning("FICHA_MEMORY_LIMIT_GB=%r not an int — ignoring", override)
 
@@ -336,7 +338,10 @@ def pick_memory_limit_gb() -> int:
     chosen = max(_MIN_MEMORY_GB, min(by_headroom, by_fraction))
     log.info(
         "auto memory_limit: total=%d GB → headroom=%d, fraction=%d → chose %d GB",
-        total, by_headroom, by_fraction, chosen,
+        total,
+        by_headroom,
+        by_fraction,
+        chosen,
     )
     return chosen
 
