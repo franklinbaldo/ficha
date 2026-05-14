@@ -533,15 +533,23 @@ def write_cnpjs_parquet(
         """
     )
     # W1.3 (docs/perf-plan-2026-05.md §1.3): partition the join by
-    # `LEFT(cnpj_basico, 1)` digit. The full 67M × 70M LEFT JOIN spilled
-    # 95 GiB of temp disk on a 16 GB GH runner with ~25 GB free
-    # (run 25858026785), exhausting `max_temp_directory_size`. Looping
-    # over 10 single-digit prefixes shrinks each join's working set
-    # ~10× — per-bucket spill drops to ~9 GiB, fitting comfortably.
-    # We still publish a single `cnpjs.parquet`: each bucket writes
-    # to `cnpjs.parquet.parts/part-X.parquet`, then a streaming
-    # parquet-to-parquet COPY merges them (no aggregation, no sort →
-    # DuckDB row-group-streams it without spilling).
+    # `LEFT(cnpj_basico, 1)` digit. The first attempt (run 25859177161)
+    # added `WHERE LEFT(est.cnpj_basico, 1) = '0'` to the COPY's main
+    # SELECT, but DuckDB's optimizer didn't propagate the predicate
+    # across the LEFT JOINs to `empresa` and `simples` — bucket 0 still
+    # hashed the full 67M-row empresa and 48M-row simples, hitting the
+    # same 95 GiB temp-spill exhaustion.
+    #
+    # Defensive fix: materialize per-bucket temp tables for *all three*
+    # large inputs (estabelecimento, empresa, simples) BEFORE the COPY,
+    # so the join's hash inputs are pre-shrunk by ~10×. The COPY then
+    # selects from `_est_b` / `_emp_b` / `_smp_b` instead of the full
+    # tables. Each bucket's hash-table working set drops to ~700 MB →
+    # spill comfortably under the runner's free disk.
+    #
+    # Each bucket writes to `cnpjs.parquet.parts/part-X.parquet`, then
+    # a streaming parquet-to-parquet COPY merges them (no aggregation,
+    # no sort → DuckDB row-group-streams it without measurable spill).
     parts_dir = output_path.parent / f"{output_path.stem}.parts"
     if parts_dir.exists():
         shutil.rmtree(parts_dir)
@@ -550,6 +558,20 @@ def write_cnpjs_parquet(
         for _bucket in "0123456789":
             _part_path = parts_dir / f"part-{_bucket}.parquet"
             log.info("    writing cnpjs bucket %s/10 → %s", _bucket, _part_path.name)
+            # Pre-filter the three big inputs into per-bucket temps so
+            # the COPY's joins hash ~1/10 of each table instead of the
+            # full ~67M-row empresa / ~48M-row simples (which is what
+            # the predicate-in-WHERE attempt failed to achieve — see
+            # the W1.3 block above).
+            for _tbl, _src in (
+                ("_est_b", "estabelecimento"),
+                ("_emp_b", "empresa"),
+                ("_smp_b", "simples"),
+            ):
+                con.execute(
+                    f"CREATE OR REPLACE TEMP TABLE {_tbl} AS "
+                    f"SELECT * FROM {_src} WHERE LEFT(cnpj_basico, 1) = '{_bucket}'"
+                )
             con.execute(
                 f"""
             COPY (
@@ -634,27 +656,20 @@ def write_cnpjs_parquet(
                 {_date_expr("s.data_opcao_mei")} AS data_opcao_mei,
                 {_date_expr("s.data_exclusao_mei")} AS data_exclusao_mei
 
-            FROM estabelecimento est
+            -- W1.3 partition: all three big inputs are pre-filtered
+            -- into _est_b / _emp_b / _smp_b above. The lookups stay
+            -- full-size (small) and joins against them are nested-loop
+            -- friendly.
+            FROM _est_b est
             CROSS JOIN _cnae_map _cm
-            LEFT JOIN empresa emp ON emp.cnpj_basico = est.cnpj_basico
-            LEFT JOIN simples s ON s.cnpj_basico = est.cnpj_basico
+            LEFT JOIN _emp_b emp ON emp.cnpj_basico = est.cnpj_basico
+            LEFT JOIN _smp_b s ON s.cnpj_basico = est.cnpj_basico
             LEFT JOIN lookup_naturezas nj ON nj.codigo = emp.natureza_juridica
             LEFT JOIN lookup_qualificacoes qr ON qr.codigo = emp.qualificacao_responsavel
             LEFT JOIN lookup_motivos mt ON mt.codigo = est.motivo_situacao_cadastral
             LEFT JOIN lookup_cnaes cn_p ON cn_p.codigo = est.cnae_fiscal_principal
             LEFT JOIN lookup_municipios mn ON mn.codigo = est.municipio
             LEFT JOIN lookup_paises ps ON ps.codigo = est.pais
-            -- W1.3 partition predicate. `cnpj_basico` is an 8-digit
-            -- string; LEFT(...,1) is a digit '0'-'9'. DuckDB pushes
-            -- this filter down into the estabelecimento scan AND, via
-            -- the JOIN equality, restricts empresa/simples to the same
-            -- bucket too. Each bucket holds ~1/10 of all rows.
-            -- Inlined as a literal (not `?`) because DuckDB 1.5.2
-            -- silently no-ops `COPY ... TO ?` when the same statement
-            -- carries other parameters; reproduced on bootstrap iter.
-            -- `_bucket` is a single digit char from "0123456789" — no
-            -- injection surface.
-            WHERE LEFT(est.cnpj_basico, 1) = '{_bucket}'
             -- ORDER BY cnpj omitted: forced global sort of ~30 GB join
             -- output through DuckDB's external sorter blew past 70 GB
             -- disk on GH Actions runners (PR #24, run 25519086268).
@@ -668,6 +683,11 @@ def write_cnpjs_parquet(
             ) TO '{_part_path}' (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 200000)
             """
             )
+            # Drop the bucket temps so their working set + on-disk
+            # storage is released before the next iteration starts.
+            con.execute("DROP TABLE IF EXISTS _est_b")
+            con.execute("DROP TABLE IF EXISTS _emp_b")
+            con.execute("DROP TABLE IF EXISTS _smp_b")
 
         # Stream-concat — parquet-to-parquet without aggregation/sort is
         # row-group streaming in DuckDB; peak memory is just one row
