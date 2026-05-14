@@ -160,15 +160,32 @@ def _validate_month(s: str) -> str:
     return s
 
 
+# A "complete" RFB mirror has 37 raw ZIPs (10 Empresas + 10 Estabelecimentos +
+# 10 Socios + Simples + 6 lookups). Partial items (e.g. a cancelled mirror
+# run that uploaded 1-2 ZIPs) shouldn't outrank a fully populated older
+# snapshot when picking the month under test.
+_MIN_COMPLETE_RAW_ZIPS = 37
+
+
 def pick_month(docs: list[dict]) -> str | None:
     env_month = os.environ.get("MONTH", "").strip()
     if env_month:
         log.info("using MONTH from env: %s", env_month)
         return _validate_month(env_month)
-    ids = sorted(d.get("identifier", "") for d in docs)
-    if not ids:
+    if not docs:
         return None
-    candidate = ids[-1].removeprefix("ficha-")
+    # Prefer the most recent *complete* item. Fall back to most-recent
+    # overall so we always probe something when no item is complete.
+    complete = [d for d in docs if (d.get("files_count") or 0) >= _MIN_COMPLETE_RAW_ZIPS]
+    pool = complete or docs
+    if not complete:
+        log.warning(
+            "no item has >= %d files; falling back to most-recent (partial)",
+            _MIN_COMPLETE_RAW_ZIPS,
+        )
+    chosen = max(pool, key=lambda d: d.get("identifier", ""))
+    candidate = chosen["identifier"].removeprefix("ficha-")
+    log.info("picked month=%s (files_count=%s)", candidate, chosen.get("files_count"))
     return _validate_month(candidate)
 
 
