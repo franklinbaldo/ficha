@@ -29,7 +29,9 @@ import zipfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from doc_format_poc import fetch_sample, to_protobuf  # noqa: E402
+from doc_format_poc import fetch_sample  # noqa: E402
+
+from ficha_etl.pack import cnpjpath, row_to_company
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
@@ -73,13 +75,16 @@ def _entry_name(cnpj_base: str, layout: str, extension: str) -> str:
     - flat:     12345678.pb
     - fold2:    12/12345678.pb               (2-digit prefix folder)
     - cnpjpath: 12/345/678.pb                (mirrors the 00.000.000 split)
+                                              uses pack.cnpjpath() — canonical
     """
     if layout == "flat":
         return f"{cnpj_base}.{extension}"
     if layout == "fold2":
         return f"{cnpj_base[:2]}/{cnpj_base}.{extension}"
     if layout == "cnpjpath":
-        return f"{cnpj_base[:2]}/{cnpj_base[2:5]}/{cnpj_base[5:8]}.{extension}"
+        # strip extension from pack.cnpjpath and add the right one
+        base = cnpjpath(int(cnpj_base)).removesuffix(".pb")
+        return f"{base}.{extension}"
     raise ValueError(f"unknown layout: {layout}")
 
 
@@ -110,17 +115,19 @@ def main() -> int:
         print("::error::no docs returned from sample query")
         return 1
 
-    # Build payloads keyed by cnpj_base (we want unique-per-raiz, so dedupe
-    # collapses estabelecimentos to their raiz).
+    # Build payloads keyed by cnpj_base string (zero-padded 8 digits).
+    # Uses the real schema from pack.row_to_company — same code path the
+    # ETL will use in production.
     seen: set[str] = set()
     pb_payloads: dict[str, bytes] = {}
     json_payloads: dict[str, bytes] = {}
     for d in docs:
-        cb = d.get("cnpj_base") or ""
-        if cb in seen or not cb:
+        cb = str(d.get("cnpj_base") or "").zfill(8)
+        if cb in seen or cb == "00000000":
             continue
         seen.add(cb)
-        pb_payloads[cb] = to_protobuf(d)
+        company = row_to_company(d)
+        pb_payloads[cb] = company.SerializeToString()
         json_payloads[cb] = json.dumps(d, default=str, separators=(",", ":")).encode()
     n_uniq = len(pb_payloads)
 

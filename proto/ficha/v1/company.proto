@@ -1,0 +1,170 @@
+syntax = "proto3";
+package ficha.v1;
+
+// =====================================================================
+// Ficha Empresarial v1 — schema canônico por cnpj_base
+//
+// Um arquivo .pb por cnpj_base dentro do ZIP, no layout:
+//   companies.zip / <XX> / <XXX> / <XXX>.pb
+// onde XX/XXX/XXX são os 2+3+3 primeiros dígitos do cnpj_base,
+// espelhando a pontuação 00.000.000 do CNPJ.
+//
+// Lookups (CNAE, município, etc.) ficam em:
+//   companies.zip / _lookups / <kind>.pb   (LookupFile)
+// O client carrega uma vez e joiniza localmente por código.
+//
+// Convenções de tipo:
+//   - uint32/uint64: varint encoding — ocupa só os bytes necessários.
+//   - CNPJ (14 dígitos) = cnpj_base (uint32, 8 d) + cnpj_ordem (uint32, 4 d) + cnpj_dv (uint32, 2 d)
+//     Reconstituição: padStart(8,'0') + padStart(4,'0') + padStart(2,'0')
+//   - Datas: uint32 no formato YYYYMMDD (e.g. 20260514). 0 = ausente.
+//     Reconstituição: String(n).slice(0,4)+'-'+String(n).slice(4,6)+'-'+String(n).slice(6,8)
+//   - CPF mascarado: uint32 com os 6 dígitos do meio (RFB publica ***NNNNNN**).
+//     Reconstituição: '***' + String(n).padStart(6,'0') + '**'
+//   - CEP: uint32 com 8 dígitos. 0 = ausente.
+//     Reconstituição: String(n).padStart(8,'0')
+// =====================================================================
+
+// ---- enums ----------------------------------------------------------
+
+enum Porte {
+  PORTE_UNSPECIFIED   = 0;
+  NAO_INFORMADO       = 1;
+  MICRO_EMPRESA       = 2;  // ME
+  PEQUENO_PORTE       = 3;  // EPP
+  DEMAIS              = 5;
+}
+
+enum TipoEstabelecimento {
+  TIPO_ESTAB_UNSPECIFIED = 0;
+  MATRIZ                 = 1;
+  FILIAL                 = 2;
+}
+
+enum TipoSocio {
+  TIPO_SOCIO_UNSPECIFIED = 0;
+  PESSOA_JURIDICA        = 1;
+  PESSOA_FISICA          = 2;
+  ESTRANGEIRO            = 3;
+}
+
+enum FaixaEtaria {
+  FAIXA_ETARIA_UNSPECIFIED = 0;
+  ATE_12                   = 1;
+  DE_13_A_20               = 2;
+  DE_21_A_30               = 3;
+  DE_31_A_40               = 4;
+  DE_41_A_50               = 5;
+  DE_51_A_60               = 6;
+  DE_61_A_70               = 7;
+  DE_71_A_80               = 8;
+  ACIMA_80                 = 9;
+  NAO_INFORMADA            = 10;
+}
+
+// ---- mensagens principais -------------------------------------------
+
+message Company {
+  // identidade da raiz
+  uint32 cnpj_base                   = 1;  // 8 dígitos; padStart(8,'0')
+  string razao_social                = 2;
+  string razao_social_normalizada    = 3;  // uppercase sem acento — busca client-side
+
+  // agregados (de raizes.parquet)
+  uint32 natureza_juridica_codigo    = 10;
+  Porte  porte_empresa               = 11;
+  double capital_social              = 12;
+  string ente_federativo_responsavel = 13;
+  uint32 qtd_estabelecimentos        = 14;
+  uint32 qtd_estabelecimentos_ativos = 15;
+
+  // hierarquia
+  repeated Estabelecimento estabelecimentos = 20;
+  repeated Socio           socios           = 21;
+
+  // metadata do snapshot
+  uint32 snapshot_yyyymm = 100;  // e.g. 202604
+}
+
+message Estabelecimento {
+  // identidade — cnpj_base fica na Company pai
+  uint32             cnpj_ordem = 1;  // 4 dígitos; padStart(4,'0')
+  uint32             cnpj_dv    = 2;  // 2 dígitos; padStart(2,'0')
+  TipoEstabelecimento tipo      = 3;
+  string             nome_fantasia = 4;
+
+  // situação cadastral
+  uint32 situacao_cadastral              = 10;  // código 1 dígito
+  uint32 data_situacao_cadastral         = 11;  // YYYYMMDD
+  uint32 motivo_situacao_cadastral_codigo = 12;
+  string situacao_especial               = 13;
+  uint32 data_situacao_especial          = 14;  // YYYYMMDD
+  uint32 data_inicio_atividade           = 15;  // YYYYMMDD
+
+  // atividade econômica
+  uint32          cnae_principal_codigo     = 20;
+  repeated uint32 cnaes_secundarios_codigos = 21;  // packed encoding automático
+
+  // endereço
+  string tipo_logradouro      = 30;
+  string logradouro           = 31;
+  string numero               = 32;
+  string complemento          = 33;
+  string bairro               = 34;
+  uint32 cep                  = 35;  // 8 dígitos; padStart(8,'0')
+  string uf                   = 36;  // 2 letras
+  uint32 municipio_codigo     = 37;  // IBGE 7 dígitos
+  string nome_cidade_exterior = 38;
+  uint32 pais_codigo          = 39;
+
+  // contato
+  string ddd_1             = 40;
+  string telefone_1        = 41;
+  string ddd_2             = 42;
+  string telefone_2        = 43;
+  string ddd_fax           = 44;
+  string fax               = 45;
+  string correio_eletronico = 46;
+
+  // Simples Nacional / MEI
+  bool   opcao_simples         = 50;
+  uint32 data_opcao_simples    = 51;  // YYYYMMDD
+  uint32 data_exclusao_simples = 52;  // YYYYMMDD
+  bool   opcao_mei             = 53;
+  uint32 data_opcao_mei        = 54;  // YYYYMMDD
+  uint32 data_exclusao_mei     = 55;  // YYYYMMDD
+}
+
+message Socio {
+  TipoSocio tipo                   = 1;
+  string    nome_socio_razao_social = 2;
+
+  // identificação — mutuamente exclusivos por tipo
+  uint32 cpf_mascarado_meio = 3;  // PF: 6 dígitos do meio (RFB: ***NNNNNN**); padStart(6,'0')
+  uint64 cnpj_socio         = 4;  // PJ: 14 dígitos; padStart(14,'0')
+
+  uint32      qualificacao_codigo    = 5;
+  uint32      data_entrada_sociedade = 6;  // YYYYMMDD
+  uint32      pais_codigo            = 7;  // estrangeiros
+  FaixaEtaria faixa_etaria           = 8;
+
+  // representante legal (presente quando sócio é PJ ou estrangeiro)
+  uint32 representante_legal_cpf_meio              = 10;  // 6 dígitos do meio; padStart(6,'0')
+  string representante_legal_nome                  = 11;
+  uint32 representante_legal_qualificacao_codigo   = 12;
+}
+
+// ---- lookups --------------------------------------------------------
+
+// Um LookupEntry por linha de tabela de referência RFB.
+message LookupEntry {
+  uint32 codigo    = 1;
+  string descricao = 2;
+}
+
+// Um LookupFile por arquivo _lookups/<kind>.pb dentro do ZIP.
+// kind: "cnaes" | "municipios" | "naturezas" | "motivos" | "paises" | "qualificacoes"
+message LookupFile {
+  string                kind    = 1;
+  repeated LookupEntry entries  = 2;
+}
