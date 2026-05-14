@@ -417,6 +417,41 @@ def upload_outputs(
     log.info("uploaded outputs to ia:%s OK", identifier)
 
 
+def upload_companies_zip(
+    month: str,
+    companies_zip_path: Path,
+    *,
+    access_key: str,
+    secret_key: str,
+) -> None:
+    """Faz upload de companies.zip para o item IA do mês.
+
+    Args:
+        month: snapshot no formato YYYY-MM.
+        companies_zip_path: caminho local do companies.zip produzido por pack_from_parquets.
+        access_key: IA S3-like access key.
+        secret_key: IA S3-like secret key.
+    """
+    if not is_valid_month(month):
+        raise ValueError(f"month must be YYYY-MM, got {month!r}")
+    if not companies_zip_path.exists():
+        raise FileNotFoundError(f"companies.zip not found: {companies_zip_path}")
+
+    identifier = item_id(month)
+    log.info("uploading companies.zip to ia:%s", identifier)
+    responses = ia.upload(
+        identifier,
+        files={"companies.zip": str(companies_zip_path)},
+        access_key=access_key,
+        secret_key=secret_key,
+        retries=_RETRIES,
+        retries_sleep=_RETRY_SLEEP,
+        verbose=True,
+    )
+    _check_responses(responses, "companies.zip")
+    log.info("uploaded ia:%s/companies.zip OK", identifier)
+
+
 def upload_raw_zips(
     month: str,
     cache_dir: Path,
