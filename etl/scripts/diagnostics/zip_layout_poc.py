@@ -1,14 +1,16 @@
 """ZIP layout POC: STORED vs DEFLATED, flat vs foldered.
 
-Generates six ZIPs from the same 10k-empresa protobuf sample and reports
+Generates eight ZIPs from the same 10k-empresa protobuf sample and reports
 size + central-directory overhead for each:
 
   1. PB  flat       STORED      <cnpj_base>.pb
   2. PB  flat       DEFLATED    <cnpj_base>.pb
-  3. PB  foldered2  STORED      <XX>/<cnpj_base>.pb   (2-digit prefix)
-  4. PB  foldered2  DEFLATED    <XX>/<cnpj_base>.pb
-  5. JSON flat      STORED      <cnpj_base>.json      (baseline)
-  6. JSON flat      DEFLATED    <cnpj_base>.json
+  3. PB  fold2      STORED      <XX>/<cnpj_base>.pb       (2-digit prefix)
+  4. PB  fold2      DEFLATED    <XX>/<cnpj_base>.pb
+  5. PB  cnpjpath   STORED      <XX>/<XXX>/<XXX>.pb       (mirrors 00.000.000 punctuation)
+  6. PB  cnpjpath   DEFLATED    <XX>/<XXX>/<XXX>.pb
+  7. JSON flat      STORED      <cnpj_base>.json          (baseline)
+  8. JSON flat      DEFLATED    <cnpj_base>.json
 
 Folders inside the ZIP are pure naming convention — entries still live
 in a single flat central directory. The point is to know whether IA's
@@ -66,10 +68,25 @@ def parse_eocd(buf: bytes) -> dict:
     }
 
 
+def _entry_name(cnpj_base: str, layout: str, extension: str) -> str:
+    """Layouts:
+    - flat:     12345678.pb
+    - fold2:    12/12345678.pb               (2-digit prefix folder)
+    - cnpjpath: 12/345/678.pb                (mirrors the 00.000.000 split)
+    """
+    if layout == "flat":
+        return f"{cnpj_base}.{extension}"
+    if layout == "fold2":
+        return f"{cnpj_base[:2]}/{cnpj_base}.{extension}"
+    if layout == "cnpjpath":
+        return f"{cnpj_base[:2]}/{cnpj_base[2:5]}/{cnpj_base[5:8]}.{extension}"
+    raise ValueError(f"unknown layout: {layout}")
+
+
 def build_zip(
     payloads: dict[str, bytes],
     compression: int,
-    foldered: bool,
+    layout: str,
     extension: str,
 ) -> bytes:
     """payloads: cnpj_base → payload bytes. Returns the full ZIP bytes."""
@@ -78,11 +95,7 @@ def build_zip(
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", compression=compression, compresslevel=6) as zf:
         for cnpj_base, payload in payloads.items():
-            if foldered:
-                name = f"{cnpj_base[:2]}/{cnpj_base}.{extension}"
-            else:
-                name = f"{cnpj_base}.{extension}"
-            zf.writestr(name, payload)
+            zf.writestr(_entry_name(cnpj_base, layout, extension), payload)
     return buf.getvalue()
 
 
@@ -125,17 +138,19 @@ def main() -> int:
 
     section("Build ZIPs")
     variants = [
-        ("PB   flat       STORED  ", pb_payloads, zipfile.ZIP_STORED, False, "pb"),
-        ("PB   flat       DEFLATE ", pb_payloads, zipfile.ZIP_DEFLATED, False, "pb"),
-        ("PB   foldered2  STORED  ", pb_payloads, zipfile.ZIP_STORED, True, "pb"),
-        ("PB   foldered2  DEFLATE ", pb_payloads, zipfile.ZIP_DEFLATED, True, "pb"),
-        ("JSON flat       STORED  ", json_payloads, zipfile.ZIP_STORED, False, "json"),
-        ("JSON flat       DEFLATE ", json_payloads, zipfile.ZIP_DEFLATED, False, "json"),
+        ("PB   flat       STORED  ", pb_payloads, zipfile.ZIP_STORED, "flat", "pb"),
+        ("PB   flat       DEFLATE ", pb_payloads, zipfile.ZIP_DEFLATED, "flat", "pb"),
+        ("PB   fold2      STORED  ", pb_payloads, zipfile.ZIP_STORED, "fold2", "pb"),
+        ("PB   fold2      DEFLATE ", pb_payloads, zipfile.ZIP_DEFLATED, "fold2", "pb"),
+        ("PB   cnpjpath   STORED  ", pb_payloads, zipfile.ZIP_STORED, "cnpjpath", "pb"),
+        ("PB   cnpjpath   DEFLATE ", pb_payloads, zipfile.ZIP_DEFLATED, "cnpjpath", "pb"),
+        ("JSON flat       STORED  ", json_payloads, zipfile.ZIP_STORED, "flat", "json"),
+        ("JSON flat       DEFLATE ", json_payloads, zipfile.ZIP_DEFLATED, "flat", "json"),
     ]
     results = []
-    for label, payloads, comp, foldered, ext in variants:
+    for label, payloads, comp, layout, ext in variants:
         t0 = time.monotonic()
-        zbuf = build_zip(payloads, comp, foldered, ext)
+        zbuf = build_zip(payloads, comp, layout, ext)
         build_s = time.monotonic() - t0
         eocd = parse_eocd(zbuf)
         results.append(
