@@ -51,8 +51,8 @@ EXPECTED_COLUMNS = {
         "uf", "municipio_codigo",
         "opcao_simples", "opcao_mei",
     },
-    "raizes.parquet": {"cnpj_basico", "razao_social"},
-    "socios.parquet": {"cnpj_basico"},
+    "raizes.parquet": {"cnpj_base", "razao_social"},
+    "socios.parquet": {"cnpj_base"},
 }
 
 
@@ -258,8 +258,9 @@ def main() -> int:
     for name, entry in report.get("duckdb", {}).items():
         if not isinstance(entry, dict):
             continue
-        if "count_error" in entry or "schema_error" in entry:
-            failures.append(f"duckdb:{name}")
+        for err_key in ("schema_error", "count_error", "sample_error", "filter_error"):
+            if err_key in entry:
+                failures.append(f"duckdb:{name}:{err_key}")
         if entry.get("row_count") == 0:
             failures.append(f"empty:{name}")
 
