@@ -370,8 +370,13 @@ def main() -> int:
 
     month = pick_month(docs)
     if not month:
-        print("::warning::no MONTH env and no IA items found; nothing to probe")
-        return 0
+        # Codex P2 on PR #41: this path is reachable when search and
+        # all per-month metadata fetches fail (network flake, catalog
+        # outage) or the project genuinely has no items yet. Either
+        # way, no artifact got exercised — exit non-zero so a green
+        # tick can't hide an empty probe.
+        print("::error::no MONTH env and no IA items found; nothing was exercised")
+        return 1
     report["month"] = month
 
     try:
