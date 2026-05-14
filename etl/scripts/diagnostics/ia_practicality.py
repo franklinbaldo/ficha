@@ -40,9 +40,14 @@ CANONICAL_ARTIFACTS = ["cnpjs.parquet", "raizes.parquet", "socios.parquet", "loo
 # keep this script free of the project package import.
 LOOKUP_KINDS = ["cnaes", "motivos", "municipios", "naturezas", "paises", "qualificacoes"]
 
-# Field-name expectations from web/src/schemas/v1/ — top-level columns
-# only. We don't try to validate nested array element types here.
-EXPECTED_COLUMNS = {
+# Minimal required column names that downstream code (web/src/schemas/v1)
+# touches. Intentionally a sanity check, not a full schema validation —
+# we only care that the parquet has the columns we read. Types are not
+# checked here; that needs Zod-side validation against real samples
+# (see SocioSchema, RaizSchema, EstabelecimentoSchema). Renaming
+# this would be a good follow-up if we ever invest in full type drift
+# detection.
+MINIMAL_REQUIRED_COLUMNS = {
     "cnpjs.parquet": {
         "cnpj", "cnpj_base", "cnpj_ordem", "cnpj_dv", "identificador_matriz_filial",
         "razao_social", "natureza_juridica_codigo", "capital_social", "porte_empresa",
@@ -142,13 +147,29 @@ def ia_inventory() -> list[dict]:
     return docs
 
 
+_MONTH_RE = re.compile(r"^\d{4}-(0[1-9]|1[0-2])$")
+
+
+def _validate_month(s: str) -> str:
+    """Allow only `YYYY-MM`. Refuse anything else loudly — `month` flows
+    into f-string SQL (DuckDB httpfs URLs) and into a URL path; both
+    must be tightly constrained even though the workflow input is
+    operator-controlled."""
+    if not _MONTH_RE.match(s):
+        raise ValueError(f"invalid month {s!r} — must match YYYY-MM with month in 01..12")
+    return s
+
+
 def pick_month(docs: list[dict]) -> str | None:
     env_month = os.environ.get("MONTH", "").strip()
     if env_month:
         log.info("using MONTH from env: %s", env_month)
-        return env_month
+        return _validate_month(env_month)
     ids = sorted(d.get("identifier", "") for d in docs)
-    return ids[-1].removeprefix("ficha-") if ids else None
+    if not ids:
+        return None
+    candidate = ids[-1].removeprefix("ficha-")
+    return _validate_month(candidate)
 
 
 def item_files(month: str) -> dict[str, dict]:
@@ -299,7 +320,7 @@ def duckdb_probes(month: str, report: dict) -> dict:
                 entry["filter_error"] = str(exc)
 
         # Schema sanity vs web/src/schemas/v1.
-        expected = EXPECTED_COLUMNS.get(name, set())
+        expected = MINIMAL_REQUIRED_COLUMNS.get(name, set())
         missing = sorted(expected - set(entry.get("columns") or []))
         entry["schema_missing_expected"] = missing
         if missing:

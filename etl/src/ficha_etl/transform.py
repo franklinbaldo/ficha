@@ -11,6 +11,7 @@ from __future__ import annotations
 import collections
 import json
 import logging
+import os
 import time
 import zipfile
 from collections.abc import Iterable
@@ -283,6 +284,76 @@ def _create_table_from_csvs(
         f"Falha ao carregar tabela '{table}': nenhum encoding funcionou "
         "(latin-1, utf-8, utf-8+ignore_errors)"
     )
+
+
+_OS_HEADROOM_GB = 6  # OS + runner agent + Python heap + tee + DuckDB overshoots
+_MEMORY_FRACTION = 0.65  # never exceed this share of total RAM
+_MIN_MEMORY_GB = 2
+
+
+def _total_ram_gb() -> int | None:
+    """Read MemTotal from /proc/meminfo, in GB. None if unreadable (non-Linux)."""
+    try:
+        with open("/proc/meminfo") as f:
+            for line in f:
+                if line.startswith("MemTotal:"):
+                    kb = int(line.split()[1])
+                    return kb // (1024 * 1024)
+    except (OSError, ValueError):
+        return None
+    return None
+
+
+def pick_memory_limit_gb() -> int:
+    """Choose a DuckDB memory_limit (GB) for the current runtime.
+
+    Precedence:
+        1. `FICHA_MEMORY_LIMIT_GB` env (operator override)
+        2. min(total_ram - _OS_HEADROOM_GB, total_ram * _MEMORY_FRACTION),
+           clamped to >= _MIN_MEMORY_GB.
+        3. 10 GB fallback (GH Actions 16 GB free tier default).
+
+    Rationale lives next to the PRAGMA call site.
+    """
+    override = os.environ.get("FICHA_MEMORY_LIMIT_GB", "").strip()
+    if override:
+        try:
+            n = int(override)
+            if n >= _MIN_MEMORY_GB:
+                log.info("FICHA_MEMORY_LIMIT_GB override: %d GB", n)
+                return n
+            log.warning("FICHA_MEMORY_LIMIT_GB=%s below floor %d — ignoring", override, _MIN_MEMORY_GB)
+        except ValueError:
+            log.warning("FICHA_MEMORY_LIMIT_GB=%r not an int — ignoring", override)
+
+    total = _total_ram_gb()
+    if total is None:
+        log.info("could not detect total RAM — defaulting memory_limit to 10 GB")
+        return 10
+
+    by_headroom = total - _OS_HEADROOM_GB
+    by_fraction = int(total * _MEMORY_FRACTION)
+    chosen = max(_MIN_MEMORY_GB, min(by_headroom, by_fraction))
+    log.info(
+        "auto memory_limit: total=%d GB → headroom=%d, fraction=%d → chose %d GB",
+        total, by_headroom, by_fraction, chosen,
+    )
+    return chosen
+
+
+def pick_threads() -> int:
+    """Choose DuckDB thread count. Defaults to 1 per the spillability brake
+    (see PRAGMA call site comment). Override with `FICHA_THREADS` env."""
+    override = os.environ.get("FICHA_THREADS", "").strip()
+    if override:
+        try:
+            n = int(override)
+            if n >= 1:
+                log.info("FICHA_THREADS override: %d", n)
+                return n
+        except ValueError:
+            log.warning("FICHA_THREADS=%r not an int — ignoring", override)
+    return 1
 
 
 def load_main_tables_into_duckdb(
@@ -918,17 +989,19 @@ def transform_snapshot(
     log.info("=== PHASE 2/4: load into DuckDB (%s) ===", db_path)
     t0 = time.monotonic()
     con = duckdb.connect(str(db_path))
-    # Cap memory and force on-disk spill. GH Actions `ubuntu-latest` has
-    # 16 GB of RAM as of 2026-01 (verified for `etl-bootstrap.yml` which
-    # uses the free-tier public-repo runner). The original 6 GB limit
-    # was tuned for the legacy 7 GB tier (PR #24, run 25514278003). 10 GB
-    # leaves ~6 GB for OS, runner agent, Python heap, the `tee` buffer,
-    # and DuckDB's brief overshoots during large hash joins (memory_limit
-    # is a target, not a strict cap). Per Kilo Code Review on PR #27:
-    # 12 GB on a 16 GB runner trims the safety margin too thin.
-    # Explicit limit + dedicated temp dir on the same partition as
-    # db_path makes spill behavior predictable.
-    con.execute("PRAGMA memory_limit='10GB'")
+    # Cap memory and force on-disk spill. Sized at runtime via
+    # `pick_memory_limit_gb()` — reads /proc/meminfo, reserves
+    # _OS_HEADROOM_GB for OS + runner agent + Python heap + tee buffer
+    # + DuckDB brief overshoots, and never exceeds _MEMORY_FRACTION of
+    # total. On the 16 GB GH free-tier runner this picks ~10 GB (was
+    # hard-coded to that until 2026-05). Self-hosted bigger boxes auto
+    # scale up; override via FICHA_MEMORY_LIMIT_GB env. Explicit limit +
+    # dedicated temp dir on the same partition as db_path makes spill
+    # behavior predictable. Original 6 GB tuning was for legacy 7 GB
+    # tier (PR #24, run 25514278003); per Kilo Code Review on PR #27,
+    # 12 GB on a 16 GB runner trimmed the safety margin too thin.
+    _mem_gb = pick_memory_limit_gb()
+    con.execute(f"PRAGMA memory_limit='{_mem_gb}GB'")
     con.execute(f"PRAGMA temp_directory='{db_path.parent / 'duckdb_tmp'}'")
     # Reduce per-query memory pressure during the big JOIN at phase 3.
     # DuckDB's default preserves input ordering, which buffers more in
@@ -943,7 +1016,8 @@ def transform_snapshot(
     # bumps that to ~60 min, fitting in the 350 min runner budget.
     # threads=1 also helps raizes' LIST_DISTINCT(LIST(...)) GROUP BY
     # avoid the 5.5 GB OOM that bit run 25522678418.
-    con.execute("PRAGMA threads=1")
+    _threads = pick_threads()
+    con.execute(f"PRAGMA threads={_threads}")
     try:
         # Lookups primeiro (necessárias pros JOINs dos parquets)
         for ef in extracted:
