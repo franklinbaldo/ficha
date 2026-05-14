@@ -649,7 +649,12 @@ def write_cnpjs_parquet(
             -- this filter down into the estabelecimento scan AND, via
             -- the JOIN equality, restricts empresa/simples to the same
             -- bucket too. Each bucket holds ~1/10 of all rows.
-            WHERE LEFT(est.cnpj_basico, 1) = ?
+            -- Inlined as a literal (not `?`) because DuckDB 1.5.2
+            -- silently no-ops `COPY ... TO ?` when the same statement
+            -- carries other parameters; reproduced on bootstrap iter.
+            -- `_bucket` is a single digit char from "0123456789" — no
+            -- injection surface.
+            WHERE LEFT(est.cnpj_basico, 1) = '{_bucket}'
             -- ORDER BY cnpj omitted: forced global sort of ~30 GB join
             -- output through DuckDB's external sorter blew past 70 GB
             -- disk on GH Actions runners (PR #24, run 25519086268).
@@ -660,21 +665,21 @@ def write_cnpjs_parquet(
             -- aren't primary FICHA queries (exact match dominates;
             -- razao_social search uses raizes.parquet). Revisit if
             -- range workloads materialize.
-            ) TO ? (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 200000)
-            """,
-                [_bucket, str(_part_path)],
+            ) TO '{_part_path}' (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 200000)
+            """
             )
 
         # Stream-concat — parquet-to-parquet without aggregation/sort is
         # row-group streaming in DuckDB; peak memory is just one row
-        # group's worth, not the full table.
+        # group's worth, not the full table. Paths inlined for the same
+        # DuckDB 1.5.2 quirk noted on the partition loop above.
         log.info("    merging %d bucket parts → %s", 10, output_path.name)
+        _parts_glob = parts_dir / "part-*.parquet"
         con.execute(
-            """
-          COPY (SELECT * FROM read_parquet(?))
-          TO ? (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 200000)
-          """,
-            [str(parts_dir / "part-*.parquet"), str(output_path)],
+            f"""
+          COPY (SELECT * FROM read_parquet('{_parts_glob}'))
+          TO '{output_path}' (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 200000)
+          """
         )
         shutil.rmtree(parts_dir)
     finally:
