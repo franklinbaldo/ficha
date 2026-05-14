@@ -69,14 +69,15 @@ jobs:
           SCRIPT="${{ inputs.script }}"
           TARGET_PR="${{ inputs.target_pr }}"
           # Branch-aware defaults on push: this branch runs the IA
-          # practicality probe and comments on its own PR (#41). Force
-          # fail at the end so a subscribed Claude session is notified
-          # via the github-webhook-activity event even on success.
+          # practicality probe and comments on its own PR (#41).
+          # FORCE_FAIL was used while iterating to wake the subscribed
+          # Claude session even on success; now that bootstrap has
+          # actually published parquets, we want real green/red signal
+          # so leave it at 0.
           FORCE_FAIL=0
           if [ "$GITHUB_EVENT_NAME" = "push" ] && [ "$GITHUB_REF_NAME" = "claude/plan-next-steps-l7Dt6" ]; then
             [ -z "$SCRIPT" ] && SCRIPT="ia_practicality"
             [ -z "$TARGET_PR" ] && TARGET_PR="41"
-            FORCE_FAIL=1
           fi
           [ -z "$SCRIPT" ] && SCRIPT="phase1"
           [ -z "$TARGET_PR" ] && TARGET_PR="31"
