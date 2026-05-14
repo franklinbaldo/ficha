@@ -450,19 +450,19 @@ def _cmd_run(
             return 1
 
         # ── 1. Stream ZIPs → IA (zero disco) ────────────────────────────────
-        log.info("[run 1/4] stream ZIPs RFB → IA (zero disco)")
+        log.info("[run 1/5] stream ZIPs RFB → IA (zero disco)")
         try:
             upload_mod.stream_raw_zips_to_ia(month, access_key=access_key, secret_key=secret_key)
         except Exception as exc:
             print(f"error: stream ZIPs falhou: {exc}", file=sys.stderr)
             return 1
     else:
-        log.info("[run 1/4] stream ignorado (--skip-upload) — transform usará RFB direto")
+        log.info("[run 1/5] stream ignorado (--skip-upload) — transform usará RFB direto")
 
     # ── 2. Transform ─────────────────────────────────────────────────────────
     # Com upload: fetcher chain encontra ZIPs no IA (rápido).
     # Sem upload: fetcher chain vai direto na RFB.
-    log.info("[run 2/4] transform %s → %s", month, output_dir)
+    log.info("[run 2/5] transform %s → %s", month, output_dir)
     try:
         transform.transform_snapshot(
             month,
