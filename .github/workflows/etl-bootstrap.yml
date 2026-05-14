@@ -8,7 +8,9 @@ name: ETL — bootstrap (first production snapshot)
 # doesn't loop.
 on:
   push:
-    branches: [claude/review-repo-planning-ApKX5]
+    branches:
+      - claude/review-repo-planning-ApKX5
+      - claude/plan-next-steps-l7Dt6
     paths:
       - '.github/workflows/etl-bootstrap.yml'
       - 'etl/src/**'
