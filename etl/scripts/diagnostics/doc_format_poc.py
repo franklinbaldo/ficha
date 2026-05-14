@@ -123,10 +123,20 @@ def fetch_sample(month: str, uf: str, n: int) -> list[dict]:
     t0 = time.monotonic()
     rows = con.execute(
         f"""
-        WITH s AS (
-            SELECT * FROM read_parquet(?)
+        WITH bases AS (
+            -- Codex P1 on PR #41: apply LIMIT to *distinct* cnpj_base, not
+            -- to estabelecimento rows. Multi-estab companies otherwise
+            -- consume multiple LIMIT slots and the sample is skewed.
+            SELECT DISTINCT cnpj_base FROM read_parquet(?)
             WHERE uf = ?
             LIMIT {n}
+        ),
+        s AS (
+            -- For each chosen cnpj_base, take *all* its estabs; downstream
+            -- Python dedupe picks one row per company for the per-doc
+            -- format comparison.
+            SELECT * FROM read_parquet(?)
+            WHERE cnpj_base IN (SELECT cnpj_base FROM bases)
         ),
         r AS (
             SELECT * FROM read_parquet(?)
@@ -176,8 +186,9 @@ def fetch_sample(month: str, uf: str, n: int) -> list[dict]:
         LEFT JOIN so USING (cnpj_base)
         """,
         [
-            f"{base}/cnpjs.parquet",
+            f"{base}/cnpjs.parquet",  # bases CTE: DISTINCT cnpj_base
             uf,
+            f"{base}/cnpjs.parquet",  # s CTE: estab rows for chosen bases
             f"{base}/raizes.parquet",
             f"{base}/socios.parquet",
         ],
