@@ -14,6 +14,11 @@ on:
     paths:
       - '.github/workflows/etl-bootstrap.yml'
       - 'etl/src/**'
+      # pack.py / proto/ são usados só pela camada de empacotamento
+      # (companies.zip) e não afetam a produção dos parquets. Mudanças
+      # nesses arquivos não devem disparar rebootstrap (~50 min).
+      - '!etl/src/ficha_etl/pack.py'
+      - '!etl/src/ficha_etl/proto/**'
       - 'etl/tests/**'
       - 'etl/pyproject.toml'
   workflow_dispatch:
