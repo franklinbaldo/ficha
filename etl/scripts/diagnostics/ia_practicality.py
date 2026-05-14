@@ -2,7 +2,7 @@
 
 For the most recent `ficha-YYYY-MM` item on Internet Archive (or
 `MONTH` env override), verify the analytical layer is actually usable
-from the canonical access paths:
+from the canonical access paths (probe run: 2026-05-14):
 
 1. HEAD each canonical artifact (cnpjs/raizes/socios/lookups + per-kind
    lookups) — record size, Accept-Ranges, Content-Type.
