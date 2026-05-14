@@ -274,7 +274,19 @@ def pack_companies(
     schema_sha256 = hashlib.sha256(schema_desc).hexdigest()
     snapshot_yyyymm = int(snapshot_month.replace("-", ""))
 
+    # Fail fast if the caller didn't provide every required lookup kind
+    # (Codex P2 on PR #41). The package contract is that every published
+    # companies.zip is queryable end-to-end — if a kind is missing the
+    # frontend can't decode codes of that kind and there's no recovery
+    # short of republishing.
+    missing_kinds = sorted(set(LOOKUP_KINDS) - set(lookup_rows.keys()))
+    if missing_kinds:
+        raise ValueError(
+            f"lookup_rows missing required kinds: {missing_kinds} (expected all of: {LOOKUP_KINDS})"
+        )
+
     count = 0
+    seen_cnpj_bases: set[int] = set()
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     with zipfile.ZipFile(output_path, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
@@ -290,6 +302,16 @@ def pack_companies(
         # company docs
         for row in rows:
             company = row_to_company(row)
+            # Reject duplicate cnpj_base (Codex P2 on PR #41). zipfile
+            # silently writes both entries under the same name and
+            # different ZIP readers resolve the conflict differently —
+            # safer to fail at pack time than ship an ambiguous archive.
+            if company.cnpj_base in seen_cnpj_bases:
+                raise ValueError(
+                    f"duplicate cnpj_base in input rows: {company.cnpj_base:08d} "
+                    f"— caller must group by cnpj_base before packing"
+                )
+            seen_cnpj_bases.add(company.cnpj_base)
             company.snapshot_yyyymm = snapshot_yyyymm
             pb_bytes = company.SerializeToString()
             zf.writestr(cnpjpath(company.cnpj_base), pb_bytes)
