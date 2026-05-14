@@ -169,13 +169,7 @@ def fetch_sample(month: str, uf: str, n: int) -> list[dict]:
                 'municipio_matriz_codigo':       r.municipio_matriz_codigo,
                 'data_inicio_atividade_matriz':  r.data_inicio_atividade_matriz,
             }} AS raiz,
-            COALESCE(so.socios, []::STRUCT(
-                nome VARCHAR, qualificacao_codigo INTEGER, qualificacao_descricao VARCHAR,
-                cpf_mascarado VARCHAR, cnpj_socio VARCHAR, data_entrada_sociedade VARCHAR,
-                tipo INTEGER, faixa_etaria INTEGER, pais_codigo VARCHAR,
-                representante_legal_cpf VARCHAR, representante_legal_nome VARCHAR,
-                representante_legal_qualificacao_codigo INTEGER
-            )[]) AS socios
+            so.socios AS socios
         FROM s
         LEFT JOIN r  USING (cnpj_base)
         LEFT JOIN so USING (cnpj_base)
