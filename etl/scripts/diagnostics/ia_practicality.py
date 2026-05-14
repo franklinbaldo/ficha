@@ -390,9 +390,15 @@ def main() -> int:
         failures.append("raw_zips")
         report["raw_zips"] = {"error": str(exc)}
 
-    for name in CANONICAL_ARTIFACTS:
+    # Hard-fail on any missing artifact the frontend would dereference —
+    # CANONICAL_ARTIFACTS *and* per-kind lookup parquets. probe_artifacts
+    # already HEADs the lookups; without them in the gate, a missing
+    # `lookups/cnaes.parquet` is reported in JSON but exits success
+    # (Codex P2 on PR #41).
+    _required = list(CANONICAL_ARTIFACTS) + [f"lookups/{k}.parquet" for k in LOOKUP_KINDS]
+    for name in _required:
         if not report["artifacts"].get(name, {}).get("present"):
-            print(f"::error::canonical artifact missing or unreachable: {name}")
+            print(f"::error::required artifact missing or unreachable: {name}")
             failures.append(f"missing:{name}")
 
     try:
