@@ -391,7 +391,7 @@ LEFT JOIN (
                'opcao_mei': opcao_mei,
                'data_opcao_mei': data_opcao_mei,
                'data_exclusao_mei': data_exclusao_mei
-           }) AS estabelecimentos
+           } ORDER BY cnpj_ordem, cnpj_dv) AS estabelecimentos
     FROM read_parquet(?)
     GROUP BY cnpj_base
 ) e USING (cnpj_base)
@@ -409,7 +409,11 @@ LEFT JOIN (
                'representante_legal_cpf': representante_legal_cpf,
                'representante_legal_nome': representante_legal_nome,
                'representante_legal_qualificacao_codigo': representante_legal_qualificacao_codigo
-           }) AS socios
+           } ORDER BY qualificacao_codigo,
+                      nome_socio_razao_social,
+                      cnpj_socio,
+                      cpf_mascarado,
+                      data_entrada_sociedade) AS socios
     FROM read_parquet(?)
     GROUP BY cnpj_base
 ) s USING (cnpj_base)
