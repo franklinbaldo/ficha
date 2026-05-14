@@ -49,12 +49,23 @@ LOOKUP_KINDS = ["cnaes", "motivos", "municipios", "naturezas", "paises", "qualif
 # detection.
 MINIMAL_REQUIRED_COLUMNS = {
     "cnpjs.parquet": {
-        "cnpj", "cnpj_base", "cnpj_ordem", "cnpj_dv", "identificador_matriz_filial",
-        "razao_social", "natureza_juridica_codigo", "capital_social", "porte_empresa",
-        "situacao_cadastral", "data_inicio_atividade",
-        "cnae_principal_codigo", "cnae_secundario_codigos",
-        "uf", "municipio_codigo",
-        "opcao_simples", "opcao_mei",
+        "cnpj",
+        "cnpj_base",
+        "cnpj_ordem",
+        "cnpj_dv",
+        "identificador_matriz_filial",
+        "razao_social",
+        "natureza_juridica_codigo",
+        "capital_social",
+        "porte_empresa",
+        "situacao_cadastral",
+        "data_inicio_atividade",
+        "cnae_principal_codigo",
+        "cnae_secundario_codigos",
+        "uf",
+        "municipio_codigo",
+        "opcao_simples",
+        "opcao_mei",
     },
     "raizes.parquet": {"cnpj_base", "razao_social"},
     "socios.parquet": {"cnpj_base"},
@@ -132,18 +143,22 @@ def ia_inventory() -> list[dict]:
             continue
         item_meta = meta.get("metadata") or {}
         size = sum(int(f.get("size") or 0) for f in files)
-        docs.append({
-            "identifier": ident,
-            "item_size": size,
-            "files_count": len(files),
-            "publicdate": item_meta.get("publicdate", "?"),
-        })
+        docs.append(
+            {
+                "identifier": ident,
+                "item_size": size,
+                "files_count": len(files),
+                "publicdate": item_meta.get("publicdate", "?"),
+            }
+        )
         seen.add(ident)
-        print(f"  {ident:20s}  FOUND via metadata  ({len(files)} files, {size/(1024**3):.2f} GB)")
+        print(f"  {ident:20s}  FOUND via metadata  ({len(files)} files, {size / (1024**3):.2f} GB)")
 
     for d in sorted(docs, key=lambda d: d.get("identifier", "")):
         size_gb = (d.get("item_size") or 0) / (1024**3)
-        print(f"  {d.get('identifier'):20s}  {size_gb:7.2f} GB  {d.get('files_count','?'):>5} files")
+        print(
+            f"  {d.get('identifier'):20s}  {size_gb:7.2f} GB  {d.get('files_count', '?'):>5} files"
+        )
     return docs
 
 
@@ -240,7 +255,11 @@ def probe_raw_zips(month: str, files: dict[str, dict]) -> dict:
     plus HEAD the first one to confirm Accept-Ranges / Content-Length."""
     section(f"Raw RFB ZIPs at ficha-{month}/raw/")
     base = f"https://archive.org/download/ficha-{month}"
-    raw_files = {name: meta for name, meta in files.items() if name.startswith("raw/") and name.endswith(".zip")}
+    raw_files = {
+        name: meta
+        for name, meta in files.items()
+        if name.startswith("raw/") and name.endswith(".zip")
+    }
     print(f"  {len(raw_files)} raw ZIP(s) in item metadata")
 
     by_kind: dict[str, list[str]] = {}
@@ -261,14 +280,18 @@ def probe_raw_zips(month: str, files: dict[str, dict]) -> dict:
     probe_name = sorted(raw_files, key=lambda n: int(raw_files[n].get("size") or 0))[0]
     probe_url = f"{base}/{probe_name}"
     h = head(probe_url)
-    print(f"  HEAD {probe_name}: status={h.get('status')}  size={h.get('size',0)/(1024**2):.2f} MB  ranges={h.get('accept_ranges','?')}")
+    print(
+        f"  HEAD {probe_name}: status={h.get('status')}  size={h.get('size', 0) / (1024**2):.2f} MB  ranges={h.get('accept_ranges', '?')}"
+    )
 
     # IA serves transparent unzip via `<zip>/<member>` paths. Try
     # listing members by hitting the directory-like URL (returns HTML)
     # — we just check status + content-type.
     listing_url = f"{probe_url}/"
     h2 = head(listing_url)
-    print(f"  HEAD {probe_name}/ (unzip listing): status={h2.get('status')}  content_type={h2.get('content_type')}")
+    print(
+        f"  HEAD {probe_name}/ (unzip listing): status={h2.get('status')}  content_type={h2.get('content_type')}"
+    )
 
     return {
         "count": len(raw_files),
@@ -298,7 +321,7 @@ def duckdb_probes(month: str, report: dict) -> dict:
         # exposed as separate rows the way parquet_schema() would).
         t0 = time.monotonic()
         try:
-            cols = con.execute(f"DESCRIBE SELECT * FROM read_parquet('{url}')").fetchall()
+            cols = con.execute("DESCRIBE SELECT * FROM read_parquet(?)", [url]).fetchall()
             entry["schema_elapsed_s"] = round(time.monotonic() - t0, 3)
             # DESCRIBE columns: (column_name, column_type, null, key, default, extra)
             entry["columns"] = sorted({c[0] for c in cols})
@@ -311,7 +334,7 @@ def duckdb_probes(month: str, report: dict) -> dict:
         # COUNT(*) — touches metadata + row group stats only.
         t0 = time.monotonic()
         try:
-            n = con.execute(f"SELECT COUNT(*) FROM read_parquet('{url}')").fetchone()[0]
+            n = con.execute("SELECT COUNT(*) FROM read_parquet(?)", [url]).fetchone()[0]
             entry["count_elapsed_s"] = round(time.monotonic() - t0, 3)
             entry["row_count"] = n
         except Exception as exc:
@@ -320,7 +343,7 @@ def duckdb_probes(month: str, report: dict) -> dict:
         # LIMIT 5 — exercises a real data fetch.
         t0 = time.monotonic()
         try:
-            con.execute(f"SELECT * FROM read_parquet('{url}') LIMIT 5").fetchall()
+            con.execute("SELECT * FROM read_parquet(?) LIMIT 5", [url]).fetchall()
             entry["sample_elapsed_s"] = round(time.monotonic() - t0, 3)
         except Exception as exc:
             entry["sample_error"] = str(exc)
@@ -330,7 +353,7 @@ def duckdb_probes(month: str, report: dict) -> dict:
             t0 = time.monotonic()
             try:
                 rows = con.execute(
-                    f"SELECT COUNT(*) FROM read_parquet('{url}') WHERE uf = 'AC'"
+                    "SELECT COUNT(*) FROM read_parquet(?) WHERE uf = 'AC'", [url]
                 ).fetchone()[0]
                 entry["filter_uf_ac_elapsed_s"] = round(time.monotonic() - t0, 3)
                 entry["filter_uf_ac_rows"] = rows
@@ -348,9 +371,9 @@ def duckdb_probes(month: str, report: dict) -> dict:
         rc_s = f"{rc:,}" if isinstance(rc, int) else "?"
         print(
             f"  {name:18s}  rows={rc_s:>15s}  "
-            f"schema={entry.get('schema_elapsed_s','?')}s  "
-            f"count={entry.get('count_elapsed_s','?')}s  "
-            f"sample={entry.get('sample_elapsed_s','?')}s"
+            f"schema={entry.get('schema_elapsed_s', '?')}s  "
+            f"count={entry.get('count_elapsed_s', '?')}s  "
+            f"sample={entry.get('sample_elapsed_s', '?')}s"
         )
         out[name] = entry
 
