@@ -10,6 +10,12 @@ dependencies = [
     "pyarrow>=17.0.0",
     "httpx>=0.27.0",
     "internetarchive>=4.0.0",
+    # Diagnostics-only: doc_format_poc compares JSON vs MessagePack vs
+    # Protobuf wire size for the per-company ZIP design. Cheap deps
+    # (msgpack is a C extension already in pyarrow's transitive set;
+    # pure-protobuf is pure-Python and has no codegen step).
+    "msgpack>=1.0.0",
+    "pure-protobuf>=3.0.0",
 ]
 
 [project.optional-dependencies]

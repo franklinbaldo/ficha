@@ -76,7 +76,11 @@ jobs:
           # so leave it at 0.
           FORCE_FAIL=0
           if [ "$GITHUB_EVENT_NAME" = "push" ] && [ "$GITHUB_REF_NAME" = "claude/plan-next-steps-l7Dt6" ]; then
-            [ -z "$SCRIPT" ] && SCRIPT="ia_practicality"
+            # ia_practicality already passed green twice; switch the
+            # default to the per-company doc-format POC so this push
+            # exercises that. Override with workflow_dispatch.script if
+            # you want to re-run the practicality probe.
+            [ -z "$SCRIPT" ] && SCRIPT="doc_format_poc"
             [ -z "$TARGET_PR" ] && TARGET_PR="41"
           fi
           [ -z "$SCRIPT" ] && SCRIPT="phase1"
