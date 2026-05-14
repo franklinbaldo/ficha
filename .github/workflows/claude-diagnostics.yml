@@ -15,7 +15,9 @@ on:
   # doesn't have a dispatch tool surfaced. Other branches must use
   # workflow_dispatch explicitly.
   push:
-    branches: [claude/ficha-performance-audit-U4YJn]
+    branches:
+      - claude/ficha-performance-audit-U4YJn
+      - claude/plan-next-steps-l7Dt6
     paths:
       - '.github/workflows/claude-diagnostics.yml'
       - 'etl/scripts/diagnostics/**'
