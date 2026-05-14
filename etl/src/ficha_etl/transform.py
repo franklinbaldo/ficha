@@ -12,6 +12,7 @@ import collections
 import json
 import logging
 import os
+import shutil
 import time
 import zipfile
 from collections.abc import Iterable
@@ -531,9 +532,26 @@ def write_cnpjs_parquet(
         )
         """
     )
+    # W1.3 (docs/perf-plan-2026-05.md §1.3): partition the join by
+    # `LEFT(cnpj_basico, 1)` digit. The full 67M × 70M LEFT JOIN spilled
+    # 95 GiB of temp disk on a 16 GB GH runner with ~25 GB free
+    # (run 25858026785), exhausting `max_temp_directory_size`. Looping
+    # over 10 single-digit prefixes shrinks each join's working set
+    # ~10× — per-bucket spill drops to ~9 GiB, fitting comfortably.
+    # We still publish a single `cnpjs.parquet`: each bucket writes
+    # to `cnpjs.parquet.parts/part-X.parquet`, then a streaming
+    # parquet-to-parquet COPY merges them (no aggregation, no sort →
+    # DuckDB row-group-streams it without spilling).
+    parts_dir = output_path.parent / f"{output_path.stem}.parts"
+    if parts_dir.exists():
+        shutil.rmtree(parts_dir)
+    parts_dir.mkdir(parents=True, exist_ok=True)
     try:
-        con.execute(
-            f"""
+        for _bucket in "0123456789":
+            _part_path = parts_dir / f"part-{_bucket}.parquet"
+            log.info("    writing cnpjs bucket %s/10 → %s", _bucket, _part_path.name)
+            con.execute(
+                f"""
             COPY (
                 SELECT
                     est.cnpj_basico || est.cnpj_ordem || est.cnpj_dv AS cnpj,
@@ -626,6 +644,12 @@ def write_cnpjs_parquet(
             LEFT JOIN lookup_cnaes cn_p ON cn_p.codigo = est.cnae_fiscal_principal
             LEFT JOIN lookup_municipios mn ON mn.codigo = est.municipio
             LEFT JOIN lookup_paises ps ON ps.codigo = est.pais
+            -- W1.3 partition predicate. `cnpj_basico` is an 8-digit
+            -- string; LEFT(...,1) is a digit '0'-'9'. DuckDB pushes
+            -- this filter down into the estabelecimento scan AND, via
+            -- the JOIN equality, restricts empresa/simples to the same
+            -- bucket too. Each bucket holds ~1/10 of all rows.
+            WHERE LEFT(est.cnpj_basico, 1) = ?
             -- ORDER BY cnpj omitted: forced global sort of ~30 GB join
             -- output through DuckDB's external sorter blew past 70 GB
             -- disk on GH Actions runners (PR #24, run 25519086268).
@@ -638,8 +662,21 @@ def write_cnpjs_parquet(
             -- range workloads materialize.
             ) TO ? (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 200000)
             """,
-            [str(output_path)],
+                [_bucket, str(_part_path)],
+            )
+
+        # Stream-concat — parquet-to-parquet without aggregation/sort is
+        # row-group streaming in DuckDB; peak memory is just one row
+        # group's worth, not the full table.
+        log.info("    merging %d bucket parts → %s", 10, output_path.name)
+        con.execute(
+            """
+          COPY (SELECT * FROM read_parquet(?))
+          TO ? (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 200000)
+          """,
+            [str(parts_dir / "part-*.parquet"), str(output_path)],
         )
+        shutil.rmtree(parts_dir)
     finally:
         # try/finally guarantees _cnae_map is cleaned up even if COPY
         # raises mid-write — important because the same con is reused
