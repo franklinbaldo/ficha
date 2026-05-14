@@ -276,17 +276,18 @@ def duckdb_probes(month: str, report: dict) -> dict:
         url = report[name]["url"]
         entry: dict = {"url": url}
 
-        # Footer-only read — schema.
+        # Footer-only read — top-level columns via DESCRIBE (binds to
+        # read_parquet's projection, so children of LIST/STRUCT aren't
+        # exposed as separate rows the way parquet_schema() would).
         t0 = time.monotonic()
         try:
-            cols = con.execute(
-                f"SELECT name FROM parquet_schema('{url}') WHERE NOT path_in_schema LIKE '%.list.%'"
-            ).fetchall()
+            cols = con.execute(f"DESCRIBE SELECT * FROM read_parquet('{url}')").fetchall()
             entry["schema_elapsed_s"] = round(time.monotonic() - t0, 3)
+            # DESCRIBE columns: (column_name, column_type, null, key, default, extra)
             entry["columns"] = sorted({c[0] for c in cols})
         except Exception as exc:
             entry["schema_error"] = str(exc)
-            print(f"  {name}: parquet_schema FAILED — {exc}")
+            print(f"  {name}: DESCRIBE FAILED — {exc}")
             out[name] = entry
             continue
 
