@@ -1,11 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { ficha } from '../generated/company.pb.js';
-import {
-  cnpjpath,
-  companiesZipUrl,
-  companyToEmpresaRows,
-  fetchCompany,
-} from './companies';
+import { cnpjpath, companiesZipUrl, fetchCompany } from './companies';
 
 describe('cnpjpath', () => {
   it('zero-pads to 8 digits and slices to XX/XXX/XXX.pb', () => {
@@ -98,31 +93,3 @@ describe('fetchCompany', () => {
   });
 });
 
-describe('companyToEmpresaRows', () => {
-  it('flattens nested establishments to denormalized rows', () => {
-    const company = ficha.v1.Company.decode(encodeFixture(12345678, 'TESTE LTDA'));
-    const rows = companyToEmpresaRows(company);
-    expect(rows).toHaveLength(1);
-    const row = rows[0]!;
-    expect(row.cnpj).toBe('12345678000123');
-    expect(row.razao_social).toBe('TESTE LTDA');
-    expect(row.uf).toBe('AC');
-    expect(row.nome_fantasia).toBe('FANTASIA');
-    // Canonical string '1' = MATRIZ, not the protobuf numeric enum.
-    expect(row.identificador_matriz_filial).toBe('1');
-    // Canonical key is singular (matches EstabelecimentoSchema +
-    // cnpjs.parquet); the proto field is plural.
-    expect(row).toHaveProperty('cnae_secundario_codigos');
-    expect(row).not.toHaveProperty('cnaes_secundarios_codigos');
-  });
-
-  it('returns empty list for a Company with no estabelecimentos', () => {
-    const msg = ficha.v1.Company.create({ cnpj_base: 1 });
-    expect(companyToEmpresaRows(msg)).toEqual([]);
-  });
-
-  it('throws when cnpj_base is missing or zero', () => {
-    const zeroBase = ficha.v1.Company.create({ razao_social: 'NO BASE' });
-    expect(() => companyToEmpresaRows(zeroBase)).toThrow(/missing cnpj_base/);
-  });
-});
