@@ -379,8 +379,7 @@ def _cmd_pack(
         return 1
 
     print(
-        f"pack OK — {result['count']:,} companies, "
-        f"{result['size_bytes'] / 1e6:.1f} MB → {output}"
+        f"pack OK — {result['count']:,} companies, {result['size_bytes'] / 1e6:.1f} MB → {output}"
     )
 
     if not skip_upload:
