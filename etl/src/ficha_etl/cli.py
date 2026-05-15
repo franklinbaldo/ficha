@@ -12,6 +12,7 @@ from . import (
     fetcher,
     manifest as manifest_mod,
     mirror,
+    pack as pack_mod,
     smoke,
     sources,
     transform,
@@ -138,6 +139,35 @@ def main(argv: list[str] | None = None) -> int:
         help="Quantos CNPJs amostrar no roundtrip (default: 100)",
     )
 
+    pk = sub.add_parser(
+        "pack",
+        help="Empacota companies.zip a partir dos parquets do mês (IA ou local)",
+    )
+    pk.add_argument("--month", required=True, help="Snapshot alvo no formato YYYY-MM")
+    pk.add_argument(
+        "--output",
+        type=Path,
+        default=Path("companies.zip"),
+        help="Caminho de saída do companies.zip (default: ./companies.zip)",
+    )
+    pk.add_argument(
+        "--local-parquets",
+        type=Path,
+        default=None,
+        help="Diretório local com os parquets; omitir lê do IA via httpfs",
+    )
+    pk.add_argument(
+        "--memory-limit-gb",
+        type=float,
+        default=None,
+        help="Limite de memória DuckDB em GB (default: sem limite explícito)",
+    )
+    pk.add_argument(
+        "--skip-upload",
+        action="store_true",
+        help="Gera o ZIP mas não faz upload para o IA",
+    )
+
     ft = sub.add_parser(
         "fetch",
         help=(
@@ -179,6 +209,14 @@ def main(argv: list[str] | None = None) -> int:
             args.strict,
             args.verify,
             args.verify_sample_size,
+        )
+    if args.command == "pack":
+        return _cmd_pack(
+            args.month,
+            output=args.output,
+            local_parquets=args.local_parquets,
+            memory_limit_gb=args.memory_limit_gb,
+            skip_upload=args.skip_upload,
         )
     if args.command == "run":
         return _cmd_run(
@@ -312,6 +350,60 @@ def _cmd_fetch(month: str, filename: str, cache_dir: Path, no_upstream: bool) ->
     return 0
 
 
+def _cmd_pack(
+    month: str,
+    *,
+    output: Path,
+    local_parquets: Path | None,
+    memory_limit_gb: float | None,
+    skip_upload: bool,
+) -> int:
+    """Empacota companies.zip e opcionalmente faz upload para o IA."""
+    import os
+
+    if not sources.is_valid_month(month):
+        print(f"error: month must be YYYY-MM, got {month!r}", file=sys.stderr)
+        return 2
+
+    parquets_base = str(local_parquets) if local_parquets else None
+    log.info("[pack] building companies.zip for %s", month)
+    try:
+        result = pack_mod.pack_from_parquets(
+            month,
+            output,
+            parquets_base=parquets_base,
+            memory_limit_gb=memory_limit_gb,
+        )
+    except Exception as exc:
+        print(f"error: pack failed: {exc}", file=sys.stderr)
+        return 1
+
+    print(
+        f"pack OK — {result['count']:,} companies, {result['size_bytes'] / 1e6:.1f} MB → {output}"
+    )
+
+    if not skip_upload:
+        access_key = os.environ.get("IA_ACCESS_KEY", "")
+        secret_key = os.environ.get("IA_SECRET_KEY", "")
+        if not access_key or not secret_key:
+            print(
+                "error: IA_ACCESS_KEY e IA_SECRET_KEY devem estar definidos para upload\n"
+                "       use --skip-upload para rodar sem credenciais",
+                file=sys.stderr,
+            )
+            return 1
+        try:
+            upload_mod.upload_companies_zip(
+                month, output, access_key=access_key, secret_key=secret_key
+            )
+        except Exception as exc:
+            print(f"error: upload companies.zip falhou: {exc}", file=sys.stderr)
+            return 1
+        print(f"upload OK — ia:ficha-{month}/companies.zip")
+
+    return 0
+
+
 def _cmd_run(
     month: str,
     *,
@@ -322,17 +414,19 @@ def _cmd_run(
     verify: bool,
     verify_sample_size: int,
 ) -> int:
-    """Orquestra: stream ZIPs → IA → transform → upload parquets → manifest.
+    """Orquestra: stream ZIPs → IA → transform → upload parquets → pack → manifest.
 
     Com upload ativado (default):
       1. Stream 37 ZIPs da RFB → IA (zero disco, paralelo)
       2. Transform: baixa do IA (rápido) → DuckDB → parquets
       3. Upload parquets + lookups.json → IA
-      4. Atualiza manifest.json
+      4. Pack: parquets locais → companies.zip → upload IA
+      5. Atualiza manifest.json
 
     Com --skip-upload (dry-run):
       1. Transform: baixa da RFB → DuckDB → parquets
-      2. Atualiza manifest.json (sem upload)
+      2. Pack: parquets locais → companies.zip (sem upload)
+      3. Atualiza manifest.json (sem upload)
     """
     import os
 
@@ -355,19 +449,19 @@ def _cmd_run(
             return 1
 
         # ── 1. Stream ZIPs → IA (zero disco) ────────────────────────────────
-        log.info("[run 1/4] stream ZIPs RFB → IA (zero disco)")
+        log.info("[run 1/5] stream ZIPs RFB → IA (zero disco)")
         try:
             upload_mod.stream_raw_zips_to_ia(month, access_key=access_key, secret_key=secret_key)
         except Exception as exc:
             print(f"error: stream ZIPs falhou: {exc}", file=sys.stderr)
             return 1
     else:
-        log.info("[run 1/4] stream ignorado (--skip-upload) — transform usará RFB direto")
+        log.info("[run 1/5] stream ignorado (--skip-upload) — transform usará RFB direto")
 
     # ── 2. Transform ─────────────────────────────────────────────────────────
     # Com upload: fetcher chain encontra ZIPs no IA (rápido).
     # Sem upload: fetcher chain vai direto na RFB.
-    log.info("[run 2/4] transform %s → %s", month, output_dir)
+    log.info("[run 2/5] transform %s → %s", month, output_dir)
     try:
         transform.transform_snapshot(
             month,
@@ -383,7 +477,7 @@ def _cmd_run(
 
     # ── 3. Upload parquets ───────────────────────────────────────────────────
     if not skip_upload:
-        log.info("[run 3/4] upload outputs (parquets + lookups.json) → IA")
+        log.info("[run 3/5] upload outputs (parquets + lookups.json) → IA")
         try:
             upload_mod.upload_outputs(
                 month, output_dir, access_key=access_key, secret_key=secret_key
@@ -392,10 +486,34 @@ def _cmd_run(
             print(f"error: upload outputs falhou: {exc}", file=sys.stderr)
             return 1
     else:
-        log.info("[run 3/4] upload ignorado (--skip-upload)")
+        log.info("[run 3/5] upload ignorado (--skip-upload)")
 
-    # ── 4. Manifest ─────────────────────────────────────────────────────────
-    log.info("[run 4/4] atualizar manifest → %s", manifest_path)
+    # ── 4. Pack companies.zip ────────────────────────────────────────────────
+    companies_zip = output_dir / "companies.zip"
+    log.info("[run 4/5] pack companies.zip ← parquets locais → %s", companies_zip)
+    try:
+        result = pack_mod.pack_from_parquets(month, companies_zip, parquets_base=str(output_dir))
+    except Exception as exc:
+        print(f"error: pack companies.zip falhou: {exc}", file=sys.stderr)
+        return 1
+    log.info(
+        "[run 4/5] pack OK — %d companies, %.1f MB",
+        result["count"],
+        result["size_bytes"] / 1e6,
+    )
+
+    if not skip_upload:
+        log.info("[run 4/5] upload companies.zip → IA")
+        try:
+            upload_mod.upload_companies_zip(
+                month, companies_zip, access_key=access_key, secret_key=secret_key
+            )
+        except Exception as exc:
+            print(f"error: upload companies.zip falhou: {exc}", file=sys.stderr)
+            return 1
+
+    # ── 5. Manifest ─────────────────────────────────────────────────────────
+    log.info("[run 5/5] atualizar manifest → %s", manifest_path)
     try:
         entry = manifest_mod.build_snapshot_entry(month, output_dir)
         manifest_mod.update_manifest(manifest_path, entry)
@@ -403,7 +521,11 @@ def _cmd_run(
         print(f"error: manifest update falhou: {exc}", file=sys.stderr)
         return 1
 
-    print(f"run OK — pipeline {month} concluído. Manifest: {manifest_path}")
+    companies_size_mb = companies_zip.stat().st_size / 1e6 if companies_zip.exists() else 0
+    print(
+        f"run OK — pipeline {month} concluído. "
+        f"companies.zip: {companies_size_mb:.1f} MB. Manifest: {manifest_path}"
+    )
     return 0
 
 

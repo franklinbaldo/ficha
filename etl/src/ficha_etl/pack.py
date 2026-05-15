@@ -21,14 +21,17 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import re
 import zipfile
 from pathlib import Path
 from typing import Iterator
 
+import duckdb
 from google.protobuf import descriptor_pb2
 from google.protobuf.descriptor import FileDescriptor
 
+from ficha_etl import mirror
 from ficha_etl.proto.ficha.v1.company_pb2 import (
     Company,
     Estabelecimento,
@@ -42,6 +45,7 @@ from ficha_etl.proto.ficha.v1.company_pb2 import (
     DESCRIPTOR as _COMPANY_FILE_DESCRIPTOR,
 )
 
+log = logging.getLogger(__name__)
 _PROTO_DIR = Path(__file__).parent.parent.parent.parent / "proto"
 _PROTO_PATH = _PROTO_DIR / "ficha" / "v1" / "company.proto"
 
@@ -274,7 +278,22 @@ def pack_companies(
     schema_sha256 = hashlib.sha256(schema_desc).hexdigest()
     snapshot_yyyymm = int(snapshot_month.replace("-", ""))
 
+    # Fail fast if the caller didn't provide every required lookup kind
+    # (Codex P2 on PR #41). The package contract is that every published
+    # companies.zip is queryable end-to-end — if a kind is missing the
+    # frontend can't decode codes of that kind and there's no recovery
+    # short of republishing.
+    missing_kinds = sorted(set(LOOKUP_KINDS) - set(lookup_rows.keys()))
+    if missing_kinds:
+        raise ValueError(
+            f"lookup_rows missing required kinds: {missing_kinds} (expected all of: {LOOKUP_KINDS})"
+        )
+
     count = 0
+    # O(1) duplicate guard: requires input sorted by cnpj_base (pack_from_parquets
+    # guarantees this via ORDER BY; external callers must sort too). A full set
+    # would grow to tens of millions of entries on production snapshots.
+    prev_cnpj_base: int | None = None
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     with zipfile.ZipFile(output_path, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
@@ -290,6 +309,24 @@ def pack_companies(
         # company docs
         for row in rows:
             company = row_to_company(row)
+            # Enforce strictly-increasing cnpj_base. Two reasons:
+            #   1. Duplicates: zipfile silently writes both entries under the
+            #      same name and different ZIP readers resolve conflicts
+            #      differently — safer to fail at pack time.
+            #   2. Sorted-input contract: the adjacent-only duplicate check
+            #      above would miss non-adjacent duplicates in unsorted input.
+            #      Requiring strictly-increasing keys makes the guard complete.
+            if prev_cnpj_base is not None and company.cnpj_base <= prev_cnpj_base:
+                if company.cnpj_base == prev_cnpj_base:
+                    raise ValueError(
+                        f"duplicate cnpj_base in input rows: {company.cnpj_base:08d} "
+                        f"— caller must sort and deduplicate by cnpj_base before packing"
+                    )
+                raise ValueError(
+                    f"unsorted input rows: cnpj_base {company.cnpj_base:08d} "
+                    f"< previous {prev_cnpj_base:08d} — caller must sort by cnpj_base"
+                )
+            prev_cnpj_base = company.cnpj_base
             company.snapshot_yyyymm = snapshot_yyyymm
             pb_bytes = company.SerializeToString()
             zf.writestr(cnpjpath(company.cnpj_base), pb_bytes)
@@ -306,3 +343,152 @@ def pack_companies(
 
     size = output_path.stat().st_size
     return {"count": count, "size_bytes": size, "schema_sha256": schema_sha256}
+
+
+# ---- read from parquets (IA or local) ----------------------------------------
+
+_COMPANIES_SQL = """
+SELECT
+    r.cnpj_base,
+    r.razao_social,
+    r.razao_social_normalizada,
+    r.natureza_juridica_codigo,
+    r.porte_empresa,
+    r.capital_social,
+    r.ente_federativo_responsavel,
+    r.qtd_estabelecimentos,
+    r.qtd_estabelecimentos_ativos,
+    e.estabelecimentos,
+    s.socios
+FROM read_parquet(?) r
+LEFT JOIN (
+    SELECT cnpj_base,
+           list({
+               'cnpj_ordem': cnpj_ordem,
+               'cnpj_dv': cnpj_dv,
+               'identificador_matriz_filial': identificador_matriz_filial,
+               'nome_fantasia': nome_fantasia,
+               'situacao_cadastral': situacao_cadastral,
+               'data_situacao_cadastral': data_situacao_cadastral,
+               'motivo_situacao_cadastral_codigo': motivo_situacao_cadastral_codigo,
+               'situacao_especial': situacao_especial,
+               'data_situacao_especial': data_situacao_especial,
+               'data_inicio_atividade': data_inicio_atividade,
+               'cnae_principal_codigo': cnae_principal_codigo,
+               'cnaes_secundarios_codigos': cnae_secundario_codigos,
+               'tipo_logradouro': tipo_logradouro,
+               'logradouro': logradouro,
+               'numero': numero,
+               'complemento': complemento,
+               'bairro': bairro,
+               'cep': cep,
+               'uf': uf,
+               'municipio_codigo': municipio_codigo,
+               'nome_cidade_exterior': nome_cidade_exterior,
+               'pais_codigo': pais_codigo,
+               'ddd_1': ddd_1,
+               'telefone_1': telefone_1,
+               'ddd_2': ddd_2,
+               'telefone_2': telefone_2,
+               'ddd_fax': ddd_fax,
+               'fax': fax,
+               'correio_eletronico': correio_eletronico,
+               'opcao_simples': opcao_simples,
+               'data_opcao_simples': data_opcao_simples,
+               'data_exclusao_simples': data_exclusao_simples,
+               'opcao_mei': opcao_mei,
+               'data_opcao_mei': data_opcao_mei,
+               'data_exclusao_mei': data_exclusao_mei
+           } ORDER BY cnpj_ordem, cnpj_dv) AS estabelecimentos
+    FROM read_parquet(?)
+    GROUP BY cnpj_base
+) e USING (cnpj_base)
+LEFT JOIN (
+    SELECT cnpj_base,
+           list({
+               'tipo': tipo,
+               'nome_socio_razao_social': nome_socio_razao_social,
+               'cpf_mascarado': cpf_mascarado,
+               'cnpj_socio': cnpj_socio,
+               'qualificacao_codigo': qualificacao_codigo,
+               'data_entrada_sociedade': data_entrada_sociedade,
+               'pais_codigo': pais_codigo,
+               'faixa_etaria': faixa_etaria,
+               'representante_legal_cpf': representante_legal_cpf,
+               'representante_legal_nome': representante_legal_nome,
+               'representante_legal_qualificacao_codigo': representante_legal_qualificacao_codigo
+           } ORDER BY qualificacao_codigo,
+                      nome_socio_razao_social,
+                      cnpj_socio,
+                      cpf_mascarado,
+                      data_entrada_sociedade,
+                      tipo,
+                      pais_codigo,
+                      faixa_etaria,
+                      representante_legal_cpf,
+                      representante_legal_nome,
+                      representante_legal_qualificacao_codigo) AS socios
+    FROM read_parquet(?)
+    GROUP BY cnpj_base
+) s USING (cnpj_base)
+ORDER BY r.cnpj_base
+"""
+
+
+def pack_from_parquets(
+    month: str,
+    output_path: Path,
+    *,
+    parquets_base: str | None = None,
+    batch_size: int = 10_000,
+    memory_limit_gb: float | None = None,
+) -> dict:
+    """Build companies.zip by reading parquets from IA (or a local directory).
+
+    Args:
+        month: snapshot in YYYY-MM format.
+        output_path: destination path for companies.zip.
+        parquets_base: URL prefix or local directory path containing the parquets.
+            Defaults to the IA item URL for the given month.
+        batch_size: rows to fetch per DuckDB fetchmany() call.
+        memory_limit_gb: optional DuckDB memory cap in GB.
+
+    Returns:
+        { count, size_bytes, schema_sha256 }
+    """
+    if parquets_base is None:
+        # mirror.item_root honors FICHA_IA_BASE_URL — same source of truth as
+        # the rest of the pipeline (tests/staging/self-hosted mirrors).
+        parquets_base = mirror.item_root(month)
+
+    raizes_url = f"{parquets_base}/raizes.parquet"
+    cnpjs_url = f"{parquets_base}/cnpjs.parquet"
+    socios_url = f"{parquets_base}/socios.parquet"
+
+    con = duckdb.connect()
+    if parquets_base.startswith("http"):
+        con.execute("INSTALL httpfs; LOAD httpfs;")
+    if memory_limit_gb is not None:
+        con.execute(f"SET memory_limit='{memory_limit_gb}GB'")
+
+    log.info("pack_from_parquets: reading lookups from %s", parquets_base)
+    lookup_rows: dict[str, list[dict]] = {}
+    for kind in LOOKUP_KINDS:
+        lk_url = f"{parquets_base}/lookups/{kind}.parquet"
+        rows = con.execute("SELECT codigo, descricao FROM read_parquet(?)", [lk_url]).fetchall()
+        lookup_rows[kind] = [{"codigo": r[0], "descricao": r[1]} for r in rows]
+        log.info("  lookup %s: %d entries", kind, len(rows))
+
+    log.info("pack_from_parquets: querying company rows")
+    cur = con.execute(_COMPANIES_SQL, [raizes_url, cnpjs_url, socios_url])
+    cols = [d[0] for d in cur.description]
+
+    def _row_iter() -> Iterator[dict]:
+        while True:
+            batch = cur.fetchmany(batch_size)
+            if not batch:
+                break
+            for row in batch:
+                yield dict(zip(cols, row))
+
+    return pack_companies(_row_iter(), lookup_rows, output_path, snapshot_month=month)
