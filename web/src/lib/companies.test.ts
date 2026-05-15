@@ -108,6 +108,12 @@ describe('companyToEmpresaRows', () => {
     expect(row.razao_social).toBe('TESTE LTDA');
     expect(row.uf).toBe('AC');
     expect(row.nome_fantasia).toBe('FANTASIA');
+    // Canonical string '1' = MATRIZ, not the protobuf numeric enum.
+    expect(row.identificador_matriz_filial).toBe('1');
+    // Canonical key is singular (matches EstabelecimentoSchema +
+    // cnpjs.parquet); the proto field is plural.
+    expect(row).toHaveProperty('cnae_secundario_codigos');
+    expect(row).not.toHaveProperty('cnaes_secundarios_codigos');
   });
 
   it('returns empty list for a Company with no estabelecimentos', () => {

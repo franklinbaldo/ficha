@@ -82,6 +82,17 @@ export function companyToEmpresaRows(company: Company): Record<string, unknown>[
     throw new Error('companyToEmpresaRows: Company is missing cnpj_base');
   }
   const base = String(company.cnpj_base).padStart(8, '0');
+  // Map the protobuf TipoEstabelecimento enum to the canonical string
+  // representation that EstabelecimentoSchema (web/src/schemas/v1/) and
+  // cnpjs.parquet use: '1' = MATRIZ, '2' = FILIAL. Anything else passes
+  // through as empty string — callers shouldn't see it for valid pack.py
+  // output (UNSPECIFIED indicates a hand-crafted Company).
+  function tipoStr(t: number | null | undefined): string {
+    if (t === 1) return '1';
+    if (t === 2) return '2';
+    return '';
+  }
+
   return (company.estabelecimentos ?? []).map((e) => {
     const ordem = String(e.cnpj_ordem ?? 0).padStart(4, '0');
     const dv = String(e.cnpj_dv ?? 0).padStart(2, '0');
@@ -90,7 +101,7 @@ export function companyToEmpresaRows(company: Company): Record<string, unknown>[
       cnpj_base: base,
       cnpj_ordem: ordem,
       cnpj_dv: dv,
-      identificador_matriz_filial: e.tipo,
+      identificador_matriz_filial: tipoStr(e.tipo),
       razao_social: company.razao_social ?? '',
       razao_social_normalizada: company.razao_social_normalizada ?? '',
       natureza_juridica_codigo: company.natureza_juridica_codigo ?? 0,
@@ -103,7 +114,10 @@ export function companyToEmpresaRows(company: Company): Record<string, unknown>[
       motivo_situacao_cadastral_codigo: e.motivo_situacao_cadastral_codigo ?? 0,
       data_inicio_atividade: e.data_inicio_atividade ?? 0,
       cnae_principal_codigo: e.cnae_principal_codigo ?? 0,
-      cnaes_secundarios_codigos: e.cnaes_secundarios_codigos ?? [],
+      // Canonical key per EstabelecimentoSchema (singular, matches
+      // cnpjs.parquet). The proto field is plural — translate at the
+      // adapter boundary so consumers see the parquet-facing name.
+      cnae_secundario_codigos: e.cnaes_secundarios_codigos ?? [],
       tipo_logradouro: e.tipo_logradouro ?? '',
       logradouro: e.logradouro ?? '',
       numero: e.numero ?? '',
