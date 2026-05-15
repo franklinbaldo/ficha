@@ -45,7 +45,6 @@ from ficha_etl.proto.ficha.v1.company_pb2 import (
 )
 
 log = logging.getLogger(__name__)
-
 _PROTO_DIR = Path(__file__).parent.parent.parent.parent / "proto"
 _PROTO_PATH = _PROTO_DIR / "ficha" / "v1" / "company.proto"
 
