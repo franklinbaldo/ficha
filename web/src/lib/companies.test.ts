@@ -91,5 +91,28 @@ describe('fetchCompany', () => {
       fetchCompany(1, { identifier: 'x', fetchImpl })
     ).rejects.toThrow(/HTTP 503/);
   });
+
+  it('coerces uint64 cnpj_socio to a plain number', async () => {
+    // 14-digit CNPJ — within Number.MAX_SAFE_INTEGER (2^53-1 ≈ 9e15).
+    const cnpjSocio = 12345678000123;
+    const msg = ficha.v1.Company.create({
+      cnpj_base: 1,
+      socios: [
+        ficha.v1.Socio.create({
+          tipo: ficha.v1.TipoSocio.PESSOA_JURIDICA,
+          cnpj_socio: cnpjSocio,
+        }),
+      ],
+    });
+    const bytes = ficha.v1.Company.encode(msg).finish();
+    const fetchImpl = vi.fn(async () => bytesResponse(bytes)) as unknown as FetchLike;
+    const c = await fetchCompany(1, { identifier: 'x', fetchImpl });
+    const socio = c?.socios?.[0];
+    expect(socio).toBeDefined();
+    // Runtime type must match the declared `number` typing — not a Long
+    // object — otherwise comparisons and JSON shaping break for callers.
+    expect(typeof socio!.cnpj_socio).toBe('number');
+    expect(socio!.cnpj_socio).toBe(cnpjSocio);
+  });
 });
 
