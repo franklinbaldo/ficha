@@ -48,60 +48,93 @@ from ficha_etl.proto.ficha.v1.company_pb2 import Company  # noqa: E402
 from ficha_etl.upload import upload_companies_zip  # noqa: E402
 
 
-def _required_members(meta_count: int) -> list[str]:
-    members = ["_schema.desc", "_schema.proto", "_meta.json"]
-    members.extend(f"_lookups/{k}.pb" for k in LOOKUP_KINDS)
-    return members
+_REQUIRED_MEMBERS = (
+    "_schema.desc",
+    "_schema.proto",
+    "_meta.json",
+    *(f"_lookups/{k}.pb" for k in LOOKUP_KINDS),
+)
 
 
-def validate_zip(zip_path: Path, sample_size: int = 100) -> dict:
-    """Open companies.zip and sanity-check its contents.
+def scan_zip(zip_path: Path, reservoir_size: int) -> dict:
+    """Single-pass scan of the ZIP.
 
-    Returns a report dict; raises AssertionError on any validation failure.
+    Validates required members, counts company .pb entries, and
+    reservoir-samples up to `reservoir_size` member names. Avoids
+    materializing the full name list — on a 67M-row snapshot that would
+    cost ~2 GB of strings on top of what `zipfile` already holds.
     """
-    report: dict = {"path": str(zip_path), "size_bytes": zip_path.stat().st_size}
+    required = set(_REQUIRED_MEMBERS)
+    found_required: set[str] = set()
+    pb_count = 0
+    rng = random.Random(42)
+    samples: list[str] = []
 
     with zipfile.ZipFile(zip_path, "r") as zf:
-        names = set(zf.namelist())
+        for info in zf.infolist():
+            name = info.filename
+            if name in required:
+                found_required.add(name)
+                continue
+            if not name.endswith(".pb") or name.startswith("_"):
+                continue
+            pb_count += 1
+            # Algorithm R reservoir sampling — keeps a uniform sample of
+            # company paths without ever holding more than `reservoir_size`.
+            if len(samples) < reservoir_size:
+                samples.append(name)
+            else:
+                j = rng.randrange(pb_count)
+                if j < reservoir_size:
+                    samples[j] = name
 
-        # 1. Required artifacts present
-        for m in _required_members(0):
-            if m not in names:
-                raise AssertionError(f"missing required ZIP member: {m}")
-        report["required_members_ok"] = True
+        missing = required - found_required
+        if missing:
+            raise AssertionError(f"missing required ZIP members: {sorted(missing)}")
 
-        # 2. _meta.json round-trip
         meta = json.loads(zf.read("_meta.json"))
-        report["meta"] = meta
-        if meta.get("count", 0) <= 0:
-            raise AssertionError(f"_meta.json count must be positive, got {meta.get('count')}")
 
-        # 3. Sample-decode random .pb members
-        pb_members = [n for n in names if n.endswith(".pb") and not n.startswith("_")]
-        if len(pb_members) != meta["count"]:
-            raise AssertionError(
-                f"member count {len(pb_members)} != _meta.json count {meta['count']}"
-            )
+    return {"meta": meta, "pb_count": pb_count, "samples": samples}
 
-        rng = random.Random(42)  # deterministic sample for reproducible diagnostics
-        sample = rng.sample(pb_members, min(sample_size, len(pb_members)))
-        decoded = 0
-        for path in sample:
+
+def validate_zip(zip_path: Path, sample_size: int = 100, reservoir_size: int = 1000) -> dict:
+    """Validate companies.zip and decode a sample of `.pb` members.
+
+    Returns a report dict; raises AssertionError on any validation failure.
+    `reservoir_size` is the number of paths persisted to the latency-probe
+    artifact (always ≥ sample_size).
+    """
+    report: dict = {"path": str(zip_path), "size_bytes": zip_path.stat().st_size}
+    reservoir_size = max(reservoir_size, sample_size)
+    scan = scan_zip(zip_path, reservoir_size=reservoir_size)
+
+    report["required_members_ok"] = True
+    report["meta"] = scan["meta"]
+    meta = scan["meta"]
+    if meta.get("count", 0) <= 0:
+        raise AssertionError(f"_meta.json count must be positive, got {meta.get('count')}")
+    if scan["pb_count"] != meta["count"]:
+        raise AssertionError(f"member count {scan['pb_count']} != _meta.json count {meta['count']}")
+
+    # Decode the first `sample_size` reservoir paths — the reservoir is
+    # already a uniform random sample, so a prefix is uniform too.
+    decode_sample = scan["samples"][:sample_size]
+    with zipfile.ZipFile(zip_path, "r") as zf:
+        for path in decode_sample:
             company = Company()
             company.ParseFromString(zf.read(path))
             if company.cnpj_base == 0:
                 raise AssertionError(f"decoded company has cnpj_base=0 at {path}")
-            # Path-derived cnpj_base must match the embedded field.
             expected_path = cnpjpath(company.cnpj_base)
             if expected_path != path:
                 raise AssertionError(
                     f"path mismatch: file at {path} encodes cnpj_base={company.cnpj_base} "
                     f"which maps to {expected_path}"
                 )
-            decoded += 1
-        report["sample_decoded"] = decoded
-        report["sample_size"] = len(sample)
 
+    report["sample_decoded"] = len(decode_sample)
+    report["sample_size"] = len(decode_sample)
+    report["reservoir_paths"] = scan["samples"]
     return report
 
 
@@ -183,19 +216,13 @@ def main() -> int:
         }
 
     # ── Output ───────────────────────────────────────────────────────────
-    # Persist the .pb path list so companies_zip_latency.py can sample it
-    # without re-opening the ZIP. Capped at 1000 paths (~80 KB) to keep
-    # this artifact small.
-    try:
-        with zipfile.ZipFile(zip_path, "r") as zf:
-            pb_paths = [n for n in zf.namelist() if n.endswith(".pb") and not n.startswith("_")]
-        rng = random.Random(42)
-        sampled_paths = rng.sample(pb_paths, min(1000, len(pb_paths)))
-        Path("/tmp/pack_e2e_paths.json").write_text(json.dumps(sorted(sampled_paths)))
-        report["paths_artifact"] = "/tmp/pack_e2e_paths.json"
-        report["paths_count"] = len(sampled_paths)
-    except Exception as exc:
-        log.warning("failed to write paths artifact: %s", exc)
+    # Persist the reservoir of .pb paths (already a uniform sample of
+    # ~1000 entries, built during the validation scan) so
+    # companies_zip_latency.py can pick targets without reopening the ZIP.
+    sampled_paths = report["validation"].pop("reservoir_paths", [])
+    Path("/tmp/pack_e2e_paths.json").write_text(json.dumps(sorted(sampled_paths)))
+    report["paths_artifact"] = "/tmp/pack_e2e_paths.json"
+    report["paths_count"] = len(sampled_paths)
 
     Path("/tmp/pack_e2e.json").write_text(json.dumps(report, indent=2, default=str))
     print(json.dumps(report, indent=2, default=str))
