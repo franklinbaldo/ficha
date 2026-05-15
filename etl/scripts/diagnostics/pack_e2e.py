@@ -169,9 +169,14 @@ def main() -> int:
     log.info("validating ZIP (sample_size=%d)", sample_size)
     try:
         report["validation"] = validate_zip(zip_path, sample_size=sample_size)
-    except AssertionError as exc:
-        log.error("validation failed: %s", exc)
-        report["error"] = f"validation: {exc}"
+    except Exception as exc:
+        # AssertionError covers our explicit checks, but zf.read()/
+        # ParseFromString() also raise on a corrupt central directory or
+        # malformed .pb payload. Route everything through the same JSON
+        # report so CI surfaces a consistent ::error:: instead of a raw
+        # traceback.
+        log.exception("validation failed")
+        report["error"] = f"validation: {type(exc).__name__}: {exc}"
         Path("/tmp/pack_e2e.json").write_text(json.dumps(report, indent=2, default=str))
         print(json.dumps(report, indent=2, default=str))
         print(f"::error::ZIP validation failed: {exc}")
@@ -219,8 +224,11 @@ def main() -> int:
     # Persist the reservoir of .pb paths (already a uniform sample of
     # ~1000 entries, built during the validation scan) so
     # companies_zip_latency.py can pick targets without reopening the ZIP.
+    # Preserve the reservoir's uniform random order — companies_zip_latency.py
+    # slices a prefix for its probe, so a lex-sorted artifact would bias it
+    # toward CNPJ-base-clustered samples and skew throughput results.
     sampled_paths = report["validation"].pop("reservoir_paths", [])
-    Path("/tmp/pack_e2e_paths.json").write_text(json.dumps(sorted(sampled_paths)))
+    Path("/tmp/pack_e2e_paths.json").write_text(json.dumps(sampled_paths))
     report["paths_artifact"] = "/tmp/pack_e2e_paths.json"
     report["paths_count"] = len(sampled_paths)
 
