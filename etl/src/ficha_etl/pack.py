@@ -308,14 +308,22 @@ def pack_companies(
         # company docs
         for row in rows:
             company = row_to_company(row)
-            # Reject adjacent duplicate cnpj_base. zipfile silently writes
-            # both entries under the same name and different ZIP readers
-            # resolve the conflict differently — safer to fail at pack time.
-            # Input must be sorted by cnpj_base for this check to be complete.
-            if company.cnpj_base == prev_cnpj_base:
+            # Enforce strictly-increasing cnpj_base. Two reasons:
+            #   1. Duplicates: zipfile silently writes both entries under the
+            #      same name and different ZIP readers resolve conflicts
+            #      differently — safer to fail at pack time.
+            #   2. Sorted-input contract: the adjacent-only duplicate check
+            #      above would miss non-adjacent duplicates in unsorted input.
+            #      Requiring strictly-increasing keys makes the guard complete.
+            if prev_cnpj_base is not None and company.cnpj_base <= prev_cnpj_base:
+                if company.cnpj_base == prev_cnpj_base:
+                    raise ValueError(
+                        f"duplicate cnpj_base in input rows: {company.cnpj_base:08d} "
+                        f"— caller must sort and deduplicate by cnpj_base before packing"
+                    )
                 raise ValueError(
-                    f"duplicate cnpj_base in input rows: {company.cnpj_base:08d} "
-                    f"— caller must sort and deduplicate by cnpj_base before packing"
+                    f"unsorted input rows: cnpj_base {company.cnpj_base:08d} "
+                    f"< previous {prev_cnpj_base:08d} — caller must sort by cnpj_base"
                 )
             prev_cnpj_base = company.cnpj_base
             company.snapshot_yyyymm = snapshot_yyyymm
@@ -412,7 +420,13 @@ LEFT JOIN (
                       nome_socio_razao_social,
                       cnpj_socio,
                       cpf_mascarado,
-                      data_entrada_sociedade) AS socios
+                      data_entrada_sociedade,
+                      tipo,
+                      pais_codigo,
+                      faixa_etaria,
+                      representante_legal_cpf,
+                      representante_legal_nome,
+                      representante_legal_qualificacao_codigo) AS socios
     FROM read_parquet(?)
     GROUP BY cnpj_base
 ) s USING (cnpj_base)
