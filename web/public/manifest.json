@@ -1,0 +1,76 @@
+{
+  "current": "2026-04",
+  "snapshots": [
+    {
+      "date": "2026-04",
+      "schema_version": "1.0.0",
+      "rfb_layout_date": null,
+      "generated_at": "2026-05-15T01:02:37Z",
+      "generator": "ficha-etl",
+      "row_counts": {
+        "cnpjs": 70145911,
+        "cnpj_contatos": 119278049,
+        "cnpj_cnaes": 187818962,
+        "raizes": 67635384,
+        "socios": 27494723
+      },
+      "files": {
+        "cnpjs": {
+          "url": "https://archive.org/download/ficha-2026-04/cnpjs.parquet",
+          "sha256": "d43d69e5e4195b8a1d5624e8f7db88a65ccc6cca87e8d1f54a9e74bb2ed02978",
+          "size": 6429770479
+        },
+        "cnpj_contatos": {
+          "url": "https://archive.org/download/ficha-2026-04/cnpj_contatos.parquet",
+          "sha256": "c1a70b4bf63110ef4c39a2a17ca7f32e9153b7fc0b9737e71ca622ce19193233",
+          "size": 1693168284
+        },
+        "cnpj_cnaes": {
+          "url": "https://archive.org/download/ficha-2026-04/cnpj_cnaes.parquet",
+          "sha256": "88c4583aa0fae897ad91899aef7ebbbcfac6a8108c4a009e8890dd729902925f",
+          "size": 1818894334,
+          "sort": [
+            "cnae_codigo",
+            "posicao",
+            "cnpj_base"
+          ]
+        },
+        "raizes": {
+          "url": "https://archive.org/download/ficha-2026-04/raizes.parquet",
+          "sha256": "87ef8463401ffd3df00a38ce789e5a449c61c1143762487eb58f657a1b38f185",
+          "size": 2860304748
+        },
+        "socios": {
+          "url": "https://archive.org/download/ficha-2026-04/socios.parquet",
+          "sha256": "35f4a2dbb65be56f6600323fcf9bf353eb6099a9681d769148c5703a913175f5",
+          "size": 537612302
+        },
+        "lookups": {
+          "url": "https://archive.org/download/ficha-2026-04/lookups.json",
+          "sha256": "0441849638f69548a39d7a6cce56cea87b3e7d07fc1ee83e966ce325f8de8060",
+          "size": 272145
+        }
+      },
+      "lookups": {
+        "cnaes": {
+          "url": "https://archive.org/download/ficha-2026-04/lookups/cnaes.parquet"
+        },
+        "motivos": {
+          "url": "https://archive.org/download/ficha-2026-04/lookups/motivos.parquet"
+        },
+        "municipios": {
+          "url": "https://archive.org/download/ficha-2026-04/lookups/municipios.parquet"
+        },
+        "naturezas": {
+          "url": "https://archive.org/download/ficha-2026-04/lookups/naturezas.parquet"
+        },
+        "paises": {
+          "url": "https://archive.org/download/ficha-2026-04/lookups/paises.parquet"
+        },
+        "qualificacoes": {
+          "url": "https://archive.org/download/ficha-2026-04/lookups/qualificacoes.parquet"
+        }
+      }
+    }
+  ]
+}
