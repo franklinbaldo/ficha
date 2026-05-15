@@ -423,6 +423,7 @@ def upload_companies_zip(
     *,
     access_key: str,
     secret_key: str,
+    identifier_override: str | None = None,
 ) -> None:
     """Faz upload de companies.zip para o item IA do mês.
 
@@ -431,13 +432,15 @@ def upload_companies_zip(
         companies_zip_path: caminho local do companies.zip produzido por pack_from_parquets.
         access_key: IA S3-like access key.
         secret_key: IA S3-like secret key.
+        identifier_override: identificador IA alternativo (ex.: item POC).
+            Default usa item_id(month).
     """
     if not is_valid_month(month):
         raise ValueError(f"month must be YYYY-MM, got {month!r}")
     if not companies_zip_path.exists():
         raise FileNotFoundError(f"companies.zip not found: {companies_zip_path}")
 
-    identifier = item_id(month)
+    identifier = identifier_override or item_id(month)
     log.info("uploading companies.zip to ia:%s", identifier)
     responses = ia.upload(
         identifier,

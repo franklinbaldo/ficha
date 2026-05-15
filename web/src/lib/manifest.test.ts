@@ -8,12 +8,22 @@ const SAMPLE_SNAPSHOT = {
   rfb_layout_date: null,
   generated_at: '2026-04-27T03:00:00Z',
   generator: 'ficha-etl',
-  row_counts: { cnpjs: 60_000_000, raizes: 30_000_000, socios: 50_000_000 },
+  row_counts: {
+    cnpjs: 60_000_000,
+    cnpj_contatos: 90_000_000,
+    raizes: 30_000_000,
+    socios: 50_000_000,
+  },
   files: {
     cnpjs: {
       url: 'https://archive.org/download/ficha-2026-04/cnpjs.parquet',
       sha256: 'a'.repeat(64),
       size: 3_000_000_000,
+    },
+    cnpj_contatos: {
+      url: 'https://archive.org/download/ficha-2026-04/cnpj_contatos.parquet',
+      sha256: 'e'.repeat(64),
+      size: 200_000_000,
     },
     raizes: {
       url: 'https://archive.org/download/ficha-2026-04/raizes.parquet',

@@ -9,7 +9,8 @@
     "preview": "astro preview",
     "check": "astro check",
     "test": "vitest run",
-    "astro": "astro"
+    "astro": "astro",
+    "gen-proto": "node scripts/gen-proto.mjs"
   },
   "dependencies": {
     "@astrojs/svelte": "^8.1.0",
@@ -17,11 +18,13 @@
     "apache-arrow": "^21.1.0",
     "astro": "^6.1.9",
     "duckdb": "^1.4.4",
+    "protobufjs": "^8.3.0",
     "svelte": "^5.0.0",
     "zod": "^3.23.8"
   },
   "devDependencies": {
     "@astrojs/check": "^0.9.8",
+    "protobufjs-cli": "^2.3.0",
     "typescript": "^5.6.0",
     "vitest": "^4.1.5"
   }
