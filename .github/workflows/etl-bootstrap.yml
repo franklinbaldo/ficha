@@ -8,10 +8,17 @@ name: ETL — bootstrap (first production snapshot)
 # doesn't loop.
 on:
   push:
-    branches: [claude/review-repo-planning-ApKX5]
+    branches:
+      - claude/review-repo-planning-ApKX5
+      - claude/plan-next-steps-l7Dt6
     paths:
       - '.github/workflows/etl-bootstrap.yml'
       - 'etl/src/**'
+      # pack.py / proto/ são usados só pela camada de empacotamento
+      # (companies.zip) e não afetam a produção dos parquets. Mudanças
+      # nesses arquivos não devem disparar rebootstrap (~50 min).
+      - '!etl/src/ficha_etl/pack.py'
+      - '!etl/src/ficha_etl/proto/**'
       - 'etl/tests/**'
       - 'etl/pyproject.toml'
   workflow_dispatch:
@@ -88,6 +95,14 @@ jobs:
           CNPJ_SHARE_TOKEN: ${{ secrets.CNPJ_SHARE_TOKEN }}
         run: |
           set -x  # echo commands so we can see what list-snapshots actually returns
+          # On the iteration branch, pin to 2026-04 so the fetcher chain
+          # reuses the IA-mirrored ZIPs at ficha-2026-04/raw/ instead of
+          # re-streaming 7 GB from RFB every push. Operator can still
+          # override via workflow_dispatch input.
+          if [ -z "$INPUT_MONTH" ] && [ "$GITHUB_EVENT_NAME" = "push" ] && [ "$GITHUB_REF_NAME" = "claude/plan-next-steps-l7Dt6" ]; then
+            INPUT_MONTH="2026-04"
+            echo "Iteration-branch push: pinning INPUT_MONTH=$INPUT_MONTH to reuse IA mirror"
+          fi
           # Resolution policy:
           # - INPUT_MONTH (operator-supplied): validated immediately; invalid
           #   means the operator made a typo and should know -- never silently

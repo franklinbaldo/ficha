@@ -95,7 +95,9 @@ def find_simples_zip(month: str) -> str | None:
         meta = json.loads(resp.read())
     files = meta.get("files", [])
     simples_files = [
-        f for f in files if "simples" in f.get("name", "").lower() and f.get("name", "").endswith(".zip")
+        f
+        for f in files
+        if "simples" in f.get("name", "").lower() and f.get("name", "").endswith(".zip")
     ]
     print(f"  {len(simples_files)} simples ZIP(s) in ficha-{month}")
     for f in simples_files:
@@ -164,7 +166,7 @@ def simples_cardinality(month: str, simples_url: str) -> dict:
                             'data_exclusao_mei':'VARCHAR'
                         }},
                         max_line_size=16777216,
-                        ignore_errors={'true' if ie else 'false'}
+                        ignore_errors={"true" if ie else "false"}
                     )
                     """
                 )
