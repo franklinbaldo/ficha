@@ -31,6 +31,7 @@ import duckdb
 from google.protobuf import descriptor_pb2
 from google.protobuf.descriptor import FileDescriptor
 
+from ficha_etl import mirror
 from ficha_etl.proto.ficha.v1.company_pb2 import (
     Company,
     Estabelecimento,
@@ -456,7 +457,9 @@ def pack_from_parquets(
         { count, size_bytes, schema_sha256 }
     """
     if parquets_base is None:
-        parquets_base = f"https://archive.org/download/ficha-{month}"
+        # mirror.item_root honors FICHA_IA_BASE_URL — same source of truth as
+        # the rest of the pipeline (tests/staging/self-hosted mirrors).
+        parquets_base = mirror.item_root(month)
 
     raizes_url = f"{parquets_base}/raizes.parquet"
     cnpjs_url = f"{parquets_base}/cnpjs.parquet"
