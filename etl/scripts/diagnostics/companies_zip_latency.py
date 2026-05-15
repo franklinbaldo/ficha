@@ -138,17 +138,25 @@ def main() -> int:
 
     report: dict = {"month": month, "item": item, "num_paths": len(urls)}
 
-    # Sanity check: _meta.json must be reachable before the probes.
+    # Sanity check: fetch _meta.json and verify it has the fields we
+    # expect — a 200 alone could mean IA returned an HTML error page or
+    # the upload landed on an item with the wrong layout.
     meta_url = f"{base_url}/_meta.json"
-    log.info("HEAD %s", meta_url)
+    log.info("GET %s", meta_url)
     try:
         with httpx.Client() as client:
-            r = client.head(meta_url, timeout=30.0, follow_redirects=True)
+            r = client.get(meta_url, timeout=30.0, follow_redirects=True)
             r.raise_for_status()
-            report["meta_head_status"] = r.status_code
+            meta = r.json()
     except Exception as exc:
-        print(f"::error::failed to HEAD {meta_url}: {exc}")
+        print(f"::error::failed to GET {meta_url}: {exc}")
         return 1
+
+    missing_fields = [f for f in ("count", "schema_version", "schema_sha256") if f not in meta]
+    if missing_fields or not isinstance(meta.get("count"), int) or meta["count"] <= 0:
+        print(f"::error::_meta.json shape invalid: missing={missing_fields} meta={meta}")
+        return 1
+    report["meta"] = meta
 
     with httpx.Client() as client:
         try:

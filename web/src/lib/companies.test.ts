@@ -114,4 +114,9 @@ describe('companyToEmpresaRows', () => {
     const msg = ficha.v1.Company.create({ cnpj_base: 1 });
     expect(companyToEmpresaRows(msg)).toEqual([]);
   });
+
+  it('throws when cnpj_base is missing or zero', () => {
+    const zeroBase = ficha.v1.Company.create({ razao_social: 'NO BASE' });
+    expect(() => companyToEmpresaRows(zeroBase)).toThrow(/missing cnpj_base/);
+  });
 });

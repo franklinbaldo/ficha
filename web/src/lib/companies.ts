@@ -74,7 +74,14 @@ export async function fetchCompany(
  * search flow already uses.
  */
 export function companyToEmpresaRows(company: Company): Record<string, unknown>[] {
-  const base = String(company.cnpj_base ?? 0).padStart(8, '0');
+  // proto3 doesn't distinguish "unset" from "0", so cnpj_base == 0 here
+  // means either pack.py packed a bogus row (impossible — it asserts the
+  // opposite) or a hand-crafted Company was passed in. Either way the
+  // padded "00000000" would yield a malformed CNPJ; fail loudly instead.
+  if (!company.cnpj_base) {
+    throw new Error('companyToEmpresaRows: Company is missing cnpj_base');
+  }
+  const base = String(company.cnpj_base).padStart(8, '0');
   return (company.estabelecimentos ?? []).map((e) => {
     const ordem = String(e.cnpj_ordem ?? 0).padStart(4, '0');
     const dv = String(e.cnpj_dv ?? 0).padStart(2, '0');
