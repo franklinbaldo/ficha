@@ -811,7 +811,15 @@ def write_cnpj_cnaes_parquet(
     """)
 
 
-_LOGRADOURO_NORM_EXPR = r"""
+def _logradouro_norm_sql(col: str) -> str:
+    """Return a SQL expression that normalises a logradouro column for search.
+
+    Expands the top-10 most common abbreviations used by RFB (covering ≥90%
+    of variation per docs/perf-plan-2026-05.md §7.2), strips accents,
+    collapses whitespace, and upper-cases the result.  `col` must be a
+    trusted SQL column reference (e.g. ``'est.logradouro'``).
+    """
+    return rf"""
     UPPER(strip_accents(TRIM(
         regexp_replace(
         regexp_replace(
@@ -849,7 +857,7 @@ def write_enderecos_parquet(
     """
     output_path.parent.mkdir(parents=True, exist_ok=True)
     log.info("    writing enderecos.parquet...")
-    norm_expr = _LOGRADOURO_NORM_EXPR.format(col="est.logradouro")
+    norm_expr = _logradouro_norm_sql("est.logradouro")
     con.execute(
         f"""
         COPY (
