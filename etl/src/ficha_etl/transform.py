@@ -374,7 +374,6 @@ def load_main_tables_into_duckdb(
     for table, kind, cols in (
         ("empresa", "empresas", _EMPRESA_COLUMNS),
         ("estabelecimento", "estabelecimentos", _ESTABELECIMENTO_COLUMNS),
-        ("socio", "socios", _SOCIO_COLUMNS),
         ("simples", "simples", _SIMPLES_COLUMNS),
     ):
         t0 = time.monotonic()
@@ -387,6 +386,54 @@ def load_main_tables_into_duckdb(
             f"{n:,}",
             time.monotonic() - t0,
         )
+
+    # Carrega socios como tabela intermediária e divide por tipo de pessoa.
+    # A separação explicita os dois sub-tipos que o dump da RFB embute na
+    # mesma tabela: sócio (PF/PJ/estrangeiro) e representante legal.
+    # Isso elimina o UNION ALL semântico em write_pessoas_parquet e remove
+    # colunas nullable estruturais (data_entrada_sociedade não existe para
+    # representantes; representante_legal não existe para pessoas físicas).
+    t0 = time.monotonic()
+    _create_table_from_csvs(con, "_socio_raw", by_kind.get("socios", []), _SOCIO_COLUMNS)
+    n_raw = con.execute("SELECT COUNT(*) FROM _socio_raw").fetchone()[0]
+    log.info("loaded '_socio_raw' — %s rows in %.1fs", f"{n_raw:,}", time.monotonic() - t0)
+
+    t0 = time.monotonic()
+    # socio_pf: sócios pessoas físicas (identificador '2')
+    con.execute("""
+        CREATE OR REPLACE TABLE socio_pf AS
+        SELECT * FROM _socio_raw WHERE identificador_socio = '2'
+    """)
+    # socio_outros: PJ ('1') + estrangeiros ('3') — agrupados porque
+    # ambos aparecem em socios.parquet mas não em pessoas.parquet.
+    con.execute("""
+        CREATE OR REPLACE TABLE socio_outros AS
+        SELECT * FROM _socio_raw WHERE identificador_socio IN ('1', '3')
+    """)
+    # representante: linhas derivadas dos campos representante_legal_*
+    # embutidos em qualquer registro de sócio. DISTINCT porque o mesmo
+    # representante pode aparecer em múltiplos registros da mesma empresa.
+    con.execute("""
+        CREATE OR REPLACE TABLE representante AS
+        SELECT DISTINCT
+            cnpj_basico,
+            representante_legal       AS cpf_mascarado,
+            nome_representante_legal  AS nome,
+            qualificacao_representante_legal AS qualificacao_codigo
+        FROM _socio_raw
+        WHERE representante_legal IS NOT NULL AND representante_legal <> ''
+    """)
+    con.execute("DROP TABLE IF EXISTS _socio_raw")
+    n_pf = con.execute("SELECT COUNT(*) FROM socio_pf").fetchone()[0]
+    n_out = con.execute("SELECT COUNT(*) FROM socio_outros").fetchone()[0]
+    n_rep = con.execute("SELECT COUNT(*) FROM representante").fetchone()[0]
+    log.info(
+        "split socio → socio_pf=%s socio_outros=%s representante=%s in %.1fs",
+        f"{n_pf:,}",
+        f"{n_out:,}",
+        f"{n_rep:,}",
+        time.monotonic() - t0,
+    )
 
 
 def load_lookup_into_duckdb(
@@ -1166,44 +1213,48 @@ def write_pessoas_parquet(
 ) -> None:
     """Produz `pessoas.parquet`: reverse lookup PF por CPF mascarado + nome.
 
-    Inclui sócios PF (identificador_socio='2') e representantes legais.
-    PJ-sócios ('1') e estrangeiros ('3') sem CPF são excluídos.
-    Ordenado por (cpf_mascarado, nome_normalizado) — linhas da mesma pessoa
-    ficam contíguas (1 row-group por pessoa típica), min/max pruning efetivo.
-    Ver docs/perf-plan-2026-05.md §8.
+    Grain: (cpf_mascarado, nome_normalizado, cnpj_base, papel) — uma linha
+    por vínculo pessoa×empresa×papel. A mesma pessoa aparece N vezes se for
+    sócia em N empresas; o sort por (cpf_mascarado, nome_normalizado) agrupa
+    todas as linhas de uma pessoa para leitura eficiente.
+
+    Fontes separadas por tipo (sem UNION ALL semântico):
+      socio_pf  → papel='socio_pf'    (identificador='2')
+      representante → papel='representante'  (campo representante_legal_*)
+
+    Colunas ausentes por tipo são omitidas em vez de NULL:
+      data_entrada_sociedade e faixa_etaria pertencem ao vínculo de sócio PF,
+      não ao conceito de representante legal. Removê-las de pessoas.parquet
+      evita NULLs estruturais; quem precisar delas busca em socios.parquet.
+
+    Ver ADR 0024.
     """
     output_path.parent.mkdir(parents=True, exist_ok=True)
     log.info("    writing pessoas.parquet...")
     con.execute(
         """
         COPY (
+            -- Sócios PF: CPF mascarado como identificador
             SELECT
-                soc.cnpj_cpf_socio AS cpf_mascarado,
-                UPPER(strip_accents(TRIM(soc.nome_socio_razao_social)))
-                    AS nome_normalizado,
-                soc.nome_socio_razao_social AS nome_original,
-                'socio_pf' AS papel,
-                soc.cnpj_basico AS cnpj_base,
-                soc.qualificacao_socio AS qualificacao_codigo,
-                soc.data_entrada_sociedade,
-                soc.faixa_etaria
-            FROM socio soc
-            WHERE soc.identificador_socio = '2'
-              AND soc.cnpj_cpf_socio IS NOT NULL AND soc.cnpj_cpf_socio <> ''
+                pf.cnpj_cpf_socio                                   AS cpf_mascarado,
+                UPPER(strip_accents(TRIM(pf.nome_socio_razao_social))) AS nome_normalizado,
+                pf.nome_socio_razao_social                          AS nome_original,
+                'socio_pf'                                          AS papel,
+                pf.cnpj_basico                                      AS cnpj_base,
+                pf.qualificacao_socio                               AS qualificacao_codigo
+            FROM socio_pf pf
+            WHERE pf.cnpj_cpf_socio IS NOT NULL AND pf.cnpj_cpf_socio <> ''
             UNION ALL
+            -- Representantes legais: entidade separada, sem data de entrada
             SELECT
-                soc.representante_legal AS cpf_mascarado,
-                UPPER(strip_accents(TRIM(soc.nome_representante_legal)))
-                    AS nome_normalizado,
-                soc.nome_representante_legal AS nome_original,
-                'representante' AS papel,
-                soc.cnpj_basico AS cnpj_base,
-                soc.qualificacao_representante_legal AS qualificacao_codigo,
-                NULL AS data_entrada_sociedade,
-                NULL AS faixa_etaria
-            FROM socio soc
-            WHERE soc.representante_legal IS NOT NULL
-              AND soc.representante_legal <> ''
+                rep.cpf_mascarado,
+                UPPER(strip_accents(TRIM(rep.nome)))                AS nome_normalizado,
+                rep.nome                                            AS nome_original,
+                'representante'                                     AS papel,
+                rep.cnpj_basico                                     AS cnpj_base,
+                rep.qualificacao_codigo
+            FROM representante rep
+            WHERE rep.cpf_mascarado IS NOT NULL AND rep.cpf_mascarado <> ''
             ORDER BY cpf_mascarado, nome_normalizado
         ) TO ? (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 200000)
         """,
@@ -1404,7 +1455,7 @@ def write_socios_parquet(
                 soc.qualificacao_representante_legal AS representante_legal_qualificacao_codigo,
                 COALESCE(qr.descricao, '') AS representante_legal_qualificacao_descricao,
                 soc.faixa_etaria
-            FROM socio soc
+            FROM (SELECT * FROM socio_pf UNION ALL SELECT * FROM socio_outros) soc
             LEFT JOIN lookup_qualificacoes qs ON qs.codigo = soc.qualificacao_socio
             LEFT JOIN lookup_qualificacoes qr ON qr.codigo = soc.qualificacao_representante_legal
             LEFT JOIN lookup_paises ps ON ps.codigo = soc.pais
@@ -1657,7 +1708,7 @@ def transform_snapshot(
         # --- Step 6: Write socios + pessoas (socio table still loaded) ---
         post_write_drops_step6 = {
             "socios": (),
-            "pessoas": ("socio",),  # socio used by socios + pessoas only
+            "pessoas": ("socio_pf", "socio_outros", "representante"),
         }
         for name, fn in (
             ("socios", write_socios_parquet),

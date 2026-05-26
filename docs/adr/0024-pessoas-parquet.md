@@ -24,11 +24,15 @@ Produzir `pessoas.parquet` como índice inverso de pessoas físicas:
 | `papel` | ENUM | `socio_pf` ou `representante` |
 | `cnpj_base` | VARCHAR(8) | Raiz do CNPJ |
 | `qualificacao_codigo` | VARCHAR | Qualificação RFB |
-| `data_entrada_sociedade` | VARCHAR | Presente apenas para `socio_pf` |
-| `faixa_etaria` | VARCHAR | Código 0-9, presente apenas para `socio_pf` |
 
+**Grão:** `(cpf_mascarado, nome_normalizado, cnpj_base, papel)` — uma linha por pessoa × empresa × papel.  
 **Sort:** `(cpf_mascarado, nome_normalizado)`  
-**Fonte:** tabela `socio` via UNION ALL de dois subsets.
+**Fonte:** `socio_pf` (sócios PF) + `representante` (representantes legais derivados dos campos `representante_legal_*`).
+
+`data_entrada_sociedade` e `faixa_etaria` foram **removidos** do parquet: são propriedades
+do vínculo sócio×empresa, não da pessoa em si, e eram estruturalmente NULL para todas as
+linhas de papel `representante` (o conceito não existe para representantes). Permanecem
+disponíveis em `socios.parquet`.
 
 ## Inclusão e exclusão
 
@@ -70,7 +74,7 @@ sem desmascaramento de CPF. Aplica-se ADR 0004 e ADR 0006.
 ## Consequências
 
 - +1 write no phase 3 do ETL (~5-10 min, ~6 GB peak — entrada pequena)
-- Tabela `socio` é liberada da memória após write de `pessoas`
+- Tabela `socio` é dividida em `socio_pf`, `socio_outros` e `representante` durante o carregamento; todas são liberadas após o write de `pessoas`
 - Manifest ganha entrada `pessoas` com metadata de sort
 - Frontend usa `attachPessoas(db, url)` para registrar e criar VIEW
 - Schema Zod em `web/src/schemas/v1/pessoa.ts`
