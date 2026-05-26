@@ -1,0 +1,72 @@
+name: ETL Streaming Benchmark (W3.1)
+
+# Demonstrates that ZIP → FIFO → DuckDB is viable and advantageous over
+# the current ZIP → CSV-on-disk → DuckDB path.
+#
+# Triggers:
+#   - Manual (workflow_dispatch) — run at any time to get benchmark numbers
+#   - PR — when etl/ changes, so benchmark regresses are caught early
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'etl/**'
+      - '.github/workflows/etl-streaming-benchmark.yml'
+
+jobs:
+  streaming-benchmark:
+    name: W3.1 streaming POC
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: etl
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install 3.11
+
+      - name: Install dependencies
+        run: uv sync --extra dev
+
+      - name: Lint streaming module
+        run: |
+          uv run ruff check src/ficha_etl/streaming.py tests/test_streaming_poc.py
+          uv run ruff format --check src/ficha_etl/streaming.py tests/test_streaming_poc.py
+
+      - name: Run streaming POC tests (correctness + benchmark)
+        id: benchmark
+        run: |
+          uv run pytest tests/test_streaming_poc.py -v -s --tb=short \
+            | tee /tmp/benchmark_output.txt
+          echo "exit_code=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
+
+      - name: Write benchmark results to step summary
+        if: always()
+        run: |
+          echo "## W3.1 Streaming Benchmark Results" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "Comparing **ZIP → CSV on disk → DuckDB** (current) vs" >> "$GITHUB_STEP_SUMMARY"
+          echo "**ZIP → FIFO → DuckDB** (streaming, no intermediate file)." >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          grep -A 25 "W3.1 STREAMING BENCHMARK" /tmp/benchmark_output.txt \
+            >> "$GITHUB_STEP_SUMMARY" || echo "(benchmark output not found)" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "### Test results" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          grep -E "PASSED|FAILED|ERROR|passed|failed|error" /tmp/benchmark_output.txt \
+            >> "$GITHUB_STEP_SUMMARY" || true
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Fail if tests failed
+        if: steps.benchmark.outputs.exit_code != '0'
+        run: exit 1
