@@ -79,9 +79,11 @@ def build_snapshot_entry(month: str, output_dir: Path) -> dict:
     cnpj_cnaes = output_dir / "cnpj_cnaes.parquet"
     raizes = output_dir / "raizes.parquet"
     socios = output_dir / "socios.parquet"
+    enderecos = output_dir / "enderecos.parquet"
+    pessoas = output_dir / "pessoas.parquet"
     lookups = output_dir / "lookups.json"
 
-    for path in (cnpjs, cnpj_contatos, cnpj_cnaes, raizes, socios, lookups):
+    for path in (cnpjs, cnpj_contatos, cnpj_cnaes, raizes, socios, enderecos, pessoas, lookups):
         if not path.exists():
             raise FileNotFoundError(f"arquivo ausente para manifest: {path}")
 
@@ -97,6 +99,8 @@ def build_snapshot_entry(month: str, output_dir: Path) -> dict:
         "cnpj_cnaes": _row_count(cnpj_cnaes),
         "raizes": _row_count(raizes),
         "socios": _row_count(socios),
+        "enderecos": _row_count(enderecos),
+        "pessoas": _row_count(pessoas),
     }
     log.info("row counts: %s", row_counts)
 
@@ -117,6 +121,14 @@ def build_snapshot_entry(month: str, output_dir: Path) -> dict:
             },
             "raizes": _file_entry(raizes, parquet_url(month, "raizes")),
             "socios": _file_entry(socios, parquet_url(month, "socios")),
+            "enderecos": {
+                **_file_entry(enderecos, parquet_url(month, "enderecos")),
+                "sort": ["uf", "municipio_codigo", "logradouro_normalizado", "numero"],
+            },
+            "pessoas": {
+                **_file_entry(pessoas, parquet_url(month, "pessoas")),
+                "sort": ["cpf_mascarado", "nome_normalizado"],
+            },
             "lookups": _file_entry(lookups, lookups_url(month)),
         },
         "lookups": {

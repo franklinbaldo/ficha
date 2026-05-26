@@ -670,16 +670,16 @@ def write_cnpjs_parquet(
             LEFT JOIN lookup_cnaes cn_p ON cn_p.codigo = est.cnae_fiscal_principal
             LEFT JOIN lookup_municipios mn ON mn.codigo = est.municipio
             LEFT JOIN lookup_paises ps ON ps.codigo = est.pais
-            -- ORDER BY cnpj omitted: forced global sort of ~30 GB join
-            -- output through DuckDB's external sorter blew past 70 GB
-            -- disk on GH Actions runners (PR #24, run 25519086268).
-            -- Lookup-by-exact-cnpj queries hit the bloom filter on
-            -- `cnpj`, which is independent of physical row order, so
-            -- the bootstrap output works the same. Range queries on
-            -- cnpj would lose row-group min/max pruning -- but those
-            -- aren't primary FICHA queries (exact match dominates;
-            -- razao_social search uses raizes.parquet). Revisit if
-            -- range workloads materialize.
+            -- W5.2 (docs/perf-plan-2026-05.md §5.2): per-bucket sort.
+            -- Global sort OOM'd at ~70 GB (PR #24, run 25519086268), but
+            -- W1.3 partitioning shrinks each bucket to ~1/10 of the data
+            -- (~3 GB), well within the 6 GB memory cap. Sorting within
+            -- each digit-prefix bucket + concatenating parts in numeric
+            -- order (part-0…part-9) yields a globally sorted output:
+            -- all CNPJs starting with '0' precede '1', etc. Sorted row
+            -- groups make min/max pruning ~10× more selective for
+            -- exact-cnpj lookups (from ~30 to ~3 row groups scanned).
+            ORDER BY cnpj
             ) TO '{_part_path}' (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 200000)
             """
             )
@@ -809,6 +809,116 @@ def write_cnpj_cnaes_parquet(
           ORDER BY cnae_codigo, posicao, cnpj_base
         ) TO '{output_path}' (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 200000)
     """)
+
+
+_LOGRADOURO_NORM_EXPR = r"""
+    UPPER(strip_accents(TRIM(
+        regexp_replace(
+        regexp_replace(
+        regexp_replace(
+        regexp_replace(
+        regexp_replace(
+        regexp_replace(
+        regexp_replace(
+        regexp_replace(
+        regexp_replace(
+        regexp_replace(
+        regexp_replace({col}, '\s+', ' ', 'g'),
+            '^R\.?\s+', 'RUA ', 'i'),
+            '^AV\.?\s+', 'AVENIDA ', 'i'),
+            '^TV\.?\s+', 'TRAVESSA ', 'i'),
+            '^AL\.?\s+', 'ALAMEDA ', 'i'),
+            '^PCA\.?\s+', 'PRACA ', 'i'),
+            '^PC\.?\s+', 'PRACA ', 'i'),
+            '^EST\.?\s+', 'ESTRADA ', 'i'),
+            '^ROD\.?\s+', 'RODOVIA ', 'i'),
+            '^VL\.?\s+', 'VILA ', 'i'),
+            '^LG\.?\s+', 'LARGO ', 'i')
+    )))"""
+
+
+def write_enderecos_parquet(
+    con: duckdb.DuckDBPyConnection,
+    output_path: Path,
+) -> None:
+    """Produz `enderecos.parquet`: reverse lookup por endereço e município.
+
+    Ordenado por (uf, municipio_codigo, logradouro_normalizado, numero) para que
+    buscas por UF+município e logradouro usem min/max row-group pruning.
+    Ver docs/perf-plan-2026-05.md §7.
+    """
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    log.info("    writing enderecos.parquet...")
+    norm_expr = _LOGRADOURO_NORM_EXPR.format(col="est.logradouro")
+    con.execute(
+        f"""
+        COPY (
+            SELECT
+                est.uf,
+                est.municipio AS municipio_codigo,
+                {norm_expr} AS logradouro_normalizado,
+                est.numero,
+                est.cep,
+                est.bairro,
+                est.cnpj_basico || est.cnpj_ordem || est.cnpj_dv AS cnpj
+            FROM estabelecimento est
+            WHERE est.logradouro IS NOT NULL AND est.logradouro <> ''
+              AND est.uf IS NOT NULL AND est.uf <> ''
+            ORDER BY est.uf, est.municipio, logradouro_normalizado, est.numero
+        ) TO '{output_path}' (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 200000)
+        """
+    )
+
+
+def write_pessoas_parquet(
+    con: duckdb.DuckDBPyConnection,
+    output_path: Path,
+) -> None:
+    """Produz `pessoas.parquet`: reverse lookup PF por CPF mascarado + nome.
+
+    Inclui sócios PF (identificador_socio='2') e representantes legais.
+    PJ-sócios ('1') e estrangeiros ('3') sem CPF são excluídos.
+    Ordenado por (cpf_mascarado, nome_normalizado) — linhas da mesma pessoa
+    ficam contíguas (1 row-group por pessoa típica), min/max pruning efetivo.
+    Ver docs/perf-plan-2026-05.md §8.
+    """
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    log.info("    writing pessoas.parquet...")
+    con.execute(
+        """
+        COPY (
+            SELECT
+                soc.cnpj_cpf_socio AS cpf_mascarado,
+                UPPER(strip_accents(TRIM(soc.nome_socio_razao_social)))
+                    AS nome_normalizado,
+                soc.nome_socio_razao_social AS nome_original,
+                'socio_pf' AS papel,
+                soc.cnpj_basico AS cnpj_base,
+                soc.qualificacao_socio AS qualificacao_codigo,
+                soc.data_entrada_sociedade,
+                soc.faixa_etaria
+            FROM socio soc
+            WHERE soc.identificador_socio = '2'
+              AND soc.cnpj_cpf_socio IS NOT NULL AND soc.cnpj_cpf_socio <> ''
+            UNION ALL
+            SELECT
+                soc.representante_legal AS cpf_mascarado,
+                UPPER(strip_accents(TRIM(soc.nome_representante_legal)))
+                    AS nome_normalizado,
+                soc.nome_representante_legal AS nome_original,
+                'representante' AS papel,
+                soc.cnpj_basico AS cnpj_base,
+                soc.qualificacao_representante_legal AS qualificacao_codigo,
+                NULL AS data_entrada_sociedade,
+                NULL AS faixa_etaria
+            FROM socio soc
+            WHERE soc.representante_legal IS NOT NULL
+              AND soc.representante_legal <> ''
+            ORDER BY cpf_mascarado, nome_normalizado
+        ) TO ? (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 200000)
+        """,
+        [str(output_path)],
+    )
 
 
 def write_raizes_parquet(
@@ -1159,6 +1269,8 @@ def transform_snapshot(
             "cnpj_cnaes": (),
             "raizes": (),
             "socios": (),
+            "enderecos": (),
+            "pessoas": ("socio",),  # socio used by socios + pessoas only
         }
         for name, fn in (
             ("cnpjs", write_cnpjs_parquet),
@@ -1166,6 +1278,8 @@ def transform_snapshot(
             ("cnpj_cnaes", write_cnpj_cnaes_parquet),
             ("raizes", write_raizes_parquet),
             ("socios", write_socios_parquet),
+            ("enderecos", write_enderecos_parquet),
+            ("pessoas", write_pessoas_parquet),
         ):
             try:
                 log.info("  writing %s.parquet...", name)
