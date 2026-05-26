@@ -56,3 +56,39 @@ export async function attachLookups(db: duckdb.AsyncDuckDB, manifest: Snapshot):
     await conn.close();
   }
 }
+
+/**
+ * Registra `enderecos.parquet` e cria a VIEW `enderecos`.
+ *
+ * Parquet ordenado por (uf, municipio_codigo, logradouro_normalizado, numero).
+ * DuckDB-WASM usa min/max por row-group para pular seções irrelevantes —
+ * queries prefix como `WHERE uf='SP' AND municipio_codigo='7107'` baixam
+ * apenas os row-groups do município em vez do arquivo completo (~1 GB).
+ * Ver ADR 0023.
+ */
+export async function attachEnderecos(db: duckdb.AsyncDuckDB, url: string): Promise<void> {
+  await db.registerFileURL('enderecos.parquet', url, duckdb.DuckDBDataProtocol.HTTP, false);
+  const conn = await db.connect();
+  try {
+    await conn.query(`CREATE OR REPLACE VIEW enderecos AS SELECT * FROM 'enderecos.parquet'`);
+  } finally {
+    await conn.close();
+  }
+}
+
+/**
+ * Registra `pessoas.parquet` e cria a VIEW `pessoas`.
+ *
+ * Parquet ordenado por (cpf_mascarado, nome_normalizado) — todas as linhas
+ * de uma pessoa ficam num único row-group, tornando lookups por CPF mascarado
+ * e/ou nome muito eficientes. Ver ADR 0024.
+ */
+export async function attachPessoas(db: duckdb.AsyncDuckDB, url: string): Promise<void> {
+  await db.registerFileURL('pessoas.parquet', url, duckdb.DuckDBDataProtocol.HTTP, false);
+  const conn = await db.connect();
+  try {
+    await conn.query(`CREATE OR REPLACE VIEW pessoas AS SELECT * FROM 'pessoas.parquet'`);
+  } finally {
+    await conn.close();
+  }
+}

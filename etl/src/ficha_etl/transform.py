@@ -811,38 +811,19 @@ def write_cnpj_cnaes_parquet(
     """)
 
 
-def _logradouro_norm_sql(col: str) -> str:
-    """Return a SQL expression that normalises a logradouro column for search.
-
-    Expands the top-10 most common abbreviations used by RFB (covering ≥90%
-    of variation per docs/perf-plan-2026-05.md §7.2), strips accents,
-    collapses whitespace, and upper-cases the result.  `col` must be a
-    trusted SQL column reference (e.g. ``'est.logradouro'``).
-    """
-    return rf"""
-    UPPER(strip_accents(TRIM(
-        regexp_replace(
-        regexp_replace(
-        regexp_replace(
-        regexp_replace(
-        regexp_replace(
-        regexp_replace(
-        regexp_replace(
-        regexp_replace(
-        regexp_replace(
-        regexp_replace(
-        regexp_replace({col}, '\s+', ' ', 'g'),
-            '^R\.?\s+', 'RUA ', 'i'),
-            '^AV\.?\s+', 'AVENIDA ', 'i'),
-            '^TV\.?\s+', 'TRAVESSA ', 'i'),
-            '^AL\.?\s+', 'ALAMEDA ', 'i'),
-            '^PCA\.?\s+', 'PRACA ', 'i'),
-            '^PC\.?\s+', 'PRACA ', 'i'),
-            '^EST\.?\s+', 'ESTRADA ', 'i'),
-            '^ROD\.?\s+', 'RODOVIA ', 'i'),
-            '^VL\.?\s+', 'VILA ', 'i'),
-            '^LG\.?\s+', 'LARGO ', 'i')
-    )))"""
+# Top-10 logradouro abbreviations per perf-plan §7.2 (covers ≥90% of variation).
+_LOGRADOURO_ABBREVS: dict[str, str] = {
+    "R": "RUA",
+    "AV": "AVENIDA",
+    "TV": "TRAVESSA",
+    "AL": "ALAMEDA",
+    "PCA": "PRACA",
+    "PC": "PRACA",
+    "EST": "ESTRADA",
+    "ROD": "RODOVIA",
+    "VL": "VILA",
+    "LG": "LARGO",
+}
 
 
 def write_enderecos_parquet(
@@ -853,26 +834,54 @@ def write_enderecos_parquet(
 
     Ordenado por (uf, municipio_codigo, logradouro_normalizado, numero) para que
     buscas por UF+município e logradouro usem min/max row-group pruning.
-    Ver docs/perf-plan-2026-05.md §7.
+    Ver docs/perf-plan-2026-05.md §7 e ADR 0023.
+
+    Normalização vetorizada: CTE computa a base normalizada uma vez por linha
+    (UPPER + strip_accents + TRIM + whitespace collapse); depois uma única
+    extração de prefixo + MAP lookup substitui as 10 chamadas regexp_replace
+    anteriores, passando de 11 para 4 operações regex/map por linha.
     """
     output_path.parent.mkdir(parents=True, exist_ok=True)
     log.info("    writing enderecos.parquet...")
-    norm_expr = _logradouro_norm_sql("est.logradouro")
+    # Build MAP literal: MAP {'R': 'RUA ', 'AV': 'AVENIDA ', ...}
+    # Trailing space in values avoids re-adding a separator on concatenation.
+    abbrev_map = (
+        "MAP {"
+        + ", ".join(f"'{k}': '{v} '" for k, v in _LOGRADOURO_ABBREVS.items())
+        + "}"
+    )
     con.execute(
-        f"""
+        rf"""
         COPY (
+            WITH _base AS (
+                SELECT
+                    est.uf,
+                    est.municipio AS municipio_codigo,
+                    UPPER(strip_accents(TRIM(
+                        regexp_replace(est.logradouro, '\s+', ' ', 'g')
+                    ))) AS _logr,
+                    est.numero,
+                    est.cep,
+                    est.bairro,
+                    est.cnpj_basico || est.cnpj_ordem || est.cnpj_dv AS cnpj
+                FROM estabelecimento est
+                WHERE est.logradouro IS NOT NULL AND est.logradouro <> ''
+                  AND est.uf IS NOT NULL AND est.uf <> ''
+            )
             SELECT
-                est.uf,
-                est.municipio AS municipio_codigo,
-                {norm_expr} AS logradouro_normalizado,
-                est.numero,
-                est.cep,
-                est.bairro,
-                est.cnpj_basico || est.cnpj_ordem || est.cnpj_dv AS cnpj
-            FROM estabelecimento est
-            WHERE est.logradouro IS NOT NULL AND est.logradouro <> ''
-              AND est.uf IS NOT NULL AND est.uf <> ''
-            ORDER BY est.uf, est.municipio, logradouro_normalizado, est.numero
+                uf,
+                municipio_codigo,
+                COALESCE(
+                    {abbrev_map}[regexp_extract(_logr, '^([A-Z]+)\.?\s+', 1)]
+                    || regexp_replace(_logr, '^[A-Z]+\.?\s+', ''),
+                    _logr
+                ) AS logradouro_normalizado,
+                numero,
+                cep,
+                bairro,
+                cnpj
+            FROM _base
+            ORDER BY uf, municipio_codigo, logradouro_normalizado, numero
         ) TO '{output_path}' (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 200000)
         """
     )
