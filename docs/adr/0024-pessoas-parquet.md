@@ -24,15 +24,18 @@ Produzir `pessoas.parquet` como índice inverso de pessoas físicas:
 | `papel` | ENUM | `socio_pf` ou `representante` |
 | `cnpj_base` | VARCHAR(8) | Raiz do CNPJ |
 | `qualificacao_codigo` | VARCHAR | Qualificação RFB |
+| `faixa_etaria` | VARCHAR | Código 0-9 (atributo da pessoa); NULL para representantes |
 
-**Grão:** `(cpf_mascarado, nome_normalizado, cnpj_base, papel)` — uma linha por pessoa × empresa × papel.  
+**Grão:** `(cpf_mascarado, nome_normalizado, faixa_etaria, cnpj_base, papel)` — uma linha por pessoa × empresa × papel.  
 **Sort:** `(cpf_mascarado, nome_normalizado)`  
 **Fonte:** `socio_pf` (sócios PF) + `representante` (representantes legais derivados dos campos `representante_legal_*`).
 
-`data_entrada_sociedade` e `faixa_etaria` foram **removidos** do parquet: são propriedades
-do vínculo sócio×empresa, não da pessoa em si, e eram estruturalmente NULL para todas as
-linhas de papel `representante` (o conceito não existe para representantes). Permanecem
-disponíveis em `socios.parquet`.
+`faixa_etaria` é atributo da **pessoa** (não do vínculo) e serve para desambiguar homônimos:
+duas linhas com o mesmo CPF mascarado e nome mas `faixa_etaria` diferentes são quase certamente
+pessoas distintas. É NULL para representantes porque a RFB não publica esse campo em `representante_legal_*`.
+
+`data_entrada_sociedade` foi **removido** do parquet: é propriedade do vínculo sócio×empresa
+(quando a pessoa entrou naquela empresa), não da pessoa em si. Permanece disponível em `socios.parquet`.
 
 ## Inclusão e exclusão
 

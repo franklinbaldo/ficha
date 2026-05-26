@@ -1213,19 +1213,17 @@ def write_pessoas_parquet(
 ) -> None:
     """Produz `pessoas.parquet`: reverse lookup PF por CPF mascarado + nome.
 
-    Grain: (cpf_mascarado, nome_normalizado, cnpj_base, papel) — uma linha
-    por vínculo pessoa×empresa×papel. A mesma pessoa aparece N vezes se for
+    Grain: (cpf_mascarado, nome_normalizado, faixa_etaria, cnpj_base, papel) — uma
+    linha por vínculo pessoa×empresa×papel. A mesma pessoa aparece N vezes se for
     sócia em N empresas; o sort por (cpf_mascarado, nome_normalizado) agrupa
     todas as linhas de uma pessoa para leitura eficiente.
 
-    Fontes separadas por tipo (sem UNION ALL semântico):
-      socio_pf  → papel='socio_pf'    (identificador='2')
-      representante → papel='representante'  (campo representante_legal_*)
+    faixa_etaria é atributo da pessoa (não do vínculo) e serve para desambiguar
+    homônimos com o mesmo CPF mascarado e nome: duas linhas com faixa_etaria
+    diferentes são quase certamente pessoas distintas. Vem NULL para representantes
+    pois a RFB não publica esse campo para representante_legal_*.
 
-    Colunas ausentes por tipo são omitidas em vez de NULL:
-      data_entrada_sociedade e faixa_etaria pertencem ao vínculo de sócio PF,
-      não ao conceito de representante legal. Removê-las de pessoas.parquet
-      evita NULLs estruturais; quem precisar delas busca em socios.parquet.
+    data_entrada_sociedade é do vínculo (não da pessoa) e permanece em socios.parquet.
 
     Ver ADR 0024.
     """
@@ -1241,18 +1239,20 @@ def write_pessoas_parquet(
                 pf.nome_socio_razao_social                          AS nome_original,
                 'socio_pf'                                          AS papel,
                 pf.cnpj_basico                                      AS cnpj_base,
-                pf.qualificacao_socio                               AS qualificacao_codigo
+                pf.qualificacao_socio                               AS qualificacao_codigo,
+                pf.faixa_etaria                                     AS faixa_etaria
             FROM socio_pf pf
             WHERE pf.cnpj_cpf_socio IS NOT NULL AND pf.cnpj_cpf_socio <> ''
             UNION ALL
-            -- Representantes legais: entidade separada, sem data de entrada
+            -- Representantes legais: faixa_etaria não publicada pela RFB
             SELECT
                 rep.cpf_mascarado,
                 UPPER(strip_accents(TRIM(rep.nome)))                AS nome_normalizado,
                 rep.nome                                            AS nome_original,
                 'representante'                                     AS papel,
                 rep.cnpj_basico                                     AS cnpj_base,
-                rep.qualificacao_codigo
+                rep.qualificacao_codigo,
+                NULL                                                AS faixa_etaria
             FROM representante rep
             WHERE rep.cpf_mascarado IS NOT NULL AND rep.cpf_mascarado <> ''
             ORDER BY cpf_mascarado, nome_normalizado

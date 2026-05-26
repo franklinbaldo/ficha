@@ -28,6 +28,13 @@ export const PessoaSchema = z.object({
   cnpj_base: z.string().length(8),
 
   qualificacao_codigo: z.string().nullable(),
+
+  // Faixa etária da pessoa (atributo da pessoa, não do vínculo) — usado para
+  // desambiguar homônimos com o mesmo CPF mascarado e nome. NULL para representantes
+  // (a RFB não publica esse campo em representante_legal_*).
+  faixa_etaria: z
+    .enum(['0', '1', '2', '3', '4', '5', '6', '7', '8', '9'])
+    .nullable(),
 });
 
 export type Pessoa = z.infer<typeof PessoaSchema>;
