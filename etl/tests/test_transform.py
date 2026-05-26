@@ -968,3 +968,171 @@ def test_write_cnpj_cnaes_parquet_position_ordering(tmp_path):
         ("4711301", 2),
         ("9311500", 3),
     ]
+
+
+# -----------------------------------------------------------------------------
+# write_cnpjs_parquet_chunked — matches full write_cnpjs_parquet
+# -----------------------------------------------------------------------------
+
+
+def _setup_duckdb_with_lookups_empresa_simples(
+    con: duckdb.DuckDBPyConnection, extracted: list, tmp_path: "Path"
+) -> None:
+    """Load lookups + empresa + simples into con (but NOT estabelecimento)."""
+    for ef in extracted:
+        if ef.kind in transform._LOOKUP_KINDS:
+            transform.load_lookup_into_duckdb(con, ef.kind, ef.csv_path)
+    # Load only empresa and simples, not estabelecimento.
+    import collections
+
+    by_kind: dict = collections.defaultdict(list)
+    for ef in extracted:
+        by_kind[ef.kind].append(ef.csv_path)
+    for table, kind, cols in (
+        ("empresa", "empresas", transform._EMPRESA_COLUMNS),
+        ("simples", "simples", transform._SIMPLES_COLUMNS),
+    ):
+        transform._create_table_from_csvs(con, table, by_kind.get(kind, []), cols)
+
+
+def test_write_cnpjs_parquet_chunked_matches_full_write(tmp_path, all_zips_dir):
+    """write_cnpjs_parquet_chunked must produce the same rows as write_cnpjs_parquet.
+
+    Compares row count and every row (sorted by cnpj) between:
+    - write_cnpjs_parquet (full load, all tables in con)
+    - write_cnpjs_parquet_chunked (loads one estabelecimento CSV at a time)
+    """
+    chain = fetcher.ChainedFetcher(fetchers=[_ZipDirFetcher(all_zips_dir)])
+    extract_dir = tmp_path / "extracted"
+    extracted = transform.extract_all("2026-04", chain, extract_dir)
+
+    estabelecimento_csv_paths = [ef.csv_path for ef in extracted if ef.kind == "estabelecimentos"]
+
+    # --- Full write (reference) ---
+    con_full = duckdb.connect()
+    try:
+        for ef in extracted:
+            if ef.kind in transform._LOOKUP_KINDS:
+                transform.load_lookup_into_duckdb(con_full, ef.kind, ef.csv_path)
+        transform.load_main_tables_into_duckdb(con_full, extracted)
+
+        full_out = tmp_path / "cnpjs_full.parquet"
+        transform.write_cnpjs_parquet(con_full, full_out)
+    finally:
+        con_full.close()
+
+    # --- Chunked write ---
+    con_chunked = duckdb.connect()
+    try:
+        _setup_duckdb_with_lookups_empresa_simples(con_chunked, extracted, tmp_path)
+
+        chunked_out = tmp_path / "cnpjs_chunked.parquet"
+        transform.write_cnpjs_parquet_chunked(con_chunked, estabelecimento_csv_paths, chunked_out)
+    finally:
+        con_chunked.close()
+
+    # --- Compare ---
+    compare_con = duckdb.connect()
+    try:
+        full_count = compare_con.execute(f"SELECT COUNT(*) FROM '{full_out}'").fetchone()[0]
+        chunked_count = compare_con.execute(f"SELECT COUNT(*) FROM '{chunked_out}'").fetchone()[0]
+        assert full_count == chunked_count, (
+            f"row count mismatch: full={full_count}, chunked={chunked_count}"
+        )
+
+        # Compare all rows sorted by cnpj — same order expected since both sort by cnpj.
+        full_rows = compare_con.execute(
+            f"SELECT cnpj, razao_social, situacao_cadastral, uf, municipio_codigo "
+            f"FROM '{full_out}' ORDER BY cnpj"
+        ).fetchall()
+        chunked_rows = compare_con.execute(
+            f"SELECT cnpj, razao_social, situacao_cadastral, uf, municipio_codigo "
+            f"FROM '{chunked_out}' ORDER BY cnpj"
+        ).fetchall()
+
+        assert full_rows == chunked_rows, (
+            f"row content mismatch; first divergence at index "
+            f"{next(i for i, (a, b) in enumerate(zip(full_rows, chunked_rows)) if a != b)}"
+            if full_rows != chunked_rows
+            else ""
+        )
+    finally:
+        compare_con.close()
+
+
+# -----------------------------------------------------------------------------
+# write_raizes_parquet_from_cnpjs — matches write_raizes_parquet
+# -----------------------------------------------------------------------------
+
+
+def test_write_raizes_from_cnpjs_matches_original(tmp_path, all_zips_dir):
+    """write_raizes_parquet_from_cnpjs must produce the same raizes as write_raizes_parquet.
+
+    Runs transform_snapshot to get both cnpjs.parquet and raizes.parquet (original),
+    then calls write_raizes_parquet_from_cnpjs on the cnpjs.parquet and compares
+    row counts plus key aggregated fields.
+    """
+    chain = fetcher.ChainedFetcher(fetchers=[_ZipDirFetcher(all_zips_dir)])
+    output_dir = tmp_path / "output"
+    cache_dir = tmp_path / "cache"
+
+    # Run the full pipeline to get reference outputs.
+    transform.transform_snapshot(
+        "2026-04",
+        cache_dir=cache_dir,
+        output_dir=output_dir,
+        chain=chain,
+        skip_unimplemented=False,
+    )
+
+    cnpjs_path = output_dir / "cnpjs.parquet"
+    raizes_ref = output_dir / "raizes.parquet"
+    raizes_new = tmp_path / "raizes_from_cnpjs.parquet"
+
+    assert cnpjs_path.exists(), "cnpjs.parquet must exist after transform_snapshot"
+    assert raizes_ref.exists(), "raizes.parquet must exist after transform_snapshot"
+
+    # Compute raizes from cnpjs.parquet using the new function.
+    con = duckdb.connect()
+    try:
+        transform.write_raizes_parquet_from_cnpjs(con, cnpjs_path, raizes_new)
+    finally:
+        con.close()
+
+    assert raizes_new.exists()
+
+    # Compare.
+    compare_con = duckdb.connect()
+    try:
+        ref_count = compare_con.execute(f"SELECT COUNT(*) FROM '{raizes_ref}'").fetchone()[0]
+        new_count = compare_con.execute(f"SELECT COUNT(*) FROM '{raizes_new}'").fetchone()[0]
+        assert ref_count == new_count, (
+            f"raizes row count mismatch: original={ref_count}, from_cnpjs={new_count}"
+        )
+
+        # Compare key fields for each cnpj_base.
+        ref_rows = compare_con.execute(
+            f"SELECT cnpj_base, qtd_estabelecimentos, qtd_estabelecimentos_ativos, "
+            f"ufs_atuacao, uf_matriz, municipio_matriz_nome "
+            f"FROM '{raizes_ref}' ORDER BY cnpj_base"
+        ).fetchall()
+        new_rows = compare_con.execute(
+            f"SELECT cnpj_base, qtd_estabelecimentos, qtd_estabelecimentos_ativos, "
+            f"ufs_atuacao, uf_matriz, municipio_matriz_nome "
+            f"FROM '{raizes_new}' ORDER BY cnpj_base"
+        ).fetchall()
+
+        assert len(ref_rows) == len(new_rows)
+        for ref, new in zip(ref_rows, new_rows):
+            assert ref[0] == new[0], f"cnpj_base mismatch: {ref[0]} vs {new[0]}"
+            assert ref[1] == new[1], (
+                f"qtd_estabelecimentos mismatch for {ref[0]}: {ref[1]} vs {new[1]}"
+            )
+            assert ref[2] == new[2], (
+                f"qtd_estabelecimentos_ativos mismatch for {ref[0]}: {ref[2]} vs {new[2]}"
+            )
+            assert sorted(ref[3]) == sorted(new[3]), (
+                f"ufs_atuacao mismatch for {ref[0]}: {ref[3]} vs {new[3]}"
+            )
+    finally:
+        compare_con.close()
