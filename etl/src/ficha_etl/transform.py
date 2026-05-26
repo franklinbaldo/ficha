@@ -845,11 +845,7 @@ def write_enderecos_parquet(
     log.info("    writing enderecos.parquet...")
     # Build MAP literal: MAP {'R': 'RUA ', 'AV': 'AVENIDA ', ...}
     # Trailing space in values avoids re-adding a separator on concatenation.
-    abbrev_map = (
-        "MAP {"
-        + ", ".join(f"'{k}': '{v} '" for k, v in _LOGRADOURO_ABBREVS.items())
-        + "}"
-    )
+    abbrev_map = "MAP {" + ", ".join(f"'{k}': '{v} '" for k, v in _LOGRADOURO_ABBREVS.items()) + "}"
     con.execute(
         rf"""
         COPY (
