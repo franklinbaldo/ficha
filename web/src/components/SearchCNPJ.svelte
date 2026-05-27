@@ -196,30 +196,37 @@
           return;
         }
         // Exact CNAE code (all digits) or description ILIKE via lookup_cnaes.
-        // JOIN cnpjs to get company names — sorted by code then razao_social.
+        // LIMIT is applied inside the cnpj_cnaes subquery FIRST so DuckDB
+        // only scans the first 30 rows of the sorted parquet before joining
+        // cnpjs — avoids downloading all rows for popular codes (~millions).
         const isCode = /^\d+$/.test(sanitized);
         let stmt;
         if (isCode) {
           stmt = await conn.prepare(`
             SELECT cc.cnpj, c.razao_social, c.nome_fantasia, c.uf, c.municipio_nome,
                    cc.cnae_codigo, cc.posicao
-            FROM cnpj_cnaes cc
+            FROM (
+              SELECT cnpj, cnae_codigo, posicao
+              FROM cnpj_cnaes WHERE cnae_codigo = ?
+              LIMIT 30
+            ) cc
             JOIN cnpjs c ON c.cnpj = cc.cnpj
-            WHERE cc.cnae_codigo = ?
-            ORDER BY cc.posicao, c.razao_social
-            LIMIT 30
+            ORDER BY cc.posicao, cc.cnpj
           `);
         } else {
           stmt = await conn.prepare(`
             SELECT cc.cnpj, c.razao_social, c.nome_fantasia, c.uf, c.municipio_nome,
                    cc.cnae_codigo, cc.posicao
-            FROM cnpj_cnaes cc
+            FROM (
+              SELECT cnpj, cnae_codigo, posicao
+              FROM cnpj_cnaes
+              WHERE cnae_codigo IN (
+                SELECT codigo FROM lookup_cnaes WHERE descricao_normalizada ILIKE ?
+              )
+              LIMIT 30
+            ) cc
             JOIN cnpjs c ON c.cnpj = cc.cnpj
-            WHERE cc.cnae_codigo IN (
-              SELECT codigo FROM lookup_cnaes WHERE descricao_normalizada ILIKE ?
-            )
-            ORDER BY cc.cnae_codigo, cc.posicao, c.razao_social
-            LIMIT 30
+            ORDER BY cc.cnae_codigo, cc.posicao, cc.cnpj
           `);
         }
         const res = await stmt.query(isCode ? sanitized : `%${sanitized.toUpperCase()}%`);
