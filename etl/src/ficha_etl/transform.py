@@ -388,6 +388,24 @@ def load_main_tables_into_duckdb(
             time.monotonic() - t0,
         )
 
+    # W13.1a: verify 1:1 cardinality assumption for simples.
+    # write_cnpjs_parquet does LEFT JOIN simples ON cnpj_basico — if simples
+    # has multiple rows per cnpj_basico the join silently multiplies
+    # estabelecimento rows. RFB's intent is 1 row per empresa but this has
+    # never been empirically confirmed on a completed bootstrap run.
+    dupes = con.execute(
+        "SELECT COUNT(*) FROM ("
+        "  SELECT cnpj_basico FROM simples GROUP BY cnpj_basico HAVING COUNT(*) > 1"
+        ")"
+    ).fetchone()[0]
+    if dupes > 0:
+        log.warning(
+            "W13.1a: simples has %d cnpj_basico value(s) with multiple rows — "
+            "LEFT JOIN in write_cnpjs_parquet may silently multiply rows. "
+            "See docs/perf-plan-2026-05.md §13.1 for the fix.",
+            dupes,
+        )
+
 
 def load_lookup_into_duckdb(
     con: duckdb.DuckDBPyConnection,
