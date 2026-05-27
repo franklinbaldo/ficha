@@ -82,10 +82,20 @@
     if (!db || !cnpj.trim()) return;
     loading = true;
 
+    // Strip LIKE wildcard characters from user input — names don't contain % or _,
+    // and allowing them would let a single % match the entire table.
+    const sanitized = cnpj.trim().replace(/[%_\\]/g, '');
+
     try {
       const conn = await db.connect();
 
       if (searchMode === 'pessoa') {
+        if (sanitized.length < 3) {
+          pessoaResults = [];
+          results = [];
+          await conn.close();
+          return;
+        }
         const stmt = await conn.prepare(`
           SELECT
             cpf_mascarado,
@@ -100,7 +110,7 @@
           ORDER BY cpf_mascarado, nome_normalizado
           LIMIT 50
         `);
-        const res = await stmt.query(`%${cnpj.trim().toUpperCase()}%`);
+        const res = await stmt.query(`%${sanitized.toUpperCase()}%`);
         await stmt.close();
         pessoaResults = res.toArray().map((r) => r.toJSON() as PessoaRow);
         results = [];
@@ -118,13 +128,19 @@
           res = await stmt.query(clean);
           await stmt.close();
         } else {
+          if (sanitized.length < 3) {
+            results = [];
+            pessoaResults = [];
+            await conn.close();
+            return;
+          }
           const stmt = await conn.prepare(`
             SELECT cnpj, razao_social, nome_fantasia, uf,
                    cnae_principal_codigo, cnae_principal_descricao,
                    municipio_nome, capital_social
             FROM cnpjs WHERE razao_social ILIKE ? LIMIT 20
           `);
-          res = await stmt.query(`%${cnpj.trim()}%`);
+          res = await stmt.query(`%${sanitized}%`);
           await stmt.close();
         }
 
