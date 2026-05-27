@@ -234,4 +234,6 @@ def load_zips_parallel(
                 _load_from_result(con, result)
 
     if errors:
+        for i, exc in enumerate(errors[1:], start=2):
+            log.error("ZIP failure %d/%d: %s", i, len(errors), exc)
         raise RuntimeError(f"{len(errors)} ZIP(s) failed to decompress") from errors[0]

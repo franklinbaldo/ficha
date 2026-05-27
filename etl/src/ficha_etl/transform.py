@@ -496,11 +496,13 @@ END
 """
 
 
-def _cnpjs_chunk_select_sql(
+def _cnpjs_chunk_select_sql(  # noqa: PLR0913
     est_alias: str,
     emp_alias: str,
     smp_alias: str,
     cnae_map_alias: str,
+    *,
+    order_by: bool = True,
 ) -> str:
     """Return the SELECT...FROM...JOIN... SQL for the cnpjs denormalized query.
 
@@ -510,10 +512,8 @@ def _cnpjs_chunk_select_sql(
     (which loads one estabelecimento CSV at a time directly).
 
     The _cnae_map temp table must already exist in `con` before this SQL is
-    executed. The ORDER BY cnpj at the end is included so the caller can wrap
-    it in COPY (...) TO without a per-chunk sort for the bucket approach.
-    Callers that do a global sort at merge time should strip or ignore the
-    trailing ORDER BY line.
+    executed. Pass order_by=False when a global sort at merge time makes the
+    per-chunk ORDER BY redundant (avoids fragile rsplit string manipulation).
     """
     est = est_alias
     emp = emp_alias
@@ -611,7 +611,7 @@ def _cnpjs_chunk_select_sql(
         LEFT JOIN lookup_cnaes cn_p ON cn_p.codigo = {est}.cnae_fiscal_principal
         LEFT JOIN lookup_municipios mn ON mn.codigo = {est}.municipio
         LEFT JOIN lookup_paises ps ON ps.codigo = {est}.pais
-        ORDER BY cnpj
+        {"ORDER BY cnpj" if order_by else ""}
     """
 
 
@@ -778,18 +778,15 @@ def write_cnpjs_parquet_chunked(
                 continue
 
             part_path = parts_dir / f"chunk-{i}.parquet"
-            # Use the shared helper. The chunk SELECT uses estabelecimento /
-            # empresa / simples directly (no bucket-prefix tables). No per-chunk
-            # ORDER BY — the global sort in the merge step handles ordering.
+            # order_by=False: the global merge step sorts by cnpj, so
+            # per-chunk ORDER BY is unnecessary and wasteful.
             _select_sql = _cnpjs_chunk_select_sql(
-                "estabelecimento", "empresa", "simples", "_cnae_map"
+                "estabelecimento", "empresa", "simples", "_cnae_map", order_by=False
             )
-            # Strip the trailing ORDER BY — the merge step sorts globally.
-            _select_sql_no_order = _select_sql.rsplit("ORDER BY cnpj", 1)[0]
             con.execute(
                 f"""
                 COPY (
-                    {_select_sql_no_order}
+                    {_select_sql}
                 ) TO '{part_path}' (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 200000)
                 """
             )
@@ -801,11 +798,10 @@ def write_cnpjs_parquet_chunked(
         if not written_parts:
             # No chunks written — produce an empty parquet with the right schema.
             # This shouldn't happen in production but is a safe fallback.
+            # Use write_cnpjs_parquet with zero rows rather than read_parquet([])
+            # which crashes DuckDB (cannot infer schema from empty list).
             log.warning("write_cnpjs_parquet_chunked: no chunks written; output will be empty")
-            con.execute(
-                f"COPY (SELECT * FROM read_parquet([]) WHERE FALSE) "
-                f"TO '{output_path}' (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 200000)"
-            )
+            write_cnpjs_parquet(con, output_path)
             return
 
         # Merge all chunk parquets → final output, sorted globally by cnpj.
@@ -824,6 +820,8 @@ def write_cnpjs_parquet_chunked(
     finally:
         con.execute("DROP TABLE IF EXISTS _cnae_map")
         con.execute("DROP TABLE IF EXISTS estabelecimento")
+        # Clean up parts dir on error (success path already removed it above).
+        shutil.rmtree(parts_dir, ignore_errors=True)
 
 
 def write_raizes_parquet_from_cnpjs(
@@ -882,7 +880,7 @@ def write_raizes_parquet_from_cnpjs(
     """)
     con.execute("""
         CREATE OR REPLACE TEMP TABLE _raizes_ufs_agg AS
-        SELECT cnpj_base, list(uf) AS ufs_atuacao
+        SELECT cnpj_base, list_sort(list(uf)) AS ufs_atuacao
         FROM _raizes_ufs GROUP BY cnpj_base
     """)
     con.execute("""
@@ -892,7 +890,7 @@ def write_raizes_parquet_from_cnpjs(
     """)
     con.execute("""
         CREATE OR REPLACE TEMP TABLE _raizes_cnaes_agg AS
-        SELECT cnpj_base, list(cnae_principal_codigo) AS cnaes_principais_distintos
+        SELECT cnpj_base, list_sort(list(cnae_principal_codigo)) AS cnaes_principais_distintos
         FROM _raizes_cnaes GROUP BY cnpj_base
     """)
 

@@ -304,7 +304,7 @@ def test_benchmark_streaming_vs_current(bench_zip, tmp_path):
 
     # Disk gate: streaming must not write any intermediate CSV
     assert disk_stream == 0, (
-        f"streaming left {disk_stream} bytes on disk (expected 0 — FIFO should disappear)"
+        f"streaming left {disk_stream} bytes on disk (expected 0 — tmpfs file cleaned up after load)"
     )
 
     # Disk benefit: current must have written the uncompressed CSV

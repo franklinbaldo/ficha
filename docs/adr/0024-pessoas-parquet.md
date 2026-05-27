@@ -28,7 +28,7 @@ Produzir `pessoas.parquet` como índice inverso de pessoas físicas:
 
 **Grão:** `(cpf_mascarado, nome_normalizado, faixa_etaria, cnpj_base, papel)` — uma linha por pessoa × empresa × papel.  
 **Sort:** `(cpf_mascarado, nome_normalizado)`  
-**Fonte:** `socio_pf` (sócios PF) + `representante` (representantes legais derivados dos campos `representante_legal_*`).
+**Fonte:** tabela `socio` — duas queries: `WHERE identificador_socio = '2'` para sócios PF, e `WHERE representante_legal IS NOT NULL` (DISTINCT por cnpj_basico) para representantes.
 
 `faixa_etaria` é atributo da **pessoa** (não do vínculo) e serve para desambiguar homônimos:
 duas linhas com o mesmo CPF mascarado e nome mas `faixa_etaria` diferentes são quase certamente
@@ -77,7 +77,7 @@ sem desmascaramento de CPF. Aplica-se ADR 0004 e ADR 0006.
 ## Consequências
 
 - +1 write no phase 3 do ETL (~5-10 min, ~6 GB peak — entrada pequena)
-- Tabela `socio` é dividida em `socio_pf`, `socio_outros` e `representante` durante o carregamento; todas são liberadas após o write de `pessoas`
+- Tabela `socio` é liberada da memória após o write de `pessoas`
 - Manifest ganha entrada `pessoas` com metadata de sort
 - Frontend usa `attachPessoas(db, url)` para registrar e criar VIEW
 - Schema Zod em `web/src/schemas/v1/pessoa.ts`
