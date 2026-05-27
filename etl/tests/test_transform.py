@@ -1243,7 +1243,11 @@ def test_write_enderecos_parquet_numeric_sort(tmp_path):
     out = tmp_path / "enderecos.parquet"
     transform.write_enderecos_parquet(con, out)
 
-    # Read in physical file order (row_number() OVER () without ORDER BY preserves parquet order).
+    # row_number() OVER () without ORDER BY reflects physical parquet row order —
+    # DuckDB scans row groups sequentially, so this matches the COPY ... ORDER BY
+    # written above. This is a DuckDB implementation guarantee (not SQL spec),
+    # but it's the most practical way to assert physical sort order without
+    # re-sorting on the read side (which would defeat the purpose of the test).
     numeros = con.execute(
         f"""
         SELECT numero FROM (

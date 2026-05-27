@@ -474,18 +474,6 @@ def _date_expr(col: str) -> str:
     )
 
 
-# Mapeamentos pequenos hardcoded — códigos da RFB sem tabela própria de lookup.
-_SITUACAO_DESCRICAO_SQL = """
-CASE est.situacao_cadastral
-    WHEN '01' THEN 'Nula'
-    WHEN '02' THEN 'Ativa'
-    WHEN '03' THEN 'Suspensa'
-    WHEN '04' THEN 'Inapta'
-    WHEN '08' THEN 'Baixada'
-    ELSE ''
-END
-"""
-
 _TIPO_SOCIO_DESCRICAO_SQL = """
 CASE soc.identificador_socio
     WHEN '1' THEN 'PJ'
@@ -1224,6 +1212,10 @@ def write_raizes_parquet(
 
     Requer que `load_main_tables_into_duckdb` e os lookups já estejam carregados em `con`.
     Ver ADR 0008 e schema `web/src/schemas/v1/raiz.ts`.
+
+    Nota: o pipeline principal (transform_snapshot) usa write_raizes_parquet_from_cnpjs,
+    que deriva raizes.parquet do cnpjs.parquet já escrito sem precisar das tabelas brutas.
+    Esta função permanece para uso standalone e testes de referência.
     """
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
