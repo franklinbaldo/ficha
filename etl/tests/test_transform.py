@@ -323,6 +323,60 @@ def test_load_lookup_preserves_iso_encoding(tmp_path):
         con.close()
 
 
+def test_load_main_tables_warns_on_simples_duplicates(tmp_path, caplog):
+    """W13.1a: load_main_tables logs a warning when simples has duplicate cnpj_basico."""
+    import logging
+
+    con = duckdb.connect()
+    try:
+        # Build extracted list with duplicate simples rows for the same cnpj_basico.
+        zips = tmp_path / "zips"
+        rows_for_kind = {
+            "cnaes": LOOKUP_FIXTURES["cnaes"],
+            "motivos": LOOKUP_FIXTURES["motivos"],
+            "municipios": LOOKUP_FIXTURES["municipios"],
+            "naturezas": LOOKUP_FIXTURES["naturezas"],
+            "paises": LOOKUP_FIXTURES["paises"],
+            "qualificacoes": LOOKUP_FIXTURES["qualificacoes"],
+            "empresas": EMPRESA_ROWS,
+            "estabelecimentos": ESTABELECIMENTO_ROWS,
+            "socios": SOCIO_ROWS,
+            # Two rows for cnpj_basico '11111111' — violates the 1:1 assumption.
+            "simples": [
+                ("11111111", "S", "20200101", "", "N", "", ""),
+                ("11111111", "N", "20210101", "20210601", "N", "", ""),
+            ],
+        }
+        zips.mkdir()
+        seen: set[str] = set()
+        for spec in canonical_inventory():
+            rows = rows_for_kind.get(spec.kind, [])
+            if spec.kind in seen:
+                rows = []
+            seen.add(spec.kind)
+            _zip_with_csv(zips / spec.name, f"{spec.name.removesuffix('.zip')}.CSV", rows)
+
+        from ficha_etl import fetcher
+
+        class _Dir:
+            def get(self, name, dest):
+                import shutil
+
+                shutil.copy2(zips / name, dest)
+
+        chain = fetcher.ChainedFetcher(fetchers=[_ZipDirFetcher(zips)])
+        extracted = transform.extract_all("2026-04", chain, tmp_path / "extracted")
+
+        with caplog.at_level(logging.WARNING, logger="ficha_etl.transform"):
+            transform.load_main_tables_into_duckdb(con, extracted)
+
+        assert any("W13.1a" in r.message for r in caplog.records), (
+            "Expected W13.1a warning for duplicate simples rows"
+        )
+    finally:
+        con.close()
+
+
 def test_write_lookups_json_full_shape(tmp_path):
     con = duckdb.connect()
     try:
