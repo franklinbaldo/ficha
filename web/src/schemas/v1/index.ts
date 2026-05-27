@@ -9,6 +9,8 @@
 export { EstabelecimentoSchema, type Estabelecimento } from './estabelecimento';
 export { RaizSchema, type Raiz } from './raiz';
 export { SocioSchema, type Socio } from './socio';
+export { EnderecoSchema, type Endereco } from './endereco';
+export { PessoaSchema, type Pessoa } from './pessoa';
 export { LookupsSchema, type Lookups } from './lookups';
 export { ManifestSchema, SnapshotEntrySchema, type Manifest, type Snapshot } from './manifest';
 

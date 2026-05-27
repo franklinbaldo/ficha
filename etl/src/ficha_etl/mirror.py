@@ -58,7 +58,7 @@ def raw_file_url(month: str, filename: str) -> str:
 def parquet_url(month: str, name: str) -> str:
     """URL de um Parquet transformado dentro do item.
 
-    `name` deve ser um dos: cnpjs, cnpj_contatos, raizes, socios.
+    `name` deve ser um dos: cnpjs, cnpj_contatos, cnpj_cnaes, raizes, socios, enderecos, pessoas.
     """
     return f"{item_root(month)}/{name}.parquet"
 

@@ -43,6 +43,8 @@ def output_dir(tmp_path: Path) -> Path:
     _write_parquet(d / "raizes.parquet", 3)
     _write_parquet(d / "socios.parquet", 7)
     _write_parquet(d / "cnpj_contatos.parquet", 5)
+    _write_parquet(d / "enderecos.parquet", 8)
+    _write_parquet(d / "pessoas.parquet", 12)
     (d / "lookups.json").write_text('{"schema_version":"1.0.0"}', encoding="utf-8")
 
     (d / "lookups").mkdir(parents=True, exist_ok=True)
@@ -74,6 +76,8 @@ def test_build_snapshot_entry_row_counts(output_dir: Path) -> None:
         "cnpj_cnaes": 15,
         "raizes": 3,
         "socios": 7,
+        "enderecos": 8,
+        "pessoas": 12,
     }
 
 

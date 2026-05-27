@@ -374,8 +374,8 @@ def load_main_tables_into_duckdb(
     for table, kind, cols in (
         ("empresa", "empresas", _EMPRESA_COLUMNS),
         ("estabelecimento", "estabelecimentos", _ESTABELECIMENTO_COLUMNS),
-        ("socio", "socios", _SOCIO_COLUMNS),
         ("simples", "simples", _SIMPLES_COLUMNS),
+        ("socio", "socios", _SOCIO_COLUMNS),
     ):
         t0 = time.monotonic()
         log.info("loading table '%s' from %d CSV(s)...", table, len(by_kind.get(kind, [])))
@@ -474,18 +474,6 @@ def _date_expr(col: str) -> str:
     )
 
 
-# Mapeamentos pequenos hardcoded — códigos da RFB sem tabela própria de lookup.
-_SITUACAO_DESCRICAO_SQL = """
-CASE est.situacao_cadastral
-    WHEN '01' THEN 'Nula'
-    WHEN '02' THEN 'Ativa'
-    WHEN '03' THEN 'Suspensa'
-    WHEN '04' THEN 'Inapta'
-    WHEN '08' THEN 'Baixada'
-    ELSE ''
-END
-"""
-
 _TIPO_SOCIO_DESCRICAO_SQL = """
 CASE soc.identificador_socio
     WHEN '1' THEN 'PJ'
@@ -494,6 +482,125 @@ CASE soc.identificador_socio
     ELSE ''
 END
 """
+
+
+def _cnpjs_chunk_select_sql(  # noqa: PLR0913
+    est_alias: str,
+    emp_alias: str,
+    smp_alias: str,
+    cnae_map_alias: str,
+    *,
+    order_by: bool = True,
+) -> str:
+    """Return the SELECT...FROM...JOIN... SQL for the cnpjs denormalized query.
+
+    Takes table/alias names as parameters so it can be reused by both the
+    bucket-partitioned write_cnpjs_parquet (which pre-filters into _est_b /
+    _emp_b / _smp_b) and the new chunk-per-ZIP write_cnpjs_parquet_chunked
+    (which loads one estabelecimento CSV at a time directly).
+
+    The _cnae_map temp table must already exist in `con` before this SQL is
+    executed. Pass order_by=False when a global sort at merge time makes the
+    per-chunk ORDER BY redundant (avoids fragile rsplit string manipulation).
+    """
+    est = est_alias
+    emp = emp_alias
+    smp = smp_alias
+    cm = cnae_map_alias
+    return f"""
+        SELECT
+            {est}.cnpj_basico || {est}.cnpj_ordem || {est}.cnpj_dv AS cnpj,
+            {est}.cnpj_basico AS cnpj_base,
+            {est}.cnpj_ordem,
+            {est}.cnpj_dv,
+            {est}.identificador_matriz_filial,
+
+            -- Empresa (denormalizado)
+            {emp}.razao_social,
+            UPPER(strip_accents({emp}.razao_social)) AS razao_social_normalizada,
+            {emp}.natureza_juridica AS natureza_juridica_codigo,
+            COALESCE(nj.descricao, '') AS natureza_juridica_descricao,
+            {emp}.qualificacao_responsavel AS qualificacao_responsavel_codigo,
+            COALESCE(qr.descricao, '') AS qualificacao_responsavel_descricao,
+            TRY_CAST(REPLACE({emp}.capital_social, ',', '.') AS DOUBLE) AS capital_social,
+            {emp}.porte_empresa,
+            {emp}.ente_federativo_responsavel,
+
+            -- Estabelecimento
+            {est}.nome_fantasia,
+            {est}.situacao_cadastral,
+            CASE {est}.situacao_cadastral
+                WHEN '01' THEN 'Nula'
+                WHEN '02' THEN 'Ativa'
+                WHEN '03' THEN 'Suspensa'
+                WHEN '04' THEN 'Inapta'
+                WHEN '08' THEN 'Baixada'
+                ELSE ''
+            END AS situacao_cadastral_descricao,
+            {_date_expr(f"{est}.data_situacao_cadastral")} AS data_situacao_cadastral,
+            {est}.motivo_situacao_cadastral AS motivo_situacao_cadastral_codigo,
+            COALESCE(mt.descricao, '') AS motivo_situacao_cadastral_descricao,
+            {_date_expr(f"{est}.data_inicio_atividade")} AS data_inicio_atividade,
+
+            -- CNAE (principal + secundários)
+            {est}.cnae_fiscal_principal AS cnae_principal_codigo,
+            COALESCE(cn_p.descricao, '') AS cnae_principal_descricao,
+            CASE WHEN {est}.cnae_fiscal_secundaria IS NULL OR {est}.cnae_fiscal_secundaria = ''
+                 THEN []::VARCHAR[]
+                 ELSE list_transform(str_split({est}.cnae_fiscal_secundaria, ','), x -> trim(x)) END
+                AS cnae_secundario_codigos,
+            CASE WHEN {est}.cnae_fiscal_secundaria IS NULL OR {est}.cnae_fiscal_secundaria = ''
+                 THEN []::VARCHAR[]
+                 ELSE list_transform(
+                        list_transform(str_split({est}.cnae_fiscal_secundaria, ','), x -> trim(x)),
+                        c -> COALESCE({cm}.m[c], '')
+                      ) END
+                AS cnae_secundario_descricoes,
+
+            -- Endereço
+            {est}.tipo_logradouro,
+            {est}.logradouro,
+            {est}.numero,
+            {est}.complemento,
+            {est}.bairro,
+            {est}.cep,
+            {est}.uf,
+            {est}.municipio AS municipio_codigo,
+            COALESCE(mn.descricao, '') AS municipio_nome,
+            {est}.pais AS pais_codigo,
+            COALESCE(ps.descricao, '') AS pais_nome,
+            {est}.nome_cidade_exterior,
+
+            -- Contato
+            {est}.ddd_1, {est}.telefone_1, {est}.ddd_2, {est}.telefone_2,
+            {est}.ddd_fax, {est}.fax, {est}.correio_eletronico,
+
+            -- Estado especial
+            {est}.situacao_especial,
+            {_date_expr(f"{est}.data_situacao_especial")} AS data_situacao_especial,
+
+            -- Simples / MEI (inline)
+            CASE {smp}.opcao_simples WHEN 'S' THEN TRUE WHEN 'N' THEN FALSE ELSE NULL END
+                AS opcao_simples,
+            {_date_expr(f"{smp}.data_opcao_simples")} AS data_opcao_simples,
+            {_date_expr(f"{smp}.data_exclusao_simples")} AS data_exclusao_simples,
+            CASE {smp}.opcao_mei WHEN 'S' THEN TRUE WHEN 'N' THEN FALSE ELSE NULL END
+                AS opcao_mei,
+            {_date_expr(f"{smp}.data_opcao_mei")} AS data_opcao_mei,
+            {_date_expr(f"{smp}.data_exclusao_mei")} AS data_exclusao_mei
+
+        FROM {est}
+        CROSS JOIN {cm}
+        LEFT JOIN {emp} ON {emp}.cnpj_basico = {est}.cnpj_basico
+        LEFT JOIN {smp} ON {smp}.cnpj_basico = {est}.cnpj_basico
+        LEFT JOIN lookup_naturezas nj ON nj.codigo = {emp}.natureza_juridica
+        LEFT JOIN lookup_qualificacoes qr ON qr.codigo = {emp}.qualificacao_responsavel
+        LEFT JOIN lookup_motivos mt ON mt.codigo = {est}.motivo_situacao_cadastral
+        LEFT JOIN lookup_cnaes cn_p ON cn_p.codigo = {est}.cnae_fiscal_principal
+        LEFT JOIN lookup_municipios mn ON mn.codigo = {est}.municipio
+        LEFT JOIN lookup_paises ps ON ps.codigo = {est}.pais
+        {"ORDER BY cnpj" if order_by else ""}
+    """
 
 
 def write_cnpjs_parquet(
@@ -572,114 +679,13 @@ def write_cnpjs_parquet(
                     f"CREATE OR REPLACE TEMP TABLE {_tbl} AS "
                     f"SELECT * FROM {_src} WHERE LEFT(cnpj_basico, 1) = '{_bucket}'"
                 )
+            # Use the shared helper for the SELECT logic; bucket tables
+            # _est_b / _emp_b / _smp_b are the aliases used here.
+            _select_sql = _cnpjs_chunk_select_sql("_est_b", "_emp_b", "_smp_b", "_cnae_map")
             con.execute(
                 f"""
             COPY (
-                SELECT
-                    est.cnpj_basico || est.cnpj_ordem || est.cnpj_dv AS cnpj,
-                    est.cnpj_basico AS cnpj_base,
-                    est.cnpj_ordem,
-                    est.cnpj_dv,
-                    est.identificador_matriz_filial,
-
-                    -- Empresa (denormalizado)
-                    emp.razao_social,
-                    UPPER(strip_accents(emp.razao_social)) AS razao_social_normalizada,
-                    emp.natureza_juridica AS natureza_juridica_codigo,
-                    COALESCE(nj.descricao, '') AS natureza_juridica_descricao,
-                    emp.qualificacao_responsavel AS qualificacao_responsavel_codigo,
-                    COALESCE(qr.descricao, '') AS qualificacao_responsavel_descricao,
-                    {_CAPITAL_SOCIAL_EXPR} AS capital_social,
-                    emp.porte_empresa,
-                emp.ente_federativo_responsavel,
-
-                -- Estabelecimento
-                est.nome_fantasia,
-                est.situacao_cadastral,
-                {_SITUACAO_DESCRICAO_SQL} AS situacao_cadastral_descricao,
-                {_date_expr("est.data_situacao_cadastral")} AS data_situacao_cadastral,
-                est.motivo_situacao_cadastral AS motivo_situacao_cadastral_codigo,
-                COALESCE(mt.descricao, '') AS motivo_situacao_cadastral_descricao,
-                {_date_expr("est.data_inicio_atividade")} AS data_inicio_atividade,
-
-                -- CNAE (principal + secundários)
-                est.cnae_fiscal_principal AS cnae_principal_codigo,
-                COALESCE(cn_p.descricao, '') AS cnae_principal_descricao,
-                CASE WHEN est.cnae_fiscal_secundaria IS NULL OR est.cnae_fiscal_secundaria = ''
-                     THEN []::VARCHAR[]
-                     ELSE list_transform(str_split(est.cnae_fiscal_secundaria, ','), x -> trim(x)) END
-                    AS cnae_secundario_codigos,
-                -- Resolve via _cnae_map cross-joined below. DuckDB rejects
-                -- subqueries inside list_transform lambdas, so the MAP
-                -- must be in column-scope: `_cm.m` is a regular column
-                -- reference (single-row CROSS JOIN broadcasts it onto
-                -- every estabelecimento row). MAP indexing returns NULL
-                -- for missing codes; COALESCE to '' to match the
-                -- convention used by other lookups in this SELECT.
-                CASE WHEN est.cnae_fiscal_secundaria IS NULL OR est.cnae_fiscal_secundaria = ''
-                     THEN []::VARCHAR[]
-                     ELSE list_transform(
-                            list_transform(str_split(est.cnae_fiscal_secundaria, ','), x -> trim(x)),
-                            c -> COALESCE(_cm.m[c], '')
-                          ) END
-                    AS cnae_secundario_descricoes,
-
-                -- Endereço
-                est.tipo_logradouro,
-                est.logradouro,
-                est.numero,
-                est.complemento,
-                est.bairro,
-                est.cep,
-                est.uf,
-                est.municipio AS municipio_codigo,
-                COALESCE(mn.descricao, '') AS municipio_nome,
-                est.pais AS pais_codigo,
-                COALESCE(ps.descricao, '') AS pais_nome,
-                est.nome_cidade_exterior,
-
-                -- Contato
-                est.ddd_1, est.telefone_1, est.ddd_2, est.telefone_2,
-                est.ddd_fax, est.fax, est.correio_eletronico,
-
-                -- Estado especial
-                est.situacao_especial,
-                {_date_expr("est.data_situacao_especial")} AS data_situacao_especial,
-
-                -- Simples / MEI (inline)
-                CASE s.opcao_simples WHEN 'S' THEN TRUE WHEN 'N' THEN FALSE ELSE NULL END
-                    AS opcao_simples,
-                {_date_expr("s.data_opcao_simples")} AS data_opcao_simples,
-                {_date_expr("s.data_exclusao_simples")} AS data_exclusao_simples,
-                CASE s.opcao_mei WHEN 'S' THEN TRUE WHEN 'N' THEN FALSE ELSE NULL END
-                    AS opcao_mei,
-                {_date_expr("s.data_opcao_mei")} AS data_opcao_mei,
-                {_date_expr("s.data_exclusao_mei")} AS data_exclusao_mei
-
-            -- W1.3 partition: all three big inputs are pre-filtered
-            -- into _est_b / _emp_b / _smp_b above. The lookups stay
-            -- full-size (small) and joins against them are nested-loop
-            -- friendly.
-            FROM _est_b est
-            CROSS JOIN _cnae_map _cm
-            LEFT JOIN _emp_b emp ON emp.cnpj_basico = est.cnpj_basico
-            LEFT JOIN _smp_b s ON s.cnpj_basico = est.cnpj_basico
-            LEFT JOIN lookup_naturezas nj ON nj.codigo = emp.natureza_juridica
-            LEFT JOIN lookup_qualificacoes qr ON qr.codigo = emp.qualificacao_responsavel
-            LEFT JOIN lookup_motivos mt ON mt.codigo = est.motivo_situacao_cadastral
-            LEFT JOIN lookup_cnaes cn_p ON cn_p.codigo = est.cnae_fiscal_principal
-            LEFT JOIN lookup_municipios mn ON mn.codigo = est.municipio
-            LEFT JOIN lookup_paises ps ON ps.codigo = est.pais
-            -- ORDER BY cnpj omitted: forced global sort of ~30 GB join
-            -- output through DuckDB's external sorter blew past 70 GB
-            -- disk on GH Actions runners (PR #24, run 25519086268).
-            -- Lookup-by-exact-cnpj queries hit the bloom filter on
-            -- `cnpj`, which is independent of physical row order, so
-            -- the bootstrap output works the same. Range queries on
-            -- cnpj would lose row-group min/max pruning -- but those
-            -- aren't primary FICHA queries (exact match dominates;
-            -- razao_social search uses raizes.parquet). Revisit if
-            -- range workloads materialize.
+                {_select_sql}
             ) TO '{_part_path}' (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 200000)
             """
             )
@@ -709,6 +715,263 @@ def write_cnpjs_parquet(
         # lingering _cnae_map could shadow a future re-run of this
         # function. Per Kilo PR #28 review.
         con.execute("DROP TABLE IF EXISTS _cnae_map")
+
+
+def write_cnpjs_parquet_chunked(
+    con: duckdb.DuckDBPyConnection,
+    estabelecimento_csv_paths: list[Path],
+    output_path: Path,
+) -> None:
+    """Write cnpjs.parquet by loading one estabelecimento CSV at a time.
+
+    Pre-condition: empresa, simples, all lookups already in con.
+    Each chunk: load CSV → JOIN → write chunk parquet → DROP.
+    Final merge: read_parquet(all chunks) ORDER BY cnpj → output_path.
+    Peak RAM: ~5 GB vs ~70 GB for full-load approach.
+    """
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    # Build _cnae_map once — same logic as write_cnpjs_parquet.
+    con.execute(
+        """
+        CREATE OR REPLACE TEMP TABLE _cnae_map AS
+        SELECT MAP(list(codigo), list(descricao)) AS m FROM (
+            SELECT codigo, ANY_VALUE(descricao) AS descricao
+            FROM lookup_cnaes
+            GROUP BY codigo
+        )
+        """
+    )
+    parts_dir = output_path.parent / f"{output_path.stem}.parts"
+    if parts_dir.exists():
+        shutil.rmtree(parts_dir)
+    parts_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        written_parts: list[Path] = []
+        for i, csv_path in enumerate(estabelecimento_csv_paths):
+            # Skip empty files — _create_table_from_csvs filters them too,
+            # but checking here avoids the table CREATE/DROP overhead.
+            if not csv_path.exists() or csv_path.stat().st_size == 0:
+                log.info("    chunk %d: skipping empty CSV %s", i, csv_path.name)
+                continue
+
+            log.info(
+                "    chunk %d/%d: loading %s", i, len(estabelecimento_csv_paths), csv_path.name
+            )
+            _create_table_from_csvs(con, "estabelecimento", [csv_path], _ESTABELECIMENTO_COLUMNS)
+
+            n = con.execute("SELECT COUNT(*) FROM estabelecimento").fetchone()[0]
+            if n == 0:
+                log.info("    chunk %d: 0 rows — skipping", i)
+                con.execute("DROP TABLE IF EXISTS estabelecimento")
+                continue
+
+            part_path = parts_dir / f"chunk-{i}.parquet"
+            # order_by=False: the global merge step sorts by cnpj, so
+            # per-chunk ORDER BY is unnecessary and wasteful.
+            _select_sql = _cnpjs_chunk_select_sql(
+                "estabelecimento", "empresa", "simples", "_cnae_map", order_by=False
+            )
+            con.execute(
+                f"""
+                COPY (
+                    {_select_sql}
+                ) TO '{part_path}' (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 200000)
+                """
+            )
+            log.info("    chunk %d: wrote %s", i, part_path.name)
+            written_parts.append(part_path)
+
+            con.execute("DROP TABLE IF EXISTS estabelecimento")
+
+        if not written_parts:
+            # No chunks written — produce an empty parquet with the right schema.
+            # This shouldn't happen in production but is a safe fallback.
+            # Use write_cnpjs_parquet with zero rows rather than read_parquet([])
+            # which crashes DuckDB (cannot infer schema from empty list).
+            log.warning("write_cnpjs_parquet_chunked: no chunks written; output will be empty")
+            write_cnpjs_parquet(con, output_path)
+            return
+
+        # Merge all chunk parquets → final output, sorted globally by cnpj.
+        log.info(
+            "    merging %d chunk parts → %s (ORDER BY cnpj)", len(written_parts), output_path.name
+        )
+        _parts_glob = parts_dir / "chunk-*.parquet"
+        con.execute(
+            f"""
+            COPY (
+                SELECT * FROM read_parquet('{_parts_glob}') ORDER BY cnpj
+            ) TO '{output_path}' (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 200000)
+            """
+        )
+        shutil.rmtree(parts_dir)
+    finally:
+        con.execute("DROP TABLE IF EXISTS _cnae_map")
+        con.execute("DROP TABLE IF EXISTS estabelecimento")
+        # Clean up parts dir on error (success path already removed it above).
+        shutil.rmtree(parts_dir, ignore_errors=True)
+
+
+def write_raizes_parquet_from_cnpjs(
+    con: duckdb.DuckDBPyConnection,
+    cnpjs_path: Path,
+    output_path: Path,
+) -> None:
+    """Compute raizes.parquet from cnpjs.parquet without empresa/estabelecimento in DuckDB.
+
+    All fields needed for raizes are available in the already-written cnpjs.parquet:
+    - Company fields (razao_social, natureza_juridica, etc.) via ANY_VALUE per cnpj_base
+    - Counts (qtd_estabelecimentos, qtd_estabelecimentos_ativos) via COUNT
+    - ufs_atuacao / cnaes_principais_distintos via two-step pre-dedup (W1.1 pattern)
+    - Matriz fields via QUALIFY ROW_NUMBER() OVER (PARTITION BY cnpj_base ORDER BY cnpj) = 1
+      WHERE identificador_matriz_filial = '1'
+
+    Output schema matches write_raizes_parquet exactly.
+    """
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    cnpjs_glob = str(cnpjs_path)
+
+    # Materialize once — reading cnpjs.parquet multiple times via CTEs causes
+    # repeated scans of a potentially large file; temp tables are read once.
+    log.info("    materializing _cnpjs_slim from cnpjs.parquet...")
+    con.execute(
+        f"""
+        CREATE OR REPLACE TEMP TABLE _cnpjs_slim AS
+        SELECT
+            cnpj,
+            cnpj_base,
+            identificador_matriz_filial,
+            situacao_cadastral,
+            data_inicio_atividade,
+            cnae_principal_codigo,
+            uf,
+            municipio_codigo,
+            municipio_nome,
+            cnae_principal_descricao,
+            razao_social,
+            razao_social_normalizada,
+            natureza_juridica_codigo,
+            natureza_juridica_descricao,
+            capital_social,
+            porte_empresa,
+            ente_federativo_responsavel
+        FROM read_parquet('{cnpjs_glob}')
+        """
+    )
+
+    # W1.1 pattern: two-step pre-dedup for list aggregates.
+    log.info("    materializing _raizes_ufs / _raizes_cnaes pre-dedup tables...")
+    con.execute("""
+        CREATE OR REPLACE TEMP TABLE _raizes_ufs AS
+        SELECT DISTINCT cnpj_base, uf FROM _cnpjs_slim
+        WHERE uf IS NOT NULL AND uf <> ''
+    """)
+    con.execute("""
+        CREATE OR REPLACE TEMP TABLE _raizes_ufs_agg AS
+        SELECT cnpj_base, list_sort(list(uf)) AS ufs_atuacao
+        FROM _raizes_ufs GROUP BY cnpj_base
+    """)
+    con.execute("""
+        CREATE OR REPLACE TEMP TABLE _raizes_cnaes AS
+        SELECT DISTINCT cnpj_base, cnae_principal_codigo FROM _cnpjs_slim
+        WHERE cnae_principal_codigo IS NOT NULL AND cnae_principal_codigo <> ''
+    """)
+    con.execute("""
+        CREATE OR REPLACE TEMP TABLE _raizes_cnaes_agg AS
+        SELECT cnpj_base, list_sort(list(cnae_principal_codigo)) AS cnaes_principais_distintos
+        FROM _raizes_cnaes GROUP BY cnpj_base
+    """)
+
+    log.info("    materializing _raizes_counts...")
+    con.execute("""
+        CREATE OR REPLACE TEMP TABLE _raizes_counts AS
+        SELECT
+            cnpj_base,
+            COUNT(*)::INTEGER AS qtd_estabelecimentos,
+            COUNT(*) FILTER (WHERE situacao_cadastral = '02')::INTEGER
+                AS qtd_estabelecimentos_ativos
+        FROM _cnpjs_slim
+        GROUP BY cnpj_base
+    """)
+
+    log.info("    materializing _raizes_empresa (company fields per cnpj_base)...")
+    con.execute("""
+        CREATE OR REPLACE TEMP TABLE _raizes_empresa AS
+        SELECT
+            cnpj_base,
+            ANY_VALUE(razao_social) AS razao_social,
+            ANY_VALUE(razao_social_normalizada) AS razao_social_normalizada,
+            ANY_VALUE(natureza_juridica_codigo) AS natureza_juridica_codigo,
+            ANY_VALUE(natureza_juridica_descricao) AS natureza_juridica_descricao,
+            ANY_VALUE(capital_social) AS capital_social,
+            ANY_VALUE(porte_empresa) AS porte_empresa,
+            ANY_VALUE(ente_federativo_responsavel) AS ente_federativo_responsavel
+        FROM _cnpjs_slim
+        GROUP BY cnpj_base
+    """)
+
+    log.info("    materializing _raizes_matriz...")
+    con.execute("""
+        CREATE OR REPLACE TEMP TABLE _raizes_matriz AS
+        SELECT
+            cnpj_base,
+            data_inicio_atividade AS data_inicio_atividade_matriz,
+            uf AS uf_matriz,
+            municipio_codigo AS municipio_matriz_codigo,
+            municipio_nome AS municipio_matriz_nome,
+            cnae_principal_codigo AS cnae_principal_matriz_codigo,
+            cnae_principal_descricao AS cnae_principal_matriz_descricao
+        FROM _cnpjs_slim
+        WHERE identificador_matriz_filial = '1'
+        QUALIFY ROW_NUMBER() OVER (PARTITION BY cnpj_base ORDER BY cnpj) = 1
+    """)
+
+    # Drop the wide slim table now that all temp aggregates are built.
+    con.execute("DROP TABLE IF EXISTS _cnpjs_slim")
+
+    log.info("    joining + writing raizes.parquet from cnpjs...")
+    con.execute(
+        f"""
+        COPY (
+            SELECT
+                emp.cnpj_base,
+                emp.razao_social,
+                emp.razao_social_normalizada,
+                emp.natureza_juridica_codigo,
+                emp.natureza_juridica_descricao,
+                emp.capital_social,
+                emp.porte_empresa,
+                emp.ente_federativo_responsavel,
+                COALESCE(cnt.qtd_estabelecimentos, 0) AS qtd_estabelecimentos,
+                COALESCE(cnt.qtd_estabelecimentos_ativos, 0) AS qtd_estabelecimentos_ativos,
+                COALESCE(ufs.ufs_atuacao, []) AS ufs_atuacao,
+                COALESCE(cnaes.cnaes_principais_distintos, []) AS cnaes_principais_distintos,
+                matriz.data_inicio_atividade_matriz,
+                matriz.uf_matriz,
+                matriz.municipio_matriz_codigo,
+                matriz.municipio_matriz_nome,
+                matriz.cnae_principal_matriz_codigo,
+                matriz.cnae_principal_matriz_descricao
+            FROM _raizes_empresa emp
+            LEFT JOIN _raizes_counts cnt ON cnt.cnpj_base = emp.cnpj_base
+            LEFT JOIN _raizes_ufs_agg ufs ON ufs.cnpj_base = emp.cnpj_base
+            LEFT JOIN _raizes_cnaes_agg cnaes ON cnaes.cnpj_base = emp.cnpj_base
+            LEFT JOIN _raizes_matriz matriz ON matriz.cnpj_base = emp.cnpj_base
+        ) TO '{output_path}' (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 200000)
+        """
+    )
+
+    # Free all temp tables.
+    for tbl in (
+        "_raizes_empresa",
+        "_raizes_counts",
+        "_raizes_ufs",
+        "_raizes_ufs_agg",
+        "_raizes_cnaes",
+        "_raizes_cnaes_agg",
+        "_raizes_matriz",
+    ):
+        con.execute(f"DROP TABLE IF EXISTS {tbl}")
 
 
 def write_cnpj_contatos_parquet(
@@ -811,6 +1074,136 @@ def write_cnpj_cnaes_parquet(
     """)
 
 
+# Top-10 logradouro abbreviations per perf-plan §7.2 (covers ≥90% of variation).
+_LOGRADOURO_ABBREVS: dict[str, str] = {
+    "R": "RUA",
+    "AV": "AVENIDA",
+    "TV": "TRAVESSA",
+    "AL": "ALAMEDA",
+    "PCA": "PRACA",
+    "PC": "PRACA",
+    "EST": "ESTRADA",
+    "ROD": "RODOVIA",
+    "VL": "VILA",
+    "LG": "LARGO",
+}
+
+
+def write_enderecos_parquet(
+    con: duckdb.DuckDBPyConnection,
+    output_path: Path,
+) -> None:
+    """Produz `enderecos.parquet`: reverse lookup por endereço e município.
+
+    Ordenado por (uf, municipio_codigo, logradouro_normalizado, numero) para que
+    buscas por UF+município e logradouro usem min/max row-group pruning.
+    Ver docs/perf-plan-2026-05.md §7 e ADR 0023.
+
+    Normalização vetorizada: CTE computa a base normalizada uma vez por linha
+    (UPPER + strip_accents + TRIM + whitespace collapse); depois uma única
+    extração de prefixo + MAP lookup substitui as 10 chamadas regexp_replace
+    anteriores, passando de 11 para 4 operações regex/map por linha.
+    """
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    log.info("    writing enderecos.parquet...")
+    # Build MAP literal: MAP {'R': 'RUA ', 'AV': 'AVENIDA ', ...}
+    # Trailing space in values avoids re-adding a separator on concatenation.
+    abbrev_map = "MAP {" + ", ".join(f"'{k}': '{v} '" for k, v in _LOGRADOURO_ABBREVS.items()) + "}"
+    con.execute(
+        rf"""
+        COPY (
+            WITH _base AS (
+                SELECT
+                    est.uf,
+                    est.municipio AS municipio_codigo,
+                    UPPER(strip_accents(TRIM(
+                        regexp_replace(est.logradouro, '\s+', ' ', 'g')
+                    ))) AS _logr,
+                    est.numero,
+                    est.cep,
+                    est.bairro,
+                    est.cnpj_basico || est.cnpj_ordem || est.cnpj_dv AS cnpj
+                FROM estabelecimento est
+                WHERE est.logradouro IS NOT NULL AND est.logradouro <> ''
+                  AND est.uf IS NOT NULL AND est.uf <> ''
+            )
+            SELECT
+                uf,
+                municipio_codigo,
+                COALESCE(
+                    {abbrev_map}[regexp_extract(_logr, '^([A-Z]+)\.?\s+', 1)]
+                    || regexp_replace(_logr, '^[A-Z]+\.?\s+', ''),
+                    _logr
+                ) AS logradouro_normalizado,
+                numero,
+                cep,
+                bairro,
+                cnpj
+            FROM _base
+            ORDER BY uf, municipio_codigo, logradouro_normalizado, TRY_CAST(numero AS INTEGER), numero
+        ) TO '{output_path}' (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 200000)
+        """
+    )
+
+
+def write_pessoas_parquet(
+    con: duckdb.DuckDBPyConnection,
+    output_path: Path,
+) -> None:
+    """Produz `pessoas.parquet`: reverse lookup PF por CPF mascarado + nome.
+
+    Grain: (cpf_mascarado, nome_normalizado, faixa_etaria, cnpj_base, papel) — uma
+    linha por vínculo pessoa×empresa×papel. A mesma pessoa aparece N vezes se for
+    sócia em N empresas; o sort por (cpf_mascarado, nome_normalizado) agrupa
+    todas as linhas de uma pessoa para leitura eficiente.
+
+    faixa_etaria é atributo da pessoa (não do vínculo) e serve para desambiguar
+    homônimos com o mesmo CPF mascarado e nome. NULL para representantes (a RFB
+    não publica esse campo em representante_legal_*).
+
+    data_entrada_sociedade é do vínculo e permanece em socios.parquet.
+
+    Ver ADR 0024.
+    """
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    log.info("    writing pessoas.parquet...")
+    con.execute(
+        """
+        COPY (
+            -- Sócios PF brasileiros: identificador_socio = '2'
+            SELECT
+                soc.cnpj_cpf_socio                                      AS cpf_mascarado,
+                UPPER(strip_accents(TRIM(soc.nome_socio_razao_social)))  AS nome_normalizado,
+                soc.nome_socio_razao_social                             AS nome_original,
+                'socio_pf'                                              AS papel,
+                soc.cnpj_basico                                         AS cnpj_base,
+                soc.qualificacao_socio                                  AS qualificacao_codigo,
+                soc.faixa_etaria
+            FROM socio soc
+            WHERE soc.identificador_socio = '2'
+              AND soc.cnpj_cpf_socio IS NOT NULL AND soc.cnpj_cpf_socio <> ''
+            UNION ALL
+            -- Representantes legais: embutidos como colunas em qualquer linha de socio.
+            -- DISTINCT por (cnpj_basico, representante_legal) porque o mesmo representante
+            -- pode assinar múltiplos registros da mesma empresa.
+            -- faixa_etaria NULL: a RFB não publica esse campo para representante_legal_*.
+            SELECT DISTINCT
+                soc.representante_legal                                 AS cpf_mascarado,
+                UPPER(strip_accents(TRIM(soc.nome_representante_legal))) AS nome_normalizado,
+                soc.nome_representante_legal                            AS nome_original,
+                'representante'                                         AS papel,
+                soc.cnpj_basico                                         AS cnpj_base,
+                soc.qualificacao_representante_legal                    AS qualificacao_codigo,
+                NULL                                                    AS faixa_etaria
+            FROM socio soc
+            WHERE soc.representante_legal IS NOT NULL AND soc.representante_legal <> ''
+            ORDER BY cpf_mascarado, nome_normalizado
+        ) TO ? (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 200000)
+        """,
+        [str(output_path)],
+    )
+
+
 def write_raizes_parquet(
     con: duckdb.DuckDBPyConnection,
     output_path: Path,
@@ -819,6 +1212,10 @@ def write_raizes_parquet(
 
     Requer que `load_main_tables_into_duckdb` e os lookups já estejam carregados em `con`.
     Ver ADR 0008 e schema `web/src/schemas/v1/raiz.ts`.
+
+    Nota: o pipeline principal (transform_snapshot) usa write_raizes_parquet_from_cnpjs,
+    que deriva raizes.parquet do cnpjs.parquet já escrito sem precisar das tabelas brutas.
+    Esta função permanece para uso standalone e testes de referência.
     """
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -1096,25 +1493,53 @@ def transform_snapshot(
         load_main_tables_into_duckdb(con, extracted)
         log.info("=== PHASE 2/4 done in %.0fs ===", time.monotonic() - t0)
 
-        # Reclaim disk before phase 3. Extracted CSVs are now loaded into
-        # transform.duckdb; keeping them alongside DuckDB's temp spill
-        # exhausts the runner's ~70 GiB filesystem (PR #24, run 25517197692:
-        # OOM "70.8 GiB/70.8 GiB used" while writing cnpjs.parquet). CSV
-        # cleanup is unconditional (CSVs are never cached). Raw ZIP
-        # cleanup is opt-in via env var: the bootstrap workflow (one-shot,
-        # space-constrained) sets FICHA_DROP_ZIPS_AFTER_LOAD=1 to claim
-        # ~7 GB of additional spill headroom, while the monthly cron
+        # Collect estabelecimento CSV paths for the chunked cnpjs write.
+        # These must be gathered before any CSV deletion below.
+        estabelecimento_csv_paths = [
+            ef.csv_path for ef in extracted if ef.kind == "estabelecimentos"
+        ]
+
+        # Reclaim non-estabelecimento CSV disk before phase 3. Extracted CSVs
+        # are loaded into transform.duckdb; keeping them alongside DuckDB's temp
+        # spill exhausts the runner's ~70 GiB filesystem (PR #24, run 25517197692:
+        # OOM "70.8 GiB/70.8 GiB used" while writing cnpjs.parquet).
+        #
+        # Chunk-per-ZIP pivot: estabelecimento CSVs are kept on disk so that
+        # write_cnpjs_parquet_chunked can load them one at a time. Only
+        # non-estabelecimento dirs (empresa, socios, simples, lookups) are
+        # removed here. The estabelecimentos/ subdir is cleaned up after
+        # write_cnpjs_parquet_chunked completes.
+        #
+        # Raw ZIP cleanup is opt-in via env var: the bootstrap workflow
+        # (one-shot, space-constrained) sets FICHA_DROP_ZIPS_AFTER_LOAD=1 to
+        # claim ~7 GB of additional spill headroom, while the monthly cron
         # leaves it unset so its `actions/cache` step finds the ZIPs at
         # post-job and persists them for the next run's cache hit.
         import os
         import shutil
 
         if extract_dir.exists():
-            extracted_size_gb = sum(
-                p.stat().st_size for p in extract_dir.rglob("*") if p.is_file()
-            ) / (1024**3)
-            shutil.rmtree(extract_dir)
-            log.info("freed %.1f GB by removing %s", extracted_size_gb, extract_dir)
+            _kept_size = 0.0
+            _freed_size = 0.0
+            for _subdir in extract_dir.iterdir():
+                if _subdir.is_dir() and _subdir.name == "estabelecimentos":
+                    _kept_size += sum(
+                        p.stat().st_size for p in _subdir.rglob("*") if p.is_file()
+                    ) / (1024**3)
+                    continue
+                if _subdir.is_dir():
+                    _freed_size += sum(
+                        p.stat().st_size for p in _subdir.rglob("*") if p.is_file()
+                    ) / (1024**3)
+                    shutil.rmtree(_subdir)
+                elif _subdir.is_file():
+                    _freed_size += _subdir.stat().st_size / (1024**3)
+                    _subdir.unlink()
+            log.info(
+                "freed %.1f GB non-estabelecimento CSVs; kept %.1f GB estabelecimento CSVs",
+                _freed_size,
+                _kept_size,
+            )
         if os.environ.get("FICHA_DROP_ZIPS_AFTER_LOAD") == "1":
             zips_dir = cache_dir / month
             zip_size_gb = 0.0
@@ -1141,31 +1566,19 @@ def transform_snapshot(
 
         log.info("=== PHASE 3/4: write parquets ===")
         t0 = time.monotonic()
-        # Drop tables we no longer need between writes to free DuckDB's
-        # buffer-managed memory. Without this, all four big tables stay
-        # loaded through the entire phase, competing for memory_limit
-        # during the next write's joins/sorts.
-        # Dependency map:
-        #   cnpjs.parquet  needs: estabelecimento + empresa + simples + lookups
-        #   raizes.parquet needs: empresa + estabelecimento + lookups
-        #   socios.parquet needs: socio + lookups
-        # NB: estabelecimento + empresa stay loaded through phase 4 too --
-        # the roundtrip-equivalence verify (ADR 0009) re-queries them
-        # against the just-written parquet. Only `simples` is safe to
-        # drop early.
-        post_write_drops = {
-            "cnpjs": ("simples",),  # only used by cnpjs; not referenced again
+
+        # --- Step 1: Write parquets that need the full estabelecimento table ---
+        # cnpj_contatos, cnpj_cnaes, enderecos all read from the estabelecimento
+        # table that is still loaded in DuckDB (loaded by load_main_tables_into_duckdb).
+        post_write_drops_step1 = {
             "cnpj_contatos": (),
             "cnpj_cnaes": (),
-            "raizes": (),
-            "socios": (),
+            "enderecos": (),
         }
         for name, fn in (
-            ("cnpjs", write_cnpjs_parquet),
             ("cnpj_contatos", write_cnpj_contatos_parquet),
             ("cnpj_cnaes", write_cnpj_cnaes_parquet),
-            ("raizes", write_raizes_parquet),
-            ("socios", write_socios_parquet),
+            ("enderecos", write_enderecos_parquet),
         ):
             try:
                 log.info("  writing %s.parquet...", name)
@@ -1178,7 +1591,7 @@ def transform_snapshot(
                     size_mb,
                     time.monotonic() - tp,
                 )
-                for tbl in post_write_drops.get(name, ()):
+                for tbl in post_write_drops_step1.get(name, ()):
                     con.execute(f"DROP TABLE IF EXISTS {tbl}")
                     log.info("  dropped table %s (no longer needed)", tbl)
             except NotImplementedError as exc:
@@ -1186,17 +1599,88 @@ def transform_snapshot(
                     log.warning("skipping %s.parquet: %s", name, exc)
                 else:
                     raise
-        log.info("=== PHASE 3/4 done in %.0fs ===", time.monotonic() - t0)
 
+        # --- Step 2: Drop the estabelecimento table to free ~2 GB ---
+        # cnpj_contatos / cnpj_cnaes / enderecos are done; the full table
+        # is no longer needed. write_cnpjs_parquet_chunked will reload one
+        # CSV at a time into a fresh `estabelecimento` table per chunk.
+        con.execute("DROP TABLE IF EXISTS estabelecimento")
+        log.info("  dropped table estabelecimento (~2 GB freed)")
+
+        # --- Step 3: Chunk-per-ZIP cnpjs write ---
+        # empresa + simples + lookups stay in DuckDB (~3 GB).
+        # Each chunk loads one estabelecimento CSV (~2 GB) → JOIN → write → DROP.
+        # Peak RAM: ~5 GB instead of ~70 GB.
+        log.info("  writing cnpjs.parquet (chunked — %d CSVs)...", len(estabelecimento_csv_paths))
+        tp = time.monotonic()
+        write_cnpjs_parquet_chunked(con, estabelecimento_csv_paths, output_dir / "cnpjs.parquet")
+        size_mb = (output_dir / "cnpjs.parquet").stat().st_size / 1024 / 1024
+        log.info("  wrote cnpjs.parquet — %.1f MB in %.0fs", size_mb, time.monotonic() - tp)
+
+        # --- Step 3b: Roundtrip-equivalence verify (ADR 0009) ---
+        # Must happen BEFORE deleting estabelecimento CSVs (step 4).
         if verify:
             cnpjs_parquet = output_dir / "cnpjs.parquet"
             if cnpjs_parquet.exists():
                 log.info(
-                    "=== PHASE 4/4: roundtrip-equivalence check (sample=%d) ===", verify_sample_size
+                    "=== PHASE 4/4: roundtrip-equivalence check (sample=%d) ===",
+                    verify_sample_size,
                 )
-                t0 = time.monotonic()
+                t_verify = time.monotonic()
+                # Re-load estabelecimento from all CSVs so assert_roundtrip can
+                # compare against the original source rows. After write_cnpjs_parquet_chunked
+                # each chunk's table was dropped; we reload the full set here.
+                if estabelecimento_csv_paths:
+                    _create_table_from_csvs(
+                        con, "estabelecimento", estabelecimento_csv_paths, _ESTABELECIMENTO_COLUMNS
+                    )
                 assert_roundtrip(con, cnpjs_parquet, sample_size=verify_sample_size)
-                log.info("=== PHASE 4/4 roundtrip OK in %.0fs ===", time.monotonic() - t0)
+                con.execute("DROP TABLE IF EXISTS estabelecimento")
+                log.info("=== PHASE 4/4 roundtrip OK in %.0fs ===", time.monotonic() - t_verify)
+
+        # --- Step 4: Delete estabelecimento CSVs ---
+        shutil.rmtree(extract_dir / "estabelecimentos", ignore_errors=True)
+        log.info("  deleted estabelecimento CSVs")
+
+        # --- Step 5: Write raizes from cnpjs.parquet (no tables needed) ---
+        log.info("  writing raizes.parquet (from cnpjs.parquet)...")
+        tp = time.monotonic()
+        write_raizes_parquet_from_cnpjs(
+            con, output_dir / "cnpjs.parquet", output_dir / "raizes.parquet"
+        )
+        size_mb = (output_dir / "raizes.parquet").stat().st_size / 1024 / 1024
+        log.info("  wrote raizes.parquet — %.1f MB in %.0fs", size_mb, time.monotonic() - tp)
+
+        # --- Step 6: Write socios + pessoas (socio table still loaded) ---
+        post_write_drops_step6 = {
+            "socios": (),
+            "pessoas": ("socio",),
+        }
+        for name, fn in (
+            ("socios", write_socios_parquet),
+            ("pessoas", write_pessoas_parquet),
+        ):
+            try:
+                log.info("  writing %s.parquet...", name)
+                tp = time.monotonic()
+                fn(con, output_dir / f"{name}.parquet")
+                size_mb = (output_dir / f"{name}.parquet").stat().st_size / 1024 / 1024
+                log.info(
+                    "  wrote %s.parquet — %.1f MB in %.0fs",
+                    name,
+                    size_mb,
+                    time.monotonic() - tp,
+                )
+                for tbl in post_write_drops_step6.get(name, ()):
+                    con.execute(f"DROP TABLE IF EXISTS {tbl}")
+                    log.info("  dropped table %s (no longer needed)", tbl)
+            except NotImplementedError as exc:
+                if skip_unimplemented:
+                    log.warning("skipping %s.parquet: %s", name, exc)
+                else:
+                    raise
+
+        log.info("=== PHASE 3/4 done in %.0fs ===", time.monotonic() - t0)
 
         log.info("transform_snapshot total: %.0fs", time.monotonic() - t_total)
     finally:

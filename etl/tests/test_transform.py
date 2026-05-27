@@ -968,3 +968,365 @@ def test_write_cnpj_cnaes_parquet_position_ordering(tmp_path):
         ("4711301", 2),
         ("9311500", 3),
     ]
+
+
+# -----------------------------------------------------------------------------
+# write_cnpjs_parquet_chunked — matches full write_cnpjs_parquet
+# -----------------------------------------------------------------------------
+
+
+def _setup_duckdb_with_lookups_empresa_simples(
+    con: duckdb.DuckDBPyConnection, extracted: list, tmp_path: "Path"
+) -> None:
+    """Load lookups + empresa + simples into con (but NOT estabelecimento)."""
+    for ef in extracted:
+        if ef.kind in transform._LOOKUP_KINDS:
+            transform.load_lookup_into_duckdb(con, ef.kind, ef.csv_path)
+    # Load only empresa and simples, not estabelecimento.
+    import collections
+
+    by_kind: dict = collections.defaultdict(list)
+    for ef in extracted:
+        by_kind[ef.kind].append(ef.csv_path)
+    for table, kind, cols in (
+        ("empresa", "empresas", transform._EMPRESA_COLUMNS),
+        ("simples", "simples", transform._SIMPLES_COLUMNS),
+    ):
+        transform._create_table_from_csvs(con, table, by_kind.get(kind, []), cols)
+
+
+def test_write_cnpjs_parquet_chunked_matches_full_write(tmp_path, all_zips_dir):
+    """write_cnpjs_parquet_chunked must produce the same rows as write_cnpjs_parquet.
+
+    Compares row count and every row (sorted by cnpj) between:
+    - write_cnpjs_parquet (full load, all tables in con)
+    - write_cnpjs_parquet_chunked (loads one estabelecimento CSV at a time)
+    """
+    chain = fetcher.ChainedFetcher(fetchers=[_ZipDirFetcher(all_zips_dir)])
+    extract_dir = tmp_path / "extracted"
+    extracted = transform.extract_all("2026-04", chain, extract_dir)
+
+    estabelecimento_csv_paths = [ef.csv_path for ef in extracted if ef.kind == "estabelecimentos"]
+
+    # --- Full write (reference) ---
+    con_full = duckdb.connect()
+    try:
+        for ef in extracted:
+            if ef.kind in transform._LOOKUP_KINDS:
+                transform.load_lookup_into_duckdb(con_full, ef.kind, ef.csv_path)
+        transform.load_main_tables_into_duckdb(con_full, extracted)
+
+        full_out = tmp_path / "cnpjs_full.parquet"
+        transform.write_cnpjs_parquet(con_full, full_out)
+    finally:
+        con_full.close()
+
+    # --- Chunked write ---
+    con_chunked = duckdb.connect()
+    try:
+        _setup_duckdb_with_lookups_empresa_simples(con_chunked, extracted, tmp_path)
+
+        chunked_out = tmp_path / "cnpjs_chunked.parquet"
+        transform.write_cnpjs_parquet_chunked(con_chunked, estabelecimento_csv_paths, chunked_out)
+    finally:
+        con_chunked.close()
+
+    # --- Compare ---
+    compare_con = duckdb.connect()
+    try:
+        full_count = compare_con.execute(f"SELECT COUNT(*) FROM '{full_out}'").fetchone()[0]
+        chunked_count = compare_con.execute(f"SELECT COUNT(*) FROM '{chunked_out}'").fetchone()[0]
+        assert full_count == chunked_count, (
+            f"row count mismatch: full={full_count}, chunked={chunked_count}"
+        )
+
+        # Compare all rows sorted by cnpj — same order expected since both sort by cnpj.
+        full_rows = compare_con.execute(
+            f"SELECT cnpj, razao_social, situacao_cadastral, uf, municipio_codigo "
+            f"FROM '{full_out}' ORDER BY cnpj"
+        ).fetchall()
+        chunked_rows = compare_con.execute(
+            f"SELECT cnpj, razao_social, situacao_cadastral, uf, municipio_codigo "
+            f"FROM '{chunked_out}' ORDER BY cnpj"
+        ).fetchall()
+
+        assert full_rows == chunked_rows, (
+            f"row content mismatch; first divergence at index "
+            f"{next(i for i, (a, b) in enumerate(zip(full_rows, chunked_rows)) if a != b)}"
+            if full_rows != chunked_rows
+            else ""
+        )
+    finally:
+        compare_con.close()
+
+
+# -----------------------------------------------------------------------------
+# write_raizes_parquet_from_cnpjs — matches write_raizes_parquet
+# -----------------------------------------------------------------------------
+
+
+def test_write_raizes_from_cnpjs_matches_original(tmp_path, all_zips_dir):
+    """write_raizes_parquet_from_cnpjs must produce the same raizes as write_raizes_parquet.
+
+    Runs transform_snapshot to get both cnpjs.parquet and raizes.parquet (original),
+    then calls write_raizes_parquet_from_cnpjs on the cnpjs.parquet and compares
+    row counts plus key aggregated fields.
+    """
+    chain = fetcher.ChainedFetcher(fetchers=[_ZipDirFetcher(all_zips_dir)])
+    output_dir = tmp_path / "output"
+    cache_dir = tmp_path / "cache"
+
+    # Run the full pipeline to get reference outputs.
+    transform.transform_snapshot(
+        "2026-04",
+        cache_dir=cache_dir,
+        output_dir=output_dir,
+        chain=chain,
+        skip_unimplemented=False,
+    )
+
+    cnpjs_path = output_dir / "cnpjs.parquet"
+    raizes_ref = output_dir / "raizes.parquet"
+    raizes_new = tmp_path / "raizes_from_cnpjs.parquet"
+
+    assert cnpjs_path.exists(), "cnpjs.parquet must exist after transform_snapshot"
+    assert raizes_ref.exists(), "raizes.parquet must exist after transform_snapshot"
+
+    # Compute raizes from cnpjs.parquet using the new function.
+    con = duckdb.connect()
+    try:
+        transform.write_raizes_parquet_from_cnpjs(con, cnpjs_path, raizes_new)
+    finally:
+        con.close()
+
+    assert raizes_new.exists()
+
+    # Compare.
+    compare_con = duckdb.connect()
+    try:
+        ref_count = compare_con.execute(f"SELECT COUNT(*) FROM '{raizes_ref}'").fetchone()[0]
+        new_count = compare_con.execute(f"SELECT COUNT(*) FROM '{raizes_new}'").fetchone()[0]
+        assert ref_count == new_count, (
+            f"raizes row count mismatch: original={ref_count}, from_cnpjs={new_count}"
+        )
+
+        # Compare key fields for each cnpj_base.
+        ref_rows = compare_con.execute(
+            f"SELECT cnpj_base, qtd_estabelecimentos, qtd_estabelecimentos_ativos, "
+            f"ufs_atuacao, uf_matriz, municipio_matriz_nome "
+            f"FROM '{raizes_ref}' ORDER BY cnpj_base"
+        ).fetchall()
+        new_rows = compare_con.execute(
+            f"SELECT cnpj_base, qtd_estabelecimentos, qtd_estabelecimentos_ativos, "
+            f"ufs_atuacao, uf_matriz, municipio_matriz_nome "
+            f"FROM '{raizes_new}' ORDER BY cnpj_base"
+        ).fetchall()
+
+        assert len(ref_rows) == len(new_rows)
+        for ref, new in zip(ref_rows, new_rows):
+            assert ref[0] == new[0], f"cnpj_base mismatch: {ref[0]} vs {new[0]}"
+            assert ref[1] == new[1], (
+                f"qtd_estabelecimentos mismatch for {ref[0]}: {ref[1]} vs {new[1]}"
+            )
+            assert ref[2] == new[2], (
+                f"qtd_estabelecimentos_ativos mismatch for {ref[0]}: {ref[2]} vs {new[2]}"
+            )
+            assert sorted(ref[3]) == sorted(new[3]), (
+                f"ufs_atuacao mismatch for {ref[0]}: {ref[3]} vs {new[3]}"
+            )
+    finally:
+        compare_con.close()
+
+
+# -----------------------------------------------------------------------------
+# write_enderecos_parquet — schema, normalization, sort order
+# -----------------------------------------------------------------------------
+
+
+def test_write_enderecos_parquet_schema_and_normalization(tmp_path):
+    """write_enderecos_parquet produces correct schema and normalizes logradouro."""
+    con = duckdb.connect()
+    con.execute(
+        """
+        CREATE TABLE estabelecimento (
+            cnpj_basico VARCHAR, cnpj_ordem VARCHAR, cnpj_dv VARCHAR,
+            uf VARCHAR, municipio VARCHAR, logradouro VARCHAR,
+            tipo_logradouro VARCHAR, numero VARCHAR, complemento VARCHAR,
+            bairro VARCHAR, cep VARCHAR,
+            nome_fantasia VARCHAR, situacao_cadastral VARCHAR,
+            data_situacao_cadastral VARCHAR, motivo_situacao_cadastral VARCHAR,
+            nome_cidade_exterior VARCHAR, pais VARCHAR,
+            data_inicio_atividade VARCHAR, cnae_fiscal_principal VARCHAR,
+            cnae_fiscal_secundaria VARCHAR, ddd_1 VARCHAR, telefone_1 VARCHAR,
+            ddd_2 VARCHAR, telefone_2 VARCHAR, ddd_fax VARCHAR, fax VARCHAR,
+            correio_eletronico VARCHAR, situacao_especial VARCHAR,
+            data_situacao_especial VARCHAR, identificador_matriz_filial VARCHAR
+        )
+        """
+    )
+    con.execute(
+        """
+        INSERT INTO estabelecimento
+            (cnpj_basico, cnpj_ordem, cnpj_dv, uf, municipio, logradouro, numero, cep, bairro)
+        VALUES
+            ('11111111', '0001', '00', 'SP', '3550308', 'AV  BRASIL',       '200', '01000000', 'CTR'),
+            ('22222222', '0001', '00', 'RJ', '3304557', 'R. PAULISTA',      '10',  '20000000', 'CTR'),
+            ('33333333', '0001', '00', 'SP', '3550308', 'rua  dos  testes', '5',   '04000000', 'VL'),
+            ('44444444', '0001', '00', 'SP', '3550308', '',                 '1',   '05000000', '')
+        """
+    )
+    out = tmp_path / "enderecos.parquet"
+    transform.write_enderecos_parquet(con, out)
+
+    rows = con.execute(f"SELECT * FROM '{out}' ORDER BY cnpj").fetchall()
+    cols = [d[0] for d in con.execute(f"DESCRIBE SELECT * FROM '{out}'").fetchall()]
+
+    assert "logradouro_normalizado" in cols
+    assert "municipio_codigo" in cols
+    assert "cnpj" in cols
+
+    # Row with empty logradouro excluded
+    cnpjs = {r[cols.index("cnpj")] for r in rows}
+    assert "444444444400100" not in cnpjs
+    assert len(rows) == 3
+
+    # 'AV' → 'AVENIDA'
+    av_row = next(r for r in rows if r[cols.index("cnpj")].startswith("111111"))
+    assert av_row[cols.index("logradouro_normalizado")].startswith("AVENIDA")
+
+    # 'R.' → 'RUA'
+    r_row = next(r for r in rows if r[cols.index("cnpj")].startswith("222222"))
+    assert r_row[cols.index("logradouro_normalizado")].startswith("RUA")
+
+    # Whitespace collapse + UPPER
+    rua_row = next(r for r in rows if r[cols.index("cnpj")].startswith("333333"))
+    assert "  " not in rua_row[cols.index("logradouro_normalizado")]
+    assert (
+        rua_row[cols.index("logradouro_normalizado")]
+        == rua_row[cols.index("logradouro_normalizado")].upper()
+    )
+
+    con.close()
+
+
+def test_write_enderecos_parquet_numeric_sort(tmp_path):
+    """Numeric street numbers sort as integers, not lexicographically."""
+    con = duckdb.connect()
+    con.execute(
+        """
+        CREATE TABLE estabelecimento (
+            cnpj_basico VARCHAR, cnpj_ordem VARCHAR, cnpj_dv VARCHAR,
+            uf VARCHAR, municipio VARCHAR, logradouro VARCHAR,
+            tipo_logradouro VARCHAR, numero VARCHAR, complemento VARCHAR,
+            bairro VARCHAR, cep VARCHAR,
+            nome_fantasia VARCHAR, situacao_cadastral VARCHAR,
+            data_situacao_cadastral VARCHAR, motivo_situacao_cadastral VARCHAR,
+            nome_cidade_exterior VARCHAR, pais VARCHAR,
+            data_inicio_atividade VARCHAR, cnae_fiscal_principal VARCHAR,
+            cnae_fiscal_secundaria VARCHAR, ddd_1 VARCHAR, telefone_1 VARCHAR,
+            ddd_2 VARCHAR, telefone_2 VARCHAR, ddd_fax VARCHAR, fax VARCHAR,
+            correio_eletronico VARCHAR, situacao_especial VARCHAR,
+            data_situacao_especial VARCHAR, identificador_matriz_filial VARCHAR
+        )
+        """
+    )
+    con.execute(
+        """
+        INSERT INTO estabelecimento
+            (cnpj_basico, cnpj_ordem, cnpj_dv, uf, municipio, logradouro, numero, cep, bairro)
+        VALUES
+            ('00000001', '0001', '00', 'SP', '3550308', 'RUA ALFA', '2',   '01000000', 'CTR'),
+            ('00000002', '0001', '00', 'SP', '3550308', 'RUA ALFA', '10',  '01000000', 'CTR'),
+            ('00000003', '0001', '00', 'SP', '3550308', 'RUA ALFA', '100', '01000000', 'CTR')
+        """
+    )
+    out = tmp_path / "enderecos.parquet"
+    transform.write_enderecos_parquet(con, out)
+
+    # row_number() OVER () without ORDER BY reflects physical parquet row order —
+    # DuckDB scans row groups sequentially, so this matches the COPY ... ORDER BY
+    # written above. This is a DuckDB implementation guarantee (not SQL spec),
+    # but it's the most practical way to assert physical sort order without
+    # re-sorting on the read side (which would defeat the purpose of the test).
+    numeros = con.execute(
+        f"""
+        SELECT numero FROM (
+            SELECT numero, row_number() OVER () AS rn FROM '{out}'
+            WHERE municipio_codigo = '3550308'
+        ) ORDER BY rn
+        """
+    ).fetchall()
+    # Must be [2, 10, 100] (numeric order), not [10, 100, 2] (lexicographic).
+    assert [r[0] for r in numeros] == ["2", "10", "100"]
+    con.close()
+
+
+# -----------------------------------------------------------------------------
+# write_pessoas_parquet — grain, deduplication, faixa_etaria, exclusions
+# -----------------------------------------------------------------------------
+
+
+def test_write_pessoas_parquet_grain_and_deduplication(tmp_path):
+    """write_pessoas_parquet includes socio_pf + representantes; excludes PJ/estrangeiros."""
+    con = duckdb.connect()
+    con.execute(
+        """
+        CREATE TABLE socio (
+            cnpj_basico VARCHAR,
+            identificador_socio VARCHAR,
+            nome_socio_razao_social VARCHAR,
+            cnpj_cpf_socio VARCHAR,
+            qualificacao_socio VARCHAR,
+            data_entrada_sociedade VARCHAR,
+            pais VARCHAR,
+            representante_legal VARCHAR,
+            nome_representante_legal VARCHAR,
+            qualificacao_representante_legal VARCHAR,
+            faixa_etaria VARCHAR
+        )
+        """
+    )
+    con.execute(
+        """
+        INSERT INTO socio VALUES
+            ('11111111', '2', 'JOAO SILVA',     '***123456**',   '49', '20200101', '105', '',            '',         '',   '5'),
+            ('22222222', '2', 'JOAO SILVA',     '***123456**',   '49', '20210101', '105', '',            '',         '',   '5'),
+            ('11111111', '1', 'EMPRESA XYZ',    '12345678000100','49', '20200101', '105', '',            '',         '',   '0'),
+            ('11111111', '3', 'JOHN DOE',       'USA123',        '49', '20200101', '249', '',            '',         '',   '0'),
+            ('11111111', '2', 'OUTRO SOCIO',    '***999999**',   '49', '20200101', '105', '***777777**', 'ANA LIMA', '10', '3'),
+            ('33333333', '2', 'TERCEIRO SOCIO', '***888888**',   '49', '20200101', '105', '***777777**', 'ANA LIMA', '10', '4')
+        """
+    )
+    out = tmp_path / "pessoas.parquet"
+    transform.write_pessoas_parquet(con, out)
+
+    rows = con.execute(f"SELECT * FROM '{out}' ORDER BY cpf_mascarado, cnpj_base").fetchall()
+    cols = [d[0] for d in con.execute(f"DESCRIBE SELECT * FROM '{out}'").fetchall()]
+
+    papeis = {r[cols.index("papel")] for r in rows}
+    assert papeis <= {"socio_pf", "representante"}, f"unexpected papeis: {papeis}"
+
+    cpfs = [r[cols.index("cpf_mascarado")] for r in rows]
+    assert "12345678000100" not in cpfs  # PJ excluded
+    assert "USA123" not in cpfs  # estrangeiro excluded
+
+    # JOAO SILVA in two companies → two rows
+    joao_rows = [r for r in rows if r[cols.index("cpf_mascarado")] == "***123456**"]
+    assert len(joao_rows) == 2
+    assert {r[cols.index("cnpj_base")] for r in joao_rows} == {"11111111", "22222222"}
+
+    # ANA LIMA as representante: DISTINCT per (cnpj_basico, representante_legal) → two rows
+    ana_rows = [r for r in rows if r[cols.index("cpf_mascarado")] == "***777777**"]
+    assert len(ana_rows) == 2
+    assert all(r[cols.index("papel")] == "representante" for r in ana_rows)
+    assert all(r[cols.index("faixa_etaria")] is None for r in ana_rows)
+
+    # faixa_etaria preserved for socio_pf
+    assert joao_rows[0][cols.index("faixa_etaria")] == "5"
+
+    # nome_normalizado is UPPER
+    for r in rows:
+        nome = r[cols.index("nome_normalizado")]
+        assert nome == nome.upper(), f"nome_normalizado not upper: {nome}"
+
+    con.close()
