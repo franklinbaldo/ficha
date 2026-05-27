@@ -24,12 +24,20 @@ def _make_response(status: int = 200, url: str = "https://s3.us.archive.org/test
 
 
 def _make_outputs(output_dir: Path) -> None:
-    """Cria os 4 arquivos de output com conteúdo mínimo."""
+    """Cria todos os arquivos de output com conteúdo mínimo."""
     from ficha_etl.transform import _LOOKUP_KINDS
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    for name in ("cnpjs.parquet", "raizes.parquet", "socios.parquet"):
-        (output_dir / name).write_bytes(b"PAR1" + b"\x00" * 20)  # header mínimo falso
+    for name in (
+        "cnpjs.parquet",
+        "cnpj_contatos.parquet",
+        "cnpj_cnaes.parquet",
+        "raizes.parquet",
+        "socios.parquet",
+        "enderecos.parquet",
+        "pessoas.parquet",
+    ):
+        (output_dir / name).write_bytes(b"PAR1" + b"\x00" * 20)
     (output_dir / "lookups.json").write_text('{"schema_version":"1.0.0"}')
     (output_dir / "lookups").mkdir(parents=True, exist_ok=True)
     for kind in _LOOKUP_KINDS:
@@ -69,12 +77,18 @@ def test_upload_outputs_calls_ia_with_correct_files(mock_upload, tmp_path):
     )
 
     assert mock_upload.called
-    _, kwargs = mock_upload.call_args
     files_arg = mock_upload.call_args[1].get("files") or mock_upload.call_args[0][1]
-    assert "cnpjs.parquet" in files_arg
-    assert "raizes.parquet" in files_arg
-    assert "socios.parquet" in files_arg
-    assert "lookups.json" in files_arg
+    for expected in (
+        "cnpjs.parquet",
+        "cnpj_contatos.parquet",
+        "cnpj_cnaes.parquet",
+        "raizes.parquet",
+        "socios.parquet",
+        "enderecos.parquet",
+        "pessoas.parquet",
+        "lookups.json",
+    ):
+        assert expected in files_arg, f"{expected!r} missing from upload files"
 
 
 @patch("ficha_etl.upload.ia.upload")
@@ -93,12 +107,11 @@ def test_upload_outputs_uses_correct_identifier(mock_upload, tmp_path):
 def test_upload_outputs_raises_on_missing_file(mock_upload, tmp_path):
     output_dir = tmp_path / "output"
     output_dir.mkdir()
-    # Só cria 3 dos 4 arquivos
+    # Só cria alguns parquets — lookups.json ausente
     for name in ("cnpjs.parquet", "raizes.parquet", "socios.parquet"):
         (output_dir / name).write_bytes(b"x")
-    # lookups.json ausente
 
-    with pytest.raises(FileNotFoundError, match="lookups.json"):
+    with pytest.raises(FileNotFoundError):
         upload_mod.upload_outputs("2026-04", output_dir, access_key="A", secret_key="S")
 
     mock_upload.assert_not_called()
