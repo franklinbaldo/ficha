@@ -1136,3 +1136,193 @@ def test_write_raizes_from_cnpjs_matches_original(tmp_path, all_zips_dir):
             )
     finally:
         compare_con.close()
+
+
+# -----------------------------------------------------------------------------
+# write_enderecos_parquet — schema, normalization, sort order
+# -----------------------------------------------------------------------------
+
+
+def test_write_enderecos_parquet_schema_and_normalization(tmp_path):
+    """write_enderecos_parquet produces correct schema and normalizes logradouro."""
+    con = duckdb.connect()
+    con.execute(
+        """
+        CREATE TABLE estabelecimento (
+            cnpj_basico VARCHAR, cnpj_ordem VARCHAR, cnpj_dv VARCHAR,
+            uf VARCHAR, municipio VARCHAR, logradouro VARCHAR,
+            tipo_logradouro VARCHAR, numero VARCHAR, complemento VARCHAR,
+            bairro VARCHAR, cep VARCHAR,
+            nome_fantasia VARCHAR, situacao_cadastral VARCHAR,
+            data_situacao_cadastral VARCHAR, motivo_situacao_cadastral VARCHAR,
+            nome_cidade_exterior VARCHAR, pais VARCHAR,
+            data_inicio_atividade VARCHAR, cnae_fiscal_principal VARCHAR,
+            cnae_fiscal_secundaria VARCHAR, ddd_1 VARCHAR, telefone_1 VARCHAR,
+            ddd_2 VARCHAR, telefone_2 VARCHAR, ddd_fax VARCHAR, fax VARCHAR,
+            correio_eletronico VARCHAR, situacao_especial VARCHAR,
+            data_situacao_especial VARCHAR, identificador_matriz_filial VARCHAR
+        )
+        """
+    )
+    con.execute(
+        """
+        INSERT INTO estabelecimento
+            (cnpj_basico, cnpj_ordem, cnpj_dv, uf, municipio, logradouro, numero, cep, bairro)
+        VALUES
+            ('11111111', '0001', '00', 'SP', '3550308', 'AV  BRASIL',       '200', '01000000', 'CTR'),
+            ('22222222', '0001', '00', 'RJ', '3304557', 'R. PAULISTA',      '10',  '20000000', 'CTR'),
+            ('33333333', '0001', '00', 'SP', '3550308', 'rua  dos  testes', '5',   '04000000', 'VL'),
+            ('44444444', '0001', '00', 'SP', '3550308', '',                 '1',   '05000000', '')
+        """
+    )
+    out = tmp_path / "enderecos.parquet"
+    transform.write_enderecos_parquet(con, out)
+
+    rows = con.execute(f"SELECT * FROM '{out}' ORDER BY cnpj").fetchall()
+    cols = [d[0] for d in con.execute(f"DESCRIBE SELECT * FROM '{out}'").fetchall()]
+
+    assert "logradouro_normalizado" in cols
+    assert "municipio_codigo" in cols
+    assert "cnpj" in cols
+
+    # Row with empty logradouro excluded
+    cnpjs = {r[cols.index("cnpj")] for r in rows}
+    assert "444444444400100" not in cnpjs
+    assert len(rows) == 3
+
+    # 'AV' → 'AVENIDA'
+    av_row = next(r for r in rows if r[cols.index("cnpj")].startswith("111111"))
+    assert av_row[cols.index("logradouro_normalizado")].startswith("AVENIDA")
+
+    # 'R.' → 'RUA'
+    r_row = next(r for r in rows if r[cols.index("cnpj")].startswith("222222"))
+    assert r_row[cols.index("logradouro_normalizado")].startswith("RUA")
+
+    # Whitespace collapse + UPPER
+    rua_row = next(r for r in rows if r[cols.index("cnpj")].startswith("333333"))
+    assert "  " not in rua_row[cols.index("logradouro_normalizado")]
+    assert (
+        rua_row[cols.index("logradouro_normalizado")]
+        == rua_row[cols.index("logradouro_normalizado")].upper()
+    )
+
+    con.close()
+
+
+def test_write_enderecos_parquet_numeric_sort(tmp_path):
+    """Numeric street numbers sort as integers, not lexicographically."""
+    con = duckdb.connect()
+    con.execute(
+        """
+        CREATE TABLE estabelecimento (
+            cnpj_basico VARCHAR, cnpj_ordem VARCHAR, cnpj_dv VARCHAR,
+            uf VARCHAR, municipio VARCHAR, logradouro VARCHAR,
+            tipo_logradouro VARCHAR, numero VARCHAR, complemento VARCHAR,
+            bairro VARCHAR, cep VARCHAR,
+            nome_fantasia VARCHAR, situacao_cadastral VARCHAR,
+            data_situacao_cadastral VARCHAR, motivo_situacao_cadastral VARCHAR,
+            nome_cidade_exterior VARCHAR, pais VARCHAR,
+            data_inicio_atividade VARCHAR, cnae_fiscal_principal VARCHAR,
+            cnae_fiscal_secundaria VARCHAR, ddd_1 VARCHAR, telefone_1 VARCHAR,
+            ddd_2 VARCHAR, telefone_2 VARCHAR, ddd_fax VARCHAR, fax VARCHAR,
+            correio_eletronico VARCHAR, situacao_especial VARCHAR,
+            data_situacao_especial VARCHAR, identificador_matriz_filial VARCHAR
+        )
+        """
+    )
+    con.execute(
+        """
+        INSERT INTO estabelecimento
+            (cnpj_basico, cnpj_ordem, cnpj_dv, uf, municipio, logradouro, numero, cep, bairro)
+        VALUES
+            ('00000001', '0001', '00', 'SP', '3550308', 'RUA ALFA', '2',   '01000000', 'CTR'),
+            ('00000002', '0001', '00', 'SP', '3550308', 'RUA ALFA', '10',  '01000000', 'CTR'),
+            ('00000003', '0001', '00', 'SP', '3550308', 'RUA ALFA', '100', '01000000', 'CTR')
+        """
+    )
+    out = tmp_path / "enderecos.parquet"
+    transform.write_enderecos_parquet(con, out)
+
+    # Read in physical file order (row_number() OVER () without ORDER BY preserves parquet order).
+    numeros = con.execute(
+        f"""
+        SELECT numero FROM (
+            SELECT numero, row_number() OVER () AS rn FROM '{out}'
+            WHERE municipio_codigo = '3550308'
+        ) ORDER BY rn
+        """
+    ).fetchall()
+    # Must be [2, 10, 100] (numeric order), not [10, 100, 2] (lexicographic).
+    assert [r[0] for r in numeros] == ["2", "10", "100"]
+    con.close()
+
+
+# -----------------------------------------------------------------------------
+# write_pessoas_parquet — grain, deduplication, faixa_etaria, exclusions
+# -----------------------------------------------------------------------------
+
+
+def test_write_pessoas_parquet_grain_and_deduplication(tmp_path):
+    """write_pessoas_parquet includes socio_pf + representantes; excludes PJ/estrangeiros."""
+    con = duckdb.connect()
+    con.execute(
+        """
+        CREATE TABLE socio (
+            cnpj_basico VARCHAR,
+            identificador_socio VARCHAR,
+            nome_socio_razao_social VARCHAR,
+            cnpj_cpf_socio VARCHAR,
+            qualificacao_socio VARCHAR,
+            data_entrada_sociedade VARCHAR,
+            pais VARCHAR,
+            representante_legal VARCHAR,
+            nome_representante_legal VARCHAR,
+            qualificacao_representante_legal VARCHAR,
+            faixa_etaria VARCHAR
+        )
+        """
+    )
+    con.execute(
+        """
+        INSERT INTO socio VALUES
+            ('11111111', '2', 'JOAO SILVA',     '***123456**',   '49', '20200101', '105', '',            '',         '',   '5'),
+            ('22222222', '2', 'JOAO SILVA',     '***123456**',   '49', '20210101', '105', '',            '',         '',   '5'),
+            ('11111111', '1', 'EMPRESA XYZ',    '12345678000100','49', '20200101', '105', '',            '',         '',   '0'),
+            ('11111111', '3', 'JOHN DOE',       'USA123',        '49', '20200101', '249', '',            '',         '',   '0'),
+            ('11111111', '2', 'OUTRO SOCIO',    '***999999**',   '49', '20200101', '105', '***777777**', 'ANA LIMA', '10', '3'),
+            ('33333333', '2', 'TERCEIRO SOCIO', '***888888**',   '49', '20200101', '105', '***777777**', 'ANA LIMA', '10', '4')
+        """
+    )
+    out = tmp_path / "pessoas.parquet"
+    transform.write_pessoas_parquet(con, out)
+
+    rows = con.execute(f"SELECT * FROM '{out}' ORDER BY cpf_mascarado, cnpj_base").fetchall()
+    cols = [d[0] for d in con.execute(f"DESCRIBE SELECT * FROM '{out}'").fetchall()]
+
+    papeis = {r[cols.index("papel")] for r in rows}
+    assert papeis <= {"socio_pf", "representante"}, f"unexpected papeis: {papeis}"
+
+    cpfs = [r[cols.index("cpf_mascarado")] for r in rows]
+    assert "12345678000100" not in cpfs  # PJ excluded
+    assert "USA123" not in cpfs  # estrangeiro excluded
+
+    # JOAO SILVA in two companies → two rows
+    joao_rows = [r for r in rows if r[cols.index("cpf_mascarado")] == "***123456**"]
+    assert len(joao_rows) == 2
+    assert {r[cols.index("cnpj_base")] for r in joao_rows} == {"11111111", "22222222"}
+
+    # ANA LIMA as representante: DISTINCT per (cnpj_basico, representante_legal) → two rows
+    ana_rows = [r for r in rows if r[cols.index("cpf_mascarado")] == "***777777**"]
+    assert len(ana_rows) == 2
+    assert all(r[cols.index("papel")] == "representante" for r in ana_rows)
+    assert all(r[cols.index("faixa_etaria")] is None for r in ana_rows)
+
+    # faixa_etaria preserved for socio_pf
+    assert joao_rows[0][cols.index("faixa_etaria")] == "5"
+
+    # nome_normalizado is UPPER
+    for r in rows:
+        nome = r[cols.index("nome_normalizado")]
+        assert nome == nome.upper(), f"nome_normalizado not upper: {nome}"
+
+    con.close()

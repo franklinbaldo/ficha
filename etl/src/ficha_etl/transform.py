@@ -1152,7 +1152,7 @@ def write_enderecos_parquet(
                 bairro,
                 cnpj
             FROM _base
-            ORDER BY uf, municipio_codigo, logradouro_normalizado, numero
+            ORDER BY uf, municipio_codigo, logradouro_normalizado, TRY_CAST(numero AS INTEGER), numero
         ) TO '{output_path}' (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 200000)
         """
     )
