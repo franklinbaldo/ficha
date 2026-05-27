@@ -92,3 +92,19 @@ export async function attachPessoas(db: duckdb.AsyncDuckDB, url: string): Promis
     await conn.close();
   }
 }
+
+/**
+ * Registra `cnpj_cnaes.parquet` e cria a VIEW `cnpj_cnaes`.
+ *
+ * Parquet ordenado por (cnae_codigo, posicao, cnpj_base) — todas as empresas
+ * de um CNAE ficam contíguas, tornando buscas por código CNAE muito eficientes.
+ */
+export async function attachCnpjCnaes(db: duckdb.AsyncDuckDB, url: string): Promise<void> {
+  await db.registerFileURL('cnpj_cnaes.parquet', url, duckdb.DuckDBDataProtocol.HTTP, false);
+  const conn = await db.connect();
+  try {
+    await conn.query(`CREATE OR REPLACE VIEW cnpj_cnaes AS SELECT * FROM 'cnpj_cnaes.parquet'`);
+  } finally {
+    await conn.close();
+  }
+}

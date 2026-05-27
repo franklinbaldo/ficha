@@ -3,7 +3,7 @@
   import type * as duckdb from '@duckdb/duckdb-wasm';
   import { strip as stripCNPJ } from '../lib/cnpj';
   import { fetchManifest, currentSnapshot } from '../lib/manifest';
-  import { createDuckDB, attachCnpjs, attachLookups, attachEnderecos, attachPessoas } from '../lib/analytical';
+  import { createDuckDB, attachCnpjs, attachLookups, attachEnderecos, attachPessoas, attachCnpjCnaes } from '../lib/analytical';
   import EmpresaFicha from './EmpresaFicha.svelte';
 
   type EmpresaRow = {
@@ -37,7 +37,17 @@
     cep: string | null;
   };
 
-  type SearchMode = 'empresa' | 'pessoa' | 'endereco';
+  type CnaeRow = {
+    cnpj: string;
+    razao_social: string | null;
+    nome_fantasia: string | null;
+    uf: string | null;
+    municipio_nome: string | null;
+    cnae_codigo: string;
+    posicao: number;
+  };
+
+  type SearchMode = 'empresa' | 'pessoa' | 'endereco' | 'cnae';
 
   const UFS = [
     'AC','AL','AM','AP','BA','CE','DF','ES','GO','MA',
@@ -51,8 +61,10 @@
   let results = $state<EmpresaRow[]>([]);
   let pessoaResults = $state<PessoaRow[]>([]);
   let enderecoResults = $state<EnderecoRow[]>([]);
+  let cnaeResults = $state<CnaeRow[]>([]);
   let hasPessoas = $state(false);
   let hasEnderecos = $state(false);
+  let hasCnpjCnaes = $state(false);
   let db = $state<duckdb.AsyncDuckDB | null>(null);
   let loading = $state(false);
   let snapshotDate = $state<string | null>(null);
@@ -62,6 +74,7 @@
     results = [];
     pessoaResults = [];
     enderecoResults = [];
+    cnaeResults = [];
   }
 
   async function init() {
@@ -92,6 +105,10 @@
       if (snap.files.pessoas) {
         await attachPessoas(duckDB, snap.files.pessoas.url);
         hasPessoas = true;
+      }
+      if (snap.files.cnpj_cnaes) {
+        await attachCnpjCnaes(duckDB, snap.files.cnpj_cnaes.url);
+        hasCnpjCnaes = true;
       }
 
       db = duckDB;
@@ -171,6 +188,46 @@
         enderecoResults = res.toArray().map((r) => r.toJSON() as EnderecoRow);
         results = [];
         pessoaResults = [];
+        cnaeResults = [];
+      } else if (searchMode === 'cnae') {
+        if (sanitized.length < 2) {
+          clearResults();
+          await conn.close();
+          return;
+        }
+        // Exact CNAE code (all digits) or description ILIKE via lookup_cnaes.
+        // JOIN cnpjs to get company names — sorted by code then razao_social.
+        const isCode = /^\d+$/.test(sanitized);
+        let stmt;
+        if (isCode) {
+          stmt = await conn.prepare(`
+            SELECT cc.cnpj, c.razao_social, c.nome_fantasia, c.uf, c.municipio_nome,
+                   cc.cnae_codigo, cc.posicao
+            FROM cnpj_cnaes cc
+            JOIN cnpjs c ON c.cnpj = cc.cnpj
+            WHERE cc.cnae_codigo = ?
+            ORDER BY cc.posicao, c.razao_social
+            LIMIT 30
+          `);
+        } else {
+          stmt = await conn.prepare(`
+            SELECT cc.cnpj, c.razao_social, c.nome_fantasia, c.uf, c.municipio_nome,
+                   cc.cnae_codigo, cc.posicao
+            FROM cnpj_cnaes cc
+            JOIN cnpjs c ON c.cnpj = cc.cnpj
+            WHERE cc.cnae_codigo IN (
+              SELECT codigo FROM lookup_cnaes WHERE descricao_normalizada ILIKE ?
+            )
+            ORDER BY cc.cnae_codigo, cc.posicao, c.razao_social
+            LIMIT 30
+          `);
+        }
+        const res = await stmt.query(isCode ? sanitized : `%${sanitized.toUpperCase()}%`);
+        await stmt.close();
+        cnaeResults = res.toArray().map((r) => r.toJSON() as CnaeRow);
+        results = [];
+        pessoaResults = [];
+        enderecoResults = [];
       } else if (searchMode === 'pessoa') {
         if (sanitized.length < 3) {
           clearResults();
@@ -196,6 +253,7 @@
         pessoaResults = res.toArray().map((r) => r.toJSON() as PessoaRow);
         results = [];
         enderecoResults = [];
+        cnaeResults = [];
       } else {
         const clean = stripCNPJ(cnpj);
         let res;
@@ -228,6 +286,7 @@
         results = res.toArray().map((r) => r.toJSON() as EmpresaRow);
         pessoaResults = [];
         enderecoResults = [];
+        cnaeResults = [];
       }
 
       await conn.close();
@@ -241,7 +300,7 @@
 
 <div class="container">
   <div class="search-box">
-    {#if hasPessoas || hasEnderecos}
+    {#if hasPessoas || hasEnderecos || hasCnpjCnaes}
       <div class="mode-tabs">
         <button
           class="tab {searchMode === 'empresa' ? 'active' : ''}"
@@ -258,6 +317,12 @@
             class="tab {searchMode === 'endereco' ? 'active' : ''}"
             onclick={() => { searchMode = 'endereco'; clearResults(); }}
           >Endereço</button>
+        {/if}
+        {#if hasCnpjCnaes}
+          <button
+            class="tab {searchMode === 'cnae' ? 'active' : ''}"
+            onclick={() => { searchMode = 'cnae'; clearResults(); }}
+          >CNAE</button>
         {/if}
       </div>
     {/if}
@@ -294,7 +359,11 @@
         <input
           type="text"
           bind:value={cnpj}
-          placeholder={searchMode === 'pessoa' ? 'Nome da pessoa…' : 'CNPJ ou Razão Social…'}
+          placeholder={
+            searchMode === 'pessoa' ? 'Nome da pessoa…' :
+            searchMode === 'cnae' ? 'Código CNAE (ex: 6201500) ou descrição…' :
+            'CNPJ ou Razão Social…'
+          }
           onkeydown={(e) => e.key === 'Enter' && search()}
         />
         <button onclick={search} disabled={loading || !db}>
@@ -365,6 +434,33 @@
               <td class="mono">{e.numero ?? '—'}</td>
               <td>{e.bairro ?? '—'}</td>
               <td class="mono">{e.cep ?? '—'}</td>
+            </tr>
+          {/each}
+        </tbody>
+      </table>
+    </div>
+  {:else if cnaeResults.length > 0}
+    <div class="cnae-results">
+      <table>
+        <thead>
+          <tr>
+            <th>CNPJ</th>
+            <th>Razão social</th>
+            <th>UF</th>
+            <th>Município</th>
+            <th>CNAE</th>
+            <th>Pos.</th>
+          </tr>
+        </thead>
+        <tbody>
+          {#each cnaeResults as c}
+            <tr>
+              <td class="mono">{c.cnpj}</td>
+              <td>{c.razao_social ?? '—'}</td>
+              <td class="mono">{c.uf ?? '—'}</td>
+              <td>{c.municipio_nome ?? '—'}</td>
+              <td class="mono">{c.cnae_codigo}</td>
+              <td class="mono">{c.posicao === 0 ? 'Principal' : c.posicao}</td>
             </tr>
           {/each}
         </tbody>
@@ -514,7 +610,8 @@
   }
 
   .pessoa-results,
-  .endereco-results {
+  .endereco-results,
+  .cnae-results {
     overflow-x: auto;
     border-radius: 12px;
     box-shadow: 0 1px 3px rgba(0,0,0,0.1);
