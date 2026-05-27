@@ -125,7 +125,7 @@
         }
 
         const isCep = /^\d{5}-?\d{3}$/.test(sanitized);
-        const cepClean = sanitized.replace('-', '');
+        const cepClean = sanitized.replace(/-/g, '');
 
         let stmt;
         let res;
