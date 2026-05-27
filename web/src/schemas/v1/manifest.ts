@@ -20,6 +20,7 @@ export const SnapshotEntrySchema = z.object({
   row_counts: z.object({
     cnpjs: z.number().int().nonnegative(),
     cnpj_contatos: z.number().int().nonnegative(),
+    cnpj_cnaes: z.number().int().nonnegative().optional(),
     raizes: z.number().int().nonnegative(),
     socios: z.number().int().nonnegative(),
     enderecos: z.number().int().nonnegative().optional(),
@@ -28,6 +29,7 @@ export const SnapshotEntrySchema = z.object({
   files: z.object({
     cnpjs: FileEntrySchema,
     cnpj_contatos: FileEntrySchema,
+    cnpj_cnaes: FileEntrySchema.extend({ sort: z.array(z.string()) }).optional(),
     raizes: FileEntrySchema,
     socios: FileEntrySchema,
     enderecos: FileEntrySchema.extend({ sort: z.array(z.string()) }).optional(),

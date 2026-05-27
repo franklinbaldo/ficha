@@ -5,9 +5,20 @@ Cada snapshot mensal vive num item `ficha-YYYY-MM`. Estrutura interna:
     ficha-YYYY-MM/
       raw/            ← 37 ZIPs crus espelhados da RFB
       cnpjs.parquet
+      cnpj_contatos.parquet
+      cnpj_cnaes.parquet
       raizes.parquet
       socios.parquet
+      enderecos.parquet
+      pessoas.parquet
       lookups.json
+      lookups/
+        cnaes.parquet
+        motivos.parquet
+        municipios.parquet
+        naturezas.parquet
+        paises.parquet
+        qualificacoes.parquet
 
 Ver ADR 0012 e mirror.py (URLs de leitura).
 """
@@ -366,11 +377,11 @@ def upload_outputs(
     access_key: str,
     secret_key: str,
 ) -> None:
-    """Faz upload dos 3 parquets + lookups.json para o item IA do mês.
+    """Faz upload de todos os parquets + lookups.json para o item IA do mês.
 
     Args:
         month: snapshot no formato YYYY-MM.
-        output_dir: diretório local com os 4 arquivos produzidos pelo transform.
+        output_dir: diretório local com os arquivos produzidos pelo transform.
         access_key: IA S3-like access key.
         secret_key: IA S3-like secret key.
     """
@@ -379,8 +390,12 @@ def upload_outputs(
 
     outputs = {
         "cnpjs.parquet": output_dir / "cnpjs.parquet",
+        "cnpj_contatos.parquet": output_dir / "cnpj_contatos.parquet",
+        "cnpj_cnaes.parquet": output_dir / "cnpj_cnaes.parquet",
         "raizes.parquet": output_dir / "raizes.parquet",
         "socios.parquet": output_dir / "socios.parquet",
+        "enderecos.parquet": output_dir / "enderecos.parquet",
+        "pessoas.parquet": output_dir / "pessoas.parquet",
         "lookups.json": output_dir / "lookups.json",
     }
 

@@ -68,8 +68,9 @@ def build_snapshot_entry(month: str, output_dir: Path) -> dict:
 
     Args:
         month: snapshot no formato YYYY-MM.
-        output_dir: diretório com cnpjs.parquet, raizes.parquet,
-                    socios.parquet e lookups.json.
+        output_dir: diretório com todos os parquets produzidos pelo transform
+                    (cnpjs, cnpj_contatos, cnpj_cnaes, raizes, socios,
+                    enderecos, pessoas) e lookups.json + lookups/*.parquet.
 
     Returns:
         dict pronto para ser inserido em manifest["snapshots"].
