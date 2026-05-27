@@ -375,6 +375,7 @@ def load_main_tables_into_duckdb(
         ("empresa", "empresas", _EMPRESA_COLUMNS),
         ("estabelecimento", "estabelecimentos", _ESTABELECIMENTO_COLUMNS),
         ("simples", "simples", _SIMPLES_COLUMNS),
+        ("socio", "socios", _SOCIO_COLUMNS),
     ):
         t0 = time.monotonic()
         log.info("loading table '%s' from %d CSV(s)...", table, len(by_kind.get(kind, [])))
@@ -386,54 +387,6 @@ def load_main_tables_into_duckdb(
             f"{n:,}",
             time.monotonic() - t0,
         )
-
-    # Carrega socios como tabela intermediária e divide por tipo de pessoa.
-    # A separação explicita os dois sub-tipos que o dump da RFB embute na
-    # mesma tabela: sócio (PF/PJ/estrangeiro) e representante legal.
-    # Isso elimina o UNION ALL semântico em write_pessoas_parquet e remove
-    # colunas nullable estruturais (data_entrada_sociedade não existe para
-    # representantes; representante_legal não existe para pessoas físicas).
-    t0 = time.monotonic()
-    _create_table_from_csvs(con, "_socio_raw", by_kind.get("socios", []), _SOCIO_COLUMNS)
-    n_raw = con.execute("SELECT COUNT(*) FROM _socio_raw").fetchone()[0]
-    log.info("loaded '_socio_raw' — %s rows in %.1fs", f"{n_raw:,}", time.monotonic() - t0)
-
-    t0 = time.monotonic()
-    # socio_pf: sócios pessoas físicas (identificador '2')
-    con.execute("""
-        CREATE OR REPLACE TABLE socio_pf AS
-        SELECT * FROM _socio_raw WHERE identificador_socio = '2'
-    """)
-    # socio_outros: PJ ('1') + estrangeiros ('3') — agrupados porque
-    # ambos aparecem em socios.parquet mas não em pessoas.parquet.
-    con.execute("""
-        CREATE OR REPLACE TABLE socio_outros AS
-        SELECT * FROM _socio_raw WHERE identificador_socio IN ('1', '3')
-    """)
-    # representante: linhas derivadas dos campos representante_legal_*
-    # embutidos em qualquer registro de sócio. DISTINCT porque o mesmo
-    # representante pode aparecer em múltiplos registros da mesma empresa.
-    con.execute("""
-        CREATE OR REPLACE TABLE representante AS
-        SELECT DISTINCT
-            cnpj_basico,
-            representante_legal       AS cpf_mascarado,
-            nome_representante_legal  AS nome,
-            qualificacao_representante_legal AS qualificacao_codigo
-        FROM _socio_raw
-        WHERE representante_legal IS NOT NULL AND representante_legal <> ''
-    """)
-    con.execute("DROP TABLE IF EXISTS _socio_raw")
-    n_pf = con.execute("SELECT COUNT(*) FROM socio_pf").fetchone()[0]
-    n_out = con.execute("SELECT COUNT(*) FROM socio_outros").fetchone()[0]
-    n_rep = con.execute("SELECT COUNT(*) FROM representante").fetchone()[0]
-    log.info(
-        "split socio → socio_pf=%s socio_outros=%s representante=%s in %.1fs",
-        f"{n_pf:,}",
-        f"{n_out:,}",
-        f"{n_rep:,}",
-        time.monotonic() - t0,
-    )
 
 
 def load_lookup_into_duckdb(
@@ -1219,11 +1172,10 @@ def write_pessoas_parquet(
     todas as linhas de uma pessoa para leitura eficiente.
 
     faixa_etaria é atributo da pessoa (não do vínculo) e serve para desambiguar
-    homônimos com o mesmo CPF mascarado e nome: duas linhas com faixa_etaria
-    diferentes são quase certamente pessoas distintas. Vem NULL para representantes
-    pois a RFB não publica esse campo para representante_legal_*.
+    homônimos com o mesmo CPF mascarado e nome. NULL para representantes (a RFB
+    não publica esse campo em representante_legal_*).
 
-    data_entrada_sociedade é do vínculo (não da pessoa) e permanece em socios.parquet.
+    data_entrada_sociedade é do vínculo e permanece em socios.parquet.
 
     Ver ADR 0024.
     """
@@ -1232,29 +1184,33 @@ def write_pessoas_parquet(
     con.execute(
         """
         COPY (
-            -- Sócios PF: CPF mascarado como identificador
+            -- Sócios PF brasileiros: identificador_socio = '2'
             SELECT
-                pf.cnpj_cpf_socio                                   AS cpf_mascarado,
-                UPPER(strip_accents(TRIM(pf.nome_socio_razao_social))) AS nome_normalizado,
-                pf.nome_socio_razao_social                          AS nome_original,
-                'socio_pf'                                          AS papel,
-                pf.cnpj_basico                                      AS cnpj_base,
-                pf.qualificacao_socio                               AS qualificacao_codigo,
-                pf.faixa_etaria                                     AS faixa_etaria
-            FROM socio_pf pf
-            WHERE pf.cnpj_cpf_socio IS NOT NULL AND pf.cnpj_cpf_socio <> ''
+                soc.cnpj_cpf_socio                                      AS cpf_mascarado,
+                UPPER(strip_accents(TRIM(soc.nome_socio_razao_social)))  AS nome_normalizado,
+                soc.nome_socio_razao_social                             AS nome_original,
+                'socio_pf'                                              AS papel,
+                soc.cnpj_basico                                         AS cnpj_base,
+                soc.qualificacao_socio                                  AS qualificacao_codigo,
+                soc.faixa_etaria
+            FROM socio soc
+            WHERE soc.identificador_socio = '2'
+              AND soc.cnpj_cpf_socio IS NOT NULL AND soc.cnpj_cpf_socio <> ''
             UNION ALL
-            -- Representantes legais: faixa_etaria não publicada pela RFB
-            SELECT
-                rep.cpf_mascarado,
-                UPPER(strip_accents(TRIM(rep.nome)))                AS nome_normalizado,
-                rep.nome                                            AS nome_original,
-                'representante'                                     AS papel,
-                rep.cnpj_basico                                     AS cnpj_base,
-                rep.qualificacao_codigo,
-                NULL                                                AS faixa_etaria
-            FROM representante rep
-            WHERE rep.cpf_mascarado IS NOT NULL AND rep.cpf_mascarado <> ''
+            -- Representantes legais: embutidos como colunas em qualquer linha de socio.
+            -- DISTINCT por (cnpj_basico, representante_legal) porque o mesmo representante
+            -- pode assinar múltiplos registros da mesma empresa.
+            -- faixa_etaria NULL: a RFB não publica esse campo para representante_legal_*.
+            SELECT DISTINCT
+                soc.representante_legal                                 AS cpf_mascarado,
+                UPPER(strip_accents(TRIM(soc.nome_representante_legal))) AS nome_normalizado,
+                soc.nome_representante_legal                            AS nome_original,
+                'representante'                                         AS papel,
+                soc.cnpj_basico                                         AS cnpj_base,
+                soc.qualificacao_representante_legal                    AS qualificacao_codigo,
+                NULL                                                    AS faixa_etaria
+            FROM socio soc
+            WHERE soc.representante_legal IS NOT NULL AND soc.representante_legal <> ''
             ORDER BY cpf_mascarado, nome_normalizado
         ) TO ? (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 200000)
         """,
@@ -1455,7 +1411,7 @@ def write_socios_parquet(
                 soc.qualificacao_representante_legal AS representante_legal_qualificacao_codigo,
                 COALESCE(qr.descricao, '') AS representante_legal_qualificacao_descricao,
                 soc.faixa_etaria
-            FROM (SELECT * FROM socio_pf UNION ALL SELECT * FROM socio_outros) soc
+            FROM socio soc
             LEFT JOIN lookup_qualificacoes qs ON qs.codigo = soc.qualificacao_socio
             LEFT JOIN lookup_qualificacoes qr ON qr.codigo = soc.qualificacao_representante_legal
             LEFT JOIN lookup_paises ps ON ps.codigo = soc.pais
@@ -1708,7 +1664,7 @@ def transform_snapshot(
         # --- Step 6: Write socios + pessoas (socio table still loaded) ---
         post_write_drops_step6 = {
             "socios": (),
-            "pessoas": ("socio_pf", "socio_outros", "representante"),
+            "pessoas": ("socio",),
         }
         for name, fn in (
             ("socios", write_socios_parquet),
