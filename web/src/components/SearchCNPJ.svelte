@@ -27,17 +27,42 @@
     faixa_etaria: string | null;
   };
 
-  type SearchMode = 'empresa' | 'pessoa';
+  type EnderecoRow = {
+    cnpj: string;
+    uf: string;
+    municipio_codigo: string;
+    logradouro_normalizado: string;
+    numero: string | null;
+    bairro: string | null;
+    cep: string | null;
+  };
+
+  type SearchMode = 'empresa' | 'pessoa' | 'endereco';
+
+  const UFS = [
+    'AC','AL','AM','AP','BA','CE','DF','ES','GO','MA',
+    'MG','MS','MT','PA','PB','PE','PI','PR','RJ','RN',
+    'RO','RR','RS','SC','SE','SP','TO',
+  ];
 
   let cnpj = $state('');
+  let ufFiltro = $state('');
   let searchMode = $state<SearchMode>('empresa');
   let results = $state<EmpresaRow[]>([]);
   let pessoaResults = $state<PessoaRow[]>([]);
+  let enderecoResults = $state<EnderecoRow[]>([]);
   let hasPessoas = $state(false);
+  let hasEnderecos = $state(false);
   let db = $state<duckdb.AsyncDuckDB | null>(null);
   let loading = $state(false);
   let snapshotDate = $state<string | null>(null);
   let status = $state('Inicializando…');
+
+  function clearResults() {
+    results = [];
+    pessoaResults = [];
+    enderecoResults = [];
+  }
 
   async function init() {
     try {
@@ -60,7 +85,10 @@
       status = `Anexando snapshot ${snap.date}…`;
       await attachCnpjs(duckDB, snap.files.cnpjs.url);
       await attachLookups(duckDB, snap);
-      if (snap.files.enderecos) await attachEnderecos(duckDB, snap.files.enderecos.url);
+      if (snap.files.enderecos) {
+        await attachEnderecos(duckDB, snap.files.enderecos.url);
+        hasEnderecos = true;
+      }
       if (snap.files.pessoas) {
         await attachPessoas(duckDB, snap.files.pessoas.url);
         hasPessoas = true;
@@ -89,10 +117,63 @@
     try {
       const conn = await db.connect();
 
-      if (searchMode === 'pessoa') {
+      if (searchMode === 'endereco') {
         if (sanitized.length < 3) {
-          pessoaResults = [];
-          results = [];
+          clearResults();
+          await conn.close();
+          return;
+        }
+
+        const isCep = /^\d{5}-?\d{3}$/.test(sanitized);
+        const cepClean = sanitized.replace('-', '');
+
+        let stmt;
+        let res;
+        if (isCep) {
+          if (ufFiltro) {
+            stmt = await conn.prepare(`
+              SELECT cnpj, uf, municipio_codigo, logradouro_normalizado, numero, bairro, cep
+              FROM enderecos WHERE uf = ? AND cep = ?
+              ORDER BY logradouro_normalizado, numero
+              LIMIT 50
+            `);
+            res = await stmt.query(ufFiltro, cepClean);
+          } else {
+            stmt = await conn.prepare(`
+              SELECT cnpj, uf, municipio_codigo, logradouro_normalizado, numero, bairro, cep
+              FROM enderecos WHERE cep = ?
+              ORDER BY uf, logradouro_normalizado, numero
+              LIMIT 50
+            `);
+            res = await stmt.query(cepClean);
+          }
+        } else {
+          const upper = sanitized.toUpperCase();
+          if (ufFiltro) {
+            stmt = await conn.prepare(`
+              SELECT cnpj, uf, municipio_codigo, logradouro_normalizado, numero, bairro, cep
+              FROM enderecos WHERE uf = ? AND logradouro_normalizado ILIKE ?
+              ORDER BY logradouro_normalizado, numero
+              LIMIT 50
+            `);
+            res = await stmt.query(ufFiltro, `%${upper}%`);
+          } else {
+            stmt = await conn.prepare(`
+              SELECT cnpj, uf, municipio_codigo, logradouro_normalizado, numero, bairro, cep
+              FROM enderecos WHERE logradouro_normalizado ILIKE ?
+              ORDER BY uf, logradouro_normalizado, numero
+              LIMIT 50
+            `);
+            res = await stmt.query(`%${upper}%`);
+          }
+        }
+        await stmt.close();
+        enderecoResults = res.toArray().map((r) => r.toJSON() as EnderecoRow);
+        results = [];
+        pessoaResults = [];
+      } else if (searchMode === 'pessoa') {
+        if (sanitized.length < 3) {
+          clearResults();
           await conn.close();
           return;
         }
@@ -114,6 +195,7 @@
         await stmt.close();
         pessoaResults = res.toArray().map((r) => r.toJSON() as PessoaRow);
         results = [];
+        enderecoResults = [];
       } else {
         const clean = stripCNPJ(cnpj);
         let res;
@@ -129,8 +211,7 @@
           await stmt.close();
         } else {
           if (sanitized.length < 3) {
-            results = [];
-            pessoaResults = [];
+            clearResults();
             await conn.close();
             return;
           }
@@ -146,6 +227,7 @@
 
         results = res.toArray().map((r) => r.toJSON() as EmpresaRow);
         pessoaResults = [];
+        enderecoResults = [];
       }
 
       await conn.close();
@@ -159,33 +241,72 @@
 
 <div class="container">
   <div class="search-box">
-    {#if hasPessoas}
+    {#if hasPessoas || hasEnderecos}
       <div class="mode-tabs">
         <button
           class="tab {searchMode === 'empresa' ? 'active' : ''}"
-          onclick={() => { searchMode = 'empresa'; results = []; pessoaResults = []; }}
+          onclick={() => { searchMode = 'empresa'; clearResults(); }}
         >Empresa</button>
-        <button
-          class="tab {searchMode === 'pessoa' ? 'active' : ''}"
-          onclick={() => { searchMode = 'pessoa'; results = []; pessoaResults = []; }}
-        >Pessoa</button>
+        {#if hasPessoas}
+          <button
+            class="tab {searchMode === 'pessoa' ? 'active' : ''}"
+            onclick={() => { searchMode = 'pessoa'; clearResults(); }}
+          >Pessoa</button>
+        {/if}
+        {#if hasEnderecos}
+          <button
+            class="tab {searchMode === 'endereco' ? 'active' : ''}"
+            onclick={() => { searchMode = 'endereco'; clearResults(); }}
+          >Endereço</button>
+        {/if}
       </div>
     {/if}
-    <div class="input-group">
-      <input
-        type="text"
-        bind:value={cnpj}
-        placeholder={searchMode === 'pessoa' ? 'Nome da pessoa…' : 'CNPJ ou Razão Social…'}
-        onkeydown={(e) => e.key === 'Enter' && search()}
-      />
-      <button onclick={search} disabled={loading || !db}>
-        {#if loading}
-          <span class="spinner"></span>
-        {:else}
-          Buscar
+
+    {#if searchMode === 'endereco'}
+      <div class="endereco-inputs">
+        <div class="input-group">
+          <select bind:value={ufFiltro} class="uf-select">
+            <option value="">UF (todas)</option>
+            {#each UFS as uf}
+              <option value={uf}>{uf}</option>
+            {/each}
+          </select>
+          <input
+            type="text"
+            bind:value={cnpj}
+            placeholder="Logradouro ou CEP (ex: 01310-100)…"
+            onkeydown={(e) => e.key === 'Enter' && search()}
+          />
+          <button onclick={search} disabled={loading || !db}>
+            {#if loading}
+              <span class="spinner"></span>
+            {:else}
+              Buscar
+            {/if}
+          </button>
+        </div>
+        {#if !ufFiltro}
+          <p class="hint">Selecione uma UF para acelerar a busca.</p>
         {/if}
-      </button>
-    </div>
+      </div>
+    {:else}
+      <div class="input-group">
+        <input
+          type="text"
+          bind:value={cnpj}
+          placeholder={searchMode === 'pessoa' ? 'Nome da pessoa…' : 'CNPJ ou Razão Social…'}
+          onkeydown={(e) => e.key === 'Enter' && search()}
+        />
+        <button onclick={search} disabled={loading || !db}>
+          {#if loading}
+            <span class="spinner"></span>
+          {:else}
+            Buscar
+          {/if}
+        </button>
+      </div>
+    {/if}
+
     <p class="status {status.startsWith('Erro') ? 'error' : ''}">
       {status}
     </p>
@@ -222,6 +343,33 @@
         </tbody>
       </table>
     </div>
+  {:else if enderecoResults.length > 0}
+    <div class="endereco-results">
+      <table>
+        <thead>
+          <tr>
+            <th>CNPJ</th>
+            <th>UF</th>
+            <th>Logradouro</th>
+            <th>Número</th>
+            <th>Bairro</th>
+            <th>CEP</th>
+          </tr>
+        </thead>
+        <tbody>
+          {#each enderecoResults as e}
+            <tr>
+              <td class="mono">{e.cnpj}</td>
+              <td class="mono">{e.uf}</td>
+              <td>{e.logradouro_normalizado}</td>
+              <td class="mono">{e.numero ?? '—'}</td>
+              <td>{e.bairro ?? '—'}</td>
+              <td class="mono">{e.cep ?? '—'}</td>
+            </tr>
+          {/each}
+        </tbody>
+      </table>
+    </div>
   {:else if !loading && cnpj && db}
     <div class="no-results">
       Nenhum dado encontrado para "{cnpj}".
@@ -231,7 +379,7 @@
 
 <style>
   .container {
-    max-width: 900px;
+    max-width: 960px;
     margin: 2rem auto;
     padding: 0 1rem;
     font-family: system-ui, -apple-system, sans-serif;
@@ -259,6 +407,18 @@
     font-size: 1.125rem;
     outline: none;
     background: transparent;
+  }
+
+  .uf-select {
+    padding: 0.75rem 0.5rem;
+    border: none;
+    border-right: 1px solid #e5e7eb;
+    font-size: 0.9rem;
+    outline: none;
+    background: transparent;
+    color: #374151;
+    cursor: pointer;
+    min-width: 110px;
   }
 
   button {
@@ -294,6 +454,18 @@
 
   .status.error {
     color: #dc2626;
+  }
+
+  .hint {
+    font-size: 0.8rem;
+    margin-top: 0.5rem;
+    color: #9ca3af;
+  }
+
+  .endereco-inputs {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
   }
 
   .results-list {
@@ -341,7 +513,8 @@
     border-color: #2563eb;
   }
 
-  .pessoa-results {
+  .pessoa-results,
+  .endereco-results {
     overflow-x: auto;
     border-radius: 12px;
     box-shadow: 0 1px 3px rgba(0,0,0,0.1);
