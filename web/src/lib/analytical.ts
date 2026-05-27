@@ -94,6 +94,22 @@ export async function attachPessoas(db: duckdb.AsyncDuckDB, url: string): Promis
 }
 
 /**
+ * Registra `socios.parquet` e cria a VIEW `socios`.
+ *
+ * Bloom filter em cnpj_base torna lookup por empresa eficiente mesmo sem
+ * ordenação física. Ver write_socios_parquet em transform.py.
+ */
+export async function attachSocios(db: duckdb.AsyncDuckDB, url: string): Promise<void> {
+  await db.registerFileURL('socios.parquet', url, duckdb.DuckDBDataProtocol.HTTP, false);
+  const conn = await db.connect();
+  try {
+    await conn.query(`CREATE OR REPLACE VIEW socios AS SELECT * FROM 'socios.parquet'`);
+  } finally {
+    await conn.close();
+  }
+}
+
+/**
  * Registra `cnpj_cnaes.parquet` e cria a VIEW `cnpj_cnaes`.
  *
  * Parquet ordenado por (cnae_codigo, posicao, cnpj_base) — todas as empresas

@@ -3,7 +3,7 @@
   import type * as duckdb from '@duckdb/duckdb-wasm';
   import { strip as stripCNPJ } from '../lib/cnpj';
   import { fetchManifest, currentSnapshot } from '../lib/manifest';
-  import { createDuckDB, attachCnpjs, attachLookups, attachEnderecos, attachPessoas, attachCnpjCnaes } from '../lib/analytical';
+  import { createDuckDB, attachCnpjs, attachLookups, attachEnderecos, attachPessoas, attachCnpjCnaes, attachSocios } from '../lib/analytical';
   import EmpresaFicha from './EmpresaFicha.svelte';
 
   type EmpresaRow = {
@@ -110,6 +110,7 @@
         await attachCnpjCnaes(duckDB, snap.files.cnpj_cnaes.url);
         hasCnpjCnaes = true;
       }
+      await attachSocios(duckDB, snap.files.socios.url);
 
       db = duckDB;
       status = `Pronto para consultas — snapshot ${snap.date}`;
@@ -391,7 +392,7 @@
   {#if results.length > 0}
     <div class="results-list">
       {#each results as empresa}
-        <EmpresaFicha {empresa} />
+        <EmpresaFicha {empresa} {db} />
       {/each}
     </div>
   {:else if pessoaResults.length > 0}
