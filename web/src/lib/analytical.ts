@@ -110,6 +110,22 @@ export async function attachSocios(db: duckdb.AsyncDuckDB, url: string): Promise
 }
 
 /**
+ * Registra `cnpj_contatos.parquet` e cria a VIEW `cnpj_contatos`.
+ *
+ * Parquet ordenado por (tipo, valor, cnpj) — lookup por CNPJ completo via
+ * prepared statement é eficiente porque cnpj está no row-group metadata.
+ */
+export async function attachCnpjContatos(db: duckdb.AsyncDuckDB, url: string): Promise<void> {
+  await db.registerFileURL('cnpj_contatos.parquet', url, duckdb.DuckDBDataProtocol.HTTP, false);
+  const conn = await db.connect();
+  try {
+    await conn.query(`CREATE OR REPLACE VIEW cnpj_contatos AS SELECT * FROM 'cnpj_contatos.parquet'`);
+  } finally {
+    await conn.close();
+  }
+}
+
+/**
  * Registra `cnpj_cnaes.parquet` e cria a VIEW `cnpj_cnaes`.
  *
  * Parquet ordenado por (cnae_codigo, posicao, cnpj_base) — todas as empresas
