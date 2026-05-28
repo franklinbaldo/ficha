@@ -3,7 +3,7 @@
   import type * as duckdb from '@duckdb/duckdb-wasm';
   import { strip as stripCNPJ } from '../lib/cnpj';
   import { fetchManifest, currentSnapshot } from '../lib/manifest';
-  import { createDuckDB, attachCnpjs, attachLookups, attachEnderecos, attachPessoas, attachCnpjCnaes, attachSocios } from '../lib/analytical';
+  import { createDuckDB, attachCnpjs, attachLookups, attachEnderecos, attachPessoas, attachSocios, attachCnpjContatos, attachCnpjCnaes } from '../lib/analytical';
   import EmpresaFicha from './EmpresaFicha.svelte';
 
   type EmpresaRow = {
@@ -15,6 +15,11 @@
     cnae_principal_descricao: string | null;
     municipio_nome: string | null;
     capital_social: number | null;
+    opcao_simples: boolean | null;
+    data_opcao_simples: string | null;
+    data_exclusao_simples: string | null;
+    opcao_mei: boolean | null;
+    data_opcao_mei: string | null;
   };
 
   type PessoaRow = {
@@ -111,6 +116,7 @@
         hasCnpjCnaes = true;
       }
       await attachSocios(duckDB, snap.files.socios.url);
+      await attachCnpjContatos(duckDB, snap.files.cnpj_contatos.url);
 
       db = duckDB;
       status = `Pronto para consultas — snapshot ${snap.date}`;
@@ -270,7 +276,9 @@
           const stmt = await conn.prepare(`
             SELECT cnpj, razao_social, nome_fantasia, uf,
                    cnae_principal_codigo, cnae_principal_descricao,
-                   municipio_nome, capital_social
+                   municipio_nome, capital_social,
+                   opcao_simples, data_opcao_simples, data_exclusao_simples,
+                   opcao_mei, data_opcao_mei
             FROM cnpjs WHERE cnpj = ? LIMIT 1
           `);
           res = await stmt.query(clean);
@@ -284,7 +292,9 @@
           const stmt = await conn.prepare(`
             SELECT cnpj, razao_social, nome_fantasia, uf,
                    cnae_principal_codigo, cnae_principal_descricao,
-                   municipio_nome, capital_social
+                   municipio_nome, capital_social,
+                   opcao_simples, data_opcao_simples, data_exclusao_simples,
+                   opcao_mei, data_opcao_mei
             FROM cnpjs WHERE razao_social ILIKE ? LIMIT 20
           `);
           res = await stmt.query(`%${sanitized}%`);
