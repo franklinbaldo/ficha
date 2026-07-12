@@ -132,10 +132,12 @@
       } catch (e) {
         console.warn('socios indisponível:', e);
       }
-      try {
-        await attachCnpjContatos(duckDB, snap.files.cnpj_contatos.url);
-      } catch (e) {
-        console.warn('cnpj_contatos indisponível:', e);
+      if (snap.files.cnpj_contatos) {
+        try {
+          await attachCnpjContatos(duckDB, snap.files.cnpj_contatos.url);
+        } catch (e) {
+          console.warn('cnpj_contatos indisponível:', e);
+        }
       }
       if (snap.files.enderecos) {
         try {

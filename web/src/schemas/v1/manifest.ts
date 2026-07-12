@@ -19,7 +19,7 @@ export const SnapshotEntrySchema = z.object({
   generator: z.string(),
   row_counts: z.object({
     cnpjs: z.number().int().nonnegative(),
-    cnpj_contatos: z.number().int().nonnegative(),
+    cnpj_contatos: z.number().int().nonnegative().optional(),
     cnpj_cnaes: z.number().int().nonnegative().optional(),
     raizes: z.number().int().nonnegative(),
     socios: z.number().int().nonnegative(),
@@ -28,7 +28,12 @@ export const SnapshotEntrySchema = z.object({
   }),
   files: z.object({
     cnpjs: FileEntrySchema,
-    cnpj_contatos: FileEntrySchema,
+    // Opcional: um upload individual pro Internet Archive pode falhar
+    // depois do commit do manifest (ver 2026-04 — cnpj_contatos/cnpj_cnaes
+    // ficaram 404). O frontend já degrada a seção correspondente quando
+    // ausente; o manifest não deve afirmar que um arquivo existe se a URL
+    // não responde.
+    cnpj_contatos: FileEntrySchema.optional(),
     cnpj_cnaes: FileEntrySchema.extend({ sort: z.array(z.string()) }).optional(),
     raizes: FileEntrySchema,
     socios: FileEntrySchema,

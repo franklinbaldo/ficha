@@ -94,7 +94,7 @@ jobs:
             | [
                 .files.cnpjs.url,
                 .files.socios.url,
-                .files.cnpj_contatos.url,
+                (.files.cnpj_contatos.url // empty),
                 (.files.cnpj_cnaes.url // empty),
                 (.files.enderecos.url // empty),
                 (.files.pessoas.url // empty),
