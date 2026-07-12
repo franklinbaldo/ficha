@@ -75,6 +75,24 @@
   let snapshotDate = $state<string | null>(null);
   let status = $state('Inicializando…');
 
+  /** "2026-04" → "abril de 2026" */
+  function formatMonth(date: string): string {
+    const [y, m] = date.split('-').map(Number);
+    return new Intl.DateTimeFormat('pt-BR', { month: 'long', year: 'numeric' }).format(
+      new Date(y, m - 1, 1)
+    );
+  }
+
+  /** Meses entre o snapshot e hoje. RFB publica com ~1 mês de defasagem;
+   *  ≥3 significa que a atualização mensal automática falhou. */
+  function monthsBehind(date: string): number {
+    const [y, m] = date.split('-').map(Number);
+    const now = new Date();
+    return (now.getFullYear() - y) * 12 + (now.getMonth() + 1 - m);
+  }
+
+  const isStale = $derived(snapshotDate !== null && monthsBehind(snapshotDate) >= 3);
+
   function clearResults() {
     results = [];
     pessoaResults = [];
@@ -84,10 +102,10 @@
 
   async function init() {
     try {
-      status = 'Buscando manifest…';
+      status = 'Carregando informações da base…';
       const manifest = await fetchManifest();
       if (!manifest) {
-        status = 'Aguardando primeira publicação. Volte em breve.';
+        status = 'Os dados ainda não foram publicados. Volte em breve.';
         return;
       }
       const snap = currentSnapshot(manifest);
@@ -97,10 +115,10 @@
       }
       snapshotDate = snap.date;
 
-      status = 'Carregando DuckDB-WASM…';
+      status = 'Preparando o mecanismo de consulta…';
       const duckDB = await createDuckDB();
 
-      status = `Anexando snapshot ${snap.date}…`;
+      status = `Carregando dados de ${formatMonth(snap.date)}…`;
       await attachCnpjs(duckDB, snap.files.cnpjs.url);
       await attachLookups(duckDB, snap);
       if (snap.files.enderecos) {
@@ -119,7 +137,7 @@
       await attachCnpjContatos(duckDB, snap.files.cnpj_contatos.url);
 
       db = duckDB;
-      status = `Pronto para consultas — snapshot ${snap.date}`;
+      status = 'Pronto para consultas';
     } catch (e) {
       console.error('init error:', e);
       status = 'Erro: ' + (e as Error).message;
@@ -397,6 +415,20 @@
     <p class="status {status.startsWith('Erro') ? 'error' : ''}">
       {status}
     </p>
+
+    {#if snapshotDate}
+      <p class="snapshot-info">
+        Dados públicos da Receita Federal — referência:
+        <strong>{formatMonth(snapshotDate)}</strong>
+      </p>
+      {#if isStale}
+        <p class="stale-warning">
+          ⚠️ Esta base está desatualizada: o snapshot mais recente é de
+          {formatMonth(snapshotDate)}. Situações cadastrais e quadros societários
+          podem ter mudado desde então.
+        </p>
+      {/if}
+    {/if}
   </div>
 
   {#if results.length > 0}
@@ -568,6 +600,24 @@
 
   .status.error {
     color: #dc2626;
+  }
+
+  .snapshot-info {
+    font-size: 0.8rem;
+    margin-top: 0.25rem;
+    color: #9ca3af;
+  }
+
+  .stale-warning {
+    font-size: 0.85rem;
+    margin: 0.5rem auto 0;
+    max-width: 560px;
+    padding: 0.5rem 0.75rem;
+    background: #fef3c7;
+    border: 1px solid #fcd34d;
+    border-radius: 8px;
+    color: #92400e;
+    text-align: left;
   }
 
   .hint {
