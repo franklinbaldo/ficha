@@ -36,8 +36,8 @@ ficha/
 ├── web/             # Frontend Astro (deploy → GitHub Pages)
 ├── etl/             # Pipeline Python (RFB → Parquet → Internet Archive)
 ├── experiments/     # PoCs e benchmarks numerados
-├── docs/            # Documentação técnica e ADRs (futuro)
-└── .github/         # Workflows de CI/deploy/cron (futuro)
+├── docs/            # Documentação técnica e ADRs
+└── .github/         # Workflows de CI/deploy/cron
 ```
 
 `web/` e `etl/` são projetos auto-contidos com sua própria build, deps e config. Único contrato entre eles: o schema do Parquet declarado em `web/src/schemas/vN/`.
@@ -50,7 +50,7 @@ cd web
 bun install
 bun dev
 
-# ETL (futuro)
+# ETL
 cd etl
 uv venv && uv pip install -e ".[dev]"
 ficha-etl run --month 2026-01
