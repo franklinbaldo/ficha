@@ -17,11 +17,14 @@ import logging
 from pathlib import Path
 
 import duckdb
+import httpx
 
 from .mirror import lookup_parquet_url, lookups_url, parquet_url
 from .transform import _LOOKUP_KINDS
 
 log = logging.getLogger(__name__)
+
+_HTTP_TIMEOUT = httpx.Timeout(connect=15.0, read=30.0, write=15.0, pool=15.0)
 
 SCHEMA_VERSION = "1.0.0"
 GENERATOR = "ficha-etl"
@@ -139,6 +142,36 @@ def build_snapshot_entry(month: str, output_dir: Path) -> dict:
             for kind in _LOOKUP_KINDS
         },
     }
+
+
+def verify_snapshot_files(snapshot_entry: dict) -> list[str]:
+    """HEAD em toda URL declarada no snapshot — garante que o que vai pro
+    manifest está de fato baixável no Internet Archive.
+
+    Local file existence (checada em build_snapshot_entry) e upload bem
+    sucedido (status code checado em upload_outputs) não garantem que o
+    objeto continua servível: IA processa uploads assincronamente
+    (bucket 'derive' pode falhar depois do PUT 200/201), e sem essa
+    checagem um manifest pode acabar publicado com URLs 404 mesmo que
+    cada etapa anterior tenha reportado sucesso. Retorna a lista de URLs
+    que falharam (vazia = tudo OK) — não levanta, quem chama decide.
+    """
+    urls = [entry["url"] for entry in snapshot_entry["files"].values()]
+    urls += [entry["url"] for entry in snapshot_entry.get("lookups", {}).values()]
+
+    broken: list[str] = []
+    with httpx.Client(timeout=_HTTP_TIMEOUT, follow_redirects=True) as client:
+        for url in urls:
+            try:
+                r = client.head(url)
+            except httpx.HTTPError as exc:
+                log.warning("verify_snapshot_files: %s → %s", url, exc)
+                broken.append(url)
+                continue
+            if r.status_code != 200:
+                log.warning("verify_snapshot_files: %s → HTTP %d", url, r.status_code)
+                broken.append(url)
+    return broken
 
 
 def update_manifest(manifest_path: Path, snapshot_entry: dict) -> None:

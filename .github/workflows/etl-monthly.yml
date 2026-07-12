@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       month:
-        description: 'Snapshot alvo (YYYY-MM). Vazio = mês corrente.'
+        description: 'Snapshot alvo (YYYY-MM). Vazio = snapshot mais recente disponível no upstream (não necessariamente o mês corrente).'
         required: false
         type: string
       skip_upload:

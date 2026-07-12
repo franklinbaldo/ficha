@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 
 import duckdb
+import httpx
 import pytest
 
 from ficha_etl import manifest as manifest_mod
@@ -170,3 +171,56 @@ def test_update_manifest_creates_parent_dirs(tmp_path: Path, output_dir: Path) -
     entry = manifest_mod.build_snapshot_entry("2026-04", output_dir)
     manifest_mod.update_manifest(manifest_path, entry)
     assert manifest_path.exists()
+
+
+# ---------------------------------------------------------------------------
+# verify_snapshot_files
+# ---------------------------------------------------------------------------
+
+
+def _patch_client(monkeypatch, handler) -> None:
+    transport = httpx.MockTransport(handler)
+    original = httpx.Client
+
+    def patched(*args, **kwargs):
+        kwargs.setdefault("transport", transport)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(httpx, "Client", patched)
+
+
+def test_verify_snapshot_files_all_ok(monkeypatch, output_dir: Path) -> None:
+    entry = manifest_mod.build_snapshot_entry("2026-04", output_dir)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200)
+
+    _patch_client(monkeypatch, handler)
+    assert manifest_mod.verify_snapshot_files(entry) == []
+
+
+def test_verify_snapshot_files_reports_404(monkeypatch, output_dir: Path) -> None:
+    entry = manifest_mod.build_snapshot_entry("2026-04", output_dir)
+    broken_url = entry["files"]["cnpj_contatos"]["url"]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if str(request.url) == broken_url:
+            return httpx.Response(404)
+        return httpx.Response(200)
+
+    _patch_client(monkeypatch, handler)
+    broken = manifest_mod.verify_snapshot_files(entry)
+    assert broken == [broken_url]
+
+
+def test_verify_snapshot_files_reports_network_error(monkeypatch, output_dir: Path) -> None:
+    entry = manifest_mod.build_snapshot_entry("2026-04", output_dir)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("boom", request=request)
+
+    _patch_client(monkeypatch, handler)
+    broken = manifest_mod.verify_snapshot_files(entry)
+    # todas as URLs (files + lookups) falham com erro de conexão
+    expected_count = len(entry["files"]) + len(entry.get("lookups", {}))
+    assert len(broken) == expected_count

@@ -526,6 +526,28 @@ def _cmd_run(
     log.info("[run 5/5] atualizar manifest → %s", manifest_path)
     try:
         entry = manifest_mod.build_snapshot_entry(month, output_dir)
+    except Exception as exc:
+        print(f"error: manifest build falhou: {exc}", file=sys.stderr)
+        return 1
+
+    if not skip_upload:
+        # Local existence (build_snapshot_entry) e upload HTTP OK
+        # (upload_outputs) não garantem que o arquivo segue baixável — IA
+        # processa uploads assincronamente. Sem essa checagem o manifest
+        # pode acabar publicado com URLs 404 (foi o que aconteceu com
+        # cnpj_contatos/cnpj_cnaes em 2026-04). Só faz sentido com
+        # --skip-upload desligado: em dry-run local nada foi upado ainda.
+        log.info("[run 5/5] verificando que todos os arquivos publicados respondem 200")
+        broken = manifest_mod.verify_snapshot_files(entry)
+        if broken:
+            print(
+                "error: manifest não publicado — arquivos declarados mas inacessíveis no IA:\n"
+                + "\n".join(f"  {u}" for u in broken),
+                file=sys.stderr,
+            )
+            return 1
+
+    try:
         manifest_mod.update_manifest(manifest_path, entry)
     except Exception as exc:
         print(f"error: manifest update falhou: {exc}", file=sys.stderr)

@@ -60,8 +60,19 @@ jobs:
       - id: deployment
         uses: actions/deploy-pages@v4
 
-  # Smoke test contra o site realmente publicado: página no ar, manifest
-  # válido e parquet do snapshot atual alcançável no Internet Archive.
+  # Smoke test contra o site realmente publicado. Duas severidades,
+  # espelhando o contrato real do frontend (SearchCNPJ.svelte):
+  #   - erro:   página fora do ar, manifest inválido, cnpjs ou algum
+  #             lookup indisponível — isso derruba a busca principal e
+  #             o job precisa vermelho.
+  #   - warning: socios/cnpj_contatos/cnpj_cnaes/enderecos/pessoas —
+  #             o frontend já degrada essas seções isoladamente (init()
+  #             segue até "Pronto para consultas" mesmo sem elas), então
+  #             o site está no ar e funcional; um warning documenta o
+  #             dataset incompleto sem bloquear o deploy.
+  # Integridade completa do snapshot (todo arquivo declarado = todo
+  # arquivo baixável) é responsabilidade do ETL antes de publicar o
+  # manifest (ver manifest.verify_snapshot_files), não deste smoke.
   verify:
     needs: deploy
     runs-on: ubuntu-latest
@@ -83,30 +94,60 @@ jobs:
           [ -n "$CURRENT" ] || { echo "::error::manifest.json sem campo 'current'"; exit 1; }
           echo "manifest OK — snapshot atual: $CURRENT"
 
-          # Todos os arquivos que a inicialização do frontend carrega até
-          # "Pronto para consultas": obrigatórios (cnpjs, socios,
-          # cnpj_contatos), opcionais quando presentes no manifest
-          # (cnpj_cnaes, enderecos, pessoas) e todos os parquets de lookup.
-          # Qualquer um indisponível derruba o init inteiro no catch.
-          URLS=$(jq -r --arg m "$CURRENT" '
-            .snapshots[]
-            | select(.date == $m)
+          check_url() {
+            local url="$1"
+            local code
+            code=$(curl -sS -o /dev/null -w '%{http_code}' -I -L --max-time 60 "$url")
+            [ "$code" = "200" ]
+          }
+
+          # Essenciais: sem isso a busca principal (empresa por CNPJ/razão
+          # social) não sobe. init() trata como fatal.
+          ESSENTIAL=$(jq -r --arg m "$CURRENT" '
+            .snapshots[] | select(.date == $m)
+            | [.files.cnpjs.url, (.lookups[]?.url)] | .[]
+          ' manifest.json)
+          [ -n "$ESSENTIAL" ] || { echo "::error::nenhuma URL essencial encontrada pro mês $CURRENT"; exit 1; }
+
+          fail=0
+          while IFS= read -r url; do
+            if check_url "$url"; then
+              echo "OK   $url"
+            else
+              echo "::error::$url → indisponível (essencial)"
+              fail=1
+            fi
+          done <<< "$ESSENTIAL"
+          [ "$fail" = "0" ] || exit 1
+
+          # Complementares: init() os anexa em try/catch isolado — ausência
+          # não impede "Pronto para consultas", só desativa a seção
+          # correspondente (sócios, contatos, CNAE, endereços, pessoas).
+          COMPLEMENTARY=$(jq -r --arg m "$CURRENT" '
+            .snapshots[] | select(.date == $m)
             | [
-                .files.cnpjs.url,
-                .files.socios.url,
+                (.files.socios.url // empty),
                 (.files.cnpj_contatos.url // empty),
                 (.files.cnpj_cnaes.url // empty),
                 (.files.enderecos.url // empty),
-                (.files.pessoas.url // empty),
-                (.lookups[]?.url)
+                (.files.pessoas.url // empty)
               ]
             | .[]
           ' manifest.json)
-          [ -n "$URLS" ] || { echo "::error::nenhuma URL de snapshot encontrada pro mês $CURRENT"; exit 1; }
 
+          degraded=0
           while IFS= read -r url; do
-            code=$(curl -sS -o /dev/null -w '%{http_code}' -I -L --max-time 60 "$url")
-            [ "$code" = "200" ] || { echo "::error::$url → HTTP $code"; exit 1; }
-            echo "OK $url"
-          done <<< "$URLS"
-          echo "snapshot files OK — todos os arquivos exigidos pelo frontend alcançáveis"
+            [ -n "$url" ] || continue
+            if check_url "$url"; then
+              echo "OK   $url"
+            else
+              echo "::warning::$url → indisponível (complementar — seção correspondente fica degradada no site)"
+              degraded=1
+            fi
+          done <<< "$COMPLEMENTARY"
+
+          if [ "$degraded" = "1" ]; then
+            echo "site publicado com busca principal OK, mas com dataset(s) complementar(es) indisponível(is) — ver warnings acima"
+          else
+            echo "snapshot files OK — todos os arquivos alcançáveis"
+          fi
