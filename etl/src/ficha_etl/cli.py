@@ -284,6 +284,16 @@ def _cmd_list_snapshots() -> int:
         print(f"error: {exc}", file=sys.stderr)
         return 1
     snapshots = upstream.list_snapshots(token)
+    if not snapshots:
+        # Lista vazia nunca é normal (upstream tem 35+ meses desde 2023-05).
+        # Exit 0 aqui já mascarou dois crons mensais: o workflow lia stdout
+        # vazio e falhava adiante com "Invalid month ''" sem apontar a causa.
+        print(
+            "error: no YYYY-MM folders found on RFB upstream — "
+            "PROPFIND respondeu, mas sem pastas de snapshot (layout mudou? resposta truncada?)",
+            file=sys.stderr,
+        )
+        return 1
     for s in snapshots:
         print(s)
     print(f"\n{len(snapshots)} snapshots", file=sys.stderr)
@@ -516,6 +526,28 @@ def _cmd_run(
     log.info("[run 5/5] atualizar manifest → %s", manifest_path)
     try:
         entry = manifest_mod.build_snapshot_entry(month, output_dir)
+    except Exception as exc:
+        print(f"error: manifest build falhou: {exc}", file=sys.stderr)
+        return 1
+
+    if not skip_upload:
+        # Local existence (build_snapshot_entry) e upload HTTP OK
+        # (upload_outputs) não garantem que o arquivo segue baixável — IA
+        # processa uploads assincronamente. Sem essa checagem o manifest
+        # pode acabar publicado com URLs 404 (foi o que aconteceu com
+        # cnpj_contatos/cnpj_cnaes em 2026-04). Só faz sentido com
+        # --skip-upload desligado: em dry-run local nada foi upado ainda.
+        log.info("[run 5/5] verificando que todos os arquivos publicados respondem 200")
+        broken = manifest_mod.verify_snapshot_files(entry)
+        if broken:
+            print(
+                "error: manifest não publicado — arquivos declarados mas inacessíveis no IA:\n"
+                + "\n".join(f"  {u}" for u in broken),
+                file=sys.stderr,
+            )
+            return 1
+
+    try:
         manifest_mod.update_manifest(manifest_path, entry)
     except Exception as exc:
         print(f"error: manifest update falhou: {exc}", file=sys.stderr)

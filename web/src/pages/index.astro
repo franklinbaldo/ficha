@@ -1,19 +1,31 @@
 ---
 import FICHAHeader from '../components/Header.svelte';
 import SearchCNPJ from '../components/SearchCNPJ.svelte';
+import { withBase } from '../lib/base';
 ---
 
 <html lang="pt-br">
 	<head>
 		<meta charset="utf-8" />
-		<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+		<link rel="icon" type="image/svg+xml" href={withBase('favicon.svg')} />
 		<meta name="viewport" content="width=device-width" />
 		<meta name="generator" content={Astro.generator} />
-		<title>FICHA - Fichário de CNPJ</title>
+		<meta
+			name="description"
+			content="Consulte empresas, sócios e atividades econômicas com base nos dados públicos de CNPJ da Receita Federal — snapshots mensais preservados no Internet Archive, consultados direto no navegador."
+		/>
+		<title>FICHA — o fichário aberto das empresas brasileiras</title>
 	</head>
 	<body>
 		<FICHAHeader client:load />
 		<main>
+			<div class="hero">
+				<h1>Entenda uma empresa e suas conexões públicas</h1>
+				<p>
+					Dados abertos de CNPJ da Receita Federal — empresas, sócios, filiais e
+					atividades econômicas, consultados direto no seu navegador.
+				</p>
+			</div>
 			<SearchCNPJ client:load />
 		</main>
 	</body>
@@ -33,5 +45,19 @@ import SearchCNPJ from '../components/SearchCNPJ.svelte';
 		background: white;
 		border-radius: 8px;
 		box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+	}
+	.hero {
+		text-align: center;
+		padding: 1.5rem 1rem 0;
+	}
+	.hero h1 {
+		margin: 0 0 0.5rem;
+		font-size: 1.5rem;
+		color: #2c3e50;
+	}
+	.hero p {
+		margin: 0;
+		color: #6b7280;
+		font-size: 0.95rem;
 	}
 </style>

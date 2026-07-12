@@ -1,14 +1,16 @@
 import { ManifestSchema, type Manifest, type Snapshot } from '../schemas/v1/manifest';
+import { withBase } from './base';
 
 /**
- * Fetches `/manifest.json` from the same origin as the site (works on
+ * Fetches `manifest.json` from the same origin as the site (works on
  * GitHub Pages, dev server, custom domain — todos servem `public/`).
+ * O caminho respeita o `base` do Astro (`/ficha/manifest.json` em project pages).
  *
  * Retorna `null` quando o manifest ainda não foi publicado (404). Outros
  * erros (network, parse, validação Zod) viram exceção.
  */
 export async function fetchManifest(): Promise<Manifest | null> {
-  const url = '/manifest.json';
+  const url = withBase('manifest.json');
   let response: Response;
   try {
     response = await fetch(url, { cache: 'no-store' });

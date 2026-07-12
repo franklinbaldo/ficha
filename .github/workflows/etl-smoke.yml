@@ -25,6 +25,38 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Atualidade faz parte do produto: se o cron mensal falhar em silêncio,
+      # este check semanal fica vermelho em vez de deixar a base envelhecer
+      # despercebida (2026-04 ficou como current até julho sem nenhum alerta).
+      # Só no cron/dispatch: em PR bloquearia qualquer mudança por uma
+      # condição pré-existente que o PR não causou.
+      - name: Check manifest freshness
+        if: github.event_name != 'pull_request'
+        working-directory: .
+        run: |
+          python3 - <<'EOF'
+          import datetime, json, sys
+
+          manifest = json.load(open("web/public/manifest.json"))
+          current = manifest.get("current", "")
+          if not current:
+              print("::error::manifest.json sem campo 'current'")
+              sys.exit(1)
+
+          year, month = map(int, current.split("-"))
+          today = datetime.date.today()
+          lag = (today.year - year) * 12 + (today.month - month)
+          print(f"snapshot atual: {current} — {lag} mês(es) atrás de {today:%Y-%m}")
+
+          # RFB publica o mês M durante o próprio M (às vezes M+1), e o cron
+          # roda dia 5 — lag saudável é 0-1, e 2 é tolerável no começo do mês.
+          if lag >= 3:
+              print(f"::error::Snapshot {current} está {lag} meses atrasado — o cron mensal (etl-monthly) provavelmente está falhando. Verifique as últimas execuções e rode com inputs.month se necessário.")
+              sys.exit(1)
+          if lag == 2:
+              print(f"::warning::Snapshot {current} está 2 meses atrás do calendário — verifique se o próximo cron mensal roda com sucesso.")
+          EOF
+
       - name: Install uv
         uses: astral-sh/setup-uv@v3
         with:

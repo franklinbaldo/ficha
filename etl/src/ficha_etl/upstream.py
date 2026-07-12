@@ -149,7 +149,12 @@ def files_for_month(token: str, month: str) -> list[RemoteFile]:
 
 
 def _token_works(token: str, client: httpx.Client) -> bool:
-    """PROPFIND Depth: 0 na raiz — espera 207 Multi-Status."""
+    """PROPFIND Depth: 0 na raiz — espera 207 Multi-Status.
+
+    Só 207 conta: um WebDAV real sempre responde Multi-Status ao PROPFIND.
+    Aceitar 200 deixava uma página HTML de erro/manutenção "validar" o token
+    e a falha só aparecia depois, como lista de snapshots vazia.
+    """
     try:
         r = client.request(
             "PROPFIND",
@@ -158,9 +163,12 @@ def _token_works(token: str, client: httpx.Client) -> bool:
             headers={"Depth": "0", "Content-Type": "text/xml"},
         )
     except httpx.HTTPError as exc:
-        log.debug("token probe http error: %s", exc)
+        log.warning("token probe http error: %s", exc)
         return False
-    return r.status_code in (200, 207)
+    if r.status_code != 207:
+        log.warning("token probe unexpected status %d (esperado 207)", r.status_code)
+        return False
+    return True
 
 
 def _propfind(client: httpx.Client, token: str, url: str) -> bytes:

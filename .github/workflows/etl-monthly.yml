@@ -2,12 +2,17 @@ name: ETL — monthly snapshot
 
 on:
   schedule:
-    # 03:00 UTC no dia 5 de cada mês — RFB normalmente publica antes disso.
-    - cron: '0 3 5 * *'
+    # 03:00 UTC nos dias 5, 10, 15 e 20 — a RFB normalmente publica antes do
+    # dia 5, mas não é garantido. Rodar só uma vez por mês significava que
+    # uma publicação atrasada só seria pega no cron do mês seguinte (visto
+    # em 2026-06/2026-07). Execuções em que a RFB ainda não publicou nada
+    # novo terminam como no-op verde (ver "Resolve target month" abaixo),
+    # então tentativas extras não têm custo além do runtime do próprio check.
+    - cron: '0 3 5,10,15,20 * *'
   workflow_dispatch:
     inputs:
       month:
-        description: 'Snapshot alvo (YYYY-MM). Vazio = mês corrente.'
+        description: 'Snapshot alvo (YYYY-MM). Vazio = snapshot mais recente disponível no upstream (não necessariamente o mês corrente).'
         required: false
         type: string
       skip_upload:
@@ -71,7 +76,23 @@ jobs:
             MONTH="$INPUT_MONTH"
             echo "Using user-provided month: $MONTH"
           else
-            MONTH=$(uv run ficha-etl list-snapshots 2>/dev/null | sort | tail -n 1)
+            # Retry com backoff: os crons de 2026-06 e 2026-07 falharam aqui
+            # com saída vazia porque list-snapshots quebrava transitoriamente,
+            # o stderr ia pra /dev/null e o `tail` engolia o exit code. Agora
+            # o stderr fica no log e falha de verdade é falha do step.
+            MONTH=""
+            for attempt in 1 2 3; do
+              if SNAPSHOTS=$(uv run ficha-etl list-snapshots); then
+                MONTH=$(printf '%s\n' "$SNAPSHOTS" | sort | tail -n 1)
+                break
+              fi
+              echo "list-snapshots failed (attempt $attempt/3); retrying in $((attempt * 30))s"
+              sleep $((attempt * 30))
+            done
+            if [ -z "$MONTH" ]; then
+              echo "::error::Could not resolve latest snapshot from RFB upstream after 3 attempts — see stderr above (token rotacionado? RFB fora do ar ou bloqueando o runner?)."
+              exit 1
+            fi
             echo "Latest snapshot on RFB upstream: $MONTH"
           fi
           if ! [[ "$MONTH" =~ ^[0-9]{4}-(0[1-9]|1[0-2])$ ]]; then
@@ -79,34 +100,55 @@ jobs:
             exit 1
           fi
 
-          # Freshness guard: when MONTH was auto-resolved (no INPUT_MONTH)
-          # and it equals the latest already in manifest.json, RFB hasn't
-          # published a new snapshot yet -- the cron fired at day 5 but
-          # the new month is overdue. Re-processing the same month is a
-          # no-op (parquets are deterministic, manifest detects "no
-          # change", workflow reports green) so the missed snapshot
-          # would go unnoticed until the next month's cron, a month of
-          # stale data. Fail loud instead. Operator-provided
-          # INPUT_MONTH always succeeds (operator knows what they want).
+          # Freshness guard: quando MONTH foi auto-resolvido (sem
+          # INPUT_MONTH), distingue três casos comparando com o manifest:
+          #   MONTH >  CURRENT → snapshot novo publicado, roda o pipeline.
+          #   MONTH == CURRENT → RFB ainda não publicou o próximo. Não é
+          #     falha — é o estado normal na maior parte dos 4 disparos/mês
+          #     (dias 5/10/15/20). No-op verde com notice; reprocessar o
+          #     mesmo mês seria trabalho perdido (parquets determinísticos).
+          #     Atraso prolongado de verdade é responsabilidade do freshness
+          #     check semanal (etl-smoke.yml), não deste guard.
+          #   MONTH <  CURRENT → listagem do upstream regrediu (PROPFIND
+          #     parcial) — nunca deve mover a base pra trás. Falha de
+          #     verdade. Comparação lexicográfica funciona pra YYYY-MM.
+          # Operator-provided INPUT_MONTH sempre roda (backfill é seguro:
+          # update_manifest ordena e current aponta pro mais novo).
+          SHOULD_RUN=true
           if [ -z "$INPUT_MONTH" ]; then
             CURRENT=$(jq -r '.current // ""' ../web/public/manifest.json 2>/dev/null || echo "")
             if [ -n "$CURRENT" ] && [ "$MONTH" = "$CURRENT" ]; then
-              echo "::error::Auto-resolved month '$MONTH' is already in manifest.json (current=$CURRENT). RFB hasn't published a new snapshot yet. Re-run manually with inputs.month once the new snapshot is up, or wait for next month's cron."
+              echo "::notice::Nenhum snapshot novo publicado pela RFB ainda (upstream mais recente = manifest atual = $CURRENT). Encerrando sem reprocessar — próxima tentativa automática no próximo disparo do cron."
+              SHOULD_RUN=false
+            elif [ -n "$CURRENT" ] && ! [[ "$MONTH" > "$CURRENT" ]]; then
+              echo "::error::Auto-resolved month '$MONTH' is older than manifest current ($CURRENT) — upstream listing looks incomplete/regressive. Re-rode o smoke; se persistir, investigue o Nextcloud da RFB. Backfill manual: workflow_dispatch com inputs.month."
               exit 1
+            fi
+            # Lacuna: pular meses intermediários quebra a continuidade
+            # histórica dos snapshots. O cron processa só o mais novo;
+            # os faltantes precisam de backfill manual.
+            if [ "$SHOULD_RUN" = "true" ] && [ -n "$CURRENT" ]; then
+              EXPECTED=$(date -d "${CURRENT}-01 +1 month" +%Y-%m)
+              if [[ "$MONTH" > "$EXPECTED" ]]; then
+                echo "::warning::Gap na série histórica: manifest está em $CURRENT e este run processa $MONTH — os meses intermediários não serão processados automaticamente. Rode etl-monthly via workflow_dispatch com inputs.month pra cada mês faltante (qualquer ordem)."
+              fi
             fi
           fi
 
+          echo "should_run=$SHOULD_RUN" >> "$GITHUB_OUTPUT"
           echo "value=$MONTH" >> "$GITHUB_OUTPUT"
 
       # Cache restrito aos ZIPs crus (≤ ~7 GB) — exclui extracted/ (~25-30 GB)
       # que estouraria o limite de 10 GB do GH Actions.
       - name: Cache RFB raw ZIPs
+        if: steps.month.outputs.should_run == 'true'
         uses: actions/cache@v4
         with:
           path: etl/.cache/${{ steps.month.outputs.value }}/*.zip
           key: rfb-zips-${{ steps.month.outputs.value }}-v1
 
       - name: Run pipeline
+        if: steps.month.outputs.should_run == 'true'
         env:
           IA_ACCESS_KEY: ${{ secrets.IA_ACCESS_KEY }}
           IA_SECRET_KEY: ${{ secrets.IA_SECRET_KEY }}
@@ -125,6 +167,7 @@ jobs:
           uv run ficha-etl run --month "$MONTH" $EXTRA_ARGS
 
       - name: Commit updated manifest
+        if: steps.month.outputs.should_run == 'true'
         env:
           MONTH: ${{ steps.month.outputs.value }}
         run: |
