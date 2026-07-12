@@ -12,7 +12,7 @@
         "raizes": 67635384,
         "socios": 27494723
       },
-      "_comment_2026-04": "cnpj_contatos.parquet e cnpj_cnaes.parquet foram removidos deste snapshot em 2026-07: confirmado via archive.org/metadata/ficha-2026-04/files que os arquivos não existem no item (upload pro IA não concluiu, apesar do manifest antigo afirmar hash/tamanho). Ainda NÃO recuperados: dependem do backfill de 2026-05/2026-06 (ver PR #53, seção 'Pós-merge'), que ainda não foi disparado a partir de 2026-07-12.",
+      "_comment_2026-04": "cnpj_contatos.parquet e cnpj_cnaes.parquet não foram publicados com sucesso no item ficha-2026-04 e, por isso, não fazem parte deste snapshot no manifesto.",
       "files": {
         "cnpjs": {
           "url": "https://archive.org/download/ficha-2026-04/cnpjs.parquet",
