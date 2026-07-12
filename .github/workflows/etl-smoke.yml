@@ -28,7 +28,10 @@ jobs:
       # Atualidade faz parte do produto: se o cron mensal falhar em silêncio,
       # este check semanal fica vermelho em vez de deixar a base envelhecer
       # despercebida (2026-04 ficou como current até julho sem nenhum alerta).
+      # Só no cron/dispatch: em PR bloquearia qualquer mudança por uma
+      # condição pré-existente que o PR não causou.
       - name: Check manifest freshness
+        if: github.event_name != 'pull_request'
         working-directory: .
         run: |
           python3 - <<'EOF'
