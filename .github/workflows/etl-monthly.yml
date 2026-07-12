@@ -2,8 +2,13 @@ name: ETL — monthly snapshot
 
 on:
   schedule:
-    # 03:00 UTC no dia 5 de cada mês — RFB normalmente publica antes disso.
-    - cron: '0 3 5 * *'
+    # 03:00 UTC nos dias 5, 10, 15 e 20 — a RFB normalmente publica antes do
+    # dia 5, mas não é garantido. Rodar só uma vez por mês significava que
+    # uma publicação atrasada só seria pega no cron do mês seguinte (visto
+    # em 2026-06/2026-07). Execuções em que a RFB ainda não publicou nada
+    # novo terminam como no-op verde (ver "Resolve target month" abaixo),
+    # então tentativas extras não têm custo além do runtime do próprio check.
+    - cron: '0 3 5,10,15,20 * *'
   workflow_dispatch:
     inputs:
       month:
@@ -96,25 +101,33 @@ jobs:
           fi
 
           # Freshness guard: quando MONTH foi auto-resolvido (sem
-          # INPUT_MONTH), o cron só é saudável se descobriu um mês
-          # ESTRITAMENTE mais novo que o manifest. MONTH == CURRENT
-          # significa que a RFB ainda não publicou o próximo (reprocessar
-          # seria no-op verde e o atraso passaria despercebido). MONTH <
-          # CURRENT significa listagem incompleta do upstream — um PROPFIND
-          # parcial não pode regredir a base. Comparação lexicográfica
-          # funciona pra YYYY-MM. Operator-provided INPUT_MONTH sempre
-          # passa (backfill é seguro: update_manifest ordena e current
-          # aponta pro mais novo).
+          # INPUT_MONTH), distingue três casos comparando com o manifest:
+          #   MONTH >  CURRENT → snapshot novo publicado, roda o pipeline.
+          #   MONTH == CURRENT → RFB ainda não publicou o próximo. Não é
+          #     falha — é o estado normal na maior parte dos 4 disparos/mês
+          #     (dias 5/10/15/20). No-op verde com notice; reprocessar o
+          #     mesmo mês seria trabalho perdido (parquets determinísticos).
+          #     Atraso prolongado de verdade é responsabilidade do freshness
+          #     check semanal (etl-smoke.yml), não deste guard.
+          #   MONTH <  CURRENT → listagem do upstream regrediu (PROPFIND
+          #     parcial) — nunca deve mover a base pra trás. Falha de
+          #     verdade. Comparação lexicográfica funciona pra YYYY-MM.
+          # Operator-provided INPUT_MONTH sempre roda (backfill é seguro:
+          # update_manifest ordena e current aponta pro mais novo).
+          SHOULD_RUN=true
           if [ -z "$INPUT_MONTH" ]; then
             CURRENT=$(jq -r '.current // ""' ../web/public/manifest.json 2>/dev/null || echo "")
-            if [ -n "$CURRENT" ] && ! [[ "$MONTH" > "$CURRENT" ]]; then
-              echo "::error::Auto-resolved month '$MONTH' is not newer than manifest current ($CURRENT). Se a RFB ainda não publicou o próximo mês, aguarde o próximo cron; se a listagem veio incompleta, re-rode. Backfill manual: workflow_dispatch com inputs.month."
+            if [ -n "$CURRENT" ] && [ "$MONTH" = "$CURRENT" ]; then
+              echo "::notice::Nenhum snapshot novo publicado pela RFB ainda (upstream mais recente = manifest atual = $CURRENT). Encerrando sem reprocessar — próxima tentativa automática no próximo disparo do cron."
+              SHOULD_RUN=false
+            elif [ -n "$CURRENT" ] && ! [[ "$MONTH" > "$CURRENT" ]]; then
+              echo "::error::Auto-resolved month '$MONTH' is older than manifest current ($CURRENT) — upstream listing looks incomplete/regressive. Re-rode o smoke; se persistir, investigue o Nextcloud da RFB. Backfill manual: workflow_dispatch com inputs.month."
               exit 1
             fi
             # Lacuna: pular meses intermediários quebra a continuidade
             # histórica dos snapshots. O cron processa só o mais novo;
             # os faltantes precisam de backfill manual.
-            if [ -n "$CURRENT" ]; then
+            if [ "$SHOULD_RUN" = "true" ] && [ -n "$CURRENT" ]; then
               EXPECTED=$(date -d "${CURRENT}-01 +1 month" +%Y-%m)
               if [[ "$MONTH" > "$EXPECTED" ]]; then
                 echo "::warning::Gap na série histórica: manifest está em $CURRENT e este run processa $MONTH — os meses intermediários não serão processados automaticamente. Rode etl-monthly via workflow_dispatch com inputs.month pra cada mês faltante (qualquer ordem)."
@@ -122,17 +135,20 @@ jobs:
             fi
           fi
 
+          echo "should_run=$SHOULD_RUN" >> "$GITHUB_OUTPUT"
           echo "value=$MONTH" >> "$GITHUB_OUTPUT"
 
       # Cache restrito aos ZIPs crus (≤ ~7 GB) — exclui extracted/ (~25-30 GB)
       # que estouraria o limite de 10 GB do GH Actions.
       - name: Cache RFB raw ZIPs
+        if: steps.month.outputs.should_run == 'true'
         uses: actions/cache@v4
         with:
           path: etl/.cache/${{ steps.month.outputs.value }}/*.zip
           key: rfb-zips-${{ steps.month.outputs.value }}-v1
 
       - name: Run pipeline
+        if: steps.month.outputs.should_run == 'true'
         env:
           IA_ACCESS_KEY: ${{ secrets.IA_ACCESS_KEY }}
           IA_SECRET_KEY: ${{ secrets.IA_SECRET_KEY }}
@@ -151,6 +167,7 @@ jobs:
           uv run ficha-etl run --month "$MONTH" $EXTRA_ARGS
 
       - name: Commit updated manifest
+        if: steps.month.outputs.should_run == 'true'
         env:
           MONTH: ${{ steps.month.outputs.value }}
         run: |
