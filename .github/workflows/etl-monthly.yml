@@ -71,7 +71,23 @@ jobs:
             MONTH="$INPUT_MONTH"
             echo "Using user-provided month: $MONTH"
           else
-            MONTH=$(uv run ficha-etl list-snapshots 2>/dev/null | sort | tail -n 1)
+            # Retry com backoff: os crons de 2026-06 e 2026-07 falharam aqui
+            # com saída vazia porque list-snapshots quebrava transitoriamente,
+            # o stderr ia pra /dev/null e o `tail` engolia o exit code. Agora
+            # o stderr fica no log e falha de verdade é falha do step.
+            MONTH=""
+            for attempt in 1 2 3; do
+              if SNAPSHOTS=$(uv run ficha-etl list-snapshots); then
+                MONTH=$(printf '%s\n' "$SNAPSHOTS" | sort | tail -n 1)
+                break
+              fi
+              echo "list-snapshots failed (attempt $attempt/3); retrying in $((attempt * 30))s"
+              sleep $((attempt * 30))
+            done
+            if [ -z "$MONTH" ]; then
+              echo "::error::Could not resolve latest snapshot from RFB upstream after 3 attempts — see stderr above (token rotacionado? RFB fora do ar ou bloqueando o runner?)."
+              exit 1
+            fi
             echo "Latest snapshot on RFB upstream: $MONTH"
           fi
           if ! [[ "$MONTH" =~ ^[0-9]{4}-(0[1-9]|1[0-2])$ ]]; then

@@ -284,6 +284,16 @@ def _cmd_list_snapshots() -> int:
         print(f"error: {exc}", file=sys.stderr)
         return 1
     snapshots = upstream.list_snapshots(token)
+    if not snapshots:
+        # Lista vazia nunca é normal (upstream tem 35+ meses desde 2023-05).
+        # Exit 0 aqui já mascarou dois crons mensais: o workflow lia stdout
+        # vazio e falhava adiante com "Invalid month ''" sem apontar a causa.
+        print(
+            "error: no YYYY-MM folders found on RFB upstream — "
+            "PROPFIND respondeu, mas sem pastas de snapshot (layout mudou? resposta truncada?)",
+            file=sys.stderr,
+        )
+        return 1
     for s in snapshots:
         print(s)
     print(f"\n{len(snapshots)} snapshots", file=sys.stderr)
