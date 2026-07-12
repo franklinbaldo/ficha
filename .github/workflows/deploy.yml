@@ -26,6 +26,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # enablement: true cria/habilita o Pages via API na primeira execução —
+      # sem isso o deploy-pages falha com 404 "Ensure GitHub Pages has been
+      # enabled" (run 26554238972). Também expõe origin/base_path pro build
+      # gerar URLs corretas sob /ficha/ (project pages) ou domínio próprio.
+      - id: pages
+        uses: actions/configure-pages@v5
+        with:
+          enablement: true
+
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
@@ -33,6 +42,9 @@ jobs:
       - run: bun install --frozen-lockfile
 
       - run: bun run build
+        env:
+          SITE: ${{ steps.pages.outputs.origin }}
+          BASE_PATH: ${{ steps.pages.outputs.base_path }}
 
       - uses: actions/upload-pages-artifact@v3
         with:
@@ -44,6 +56,37 @@ jobs:
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
+    outputs:
+      page_url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - id: deployment
         uses: actions/deploy-pages@v4
+
+  # Smoke test contra o site realmente publicado: página no ar, manifest
+  # válido e parquet do snapshot atual alcançável no Internet Archive.
+  verify:
+    needs: deploy
+    runs-on: ubuntu-latest
+    steps:
+      - name: Smoke test deployed site
+        env:
+          PAGE_URL: ${{ needs.deploy.outputs.page_url }}
+        run: |
+          BASE="${PAGE_URL%/}"
+          echo "Verifying $BASE"
+
+          code=$(curl -sS -o /dev/null -w '%{http_code}' -L "$BASE/")
+          [ "$code" = "200" ] || { echo "::error::homepage → HTTP $code"; exit 1; }
+
+          curl -sSfL "$BASE/manifest.json" -o manifest.json \
+            || { echo "::error::manifest.json não publicado em $BASE/manifest.json"; exit 1; }
+
+          CURRENT=$(jq -r '.current // ""' manifest.json)
+          [ -n "$CURRENT" ] || { echo "::error::manifest.json sem campo 'current'"; exit 1; }
+          echo "manifest OK — snapshot atual: $CURRENT"
+
+          CNPJS_URL=$(jq -r --arg m "$CURRENT" \
+            '.snapshots[] | select(.date == $m) | .files.cnpjs.url' manifest.json)
+          code=$(curl -sS -o /dev/null -w '%{http_code}' -I -L --max-time 60 "$CNPJS_URL")
+          [ "$code" = "200" ] || { echo "::error::cnpjs.parquet ($CNPJS_URL) → HTTP $code"; exit 1; }
+          echo "snapshot files OK — $CNPJS_URL alcançável"

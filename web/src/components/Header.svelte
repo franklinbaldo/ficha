@@ -1,4 +1,6 @@
 <script lang="ts">
+	import { withBase } from '../lib/base';
+
 	let { title = "FICHA" } = $props();
 </script>
 
@@ -6,8 +8,8 @@
 	<nav>
 		<div class="logo">{title}</div>
 		<ul>
-			<li><a href="/">Home</a></li>
-			<li><a href="/sobre">Sobre</a></li>
+			<li><a href={withBase('/')}>Home</a></li>
+			<li><a href={withBase('/sobre')}>Sobre</a></li>
 		</ul>
 	</nav>
 </header>
