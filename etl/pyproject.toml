@@ -26,6 +26,7 @@ dev = [
     "pytest>=8.0.0",
     "ruff>=0.6.0",
     "grpcio-tools>=1.60.0",  # bundles protoc — generates company_pb2.py from .proto
+    "pyyaml>=6.0",  # parseia .github/workflows/*.yml nos testes estáticos
 ]
 
 [project.scripts]

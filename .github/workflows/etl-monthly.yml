@@ -16,7 +16,7 @@ on:
         required: false
         type: string
       skip_upload:
-        description: 'Pular upload para o Internet Archive (dry-run)'
+        description: 'Dry-run local: não faz upload nem publica o manifesto'
         required: false
         type: boolean
         default: false
@@ -167,7 +167,9 @@ jobs:
           uv run ficha-etl run --month "$MONTH" $EXTRA_ARGS
 
       - name: Commit updated manifest
-        if: steps.month.outputs.should_run == 'true'
+        if: >-
+          steps.month.outputs.should_run == 'true' &&
+          inputs.skip_upload != true
         env:
           MONTH: ${{ steps.month.outputs.value }}
         run: |
@@ -200,3 +202,16 @@ jobs:
           done
           echo "::error::failed to push manifest after 3 attempts"
           exit 1
+
+      # skip_upload roda o transform/pack localmente pra teste (CLI), mas
+      # build_snapshot_entry() gera URLs pelo padrão ia:ficha-<mês>/... sem
+      # checar se algo foi de fato enviado — e verify_snapshot_files() só é
+      # chamado quando o upload está ligado (ver _cmd_run). Sem este guard,
+      # um dry-run comitaria em main um manifest apontando pra arquivos que
+      # nunca existiram no IA (mesma classe de bug do 2026-04).
+      - name: Dry-run summary
+        if: >-
+          steps.month.outputs.should_run == 'true' &&
+          inputs.skip_upload == true
+        run: |
+          echo "::notice::Dry-run concluído: nenhum upload realizado e nenhuma alteração do manifesto será publicada."
