@@ -26,14 +26,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # enablement: true cria/habilita o Pages via API na primeira execução —
-      # sem isso o deploy-pages falha com 404 "Ensure GitHub Pages has been
-      # enabled" (run 26554238972). Também expõe origin/base_path pro build
-      # gerar URLs corretas sob /ficha/ (project pages) ou domínio próprio.
+      # Expõe origin/base_path pro build gerar URLs corretas sob /ficha/
+      # (project pages) ou domínio próprio. Pré-requisito: Pages habilitado
+      # em Settings → Pages com source "GitHub Actions" (habilitar via
+      # enablement: true exigiria PAT/GitHub App — o GITHUB_TOKEN não pode).
       - id: pages
         uses: actions/configure-pages@v5
-        with:
-          enablement: true
 
       - uses: oven-sh/setup-bun@v2
         with:
@@ -85,8 +83,30 @@ jobs:
           [ -n "$CURRENT" ] || { echo "::error::manifest.json sem campo 'current'"; exit 1; }
           echo "manifest OK — snapshot atual: $CURRENT"
 
-          CNPJS_URL=$(jq -r --arg m "$CURRENT" \
-            '.snapshots[] | select(.date == $m) | .files.cnpjs.url' manifest.json)
-          code=$(curl -sS -o /dev/null -w '%{http_code}' -I -L --max-time 60 "$CNPJS_URL")
-          [ "$code" = "200" ] || { echo "::error::cnpjs.parquet ($CNPJS_URL) → HTTP $code"; exit 1; }
-          echo "snapshot files OK — $CNPJS_URL alcançável"
+          # Todos os arquivos que a inicialização do frontend carrega até
+          # "Pronto para consultas": obrigatórios (cnpjs, socios,
+          # cnpj_contatos), opcionais quando presentes no manifest
+          # (cnpj_cnaes, enderecos, pessoas) e todos os parquets de lookup.
+          # Qualquer um indisponível derruba o init inteiro no catch.
+          URLS=$(jq -r --arg m "$CURRENT" '
+            .snapshots[]
+            | select(.date == $m)
+            | [
+                .files.cnpjs.url,
+                .files.socios.url,
+                .files.cnpj_contatos.url,
+                (.files.cnpj_cnaes.url // empty),
+                (.files.enderecos.url // empty),
+                (.files.pessoas.url // empty),
+                (.lookups[]?.url)
+              ]
+            | .[]
+          ' manifest.json)
+          [ -n "$URLS" ] || { echo "::error::nenhuma URL de snapshot encontrada pro mês $CURRENT"; exit 1; }
+
+          while IFS= read -r url; do
+            code=$(curl -sS -o /dev/null -w '%{http_code}' -I -L --max-time 60 "$url")
+            [ "$code" = "200" ] || { echo "::error::$url → HTTP $code"; exit 1; }
+            echo "OK $url"
+          done <<< "$URLS"
+          echo "snapshot files OK — todos os arquivos exigidos pelo frontend alcançáveis"

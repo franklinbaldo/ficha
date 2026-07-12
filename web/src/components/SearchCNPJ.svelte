@@ -119,22 +119,48 @@
       const duckDB = await createDuckDB();
 
       status = `Carregando dados de ${formatMonth(snap.date)}…`;
+      // Só a busca principal é fatal: sem cnpjs + lookups não há produto.
       await attachCnpjs(duckDB, snap.files.cnpjs.url);
       await attachLookups(duckDB, snap);
+
+      // Datasets complementares degradam de forma isolada: se um parquet
+      // estiver indisponível (ex.: upload incompleto no IA), a busca por
+      // empresa continua funcionando e só a seção correspondente falha —
+      // EmpresaFicha já exibe erro localizado por consulta.
+      try {
+        await attachSocios(duckDB, snap.files.socios.url);
+      } catch (e) {
+        console.warn('socios indisponível:', e);
+      }
+      try {
+        await attachCnpjContatos(duckDB, snap.files.cnpj_contatos.url);
+      } catch (e) {
+        console.warn('cnpj_contatos indisponível:', e);
+      }
       if (snap.files.enderecos) {
-        await attachEnderecos(duckDB, snap.files.enderecos.url);
-        hasEnderecos = true;
+        try {
+          await attachEnderecos(duckDB, snap.files.enderecos.url);
+          hasEnderecos = true;
+        } catch (e) {
+          console.warn('enderecos indisponível:', e);
+        }
       }
       if (snap.files.pessoas) {
-        await attachPessoas(duckDB, snap.files.pessoas.url);
-        hasPessoas = true;
+        try {
+          await attachPessoas(duckDB, snap.files.pessoas.url);
+          hasPessoas = true;
+        } catch (e) {
+          console.warn('pessoas indisponível:', e);
+        }
       }
       if (snap.files.cnpj_cnaes) {
-        await attachCnpjCnaes(duckDB, snap.files.cnpj_cnaes.url);
-        hasCnpjCnaes = true;
+        try {
+          await attachCnpjCnaes(duckDB, snap.files.cnpj_cnaes.url);
+          hasCnpjCnaes = true;
+        } catch (e) {
+          console.warn('cnpj_cnaes indisponível:', e);
+        }
       }
-      await attachSocios(duckDB, snap.files.socios.url);
-      await attachCnpjContatos(duckDB, snap.files.cnpj_contatos.url);
 
       db = duckDB;
       status = 'Pronto para consultas';
