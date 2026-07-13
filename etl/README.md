@@ -4,7 +4,12 @@ Pipeline mensal que transforma os dumps de CNPJ da Receita Federal Brasileira em
 
 ## Status
 
-Esqueleto inicial — implementação ainda não começou. Veja `experiments/` na raiz do repo para PoCs anteriores que servirão de base.
+Pipeline implementado e testado em fixtures: produz 7 parquets analíticos
+(`cnpjs`, `raizes`, `socios`, `enderecos`, `pessoas`, `cnpj_cnaes`,
+`cnpj_contatos`), `lookups.json` + 6 lookup-parquets e o `companies.zip`
+(camada atômica, protobuf por raiz). A execução automática mensal
+(`etl-monthly.yml`) ainda não completou um ciclo de ponta a ponta em
+produção — ver `docs/vision-blockers-2026-07.md`.
 
 ## Setup local
 
@@ -14,17 +19,21 @@ uv venv
 uv pip install -e ".[dev]"
 ```
 
-## Uso (planejado)
+## Uso
 
 ```bash
 ficha-etl run --month 2026-01
 ```
 
 Etapas:
-1. `download` — baixa o dump mais recente da RFB
-2. `transform` — converte CSV → Parquet único com schema versionado
+1. `download` — baixa o dump da RFB (via mirror IA quando já espelhado)
+2. `transform` — converte CSV → parquets com schema versionado
 3. `upload` — publica no Internet Archive como item `ficha-YYYY-MM`
-4. `manifest` — atualiza `web/public/manifest.json` com o novo snapshot
+4. `pack` — gera e publica o `companies.zip` (fichas atômicas em protobuf)
+5. `manifest` — atualiza `web/public/manifest.json` com o novo snapshot
+
+Outros subcomandos: `list-snapshots`, `list-files`, `download`, `transform`,
+`pack`, `fetch`, `smoke` (ver `ficha-etl --help`).
 
 ## Contrato com o frontend
 
