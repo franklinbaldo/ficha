@@ -49,5 +49,7 @@ largas em `cnpjs.parquet` permanecem (alimentam a lâmina); este arquivo é só 
   `EmpresaFicha.svelte`.
 - ⚠️ Depende de upload bem-sucedido no Internet Archive — o snapshot 2026-04
   publicado ficou sem este arquivo por falha de upload (ver
-  `docs/vision-blockers-2026-07.md`), então o botão "Contatos" falha
-  silenciosamente quando o parquet está ausente do manifest.
+  `docs/vision-blockers-2026-07.md`). Quando ausente do manifest,
+  `SearchCNPJ.svelte` pula o attach (`if (snap.files.cnpj_contatos)`), e ao
+  clicar em "Contatos" a query falha com erro visível ("Erro: ...") em
+  `EmpresaFicha.svelte`, não silenciosamente.
