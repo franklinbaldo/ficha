@@ -9,6 +9,13 @@ on:
     # novo terminam como no-op verde (ver "Resolve target month" abaixo),
     # então tentativas extras não têm custo além do runtime do próprio check.
     - cron: '0 3 5,10,15,20 * *'
+  push:
+    # Gatilho temporário só para disparar manualmente um run real sem acesso
+    # a workflow_dispatch via API (mesmo padrão do etl-bootstrap.yml). Sem
+    # inputs.month num push, o resolver cai no auto-resolve via
+    # list-snapshots (já validado pelo etl-smoke). Remover depois do run.
+    branches:
+      - trigger/etl-monthly-manual-run
   workflow_dispatch:
     inputs:
       month:
