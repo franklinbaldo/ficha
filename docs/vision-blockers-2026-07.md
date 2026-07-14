@@ -49,7 +49,8 @@ features — é a operação do pipeline que nunca fechou o ciclo.
 **Fatos:**
 
 - `etl-monthly.yml`: 6 runs, 0 sucessos (3 dispatch/cancelados em 2026-04, 3
-  crons agendados em 05/05, 05/06 e 05/07 — todos `failure`).
+  crons agendados em 2026-05, 2026-06 e 2026-07 (todos dia 5) — todos
+  `failure`).
 - Modo de falha idêntico nos 3 crons: `MONTH=$(uv run ficha-etl list-snapshots
   2>/dev/null | ...)` → saída vazia → `Invalid month ''`. O `2>/dev/null`
   engoliu a causa-raiz por 3 meses seguidos.
@@ -147,8 +148,9 @@ Mas:
 - **Código morto no frontend:** schemas Zod de dados nunca validados em
   runtime; `raizes.parquet` publicado e nunca consultado; `files.lookups`
   (JSON) não lido.
-- `etl/README.md:6` ainda diz "Esqueleto inicial — implementação ainda não
-  começou", descrevendo um pipeline de ~1.800 linhas testado.
+- `etl/README.md:6` dizia "Esqueleto inicial — implementação ainda não
+  começou" para um pipeline de ~1.800 linhas testado — corrigido neste
+  mesmo PR.
 
 ## Dimensão 6 — Processo (retrabalho crônico e sequenciamento violado)
 
