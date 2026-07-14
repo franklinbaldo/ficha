@@ -135,14 +135,20 @@ Mas:
 
 ## Dimensão 5 — Coerência arquitetural e documental
 
-- **README raiz mente sobre a camada atômica:** promete "milhões de
-  `{cnpj}.json`" (README:14); a realidade é protobuf `.pb` por `cnpj_base`.
-- **ADRs fantasma:** a numeração pula 0018→0023; os ADRs 0019-0022 dos parquets
-  já shippados (per-lookup, cnpj_cnaes, cnpj_contatos, cnpjs_summary) nunca
-  foram escritos — código sem decisão registrada.
-- **ADR 0017 (ficha-py/Ibis) não se cumpriu:** o pacote existe mas o ETL não o
-  importa (SQL inline segue sendo o vocabulário real), conhece só 3 dos 7
-  parquets (`connect.py:22`), sem notebooks, sem CI.
+- **README raiz mente sobre a camada atômica** (corrigido em PR posterior):
+  promete "milhões de `{cnpj}.json`" (README:14); a realidade é protobuf
+  `.pb` por `cnpj_base`.
+- **ADRs fantasma** (corrigido em PR posterior): a numeração pulava 0018→0023;
+  os ADRs 0019-0022 dos parquets já shippados (per-lookup, cnpj_cnaes,
+  cnpj_contatos) e o de `cnpjs_summary` (não implementado, `Proposed`) foram
+  escritos.
+- **ADR 0017 (ficha-py/Ibis)** — cumprido parcialmente (corrigido em PR
+  posterior): `ficha-py` passou a cobrir os 7 parquets + lookups, ganhou CI
+  próprio e notebooks, e o ETL passou a importá-lo de verdade em
+  `write_lookup_parquets`. Os joins pesados de `cnpjs`/`raizes` continuam em
+  SQL bruto deliberadamente — risco de OOM documentado no perf-plan torna
+  essa migração perigosa sem benchmark prévio (ver ADR 0017, "Estado da
+  implementação"). PyPI não publicado.
 - **ADR 0018 (raizes v2)** `Proposed`, não implementado; não existe
   `web/src/schemas/v2/`.
 - **Código morto no frontend:** schemas Zod de dados nunca validados em

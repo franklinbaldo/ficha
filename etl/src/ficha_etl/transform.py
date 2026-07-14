@@ -463,14 +463,24 @@ def write_lookups_json(
 
 
 def write_lookup_parquets(con: duckdb.DuckDBPyConnection, output_dir: Path) -> None:
-    """Escreve um parquet para cada lookup, para composição SQL."""
+    """Escreve um parquet para cada lookup, para composição SQL.
+
+    A expressão (codigo, descricao, descricao_normalizada) vem de
+    `ficha_py.views.lookup_normalized` (ADR 0017/0019): compilada para SQL
+    via Ibis e executada aqui com `COPY TO PARQUET`, porque o writer em si
+    (compressão, row group size) fica em SQL bruto por design do ADR 0017 —
+    Ibis não abstrai esses knobs, e não precisa: a query em si é o único
+    vocabulário que ETL e notebooks precisam compartilhar.
+    """
+    import ibis
+    from ficha_py.views import lookup_normalized
+
     (output_dir / "lookups").mkdir(parents=True, exist_ok=True)
+    ibis_con = ibis.duckdb.from_connection(con)
     for kind in _LOOKUP_KINDS:
+        select_sql = ibis.to_sql(lookup_normalized(ibis_con, kind), dialect="duckdb")
         con.execute(
-            "COPY (SELECT codigo, descricao, "
-            "UPPER(strip_accents(descricao)) AS descricao_normalizada "
-            f"FROM lookup_{kind} ORDER BY codigo) "
-            "TO ? (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 100000)",
+            f"COPY ({select_sql}) TO ? (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 100000)",
             [str(output_dir / "lookups" / f"{kind}.parquet")],
         )
 

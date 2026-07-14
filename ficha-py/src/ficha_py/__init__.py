@@ -16,17 +16,35 @@ from __future__ import annotations
 from ibis import _
 
 from .connect import connect_ia, connect_local
-from .tables import cnpjs, raizes, socios
-from .views import socios_de
+from .tables import (
+    LOOKUP_KINDS,
+    cnpj_cnaes,
+    cnpj_contatos,
+    cnpjs,
+    enderecos,
+    lookup,
+    pessoas,
+    raizes,
+    socios,
+)
+from .views import filiais_de, lookup_normalized, socios_de
 
 __all__ = [
     "_",
     "connect_ia",
     "connect_local",
+    "LOOKUP_KINDS",
     "cnpjs",
     "raizes",
     "socios",
+    "enderecos",
+    "pessoas",
+    "cnpj_cnaes",
+    "cnpj_contatos",
+    "lookup",
     "socios_de",
+    "filiais_de",
+    "lookup_normalized",
 ]
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
