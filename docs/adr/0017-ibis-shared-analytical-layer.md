@@ -1,7 +1,7 @@
 # ADR 0017 — Ibis como camada analítica compartilhada (`ficha-py`)
 
-**Status:** Proposed
-**Data:** 2026-05-07
+**Status:** Accepted (parcial — ver "Estado da implementação" abaixo)
+**Data:** 2026-05-07 (atualizado 2026-07-14)
 
 ## Contexto
 
@@ -134,18 +134,53 @@ notebooks/                   ← nova pasta com .ipynb pre-configurados
   vivendo com vocabulário divergente entre ETL escrita e notebook
   escrito sem o pacote.
 
-## Próximos passos
+## Estado da implementação (2026-07-14)
 
-1. Mergir o bootstrap PR (#24) — esse ADR fica `Proposed` até o pacote
-   nascer.
-2. PR separado: `feat(ficha-py): bootstrap package with Ibis tables + 1 helper`.
-   Inclui: estrutura do pacote, `connect.py`, `tables.py` mínimo (3 tables),
-   1 helper como prova (`socios_de(t, cnpj_base)`), CI próprio, publicação
-   no PyPI sob o mesmo namespace.
-3. PR separado: `refactor(etl): use ficha-py for joins; keep raw SQL at I/O`.
-   Migra `transform.py` pra construir `cnpjs`/`raizes`/`socios` via Ibis,
-   mantendo `read_csv` e `COPY TO PARQUET` em SQL bruto.
-4. PR separado: `docs(notebooks): scaffold Colab notebooks`. Adiciona
-   `notebooks/01-comecando.ipynb` e 2-3 mais, todos com `pip install ficha-py`
-   na primeira célula.
-5. Promover este ADR pra `Accepted` quando o passo 2 mergir.
+Feito, com um desvio deliberado do plano original de "passo 3":
+
+- ✅ **Pacote `ficha-py` cobre os 7 parquets + lookups.** `tables.py` tem refs
+  para `cnpjs`, `raizes`, `socios`, `enderecos`, `pessoas`, `cnpj_cnaes`,
+  `cnpj_contatos` e `lookup(con, kind)` genérico para os 6 lookups.
+  `connect_local`/`connect_ia` registram o conjunto completo (fail-fast se
+  faltar algum, espelhando o que `ficha_etl.manifest.build_snapshot_entry`
+  já exige). Dois helpers em `views.py`: `socios_de` (original) e
+  `filiais_de` (novo).
+- ✅ **CI próprio.** Job `ficha-py` em `.github/workflows/ci.yml`
+  (path-filtered, mesmo padrão do job `etl`).
+- ✅ **ETL importa `ficha_py` de verdade** — mas só para `write_lookup_parquets`
+  (`transform.py`), não para os joins pesados. `ficha-etl` depende de
+  `ficha-py` via path local editável (`[tool.uv.sources]`), não PyPI.
+- ✅ **Notebooks scaffold** em `notebooks/` (01-comecando, 02-busca-por-uf,
+  03-grafo-de-socios), todos usando a API pública de `ficha_py` contra
+  `connect_ia`.
+- ❌ **Não publicado no PyPI.** Requer conta/credenciais que este trabalho
+  não tinha acesso para provisionar. Fica como próximo passo caso o uso em
+  notebooks externos (fora deste monorepo) se torne real.
+
+### Por que os JOINs pesados (`cnpjs`/`raizes`) continuam em SQL bruto
+
+O plano original (passo 3, "migra `transform.py` pra construir `cnpjs`/
+`raizes`/`socios` via Ibis") **não foi executado como escrito** — decisão
+tomada na integração, não um adiamento por preguiça. Entre a redação deste
+ADR (2026-05-07) e sua aceitação, `docs/perf-plan-2026-05.md` documentou que
+o join de `cnpjs`/`raizes` tem histórico real de OOM em produção (teto de
+5.5 GiB por causa de `LIST(DISTINCT …)` não fazer spill), resolvido por uma
+sequência de ajustes muito específicos: `threads=1` como brake deliberado,
+chunk-per-ZIP com merge final, materialização de CTEs em `TEMP TABLE` na
+ordem exata que evita o OOM (`transform.py:833` em diante). Reescrever esse
+caminho via Ibis arriscaria reintroduzir exatamente o bug que várias PRs
+levaram para consertar, sem garantia de que o plano gerado pelo compilador
+Ibis preserve a mesma forma de execução.
+
+Isso é, na prática, uma extensão do princípio que o próprio ADR já
+reconhecia (SQL bruto fica no "I/O pesado" — `read_csv`/`COPY TO PARQUET`):
+joins que carregam ajuste fino de memória documentado por incidente real
+são tratados com a mesma cautela. `write_lookup_parquets` foi escolhido
+como primeiro alvo real de integração exatamente por ser o oposto: sem
+joins, sem histórico de OOM, baixo risco — prova que o padrão "ETL importa
+`ficha_py.views`" funciona, sem apostar a estabilidade do pipeline mensal
+nisso.
+
+Se uma futura migração dos joins pesados for tentada, deve vir com
+benchmark de memória comparando o plano gerado pelo Ibis contra o SQL
+manual atual, não como troca direta.

@@ -1,6 +1,6 @@
 [project]
 name = "ficha-py"
-version = "0.1.0"
+version = "0.2.0"
 description = "Python analytical layer for FICHA: Ibis expressions over CNPJ parquets on the Internet Archive."
 readme = "README.md"
 requires-python = ">=3.10"

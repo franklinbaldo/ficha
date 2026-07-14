@@ -11,10 +11,11 @@ O **FICHA** é um Data Lakehouse *serverless* e atômico para dados do CNPJ da R
 O projeto opera em duas camadas de acesso para máxima eficiência:
 
 ### 1. Camada Atômica (Key-Value Estático)
-*   **Formato:** Milhões de arquivos `{cnpj}.json` individuais, compactados em ZIPs por lote/estado.
+*   **Formato:** Um `companies.zip` por snapshot, com milhões de arquivos `{cnpj_base}.pb` (protobuf) individuais — um por raiz de CNPJ.
 *   **Tecnologia:** Explora a funcionalidade de "unzip" transparente do Internet Archive.
-*   **Uso:** Consultas diretas por CNPJ. O frontend busca a "ficha" da empresa via uma URL estática previsível.
-*   **Vantagem:** Custo zero de processamento no cliente; ideal para ferramentas de autocompletar e visualização rápida.
+*   **Uso:** Consultas diretas por CNPJ via URL estática previsível (`{item}/companies.zip/{XX}/{XXX}/{XXX}.pb`).
+*   **Vantagem:** Custo zero de processamento no cliente; protobuf é mais compacto que JSON equivalente.
+*   **Status:** implementado no ETL (`ficha_etl.pack`), com reader pronto no frontend (`web/src/lib/companies.ts`) — ainda não conectado à UI de busca.
 
 ### 2. Camada Analítica (Data Lakehouse)
 *   **Formato:** Apache Parquet otimizado e particionado.

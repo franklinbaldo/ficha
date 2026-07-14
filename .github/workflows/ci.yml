@@ -64,6 +64,9 @@ jobs:
           filters: |
             etl:
               - 'etl/**'
+              # ficha-py é dependência local editável do etl (ADR 0017) —
+              # uma mudança lá pode quebrar write_lookup_parquets sem tocar etl/**.
+              - 'ficha-py/**'
               - '.github/workflows/ci.yml'
 
       - name: Install uv
@@ -88,4 +91,46 @@ jobs:
 
       - name: Test
         if: steps.changes.outputs.etl == 'true'
+        run: uv run pytest tests
+
+  ficha-py:
+    name: ficha-py/
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ficha-py
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Detect changes in ficha-py/
+        id: changes
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            ficha-py:
+              - 'ficha-py/**'
+              - '.github/workflows/ci.yml'
+
+      - name: Install uv
+        if: steps.changes.outputs.ficha-py == 'true'
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        if: steps.changes.outputs.ficha-py == 'true'
+        run: uv python install 3.11
+
+      - name: Install
+        if: steps.changes.outputs.ficha-py == 'true'
+        run: uv sync --extra dev
+
+      - name: Lint
+        if: steps.changes.outputs.ficha-py == 'true'
+        run: |
+          uv run ruff check src tests
+          uv run ruff format --check src tests
+
+      - name: Test
+        if: steps.changes.outputs.ficha-py == 'true'
         run: uv run pytest tests

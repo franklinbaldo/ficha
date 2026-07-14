@@ -19,7 +19,13 @@ dependencies = [
     # (currently 6.31.1) — installing an older protobuf raises ImportError
     # at module load before any ETL code runs.
     "protobuf>=6.31.1",
+    # Camada analítica compartilhada (ADR 0017) — usada hoje em
+    # write_lookup_parquets; monorepo local path, não publicado no PyPI.
+    "ficha-py",
 ]
+
+[tool.uv.sources]
+ficha-py = { path = "../ficha-py", editable = true }
 
 [project.optional-dependencies]
 dev = [
