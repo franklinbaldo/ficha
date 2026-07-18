@@ -40,6 +40,11 @@ export const SnapshotEntrySchema = z.object({
     enderecos: FileEntrySchema.extend({ sort: z.array(z.string()) }).optional(),
     pessoas: FileEntrySchema.extend({ sort: z.array(z.string()) }).optional(),
     lookups: FileEntrySchema,
+    // Camada atômica (companies.zip, um protobuf por raiz). Opcional no schema
+    // para compatibilidade com snapshots antigos (2026-04 não a declara), mas
+    // exigida pelo ETL em snapshots novos (build_snapshot_entry). Quando
+    // presente, o frontend pode rotear lookup exato de CNPJ por ela.
+    companies_zip: FileEntrySchema.optional(),
   }),
   lookups: z.record(z.string(), z.object({ url: z.string().url() })).optional(),
 });

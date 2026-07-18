@@ -19,7 +19,7 @@ from pathlib import Path
 import duckdb
 import httpx
 
-from .mirror import lookup_parquet_url, lookups_url, parquet_url
+from .mirror import lookup_parquet_url, lookups_url, parquet_url, raw_file_url
 from .transform import _LOOKUP_KINDS
 
 log = logging.getLogger(__name__)
@@ -86,8 +86,16 @@ def build_snapshot_entry(month: str, output_dir: Path) -> dict:
     enderecos = output_dir / "enderecos.parquet"
     pessoas = output_dir / "pessoas.parquet"
     lookups = output_dir / "lookups.json"
+    # companies.zip é a camada atômica (ADR 0004/README) — parte do contrato
+    # do snapshot, não um extra opcional. Sem exigi-lo aqui, um run podia
+    # publicar todos os parquets, passar na verificação e virar `current`
+    # com a camada atômica ausente ou corrompida em silêncio. O `run` empacota
+    # companies.zip (passo 4/5) antes deste ponto, então exigir é seguro.
+    companies_zip = output_dir / "companies.zip"
 
-    for path in (cnpjs, cnpj_contatos, cnpj_cnaes, raizes, socios, enderecos, pessoas, lookups):
+    required = (cnpjs, cnpj_contatos, cnpj_cnaes, raizes, socios, enderecos, pessoas, lookups,
+                companies_zip)
+    for path in required:
         if not path.exists():
             raise FileNotFoundError(f"arquivo ausente para manifest: {path}")
 
@@ -134,6 +142,7 @@ def build_snapshot_entry(month: str, output_dir: Path) -> dict:
                 "sort": ["cpf_mascarado", "nome_normalizado"],
             },
             "lookups": _file_entry(lookups, lookups_url(month)),
+            "companies_zip": _file_entry(companies_zip, raw_file_url(month, "companies.zip")),
         },
         "lookups": {
             kind: {
@@ -156,12 +165,18 @@ def verify_snapshot_files(snapshot_entry: dict) -> list[str]:
     cada etapa anterior tenha reportado sucesso. Retorna a lista de URLs
     que falharam (vazia = tudo OK) — não levanta, quem chama decide.
     """
-    urls = [entry["url"] for entry in snapshot_entry["files"].values()]
-    urls += [entry["url"] for entry in snapshot_entry.get("lookups", {}).values()]
+    # (url, tamanho esperado). Entries de `files` trazem `size` (checável);
+    # os lookups por-kind só têm `url` (size=None → só checa o 200).
+    checks: list[tuple[str, int | None]] = [
+        (entry["url"], entry.get("size")) for entry in snapshot_entry["files"].values()
+    ]
+    checks += [
+        (entry["url"], entry.get("size")) for entry in snapshot_entry.get("lookups", {}).values()
+    ]
 
     broken: list[str] = []
     with httpx.Client(timeout=_HTTP_TIMEOUT, follow_redirects=True) as client:
-        for url in urls:
+        for url, expected_size in checks:
             try:
                 r = client.head(url)
             except httpx.HTTPError as exc:
@@ -171,6 +186,21 @@ def verify_snapshot_files(snapshot_entry: dict) -> list[str]:
             if r.status_code != 200:
                 log.warning("verify_snapshot_files: %s → HTTP %d", url, r.status_code)
                 broken.append(url)
+                continue
+            # Tamanho remoto == tamanho gravado no manifest: pega upload
+            # truncado / arquivo trocado que um simples 200 não detecta. Só
+            # falha em divergência positiva; Content-Length ausente (IA pode
+            # omitir em item ainda derivando) vira warning, não erro.
+            if expected_size is not None:
+                remote_len = r.headers.get("content-length")
+                if remote_len is None:
+                    log.warning("verify_snapshot_files: %s → sem Content-Length; size não verificado", url)
+                elif int(remote_len) != expected_size:
+                    log.warning(
+                        "verify_snapshot_files: %s → size remoto %s != manifest %d",
+                        url, remote_len, expected_size,
+                    )
+                    broken.append(url)
     return broken
 
 

@@ -25,13 +25,63 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Atualidade faz parte do produto: se o cron mensal falhar em silêncio,
-      # este check semanal fica vermelho em vez de deixar a base envelhecer
-      # despercebida (2026-04 ficou como current até julho sem nenhum alerta).
-      # Só no cron/dispatch: em PR bloquearia qualquer mudança por uma
-      # condição pré-existente que o PR não causou.
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+
+      - run: uv python install 3.11
+
+      - run: uv sync
+
+      # Diagnóstico independente do freshness: qual o mês mais recente que a
+      # RFB expõe upstream. Roda sempre e reporta — é o que responde "a fábrica
+      # quebrou ou é só atraso de publicação?". continue-on-error para não
+      # abortar o smoke de conectividade se o list-snapshots em si falhar.
+      - name: Upstream latest snapshot (list-snapshots)
+        if: always()
+        continue-on-error: true
+        run: |
+          {
+            echo "## Upstream (RFB) — list-snapshots"
+            echo ""
+            echo '```'
+            uv run ficha-etl list-snapshots 2>&1 | tee list-snapshots.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          LATEST=$(grep -Eo '[0-9]{4}-[0-9]{2}' list-snapshots.txt | sort | tail -n1 || true)
+          echo "Latest upstream month: \`${LATEST:-<none>}\`" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Run smoke check
+        id: smoke
+        if: always()
+        run: |
+          {
+            echo "## ETL smoke check"
+            echo ""
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          uv run ficha-etl smoke 2>&1 | tee smoke-output.txt | tee -a "$GITHUB_STEP_SUMMARY"
+          rc=${PIPESTATUS[0]}
+          {
+            echo '```'
+            echo ""
+            echo "Exit code: \`$rc\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+          {
+            echo 'output<<SMOKE_EOF'
+            cat smoke-output.txt
+            echo 'SMOKE_EOF'
+          } >> "$GITHUB_OUTPUT"
+          exit "$rc"
+
+      # Freshness roda por ÚLTIMO e com always(): o alarme de atraso do
+      # snapshot não deve mais impedir os diagnósticos de conectividade acima.
+      # Antes ele falhava PRIMEIRO e o smoke nunca rodava — exatamente no
+      # estado quebrado (manifest 3+ meses atrás) que mais precisa saber se a
+      # RFB/IA estão no ar ou se é só atraso de publicação.
       - name: Check manifest freshness
-        if: github.event_name != 'pull_request'
+        if: always() && github.event_name != 'pull_request'
         working-directory: .
         run: |
           python3 - <<'EOF'
@@ -56,37 +106,6 @@ jobs:
           if lag == 2:
               print(f"::warning::Snapshot {current} está 2 meses atrás do calendário — verifique se o próximo cron mensal roda com sucesso.")
           EOF
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v3
-        with:
-          enable-cache: true
-
-      - run: uv python install 3.11
-
-      - run: uv sync
-
-      - name: Run smoke check
-        id: smoke
-        run: |
-          {
-            echo "## ETL smoke check"
-            echo ""
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
-          uv run ficha-etl smoke 2>&1 | tee smoke-output.txt | tee -a "$GITHUB_STEP_SUMMARY"
-          rc=${PIPESTATUS[0]}
-          {
-            echo '```'
-            echo ""
-            echo "Exit code: \`$rc\`"
-          } >> "$GITHUB_STEP_SUMMARY"
-          {
-            echo 'output<<SMOKE_EOF'
-            cat smoke-output.txt
-            echo 'SMOKE_EOF'
-          } >> "$GITHUB_OUTPUT"
-          exit "$rc"
 
       - name: Comment debug output on PR (failure only)
         if: failure() && github.event_name == 'pull_request'
