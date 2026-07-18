@@ -237,6 +237,20 @@ Guidance atualizada:
 - **`cnpjs`:** migração viável e de baixo risco pela evidência; confirmar com o
   harness em CI na escala de produção (`FICHA_BENCH_ESTAB_ROWS=70000000`) antes
   de trocar o código de produção.
-- **`raizes`:** **continua sem migrar.** O OOM real de produção veio da agregação
-  `LIST(DISTINCT)` do raizes, que **não** foi medida aqui. Precisa do seu próprio
-  benchmark antes de qualquer troca — segue sendo o alvo arriscado.
+- **`raizes`:** benchmark próprio feito —
+  [`docs/ibis-raizes-benchmark-2026-07-18.md`](../ibis-raizes-benchmark-2026-07-18.md).
+  Migração **viável, com uma regra**: expressar as listas-distintas por grupo via
+  o pre-dedup de dois passos (`.distinct()` → `.group_by().agg(col.collect())`),
+  que compila para e benchmarka idêntico à produção (1.6 GB, 1.01× do spill).
+  **Nunca** via `collect(distinct=True)` idiomático — compila para
+  `ARRAY_AGG(DISTINCT)`, a mesma família DISTINCT-no-agregado que reproduz o OOM
+  histórico (o `LIST(DISTINCT)` naive estourou 4 GB a 1/10 da escala no
+  benchmark). Confirmar em CI na escala de produção antes de trocar o código.
+
+### Fecho — a "última peça" é uma regra, não um bloqueio
+
+Com os dois benchmarks, toda a camada analítica do ETL é migrável para Ibis:
+lookups ✅ e socios ✅ já migrados; `cnpjs` de baixo risco; `raizes` viável desde
+que a lista-distinta use o pre-dedup de dois passos, não o distinct-collect
+idiomático. Não há mais alvo "proibido" — há uma regra de como expressar a
+agregação distinta.

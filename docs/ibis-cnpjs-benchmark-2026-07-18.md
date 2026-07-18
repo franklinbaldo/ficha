@@ -62,8 +62,10 @@ GH Actions). `threads=1` em todos os casos.
 - **`cnpjs`:** migração para Ibis é viável e de baixo risco pela evidência local;
   confirmar com uma execução do harness em CI na escala de produção antes de
   trocar o código de produção.
-- **`raizes`:** **não migrar** sem um benchmark análogo focado na agregação
-  `LIST(DISTINCT)` — é onde o risco real de OOM mora.
+- **`raizes`:** benchmark próprio feito em
+  [`ibis-raizes-benchmark-2026-07-18.md`](ibis-raizes-benchmark-2026-07-18.md) —
+  viável desde que a lista-distinta use o pre-dedup de dois passos
+  (`.distinct().collect()`), **nunca** o `collect(distinct=True)` idiomático.
 - **`socios`:** já migrado para Ibis neste PR (sem histórico de OOM, join simples,
   equivalência bit-a-bit verificada em fixtures).
 
