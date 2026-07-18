@@ -857,10 +857,27 @@ def write_raizes_parquet_from_cnpjs(
       WHERE identificador_matriz_filial = '1'
 
     Output schema matches write_raizes_parquet exactly.
+
+    Queries em Ibis (ADR 0017), compiladas para SQL DuckDB — mesmo padrão de
+    `write_socios_parquet`/`write_lookup_parquets`. As FRONTEIRAS de
+    materialização (6 TEMP TABLEs na mesma ordem) são preservadas de propósito:
+    o perf-plan §1.1 mostra que a forma exata da execução — pre-dedup de dois
+    passos, materialização em etapas — é o que segura o OOM histórico do raizes.
+    Trocar isso por uma expressão Ibis única (um só SELECT) deixaria o DuckDB
+    decidir a materialização e poderia regredir a memória; por isso cada temp
+    table é uma expressão Ibis própria, materializada aqui. As listas distintas
+    usam `.distinct().collect()` (compila para o two-step seguro), NUNCA
+    `collect(distinct=True)` (ver docs/ibis-raizes-benchmark-2026-07-18.md).
+    Equivalência bit-a-bit coberta por test_write_raizes_from_cnpjs_matches_original.
     """
+    import ibis
+    from ibis import _
+
     output_path.parent.mkdir(parents=True, exist_ok=True)
     cnpjs_glob = str(cnpjs_path)
 
+    # _cnpjs_slim continua em SQL bruto: é I/O (read_parquet + projeção), não
+    # vocabulário analítico — mesmo princípio que mantém read_csv/COPY raw.
     # Materialize once — reading cnpjs.parquet multiple times via CTEs causes
     # repeated scans of a potentially large file; temp tables are read once.
     log.info("    materializing _cnpjs_slim from cnpjs.parquet...")
@@ -889,106 +906,118 @@ def write_raizes_parquet_from_cnpjs(
         """
     )
 
+    icon = ibis.duckdb.from_connection(con)
+
+    def _materialize(table: str, expr) -> None:
+        con.execute(
+            f"CREATE OR REPLACE TEMP TABLE {table} AS {ibis.to_sql(expr, dialect='duckdb')}"
+        )
+
+    def _dedup(col: str):
+        """1º passo do two-step W1.1: SELECT DISTINCT cnpj_base, <col> (não vazio).
+
+        O 2º passo (`.collect().sort()`) roda no agg abaixo e compila para
+        ARRAY_AGG + list_sort — a forma spillável de produção, NÃO
+        ARRAY_AGG(DISTINCT) (ver docs/ibis-raizes-benchmark-2026-07-18.md).
+        """
+        slim = icon.table("_cnpjs_slim")
+        return (
+            slim.filter(slim[col].notnull() & (slim[col] != "")).select("cnpj_base", col).distinct()
+        )
+
     # W1.1 pattern: two-step pre-dedup for list aggregates.
     log.info("    materializing _raizes_ufs / _raizes_cnaes pre-dedup tables...")
-    con.execute("""
-        CREATE OR REPLACE TEMP TABLE _raizes_ufs AS
-        SELECT DISTINCT cnpj_base, uf FROM _cnpjs_slim
-        WHERE uf IS NOT NULL AND uf <> ''
-    """)
-    con.execute("""
-        CREATE OR REPLACE TEMP TABLE _raizes_ufs_agg AS
-        SELECT cnpj_base, list_sort(list(uf)) AS ufs_atuacao
-        FROM _raizes_ufs GROUP BY cnpj_base
-    """)
-    con.execute("""
-        CREATE OR REPLACE TEMP TABLE _raizes_cnaes AS
-        SELECT DISTINCT cnpj_base, cnae_principal_codigo FROM _cnpjs_slim
-        WHERE cnae_principal_codigo IS NOT NULL AND cnae_principal_codigo <> ''
-    """)
-    con.execute("""
-        CREATE OR REPLACE TEMP TABLE _raizes_cnaes_agg AS
-        SELECT cnpj_base, list_sort(list(cnae_principal_codigo)) AS cnaes_principais_distintos
-        FROM _raizes_cnaes GROUP BY cnpj_base
-    """)
+    _materialize("_raizes_ufs", _dedup("uf"))
+    _materialize(
+        "_raizes_ufs_agg",
+        icon.table("_raizes_ufs").group_by("cnpj_base").agg(ufs_atuacao=_.uf.collect().sort()),
+    )
+    _materialize("_raizes_cnaes", _dedup("cnae_principal_codigo"))
+    _materialize(
+        "_raizes_cnaes_agg",
+        icon.table("_raizes_cnaes")
+        .group_by("cnpj_base")
+        .agg(cnaes_principais_distintos=_.cnae_principal_codigo.collect().sort()),
+    )
 
     log.info("    materializing _raizes_counts...")
-    con.execute("""
-        CREATE OR REPLACE TEMP TABLE _raizes_counts AS
-        SELECT
-            cnpj_base,
-            COUNT(*)::INTEGER AS qtd_estabelecimentos,
-            COUNT(*) FILTER (WHERE situacao_cadastral = '02')::INTEGER
-                AS qtd_estabelecimentos_ativos
-        FROM _cnpjs_slim
-        GROUP BY cnpj_base
-    """)
+    slim = icon.table("_cnpjs_slim")
+    _materialize(
+        "_raizes_counts",
+        slim.group_by("cnpj_base").agg(
+            qtd_estabelecimentos=_.count().cast("int32"),
+            qtd_estabelecimentos_ativos=_.count(where=_.situacao_cadastral == "02").cast("int32"),
+        ),
+    )
 
     log.info("    materializing _raizes_empresa (company fields per cnpj_base)...")
-    con.execute("""
-        CREATE OR REPLACE TEMP TABLE _raizes_empresa AS
-        SELECT
-            cnpj_base,
-            ANY_VALUE(razao_social) AS razao_social,
-            ANY_VALUE(razao_social_normalizada) AS razao_social_normalizada,
-            ANY_VALUE(natureza_juridica_codigo) AS natureza_juridica_codigo,
-            ANY_VALUE(natureza_juridica_descricao) AS natureza_juridica_descricao,
-            ANY_VALUE(capital_social) AS capital_social,
-            ANY_VALUE(porte_empresa) AS porte_empresa,
-            ANY_VALUE(ente_federativo_responsavel) AS ente_federativo_responsavel
-        FROM _cnpjs_slim
-        GROUP BY cnpj_base
-    """)
+    _empresa_fields = (
+        "razao_social",
+        "razao_social_normalizada",
+        "natureza_juridica_codigo",
+        "natureza_juridica_descricao",
+        "capital_social",
+        "porte_empresa",
+        "ente_federativo_responsavel",
+    )
+    _materialize(
+        "_raizes_empresa",
+        slim.group_by("cnpj_base").agg(**{f: slim[f].arbitrary() for f in _empresa_fields}),
+    )
 
     log.info("    materializing _raizes_matriz...")
-    con.execute("""
-        CREATE OR REPLACE TEMP TABLE _raizes_matriz AS
-        SELECT
-            cnpj_base,
-            data_inicio_atividade AS data_inicio_atividade_matriz,
-            uf AS uf_matriz,
-            municipio_codigo AS municipio_matriz_codigo,
-            municipio_nome AS municipio_matriz_nome,
-            cnae_principal_codigo AS cnae_principal_matriz_codigo,
-            cnae_principal_descricao AS cnae_principal_matriz_descricao
-        FROM _cnpjs_slim
-        WHERE identificador_matriz_filial = '1'
-        QUALIFY ROW_NUMBER() OVER (PARTITION BY cnpj_base ORDER BY cnpj) = 1
-    """)
+    # QUALIFY ROW_NUMBER() OVER (PARTITION BY cnpj_base ORDER BY cnpj) = 1 →
+    # row_number do Ibis é 0-based, então filtramos == 0.
+    _mf = slim.filter(slim.identificador_matriz_filial == "1")
+    _rn = ibis.row_number().over(group_by=_mf.cnpj_base, order_by=_mf.cnpj)
+    _materialize(
+        "_raizes_matriz",
+        _mf.mutate(_rn=_rn)
+        .filter(_._rn == 0)
+        .select(
+            "cnpj_base",
+            data_inicio_atividade_matriz=_.data_inicio_atividade,
+            uf_matriz=_.uf,
+            municipio_matriz_codigo=_.municipio_codigo,
+            municipio_matriz_nome=_.municipio_nome,
+            cnae_principal_matriz_codigo=_.cnae_principal_codigo,
+            cnae_principal_matriz_descricao=_.cnae_principal_descricao,
+        ),
+    )
 
     # Drop the wide slim table now that all temp aggregates are built.
     con.execute("DROP TABLE IF EXISTS _cnpjs_slim")
 
     log.info("    joining + writing raizes.parquet from cnpjs...")
+    emp = icon.table("_raizes_empresa")
+    cnt = icon.table("_raizes_counts")
+    ufs = icon.table("_raizes_ufs_agg")
+    cnaes = icon.table("_raizes_cnaes_agg")
+    mat = icon.table("_raizes_matriz")
+    _empty = ibis.literal([], type="array<string>")
+    raizes_expr = (
+        emp.left_join(cnt, emp.cnpj_base == cnt.cnpj_base)
+        .left_join(ufs, emp.cnpj_base == ufs.cnpj_base)
+        .left_join(cnaes, emp.cnpj_base == cnaes.cnpj_base)
+        .left_join(mat, emp.cnpj_base == mat.cnpj_base)
+        .select(
+            "cnpj_base",
+            *_empresa_fields,
+            qtd_estabelecimentos=cnt.qtd_estabelecimentos.coalesce(0),
+            qtd_estabelecimentos_ativos=cnt.qtd_estabelecimentos_ativos.coalesce(0),
+            ufs_atuacao=ufs.ufs_atuacao.coalesce(_empty),
+            cnaes_principais_distintos=cnaes.cnaes_principais_distintos.coalesce(_empty),
+            data_inicio_atividade_matriz=mat.data_inicio_atividade_matriz,
+            uf_matriz=mat.uf_matriz,
+            municipio_matriz_codigo=mat.municipio_matriz_codigo,
+            municipio_matriz_nome=mat.municipio_matriz_nome,
+            cnae_principal_matriz_codigo=mat.cnae_principal_matriz_codigo,
+            cnae_principal_matriz_descricao=mat.cnae_principal_matriz_descricao,
+        )
+    )
     con.execute(
-        f"""
-        COPY (
-            SELECT
-                emp.cnpj_base,
-                emp.razao_social,
-                emp.razao_social_normalizada,
-                emp.natureza_juridica_codigo,
-                emp.natureza_juridica_descricao,
-                emp.capital_social,
-                emp.porte_empresa,
-                emp.ente_federativo_responsavel,
-                COALESCE(cnt.qtd_estabelecimentos, 0) AS qtd_estabelecimentos,
-                COALESCE(cnt.qtd_estabelecimentos_ativos, 0) AS qtd_estabelecimentos_ativos,
-                COALESCE(ufs.ufs_atuacao, []) AS ufs_atuacao,
-                COALESCE(cnaes.cnaes_principais_distintos, []) AS cnaes_principais_distintos,
-                matriz.data_inicio_atividade_matriz,
-                matriz.uf_matriz,
-                matriz.municipio_matriz_codigo,
-                matriz.municipio_matriz_nome,
-                matriz.cnae_principal_matriz_codigo,
-                matriz.cnae_principal_matriz_descricao
-            FROM _raizes_empresa emp
-            LEFT JOIN _raizes_counts cnt ON cnt.cnpj_base = emp.cnpj_base
-            LEFT JOIN _raizes_ufs_agg ufs ON ufs.cnpj_base = emp.cnpj_base
-            LEFT JOIN _raizes_cnaes_agg cnaes ON cnaes.cnpj_base = emp.cnpj_base
-            LEFT JOIN _raizes_matriz matriz ON matriz.cnpj_base = emp.cnpj_base
-        ) TO '{output_path}' (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 200000)
-        """
+        f"COPY ({ibis.to_sql(raizes_expr, dialect='duckdb')}) "
+        f"TO '{output_path}' (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 200000)"
     )
 
     # Free all temp tables.
