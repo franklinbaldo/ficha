@@ -15,6 +15,7 @@ Mirror caído = bloqueante. Upstream caído = warning não-bloqueante.
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import dataclass
 
 import httpx
@@ -24,6 +25,12 @@ from . import mirror, upstream
 log = logging.getLogger(__name__)
 
 _HTTP_TIMEOUT = httpx.Timeout(connect=15.0, read=30.0, write=15.0, pool=15.0)
+
+# O Internet Archive emite 5xx/429 transitórios (derive assíncrono, rate-limit —
+# ver comentários em manifest.py e vision-blockers-2026-07). Um único HEAD 503
+# não deve alarmar como outage bloqueante: tenta algumas vezes antes de falhar.
+_MIRROR_ATTEMPTS = 3
+_MIRROR_BACKOFF_S = 2.0  # linear: espera 2s, depois 4s entre tentativas
 
 
 @dataclass
@@ -71,12 +78,39 @@ def _check_upstream(client: httpx.Client) -> tuple[bool, str]:
     )
 
 
-def _check_mirror(client: httpx.Client) -> tuple[bool, str]:
-    url = mirror.health_url()
+def _mirror_head_once(client: httpx.Client, url: str) -> tuple[bool, str, bool]:
+    """Um HEAD. Retorna (ok, detail, retryable).
+
+    retryable=True quando o erro é transitório (falha de transporte, 5xx ou 429)
+    e vale a pena tentar de novo; 4xx (exceto 429) é definitivo.
+    """
     try:
         r = client.head(url)
     except httpx.HTTPError as exc:
-        return False, f"{url} → {exc}"
+        return False, f"{url} → {exc}", True
     if 200 <= r.status_code < 400:
-        return True, f"{url} → HTTP {r.status_code}"
-    return False, f"{url} → HTTP {r.status_code}"
+        return True, f"{url} → HTTP {r.status_code}", False
+    retryable = r.status_code >= 500 or r.status_code == 429
+    return False, f"{url} → HTTP {r.status_code}", retryable
+
+
+def _check_mirror(client: httpx.Client) -> tuple[bool, str]:
+    """HEAD em archive.org/ com retry para erros transitórios.
+
+    Mirror caído é bloqueante (SmokeReport.blocking_failure), então um 503
+    transitório do IA não pode virar falha de smoke por si só — senão o check
+    semanal fica vermelho por um soluço de derive/rate-limit. Falha apenas se
+    todas as tentativas falharem ou o erro for definitivo (4xx que não 429).
+    """
+    url = mirror.health_url()
+    detail = ""
+    for attempt in range(1, _MIRROR_ATTEMPTS + 1):
+        ok, detail, retryable = _mirror_head_once(client, url)
+        if ok:
+            return True, detail + (f" (após {attempt} tentativas)" if attempt > 1 else "")
+        if not retryable:
+            return False, detail
+        if attempt < _MIRROR_ATTEMPTS:
+            log.warning("mirror smoke: %s — tentativa %d/%d", detail, attempt, _MIRROR_ATTEMPTS)
+            time.sleep(_MIRROR_BACKOFF_S * attempt)
+    return False, f"{detail} (após {_MIRROR_ATTEMPTS} tentativas)"
