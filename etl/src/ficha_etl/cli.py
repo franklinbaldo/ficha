@@ -19,6 +19,7 @@ from . import (
     upload as upload_mod,
     upstream,
 )
+from .progress import make_progress
 
 log = logging.getLogger(__name__)
 
@@ -447,111 +448,132 @@ def _cmd_run(
     if output_dir is None:
         output_dir = cache_dir / month / "output"
 
-    if not skip_upload:
-        access_key = os.environ.get("IA_ACCESS_KEY", "")
-        secret_key = os.environ.get("IA_SECRET_KEY", "")
-        if not access_key or not secret_key:
-            print(
-                "error: IA_ACCESS_KEY e IA_SECRET_KEY devem estar definidos para upload\n"
-                "       use --skip-upload para rodar sem credenciais",
-                file=sys.stderr,
-            )
-            return 1
+    progress = make_progress()
+    progress.start()
+    stage = progress.add_task("run", total=5)
 
-        # ── 1. Stream ZIPs → IA (zero disco) ────────────────────────────────
-        log.info("[run 1/5] stream ZIPs RFB → IA (zero disco)")
-        try:
-            upload_mod.stream_raw_zips_to_ia(month, access_key=access_key, secret_key=secret_key)
-        except Exception as exc:
-            print(f"error: stream ZIPs falhou: {exc}", file=sys.stderr)
-            return 1
-    else:
-        log.info("[run 1/5] stream ignorado (--skip-upload) — transform usará RFB direto")
+    def _advance(description: str) -> None:
+        progress.update(stage, description=description, advance=1)
 
-    # ── 2. Transform ─────────────────────────────────────────────────────────
-    # Com upload: fetcher chain encontra ZIPs no IA (rápido).
-    # Sem upload: fetcher chain vai direto na RFB.
-    log.info("[run 2/5] transform %s → %s", month, output_dir)
     try:
-        transform.transform_snapshot(
-            month,
-            cache_dir=cache_dir,
-            output_dir=output_dir,
-            skip_unimplemented=False,
-            verify=verify,
-            verify_sample_size=verify_sample_size,
+        if not skip_upload:
+            access_key = os.environ.get("IA_ACCESS_KEY", "")
+            secret_key = os.environ.get("IA_SECRET_KEY", "")
+            if not access_key or not secret_key:
+                print(
+                    "error: IA_ACCESS_KEY e IA_SECRET_KEY devem estar definidos para upload\n"
+                    "       use --skip-upload para rodar sem credenciais",
+                    file=sys.stderr,
+                )
+                return 1
+
+            # ── 1. Stream ZIPs → IA (zero disco) ────────────────────────
+            log.info("[run 1/5] stream ZIPs RFB → IA (zero disco)")
+            try:
+                upload_mod.stream_raw_zips_to_ia(
+                    month, access_key=access_key, secret_key=secret_key
+                )
+            except Exception as exc:
+                print(f"error: stream ZIPs falhou: {exc}", file=sys.stderr)
+                return 1
+        else:
+            log.info("[run 1/5] stream ignorado (--skip-upload) — transform usará RFB direto")
+        _advance("[run 2/5] transform")
+
+        # ── 2. Transform ─────────────────────────────────────────────────────
+        # Com upload: fetcher chain encontra ZIPs no IA (rápido).
+        # Sem upload: fetcher chain vai direto na RFB.
+        log.info("[run 2/5] transform %s → %s", month, output_dir)
+        try:
+            transform.transform_snapshot(
+                month,
+                cache_dir=cache_dir,
+                output_dir=output_dir,
+                skip_unimplemented=False,
+                verify=verify,
+                verify_sample_size=verify_sample_size,
+                progress=progress,
+            )
+        except Exception as exc:
+            print(f"error: transform failed: {exc}", file=sys.stderr)
+            return 1
+        _advance("[run 3/5] upload outputs")
+
+        # ── 3. Upload parquets ───────────────────────────────────────────────
+        if not skip_upload:
+            log.info("[run 3/5] upload outputs (parquets + lookups.json) → IA")
+            try:
+                upload_mod.upload_outputs(
+                    month, output_dir, access_key=access_key, secret_key=secret_key
+                )
+            except Exception as exc:
+                print(f"error: upload outputs falhou: {exc}", file=sys.stderr)
+                return 1
+        else:
+            log.info("[run 3/5] upload ignorado (--skip-upload)")
+        _advance("[run 4/5] pack companies.zip")
+
+        # ── 4. Pack companies.zip ─────────────────────────────────────────────
+        companies_zip = output_dir / "companies.zip"
+        log.info("[run 4/5] pack companies.zip ← parquets locais → %s", companies_zip)
+        try:
+            result = pack_mod.pack_from_parquets(
+                month, companies_zip, parquets_base=str(output_dir)
+            )
+        except Exception as exc:
+            print(f"error: pack companies.zip falhou: {exc}", file=sys.stderr)
+            return 1
+        log.info(
+            "[run 4/5] pack OK — %d companies, %.1f MB",
+            result["count"],
+            result["size_bytes"] / 1e6,
         )
-    except Exception as exc:
-        print(f"error: transform failed: {exc}", file=sys.stderr)
-        return 1
 
-    # ── 3. Upload parquets ───────────────────────────────────────────────────
-    if not skip_upload:
-        log.info("[run 3/5] upload outputs (parquets + lookups.json) → IA")
+        if not skip_upload:
+            log.info("[run 4/5] upload companies.zip → IA")
+            try:
+                upload_mod.upload_companies_zip(
+                    month, companies_zip, access_key=access_key, secret_key=secret_key
+                )
+            except Exception as exc:
+                print(f"error: upload companies.zip falhou: {exc}", file=sys.stderr)
+                return 1
+        _advance("[run 5/5] manifest")
+
+        # ── 5. Manifest ───────────────────────────────────────────────────────
+        log.info("[run 5/5] atualizar manifest → %s", manifest_path)
         try:
-            upload_mod.upload_outputs(
-                month, output_dir, access_key=access_key, secret_key=secret_key
-            )
+            entry = manifest_mod.build_snapshot_entry(month, output_dir)
         except Exception as exc:
-            print(f"error: upload outputs falhou: {exc}", file=sys.stderr)
+            print(f"error: manifest build falhou: {exc}", file=sys.stderr)
             return 1
-    else:
-        log.info("[run 3/5] upload ignorado (--skip-upload)")
 
-    # ── 4. Pack companies.zip ────────────────────────────────────────────────
-    companies_zip = output_dir / "companies.zip"
-    log.info("[run 4/5] pack companies.zip ← parquets locais → %s", companies_zip)
-    try:
-        result = pack_mod.pack_from_parquets(month, companies_zip, parquets_base=str(output_dir))
-    except Exception as exc:
-        print(f"error: pack companies.zip falhou: {exc}", file=sys.stderr)
-        return 1
-    log.info(
-        "[run 4/5] pack OK — %d companies, %.1f MB",
-        result["count"],
-        result["size_bytes"] / 1e6,
-    )
+        if not skip_upload:
+            # Local existence (build_snapshot_entry) e upload HTTP OK
+            # (upload_outputs) não garantem que o arquivo segue baixável — IA
+            # processa uploads assincronamente. Sem essa checagem o manifest
+            # pode acabar publicado com URLs 404 (foi o que aconteceu com
+            # cnpj_contatos/cnpj_cnaes em 2026-04). Só faz sentido com
+            # --skip-upload desligado: em dry-run local nada foi upado ainda.
+            log.info("[run 5/5] verificando que todos os arquivos publicados respondem 200")
+            broken = manifest_mod.verify_snapshot_files(entry)
+            if broken:
+                print(
+                    "error: manifest não publicado — arquivos declarados mas inacessíveis no IA:\n"
+                    + "\n".join(f"  {u}" for u in broken),
+                    file=sys.stderr,
+                )
+                return 1
 
-    if not skip_upload:
-        log.info("[run 4/5] upload companies.zip → IA")
         try:
-            upload_mod.upload_companies_zip(
-                month, companies_zip, access_key=access_key, secret_key=secret_key
-            )
+            manifest_mod.update_manifest(manifest_path, entry)
         except Exception as exc:
-            print(f"error: upload companies.zip falhou: {exc}", file=sys.stderr)
+            print(f"error: manifest update falhou: {exc}", file=sys.stderr)
             return 1
 
-    # ── 5. Manifest ─────────────────────────────────────────────────────────
-    log.info("[run 5/5] atualizar manifest → %s", manifest_path)
-    try:
-        entry = manifest_mod.build_snapshot_entry(month, output_dir)
-    except Exception as exc:
-        print(f"error: manifest build falhou: {exc}", file=sys.stderr)
-        return 1
-
-    if not skip_upload:
-        # Local existence (build_snapshot_entry) e upload HTTP OK
-        # (upload_outputs) não garantem que o arquivo segue baixável — IA
-        # processa uploads assincronamente. Sem essa checagem o manifest
-        # pode acabar publicado com URLs 404 (foi o que aconteceu com
-        # cnpj_contatos/cnpj_cnaes em 2026-04). Só faz sentido com
-        # --skip-upload desligado: em dry-run local nada foi upado ainda.
-        log.info("[run 5/5] verificando que todos os arquivos publicados respondem 200")
-        broken = manifest_mod.verify_snapshot_files(entry)
-        if broken:
-            print(
-                "error: manifest não publicado — arquivos declarados mas inacessíveis no IA:\n"
-                + "\n".join(f"  {u}" for u in broken),
-                file=sys.stderr,
-            )
-            return 1
-
-    try:
-        manifest_mod.update_manifest(manifest_path, entry)
-    except Exception as exc:
-        print(f"error: manifest update falhou: {exc}", file=sys.stderr)
-        return 1
+        progress.update(stage, description="[run 5/5] done", completed=5)
+    finally:
+        progress.stop()
 
     companies_size_mb = companies_zip.stat().st_size / 1e6 if companies_zip.exists() else 0
     print(

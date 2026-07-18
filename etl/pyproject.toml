@@ -22,6 +22,9 @@ dependencies = [
     # Camada analítica compartilhada (ADR 0017) — usada hoje em
     # write_lookup_parquets; monorepo local path, não publicado no PyPI.
     "ficha-py",
+    # Progress bars for `ficha-etl run`/`transform_snapshot` — auto-disabled
+    # when stdout isn't a terminal, so CI logs are unaffected.
+    "rich>=13.7.0",
 ]
 
 [tool.uv.sources]

@@ -20,8 +20,10 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import duckdb
+from rich.progress import Progress
 
 from . import fetcher as fetcher_mod
+from .progress import make_progress
 from .sources import FileKind, canonical_inventory, is_valid_month
 
 log = logging.getLogger(__name__)
@@ -130,12 +132,17 @@ def extract_all(
     month: str,
     chain: fetcher_mod.ChainedFetcher,
     extract_dir: Path,
+    *,
+    progress: Progress | None = None,
 ) -> list[ExtractedFile]:
     """Resolve cada ZIP via chain, extrai pra `extract_dir/{kind}/`.
 
     RFB publica exatamente 1 CSV por ZIP. A invariante é checada explicitamente
     aqui — se RFB mudar e empacotar arquivos extras (ex.: checksum), falhamos
     loud em vez de pegar silenciosamente o primeiro entry.
+
+    `progress`: barra de progresso já iniciada (rich) pra reusar entre
+    chamadas dentro do mesmo `run`; se omitido, cria (e fecha) a sua própria.
     """
     if not is_valid_month(month):
         raise ValueError(f"month must be YYYY-MM, got {month!r}")
@@ -153,30 +160,40 @@ def extract_all(
     # ── Extração sequencial (I/O local, rápido) ─────────────────────────────
     total = len(inventory)
     out: list[ExtractedFile] = []
-    for i, spec in enumerate(inventory, 1):
-        t0 = time.monotonic()
-        zip_path = zip_paths[spec.name]
-        kind_dir = extract_dir / spec.kind
-        extracted = extract_zip(zip_path, kind_dir)
-        files = [p for p in extracted if p.is_file()]
-        if not files:
-            raise RuntimeError(f"zip {spec.name!r} contained no files")
-        if len(files) > 1:
-            raise RuntimeError(
-                f"zip {spec.name!r} expected exactly 1 CSV, got {len(files)}: "
-                f"{[p.name for p in files]}"
+    owns_progress = progress is None
+    progress = progress or make_progress()
+    if owns_progress:
+        progress.start()
+    task_id = progress.add_task("extract ZIPs", total=total)
+    try:
+        for i, spec in enumerate(inventory, 1):
+            t0 = time.monotonic()
+            zip_path = zip_paths[spec.name]
+            kind_dir = extract_dir / spec.kind
+            extracted = extract_zip(zip_path, kind_dir)
+            files = [p for p in extracted if p.is_file()]
+            if not files:
+                raise RuntimeError(f"zip {spec.name!r} contained no files")
+            if len(files) > 1:
+                raise RuntimeError(
+                    f"zip {spec.name!r} expected exactly 1 CSV, got {len(files)}: "
+                    f"{[p.name for p in files]}"
+                )
+            csv_path = files[0]
+            size_mb = csv_path.stat().st_size / 1024 / 1024
+            log.info(
+                "[%d/%d] extracted %s → %.1f MB CSV (%.1fs)",
+                i,
+                total,
+                spec.name,
+                size_mb,
+                time.monotonic() - t0,
             )
-        csv_path = files[0]
-        size_mb = csv_path.stat().st_size / 1024 / 1024
-        log.info(
-            "[%d/%d] extracted %s → %.1f MB CSV (%.1fs)",
-            i,
-            total,
-            spec.name,
-            size_mb,
-            time.monotonic() - t0,
-        )
-        out.append(ExtractedFile(kind=spec.kind, zip_name=spec.name, csv_path=csv_path))
+            out.append(ExtractedFile(kind=spec.kind, zip_name=spec.name, csv_path=csv_path))
+            progress.update(task_id, description=f"extract {spec.name}", advance=1)
+    finally:
+        if owns_progress:
+            progress.stop()
     return out
 
 
@@ -1489,12 +1506,17 @@ def transform_snapshot(
     skip_unimplemented: bool = True,
     verify: bool = False,
     verify_sample_size: int = 100,
+    progress: Progress | None = None,
 ) -> None:
     """Orquestrador: resolve → extract → load → write outputs.
 
     Se `verify=True`, roda `assert_roundtrip` após escrever `cnpjs.parquet`
     como gate de qualidade (ADR 0009): falha se campos amostrados do
     Parquet não baterem com os dados originais já carregados no DuckDB.
+
+    `progress`: barra de progresso já iniciada (rich) pra reusar entre
+    `_cmd_run`'s outer stages e as 4 fases internas; se omitido, cria (e
+    fecha) a sua própria.
     """
     if not is_valid_month(month):
         raise ValueError(f"month must be YYYY-MM, got {month!r}")
@@ -1502,11 +1524,21 @@ def transform_snapshot(
     chain = chain or fetcher_mod.default_chain(month, cache_dir=cache_dir)
     extract_dir = cache_dir / month / "extracted"
 
+    owns_progress = progress is None
+    progress = progress or make_progress()
+    if owns_progress:
+        progress.start()
+    # 3 macro checkpoints, independent of the internal "PHASE X/4" log
+    # labels below (phase 4 there is a verify sub-step nested inside 3,
+    # not a fourth top-level stage).
+    phase_task = progress.add_task("transform: extract", total=3)
+
     t_total = time.monotonic()
     log.info("=== PHASE 1/4: extract 37 ZIPs for %s ===", month)
     t0 = time.monotonic()
-    extracted = extract_all(month, chain, extract_dir)
+    extracted = extract_all(month, chain, extract_dir, progress=progress)
     log.info("=== PHASE 1/4 done in %.0fs ===", time.monotonic() - t0)
+    progress.update(phase_task, description="transform: load into DuckDB", advance=1)
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1556,6 +1588,7 @@ def transform_snapshot(
         # Tabelas grandes
         load_main_tables_into_duckdb(con, extracted)
         log.info("=== PHASE 2/4 done in %.0fs ===", time.monotonic() - t0)
+        progress.update(phase_task, description="transform: write parquets", advance=1)
 
         # Collect estabelecimento CSV paths for the chunked cnpjs write.
         # These must be gathered before any CSV deletion below.
@@ -1745,11 +1778,14 @@ def transform_snapshot(
                     raise
 
         log.info("=== PHASE 3/4 done in %.0fs ===", time.monotonic() - t0)
+        progress.update(phase_task, description="transform: done", completed=3)
 
         log.info("transform_snapshot total: %.0fs", time.monotonic() - t_total)
     finally:
         con.close()
         db_path.unlink(missing_ok=True)
+        if owns_progress:
+            progress.stop()
 
 
 # -----------------------------------------------------------------------------
