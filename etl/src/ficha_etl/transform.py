@@ -755,10 +755,27 @@ def write_cnpjs_parquet_chunked(
     """Write cnpjs.parquet by loading one estabelecimento CSV at a time.
 
     Pre-condition: empresa, simples, all lookups already in con.
-    Each chunk: load CSV → JOIN → write chunk parquet → DROP.
-    Final merge: read_parquet(all chunks) ORDER BY cnpj → output_path.
+    Each chunk: load CSV → pre-filter empresa/simples → JOIN → write chunk
+    parquet → DROP. Final merge: read_parquet(all chunks) ORDER BY cnpj →
+    output_path.
     Peak RAM: ~5 GB vs ~70 GB for full-load approach.
+
+    Each chunk pre-filters `empresa`/`simples` down to just the
+    `cnpj_basico` values present in that chunk's `estabelecimento` table
+    (Ibis `semi_join`, ADR 0017) before joining. Without this, each chunk's
+    JOIN hashes the *full* unfiltered empresa (~70M rows) / simples (~50M
+    rows) — the same failure mode `write_cnpjs_parquet`'s digit-bucket
+    pre-filter exists to avoid (see the W1.3 comment above it: "bucket 0
+    still hashed the full 67M-row empresa... hitting the same 95 GiB
+    temp-spill exhaustion"). This chunked writer never got that fix; it hit
+    the identical OOM at production scale (run 29661697810: 73.9/73.9 GiB
+    temp-spill on chunk 0/10) since prod's RFB data volume finally made a
+    single unfiltered chunk-join expensive enough to blow the disk. A
+    semi-join (not the bucket digit-match) is used here because chunks are
+    RFB's own arbitrary ZIP split, not aligned to any `cnpj_basico` prefix.
     """
+    import ibis
+
     output_path.parent.mkdir(parents=True, exist_ok=True)
     # Build _cnae_map once — same logic as write_cnpjs_parquet.
     con.execute(
@@ -771,6 +788,13 @@ def write_cnpjs_parquet_chunked(
         )
         """
     )
+    icon = ibis.duckdb.from_connection(con)
+
+    def _materialize(table: str, expr) -> None:
+        con.execute(
+            f"CREATE OR REPLACE TEMP TABLE {table} AS {ibis.to_sql(expr, dialect='duckdb')}"
+        )
+
     parts_dir = output_path.parent / f"{output_path.stem}.parts"
     if parts_dir.exists():
         shutil.rmtree(parts_dir)
@@ -795,11 +819,18 @@ def write_cnpjs_parquet_chunked(
                 con.execute("DROP TABLE IF EXISTS estabelecimento")
                 continue
 
+            # Pre-filter empresa/simples to this chunk's cnpj_basico values
+            # (semi-join: left table's own columns, no fan-out, one row per
+            # match) BEFORE the big projection JOIN below.
+            est = icon.table("estabelecimento")
+            _materialize("_emp_c", icon.table("empresa").semi_join(est, "cnpj_basico"))
+            _materialize("_smp_c", icon.table("simples").semi_join(est, "cnpj_basico"))
+
             part_path = parts_dir / f"chunk-{i}.parquet"
             # order_by=False: the global merge step sorts by cnpj, so
             # per-chunk ORDER BY is unnecessary and wasteful.
             _select_sql = _cnpjs_chunk_select_sql(
-                "estabelecimento", "empresa", "simples", "_cnae_map", order_by=False
+                "estabelecimento", "_emp_c", "_smp_c", "_cnae_map", order_by=False
             )
             con.execute(
                 f"""
@@ -812,6 +843,8 @@ def write_cnpjs_parquet_chunked(
             written_parts.append(part_path)
 
             con.execute("DROP TABLE IF EXISTS estabelecimento")
+            con.execute("DROP TABLE IF EXISTS _emp_c")
+            con.execute("DROP TABLE IF EXISTS _smp_c")
 
         if not written_parts:
             # No chunks written — produce an empty parquet with the right schema.
@@ -838,6 +871,8 @@ def write_cnpjs_parquet_chunked(
     finally:
         con.execute("DROP TABLE IF EXISTS _cnae_map")
         con.execute("DROP TABLE IF EXISTS estabelecimento")
+        con.execute("DROP TABLE IF EXISTS _emp_c")
+        con.execute("DROP TABLE IF EXISTS _smp_c")
         # Clean up parts dir on error (success path already removed it above).
         shutil.rmtree(parts_dir, ignore_errors=True)
 
