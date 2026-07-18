@@ -242,6 +242,17 @@ def _create_table_from_csvs(
     if attempts[0] != ("utf-8", True):
         attempts.append(("utf-8", True))
 
+    # parallel=false is load-bearing, not a perf knob. DuckDB's parallel CSV
+    # scanner range-splits a single large file across byte offsets; with
+    # null_padding=true it cannot recover ragged rows whose fields contain a
+    # quoted newline that straddles a split boundary, and aborts:
+    #   "The parallel scanner does not support null_padding in conjunction
+    #    with quoted new lines."
+    # This is data-position-dependent, so it hid until the 2026-07 run reached
+    # the chunked cnpjs write, where estabelecimento is read one CSV at a time
+    # (single-file → intra-file split) instead of as a 10-file list. threads=1
+    # is already the norm here (see PRAGMA call site), so disabling the parallel
+    # reader costs nothing and makes the load deterministic across both paths.
     for encoding, ignore_errors in attempts:
         try:
             con.execute(
@@ -257,6 +268,7 @@ def _create_table_from_csvs(
                     null_padding=true,
                     strict_mode=false,
                     max_line_size=16777216,
+                    parallel=false,
                     ignore_errors={"true" if ignore_errors else "false"}
                 )
                 """
