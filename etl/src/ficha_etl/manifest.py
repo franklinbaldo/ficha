@@ -93,8 +93,17 @@ def build_snapshot_entry(month: str, output_dir: Path) -> dict:
     # companies.zip (passo 4/5) antes deste ponto, então exigir é seguro.
     companies_zip = output_dir / "companies.zip"
 
-    required = (cnpjs, cnpj_contatos, cnpj_cnaes, raizes, socios, enderecos, pessoas, lookups,
-                companies_zip)
+    required = (
+        cnpjs,
+        cnpj_contatos,
+        cnpj_cnaes,
+        raizes,
+        socios,
+        enderecos,
+        pessoas,
+        lookups,
+        companies_zip,
+    )
     for path in required:
         if not path.exists():
             raise FileNotFoundError(f"arquivo ausente para manifest: {path}")
@@ -194,11 +203,15 @@ def verify_snapshot_files(snapshot_entry: dict) -> list[str]:
             if expected_size is not None:
                 remote_len = r.headers.get("content-length")
                 if remote_len is None:
-                    log.warning("verify_snapshot_files: %s → sem Content-Length; size não verificado", url)
+                    log.warning(
+                        "verify_snapshot_files: %s → sem Content-Length; size não verificado", url
+                    )
                 elif int(remote_len) != expected_size:
                     log.warning(
                         "verify_snapshot_files: %s → size remoto %s != manifest %d",
-                        url, remote_len, expected_size,
+                        url,
+                        remote_len,
+                        expected_size,
                     )
                     broken.append(url)
     return broken
