@@ -73,6 +73,20 @@ jobs:
             cat smoke-output.txt
             echo 'SMOKE_EOF'
           } >> "$GITHUB_OUTPUT"
+          # Em pull_request o smoke é INFORMATIVO, não bloqueante: ele bate em
+          # serviços externos vivos (RFB, archive.org) e um PR de código de ETL
+          # não muda a disponibilidade deles — gatear o merge nisso é o mesmo
+          # anti-padrão que o check de freshness já evita ('condição
+          # pré-existente que o PR não causou'). Regressões de código do próprio
+          # smoke são cobertas pelos unit tests no job etl/. No cron semanal e
+          # no workflow_dispatch o mirror caído CONTINUA bloqueante (é o alerta
+          # operacional que queremos).
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            if [ "$rc" -ne 0 ]; then
+              echo "::notice::smoke informativo em PR (rc=$rc); disponibilidade externa não bloqueia o merge"
+            fi
+            exit 0
+          fi
           exit "$rc"
 
       # Freshness roda por ÚLTIMO e com always(): o alarme de atraso do
