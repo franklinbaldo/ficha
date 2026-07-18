@@ -514,16 +514,6 @@ def _date_expr(col: str) -> str:
     )
 
 
-_TIPO_SOCIO_DESCRICAO_SQL = """
-CASE soc.identificador_socio
-    WHEN '1' THEN 'PJ'
-    WHEN '2' THEN 'PF'
-    WHEN '3' THEN 'estrangeiro'
-    ELSE ''
-END
-"""
-
-
 def _cnpjs_chunk_select_sql(  # noqa: PLR0913
     est_alias: str,
     emp_alias: str,
@@ -1405,6 +1395,68 @@ def write_raizes_parquet(
         con.execute(f"DROP TABLE IF EXISTS {tbl}")
 
 
+def _socios_select_sql(con: duckdb.DuckDBPyConnection) -> str:
+    """Compila o SELECT de `socios.parquet` a partir de uma expressão Ibis.
+
+    A tabela `socio` (bruta RFB) + `lookup_qualificacoes`/`lookup_paises` viram
+    a expressão denormalizada de `socios.parquet` via Ibis, compilada para SQL
+    DuckDB. Mesmo padrão de `write_lookup_parquets` (ADR 0017): a *query* é Ibis,
+    o *writer* (`COPY ... PARQUET` com compressão/row-group) fica em SQL bruto.
+
+    A expressão é ETL-local de propósito: ela lê o schema RFB bruto (`socio`),
+    que `ficha-py` deliberadamente não conhece — `ficha-py` só fala o shape
+    *publicado* (`socios`). Ver o comentário de fronteira em `ficha_py.tables`.
+    Equivalência bit-a-bit com o SQL manual anterior verificada em fixtures com
+    casos de borda (datas vazias/'0', códigos de lookup ausentes, PF/PJ/
+    estrangeiro).
+    """
+    import ibis
+
+    icon = ibis.duckdb.from_connection(con)
+    soc = icon.table("socio")
+    qual = icon.table("lookup_qualificacoes")
+    pais = icon.table("lookup_paises")
+    # Renomeia as colunas dos lookups pra evitar colisão de nome nos LEFT JOINs
+    # (qualificacoes entra duas vezes: sócio e representante legal).
+    qs = qual.rename(qs_codigo="codigo", qs_descricao="descricao")
+    qr = qual.rename(qr_codigo="codigo", qr_descricao="descricao")
+    ps = pais.rename(ps_codigo="codigo", ps_descricao="descricao")
+
+    def _date(col):  # YYYYMMDD → YYYY-MM-DD; vazio/'0'/NULL → NULL. Igual a _date_expr.
+        return ibis.cases(
+            (col.isnull() | (col == "") | (col == "0"), ibis.null("string")),
+            else_=col.substr(0, 4) + "-" + col.substr(4, 2) + "-" + col.substr(6, 2),
+        )
+
+    ist = soc.identificador_socio
+    joined = (
+        soc.left_join(qs, soc.qualificacao_socio == qs.qs_codigo)
+        .left_join(qr, soc.qualificacao_representante_legal == qr.qr_codigo)
+        .left_join(ps, soc.pais == ps.ps_codigo)
+    )
+    expr = joined.select(
+        cnpj_base=soc.cnpj_basico,
+        tipo=ist,
+        tipo_descricao=ibis.cases(
+            (ist == "1", "PJ"), (ist == "2", "PF"), (ist == "3", "estrangeiro"), else_=""
+        ),
+        nome_socio_razao_social=soc.nome_socio_razao_social,
+        cpf_mascarado=ibis.cases((ist == "2", soc.cnpj_cpf_socio), else_=ibis.null("string")),
+        cnpj_socio=ibis.cases((ist == "1", soc.cnpj_cpf_socio), else_=ibis.null("string")),
+        qualificacao_codigo=soc.qualificacao_socio,
+        qualificacao_descricao=qs.qs_descricao.coalesce(""),
+        data_entrada_sociedade=_date(soc.data_entrada_sociedade),
+        pais_codigo=soc.pais,
+        pais_nome=ps.ps_descricao.coalesce(""),
+        representante_legal_cpf=soc.representante_legal,
+        representante_legal_nome=soc.nome_representante_legal,
+        representante_legal_qualificacao_codigo=soc.qualificacao_representante_legal,
+        representante_legal_qualificacao_descricao=qr.qr_descricao.coalesce(""),
+        faixa_etaria=soc.faixa_etaria,
+    )
+    return ibis.to_sql(expr, dialect="duckdb")
+
+
 def write_socios_parquet(
     con: duckdb.DuckDBPyConnection,
     output_path: Path,
@@ -1413,44 +1465,16 @@ def write_socios_parquet(
 
     Requer que `load_main_tables_into_duckdb` e os lookups já estejam carregados em `con`.
     Ver ADR 0008 e schema `web/src/schemas/v1/socio.ts`.
+
+    A query vem de `_socios_select_sql` (Ibis → SQL, ADR 0017); o writer fica
+    em SQL bruto. ORDER BY cnpj_base é omitido de propósito: o bloom filter em
+    cnpj_base resolve "sócios de X" independente da ordem física, e ordenar
+    aqui reintroduz o mesmo padrão de OOM que atingiu cnpjs/raizes na PR #24.
     """
     output_path.parent.mkdir(parents=True, exist_ok=True)
     con.execute(
-        f"""
-        COPY (
-            SELECT
-                soc.cnpj_basico AS cnpj_base,
-                soc.identificador_socio AS tipo,
-                {_TIPO_SOCIO_DESCRICAO_SQL} AS tipo_descricao,
-                soc.nome_socio_razao_social,
-                CASE soc.identificador_socio
-                    WHEN '2' THEN soc.cnpj_cpf_socio
-                    ELSE NULL
-                END AS cpf_mascarado,
-                CASE soc.identificador_socio
-                    WHEN '1' THEN soc.cnpj_cpf_socio
-                    ELSE NULL
-                END AS cnpj_socio,
-                soc.qualificacao_socio AS qualificacao_codigo,
-                COALESCE(qs.descricao, '') AS qualificacao_descricao,
-                {_date_expr("soc.data_entrada_sociedade")} AS data_entrada_sociedade,
-                soc.pais AS pais_codigo,
-                COALESCE(ps.descricao, '') AS pais_nome,
-                soc.representante_legal AS representante_legal_cpf,
-                soc.nome_representante_legal AS representante_legal_nome,
-                soc.qualificacao_representante_legal AS representante_legal_qualificacao_codigo,
-                COALESCE(qr.descricao, '') AS representante_legal_qualificacao_descricao,
-                soc.faixa_etaria
-            FROM socio soc
-            LEFT JOIN lookup_qualificacoes qs ON qs.codigo = soc.qualificacao_socio
-            LEFT JOIN lookup_qualificacoes qr ON qr.codigo = soc.qualificacao_representante_legal
-            LEFT JOIN lookup_paises ps ON ps.codigo = soc.pais
-            -- ORDER BY cnpj_base omitted: same trade-off as cnpjs.parquet.
-            -- Bloom filter on cnpj_base handles "sócios de X" exact match
-            -- regardless of physical order. Defensive against the same OOM
-            -- pattern that hit cnpjs/raizes writes in PR #24.
-        ) TO ? (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 200000)
-        """,
+        f"COPY ({_socios_select_sql(con)}) "
+        "TO ? (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 200000)",
         [str(output_path)],
     )
 
