@@ -47,6 +47,8 @@ def output_dir(tmp_path: Path) -> Path:
     _write_parquet(d / "enderecos.parquet", 8)
     _write_parquet(d / "pessoas.parquet", 12)
     (d / "lookups.json").write_text('{"schema_version":"1.0.0"}', encoding="utf-8")
+    # Camada atômica — parte do contrato do snapshot (build_snapshot_entry a exige).
+    (d / "companies.zip").write_bytes(b"PK\x05\x06" + b"\x00" * 18)
 
     (d / "lookups").mkdir(parents=True, exist_ok=True)
     for kind in _LOOKUP_KINDS:
@@ -94,6 +96,22 @@ def test_build_snapshot_entry_file_hashes(output_dir: Path) -> None:
     lookups_path = output_dir / "lookups.json"
     assert entry["files"]["lookups"]["sha256"] == _sha256(lookups_path)
     assert "lookups.json" in entry["files"]["lookups"]["url"]
+
+
+def test_build_snapshot_entry_includes_companies_zip(output_dir: Path) -> None:
+    # Camada atômica faz parte do contrato do snapshot (não pode sumir em silêncio).
+    entry = manifest_mod.build_snapshot_entry("2026-04", output_dir)
+    zip_path = output_dir / "companies.zip"
+    assert "companies_zip" in entry["files"]
+    assert entry["files"]["companies_zip"]["sha256"] == _sha256(zip_path)
+    assert entry["files"]["companies_zip"]["size"] == zip_path.stat().st_size
+    assert "companies.zip" in entry["files"]["companies_zip"]["url"]
+
+
+def test_build_snapshot_entry_missing_companies_zip_raises(output_dir: Path) -> None:
+    (output_dir / "companies.zip").unlink()
+    with pytest.raises(FileNotFoundError, match="companies.zip"):
+        manifest_mod.build_snapshot_entry("2026-04", output_dir)
 
 
 def test_build_snapshot_entry_missing_file_raises(tmp_path: Path) -> None:
@@ -211,6 +229,35 @@ def test_verify_snapshot_files_reports_404(monkeypatch, output_dir: Path) -> Non
     _patch_client(monkeypatch, handler)
     broken = manifest_mod.verify_snapshot_files(entry)
     assert broken == [broken_url]
+
+
+def test_verify_snapshot_files_reports_size_mismatch(monkeypatch, output_dir: Path) -> None:
+    # Content-Length remoto != size gravado no manifest → upload truncado/trocado.
+    entry = manifest_mod.build_snapshot_entry("2026-04", output_dir)
+    bad_url = entry["files"]["cnpjs"]["url"]
+    real_size = entry["files"]["cnpjs"]["size"]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if str(request.url) == bad_url:
+            return httpx.Response(200, headers={"content-length": str(real_size + 999)})
+        return httpx.Response(200)
+
+    _patch_client(monkeypatch, handler)
+    assert manifest_mod.verify_snapshot_files(entry) == [bad_url]
+
+
+def test_verify_snapshot_files_size_match_ok(monkeypatch, output_dir: Path) -> None:
+    # Content-Length correto → não reprova.
+    entry = manifest_mod.build_snapshot_entry("2026-04", output_dir)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        for f in entry["files"].values():
+            if str(request.url) == f["url"]:
+                return httpx.Response(200, headers={"content-length": str(f["size"])})
+        return httpx.Response(200)
+
+    _patch_client(monkeypatch, handler)
+    assert manifest_mod.verify_snapshot_files(entry) == []
 
 
 def test_verify_snapshot_files_reports_network_error(monkeypatch, output_dir: Path) -> None:

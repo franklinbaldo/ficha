@@ -65,6 +65,7 @@ def test_smoke_upstream_failure_is_warning_not_blocking(monkeypatch):
 
 def test_smoke_mirror_failure_is_blocking(monkeypatch):
     monkeypatch.setenv(upstream.ENV_VAR, "FROM_ENV")
+    monkeypatch.setattr(smoke.time, "sleep", lambda *_: None)  # não dorme o backoff
 
     def handler(request: httpx.Request) -> httpx.Response:
         if "archive.org" in str(request.url):
@@ -78,6 +79,45 @@ def test_smoke_mirror_failure_is_blocking(monkeypatch):
     assert report.all_ok is False
     assert report.blocking_failure is True
     assert "simulated outage" in report.mirror_detail
+
+
+def test_smoke_mirror_transient_503_recovers(monkeypatch):
+    # 503 transitório do IA (derive/rate-limit) seguido de 200 → mirror OK.
+    # Sem retry isto virava falha de smoke bloqueante por um soluço externo.
+    monkeypatch.setenv(upstream.ENV_VAR, "FROM_ENV")
+    monkeypatch.setattr(smoke.time, "sleep", lambda *_: None)
+    calls = {"archive": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "archive.org" in str(request.url):
+            calls["archive"] += 1
+            return httpx.Response(200 if calls["archive"] >= 2 else 503)
+        return httpx.Response(207, content=PROPFIND_ROOT_XML)
+
+    _patch_client(monkeypatch, handler)
+    report = smoke.run_smoke()
+    assert report.mirror_ok is True
+    assert report.blocking_failure is False
+    assert calls["archive"] == 2  # falhou uma vez, recuperou na segunda
+
+
+def test_smoke_mirror_4xx_does_not_retry(monkeypatch):
+    # 4xx (que não 429) é definitivo — não adianta retry, falha na 1ª.
+    monkeypatch.setenv(upstream.ENV_VAR, "FROM_ENV")
+    monkeypatch.setattr(smoke.time, "sleep", lambda *_: None)
+    calls = {"archive": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "archive.org" in str(request.url):
+            calls["archive"] += 1
+            return httpx.Response(404)
+        return httpx.Response(207, content=PROPFIND_ROOT_XML)
+
+    _patch_client(monkeypatch, handler)
+    report = smoke.run_smoke()
+    assert report.mirror_ok is False
+    assert report.blocking_failure is True
+    assert calls["archive"] == 1  # sem retry em erro definitivo
 
 
 def test_smoke_upstream_zero_snapshots(monkeypatch):

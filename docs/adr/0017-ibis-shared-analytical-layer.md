@@ -109,9 +109,13 @@ notebooks/                   ← nova pasta com .ipynb pre-configurados
 - ⚠️ **Dependência transitiva no Colab.** Notebook precisa
   `pip install ficha-py duckdb` na primeira célula (~30s na primeira
   execução do Colab). Aceitável.
-- ❌ **Não resolve a dor da CSV reader da ETL** — que é DuckDB-bruto
+- ⚠️ ~~**Não resolve a dor da CSV reader da ETL** — que é DuckDB-bruto
   e continua sendo. Esse era o trade-off natural: encoding/max_line_size/
-  ignore_errors são knobs que Ibis não abstrai.
+  ignore_errors são knobs que Ibis não abstrai.~~ **Corrigido em
+  2026-07-18 — ver "Atualização" abaixo:** o `con.read_csv()` do Ibis
+  *repassa* esses knobs para o DuckDB. A razão para manter o read raw é
+  outra (ausência de vocabulário compartilhado + fallback de encoding
+  específico da ETL), não incapacidade do Ibis.
 
 ## Alternativas consideradas e rejeitadas
 
@@ -184,3 +188,69 @@ nisso.
 Se uma futura migração dos joins pesados for tentada, deve vir com
 benchmark de memória comparando o plano gerado pelo Ibis contra o SQL
 manual atual, não como troca direta.
+
+## Atualização (2026-07-18)
+
+Três avanços na direção do ADR, com evidência:
+
+### 1. `socios.parquet` migrado para Ibis
+
+`write_socios_parquet` (`transform.py`) agora compila a query via
+`_socios_select_sql`, uma expressão Ibis sobre as tabelas brutas `socio` +
+`lookup_qualificacoes` + `lookup_paises` — mesmo padrão de
+`write_lookup_parquets` (query em Ibis, `COPY ... PARQUET` em SQL bruto).
+Equivalência bit-a-bit com o SQL manual anterior verificada em fixtures com
+casos de borda (datas vazias/`'0'`, códigos de lookup ausentes, PF/PJ/
+estrangeiro); os 25 testes de `test_transform.py` seguem passando.
+
+A expressão é **ETL-local de propósito**: ela lê o schema RFB bruto (`socio`),
+que `ficha-py` deliberadamente não conhece — `ficha-py` só fala o shape
+*publicado* (`socios`), conforme o comentário de fronteira em `ficha_py.tables`.
+Por isso ela vive em `transform.py`, não em `ficha-py`, mesmo sendo Ibis.
+
+### 2. Correção: o read_csv do Ibis **repassa** os knobs do DuckDB
+
+A consequência marcada com ❌ acima ("Ibis não abstrai encoding/max_line_size/
+ignore_errors") está **desatualizada** para o Ibis 12. Verificado: o
+`con.read_csv(path, delim=…, null_padding=True, ignore_errors=True,
+parallel=False, max_line_size=…, columns=…)` do backend DuckDB repassa esses
+argumentos para o `read_csv` do DuckDB (inclusive o `parallel=False` que este
+mesmo PR precisou para destravar o `cnpjs.parquet`).
+
+Consequência prática: **o read raw da ETL continua raw, mas por outro motivo** —
+não por incapacidade do Ibis, e sim porque (a) o loop de fallback de encoding
+(`_create_table_from_csvs`) é I/O específico da ingestão RFB, sem vocabulário a
+compartilhar com notebooks (que leem parquets prontos, nunca CSV bruto), e (b)
+roteá-lo pelo Ibis seria churn de risco sobre um caminho load-bearing sem ganho.
+A capacidade existe; o *value case* para migrar o read não.
+
+### 3. Benchmark de memória do join `cnpjs` (o que o ADR pedia)
+
+Rodado o benchmark que este ADR exige antes de migrar os joins pesados —
+[`docs/ibis-cnpjs-benchmark-2026-07-18.md`](../ibis-cnpjs-benchmark-2026-07-18.md).
+Resultado (6M estab, `threads=1`, sob teto de 1 GB para forçar spill): Ibis ≈
+0.90× do tempo e 1.10× do spill do SQL manual, com saída idêntica. **Não há
+penhasco de memória** — o medo hipotético registrado neste ADR não se
+confirmou para o `cnpjs`.
+
+Guidance atualizada:
+- **`cnpjs`:** migração viável e de baixo risco pela evidência; confirmar com o
+  harness em CI na escala de produção (`FICHA_BENCH_ESTAB_ROWS=70000000`) antes
+  de trocar o código de produção.
+- **`raizes`:** benchmark próprio feito —
+  [`docs/ibis-raizes-benchmark-2026-07-18.md`](../ibis-raizes-benchmark-2026-07-18.md).
+  Migração **viável, com uma regra**: expressar as listas-distintas por grupo via
+  o pre-dedup de dois passos (`.distinct()` → `.group_by().agg(col.collect())`),
+  que compila para e benchmarka idêntico à produção (1.6 GB, 1.01× do spill).
+  **Nunca** via `collect(distinct=True)` idiomático — compila para
+  `ARRAY_AGG(DISTINCT)`, a mesma família DISTINCT-no-agregado que reproduz o OOM
+  histórico (o `LIST(DISTINCT)` naive estourou 4 GB a 1/10 da escala no
+  benchmark). Confirmar em CI na escala de produção antes de trocar o código.
+
+### Fecho — a "última peça" é uma regra, não um bloqueio
+
+Com os dois benchmarks, toda a camada analítica do ETL é migrável para Ibis:
+lookups ✅ e socios ✅ já migrados; `cnpjs` de baixo risco; `raizes` viável desde
+que a lista-distinta use o pre-dedup de dois passos, não o distinct-collect
+idiomático. Não há mais alvo "proibido" — há uma regra de como expressar a
+agregação distinta.

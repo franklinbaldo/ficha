@@ -34,7 +34,9 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         if: steps.changes.outputs.web == 'true'
         with:
-          bun-version: latest
+          # Pinado (não `latest`): um bump de major do Bun não deve poder
+          # quebrar o CID sem um commit que o declare.
+          bun-version: 1.3.11
 
       - name: Install
         if: steps.changes.outputs.web == 'true'
@@ -43,6 +45,10 @@ jobs:
       - name: Astro check
         if: steps.changes.outputs.web == 'true'
         run: bunx astro check
+
+      - name: Test
+        if: steps.changes.outputs.web == 'true'
+        run: bun run test
 
       - name: Build
         if: steps.changes.outputs.web == 'true'
