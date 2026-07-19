@@ -8,27 +8,36 @@ Give each performance change (typed join keys, one-pass chunk fan-out, ...) a
 big enough to be representative but small enough to iterate on a laptop.
 
 It exercises the real stage functions from ``ficha_etl.transform`` in the same
-order ``transform_snapshot`` runs them, so the numbers reflect the production
-code path (CSV parse + encoding, the LEFT JOINs onto empresa/simples/lookups,
-the per-chunk reloads, the roundtrip verify), not a toy.
+order ``transform_snapshot`` runs them (including ``load_main_tables_into_duckdb``
+itself, dedup and all -- not a hand-rolled substitute), under the same
+production-profile DuckDB connection (`bench/_profile.py`: file-backed,
+production `memory_limit`/`temp_directory`/`preserve_insertion_order`/`threads`),
+so the numbers reflect the production code path, not a differently-configured
+approximation of it. See `bench/README.md` "Method notes" for the methodology
+review that drove this shape (RFC 0001 §7.10).
 
 What it does NOT do: download, IA upload, the protobuf pack. Those are separate
-concerns; this harness is scoped to the DuckDB/Parquet transform, which is where
-items 3 (typed keys) and 4 (one-pass fan-out) land.
+concerns; this harness is scoped to the DuckDB/Parquet transform.
 
 Usage
 -----
     uv run --all-extras python bench/benchmark.py --scale 500000 --chunks 8
-    uv run --all-extras python bench/benchmark.py --scale 2000000 --chunks 16 --json out.json
+    uv run --all-extras python bench/benchmark.py --scale 2000000 --chunks 16 --repeats 3 --json out.json
 
 ``--scale`` is the number of empresas (unique cnpj_basico); establishments come
-out to ~1.33x that (one matriz each, plus a filial for every third base). The
+out to ~1.33x that (one matriz each, plus a filial for every third base). A
+small, fixed fraction of bases (1 in 500) get an injected duplicate empresa/
+simples row with a different payload, so `load_main_tables_into_duckdb`'s
+dedup path is actually exercised and its cost measured, not bypassed. The
 generated CSVs are cached under ``--workdir`` keyed by (scale, chunks), so a
-re-run with the same parameters skips regeneration and only re-times the stages.
+re-run with the same parameters skips regeneration and only re-times stages.
 
-Numbers are wall-clock seconds per stage on THIS machine; compare a stage
-against itself across a code change (before/after a branch), not against another
-machine. Run twice and take the second run if you care about warm-cache timings.
+``--repeats`` (default 1) reruns the ENTIRE stage sequence that many times,
+each against a fresh DuckDB file + fresh production connection (some stages
+DROP tables, so state can't safely carry across reps), and reports median +
+spread per stage rather than a single wall-clock number. Default 1 is for
+quick dev iteration; a genuine measurement decision should use --repeats 3+
+(RFC 0001 §7.10: a single run is exploration, not a decision).
 """
 
 from __future__ import annotations
@@ -37,12 +46,15 @@ import argparse
 import json
 import logging
 import shutil
+import statistics
 import time
 from pathlib import Path
 
 import duckdb
 
+from _profile import capture_environment, open_production_connection
 from ficha_etl import registry, transform
+from ficha_etl.transform import ExtractedFile
 
 # The transform module logs an INFO/WARNING per table load (e.g. the utf-8
 # encoding fallback, which always fires on our ASCII synthetic CSVs). That's
@@ -58,6 +70,12 @@ _N_NATUREZAS = 100
 _N_QUALIF = 60
 _N_PAISES = 30
 _N_MOTIVOS = 40
+
+# Every 500th base gets an injected duplicate empresa/simples row (different
+# payload) so the dedup path in load_main_tables_into_duckdb is actually
+# exercised. Small enough not to dominate total row counts at any --scale
+# worth benchmarking, present enough to give the dedup queries real work.
+_DUP_EVERY_N = 500
 
 _UFS = [
     "RO",
@@ -176,7 +194,7 @@ def _estabelecimento_select(lo: int, hi: int) -> str:
 
 def generate(scale: int, chunks: int, data_dir: Path) -> list[Path]:
     """Generate (or reuse cached) synthetic RFB CSVs. Returns estabelecimento CSV paths."""
-    marker = data_dir / f".scale-{scale}-chunks-{chunks}"
+    marker = data_dir / f".scale-{scale}-chunks-{chunks}-dup{_DUP_EVERY_N}"
     est_paths = sorted(data_dir.glob("estabelecimento-*.csv"))
     if marker.exists() and est_paths:
         print(f"  reusing cached data in {data_dir} ({len(est_paths)} estab CSVs)")
@@ -188,7 +206,10 @@ def generate(scale: int, chunks: int, data_dir: Path) -> list[Path]:
     gen = duckdb.connect()
     try:
         t0 = time.monotonic()
-        # empresa: one unique cnpj_basico per base — no duplicates, no fan-out.
+        # empresa: one row per base, PLUS an injected duplicate (different
+        # razao_social, so it's a genuinely conflicting duplicate, not a
+        # trivially-collapsible exact one) for every _DUP_EVERY_N-th base --
+        # exercises load_main_tables_into_duckdb's dedup path for real.
         _copy_csv(
             gen,
             f"""
@@ -200,10 +221,20 @@ def generate(scale: int, chunks: int, data_dir: Path) -> list[Path]:
                    lpad(((base % 5) + 1)::VARCHAR, 2, '0')        AS porte_empresa,
                    ''                                            AS ente_federativo_responsavel
             FROM (SELECT range AS base FROM range(1, {scale} + 1))
+            UNION ALL
+            SELECT lpad(base::VARCHAR, 8, '0'),
+                   'EMPRESA ' || base || ' DUPLICADA',
+                   lpad((base % {_N_NATUREZAS})::VARCHAR, 4, '0'),
+                   lpad((base % {_N_QUALIF})::VARCHAR, 2, '0'),
+                   (base % 1000000)::VARCHAR || ',00',
+                   lpad(((base % 5) + 1)::VARCHAR, 2, '0'),
+                   ''
+            FROM (SELECT range AS base FROM range(1, {scale} + 1))
+            WHERE base % {_DUP_EVERY_N} = 0
             """,
             data_dir / "empresa.csv",
         )
-        # simples: ~60% of bases.
+        # simples: ~60% of bases, same duplicate-injection pattern.
         _copy_csv(
             gen,
             f"""
@@ -213,6 +244,14 @@ def generate(scale: int, chunks: int, data_dir: Path) -> list[Path]:
                    CASE WHEN base % 3 = 0 THEN 'S' ELSE 'N' END AS opcao_mei,
                    '20180101' AS data_opcao_mei, '' AS data_exclusao_mei
             FROM (SELECT range AS base FROM range(1, {scale} + 1)) WHERE base % 5 < 3
+            UNION ALL
+            SELECT lpad(base::VARCHAR, 8, '0'),
+                   CASE WHEN base % 2 = 0 THEN 'N' ELSE 'S' END,  -- deliberately flipped: conflicting payload
+                   '20180101', '',
+                   CASE WHEN base % 3 = 0 THEN 'S' ELSE 'N' END,
+                   '20180101', ''
+            FROM (SELECT range AS base FROM range(1, {scale} + 1))
+            WHERE base % 5 < 3 AND base % {_DUP_EVERY_N} = 0
             """,
             data_dir / "simples.csv",
         )
@@ -262,7 +301,7 @@ def generate(scale: int, chunks: int, data_dir: Path) -> list[Path]:
                 f"SELECT lpad(range::VARCHAR, {width}, '0'), '{kind} ' || range FROM range(0, {n})",
                 data_dir / f"lookup_{kind}.csv",
             )
-        marker.write_text(f"scale={scale} chunks={chunks}\n")
+        marker.write_text(f"scale={scale} chunks={chunks} dup_every_n={_DUP_EVERY_N}\n")
         print(f"  generated synthetic data in {time.monotonic() - t0:.1f}s → {data_dir}")
     finally:
         gen.close()
@@ -274,19 +313,40 @@ def _row_count(con: duckdb.DuckDBPyConnection, table_or_path: str, is_path: bool
     return con.execute(f"SELECT COUNT(*) FROM {src}").fetchone()[0]
 
 
-def run(scale: int, chunks: int, workdir: Path, threads: int | None) -> dict:
-    data_dir = workdir / "data"
-    out_dir = workdir / "out"
-    if out_dir.exists():
-        shutil.rmtree(out_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
+def _extracted_files(data_dir: Path, est_paths: list[Path]) -> list[ExtractedFile]:
+    """Build the ExtractedFile list load_main_tables_into_duckdb (and the
+    lookup loader) actually consume -- the real production input shape, not
+    a hand-rolled substitute that skips whatever that function does.
+    """
+    files = [
+        ExtractedFile(kind="empresas", zip_name="empresa.zip", csv_path=data_dir / "empresa.csv"),
+        ExtractedFile(kind="simples", zip_name="simples.zip", csv_path=data_dir / "simples.csv"),
+        ExtractedFile(kind="socios", zip_name="socio.zip", csv_path=data_dir / "socio.csv"),
+    ]
+    files.extend(
+        ExtractedFile(kind="estabelecimentos", zip_name=f"estab-{p.stem}.zip", csv_path=p)
+        for p in est_paths
+    )
+    for kind in ("cnaes", "municipios", "naturezas", "qualificacoes", "paises", "motivos"):
+        files.append(
+            ExtractedFile(
+                kind=kind, zip_name=f"{kind}.zip", csv_path=data_dir / f"lookup_{kind}.csv"
+            )
+        )
+    return files
 
-    est_paths = generate(scale, chunks, data_dir)
 
-    con = duckdb.connect()
-    if threads:
-        con.execute(f"PRAGMA threads={threads}")
-    n_threads = con.execute("SELECT current_setting('threads')").fetchone()[0]
+def run_once(
+    scale: int, chunks: int, data_dir: Path, out_dir: Path, db_path: Path
+) -> tuple[list[tuple[str, float, int]], dict]:
+    """One full pass through the stage sequence against a fresh production
+    connection. Returns (per-stage timings, effective connection metadata).
+    """
+    est_paths = sorted(data_dir.glob("estabelecimento-*.csv"))
+    extracted = _extracted_files(data_dir, est_paths)
+
+    con = open_production_connection(db_path)
+    env = capture_environment(con, db_path)
 
     timings: list[tuple[str, float, int]] = []
 
@@ -298,45 +358,35 @@ def run(scale: int, chunks: int, workdir: Path, threads: int | None) -> dict:
         timings.append((name, dt, rows))
         print(f"    {name:<24} {dt:8.2f}s   {rows:>12,} rows")
 
-    print(f"  running stages (duckdb threads={n_threads}, {len(est_paths)} estab chunks)...")
+    print(
+        f"  running stages (threads={env['threads']}, memory_limit={env['memory_limit']}, "
+        f"{len(est_paths)} estab chunks)..."
+    )
 
-    # Lookups first (real loader).
+    # Real production loader for lookups AND main tables — including the
+    # dedup pass (empresa/simples get injected duplicates, see generate()) —
+    # instead of calling _create_table_from_csvs per table by hand and
+    # silently skipping whatever load_main_tables_into_duckdb does. Mirrors
+    # transform_snapshot's actual PHASE 1/2 structure: lookups first, then
+    # ONE load_main_tables_into_duckdb call (production wraps this in a
+    # single "load_duckdb" stage too — see transform.py's recorder.stage
+    # call site — so this benchmark's granularity matches production's, not
+    # an artificially finer breakdown production doesn't actually have).
     def _load_lookups():
-        for kind in ("cnaes", "municipios", "naturezas", "qualificacoes", "paises", "motivos"):
-            transform.load_lookup_into_duckdb(con, kind, data_dir / f"lookup_{kind}.csv")
+        for ef in extracted:
+            if ef.kind in transform._LOOKUP_KINDS:
+                transform.load_lookup_into_duckdb(con, ef.kind, ef.csv_path)
 
     stage("load_lookups", _load_lookups)
 
-    # empresa / simples / socio tables stay resident.
-    stage(
-        "load_empresa",
-        lambda: transform._create_table_from_csvs(
-            con, "empresa", [data_dir / "empresa.csv"], registry.main_table("empresa").source
-        ),
-        "empresa",
-    )
-    stage(
-        "load_simples",
-        lambda: transform._create_table_from_csvs(
-            con, "simples", [data_dir / "simples.csv"], registry.main_table("simples").source
-        ),
-        "simples",
-    )
-    stage(
-        "load_socio",
-        lambda: transform._create_table_from_csvs(
-            con, "socio", [data_dir / "socio.csv"], registry.main_table("socio").source
-        ),
-        "socio",
-    )
-    # Full estabelecimento table for the scan-based writers.
-    stage(
-        "load_estabelecimento",
-        lambda: transform._create_table_from_csvs(
-            con, "estabelecimento", est_paths, registry.main_table("estabelecimento").source
-        ),
-        "estabelecimento",
-    )
+    dupes_found = 0
+
+    def _load_main_tables():
+        nonlocal dupes_found
+        dupes_found = transform.load_main_tables_into_duckdb(con, extracted)
+
+    stage("load_main_tables", _load_main_tables, "estabelecimento")
+    print(f"    (load_main_tables collapsed {dupes_found} duplicate cnpj_basico row(s))")
 
     # Scan-based writers (item 4 targets these — each is a full estab scan today).
     stage(
@@ -358,7 +408,7 @@ def run(scale: int, chunks: int, workdir: Path, threads: int | None) -> dict:
         is_path=True,
     )
 
-    # Drop the full table, mirror prod, then the chunked cnpjs writer (item 3+4).
+    # Drop the full table, mirror prod, then the chunked cnpjs writer.
     stage("drop_estabelecimento", lambda: con.execute("DROP TABLE IF EXISTS estabelecimento"))
     stage(
         "write_cnpjs_chunked",
@@ -377,16 +427,59 @@ def run(scale: int, chunks: int, workdir: Path, threads: int | None) -> dict:
     stage("verify_roundtrip", _verify)
 
     con.close()
+    return timings, env
 
-    total = sum(dt for _, dt, _ in timings)
-    print(f"  {'TOTAL':<24} {total:8.2f}s")
+
+def run(scale: int, chunks: int, workdir: Path, repeats: int) -> dict:
+    data_dir = workdir / "data"
+    est_paths = generate(scale, chunks, data_dir)
+
+    per_stage: dict[str, list[float]] = {}
+    row_counts: dict[str, int] = {}
+    env: dict = {}
+    for rep in range(repeats):
+        out_dir = workdir / f"out-rep{rep}"
+        if out_dir.exists():
+            shutil.rmtree(out_dir)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        db_path = workdir / f"bench-rep{rep}.duckdb"
+        if db_path.exists():
+            db_path.unlink()
+        print(f"  --- rep {rep + 1}/{repeats} ---")
+        timings, env = run_once(scale, chunks, data_dir, out_dir, db_path)
+        for name, dt, rows in timings:
+            per_stage.setdefault(name, []).append(dt)
+            row_counts[name] = rows
+        shutil.rmtree(out_dir, ignore_errors=True)
+        db_path.unlink(missing_ok=True)
+        shutil.rmtree(db_path.parent / "duckdb_tmp", ignore_errors=True)
+
+    stage_results = []
+    total_median = 0.0
+    for name, times in per_stage.items():
+        med = statistics.median(times)
+        spread = (max(times) - min(times)) if len(times) > 1 else 0.0
+        total_median += med
+        stage_results.append(
+            {
+                "name": name,
+                "rows": row_counts[name],
+                "times": [round(t, 4) for t in times],
+                "median_seconds": round(med, 4),
+                "spread_seconds": round(spread, 4),
+            }
+        )
+        print(f"  {name:<24} median={med:8.2f}s  spread={spread:6.2f}s  n={len(times)}")
+    print(f"  {'TOTAL (sum of medians)':<24} {total_median:8.2f}s")
+
     return {
         "scale": scale,
         "chunks": chunks,
-        "threads": int(n_threads),
+        "repeats": repeats,
         "est_chunks": len(est_paths),
-        "stages": [{"name": n, "seconds": round(dt, 3), "rows": r} for n, dt, r in timings],
-        "total_seconds": round(total, 3),
+        "environment": env,
+        "stages": stage_results,
+        "total_median_seconds": round(total_median, 3),
     }
 
 
@@ -399,7 +492,11 @@ def main() -> None:
         "--chunks", type=int, default=8, help="how many estabelecimento CSVs to split into"
     )
     ap.add_argument(
-        "--threads", type=int, default=None, help="DuckDB threads (default: DuckDB's own default)"
+        "--repeats",
+        type=int,
+        default=1,
+        help="full stage-sequence repetitions (median+spread reported); use 3+ for a real "
+        "measurement decision, 1 (default) for quick dev iteration",
     )
     ap.add_argument(
         "--workdir",
@@ -412,8 +509,11 @@ def main() -> None:
     )
     args = ap.parse_args()
 
-    print(f"ficha ETL benchmark — scale={args.scale:,} empresas, chunks={args.chunks}")
-    result = run(args.scale, args.chunks, args.workdir, args.threads)
+    print(
+        f"ficha ETL benchmark — scale={args.scale:,} empresas, chunks={args.chunks}, "
+        f"repeats={args.repeats}"
+    )
+    result = run(args.scale, args.chunks, args.workdir, args.repeats)
     if args.json:
         args.json.write_text(json.dumps(result, indent=2))
         print(f"  wrote {args.json}")
