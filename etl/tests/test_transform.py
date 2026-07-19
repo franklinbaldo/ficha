@@ -1023,6 +1023,84 @@ def test_assert_roundtrip_empty_estabelecimento_is_noop(tmp_path):
         con.close()
 
 
+def _build_roundtrip_dataset(con, parquet_path: Path, n_rows: int, tamper: bool) -> None:
+    """Monta estabelecimento+empresa e o cnpjs.parquet correspondente.
+
+    Se `tamper`, grava razao_social divergente pra todas as linhas — assim
+    qualquer amostra não-vazia deve acusar divergência.
+    """
+    con.execute(
+        "CREATE TABLE estabelecimento (cnpj_basico VARCHAR, cnpj_ordem VARCHAR, "
+        "cnpj_dv VARCHAR, identificador_matriz_filial VARCHAR, nome_fantasia VARCHAR, "
+        "situacao_cadastral VARCHAR, uf VARCHAR, municipio VARCHAR, "
+        "cnae_fiscal_principal VARCHAR)"
+    )
+    con.execute("CREATE TABLE empresa (cnpj_basico VARCHAR, razao_social VARCHAR)")
+    for i in range(n_rows):
+        base = f"{i:08d}"
+        con.execute(
+            "INSERT INTO estabelecimento VALUES (?, '0001', '00', '1', ?, '02', 'SP', "
+            "'3550308', '6201500')",
+            [base, f"FANTASIA {i}"],
+        )
+        con.execute("INSERT INTO empresa VALUES (?, ?)", [base, f"RAZAO {i}"])
+    razao_expr = "'TAMPERED'" if tamper else "emp.razao_social"
+    con.execute(
+        f"""
+        COPY (
+            SELECT est.cnpj_basico || est.cnpj_ordem || est.cnpj_dv AS cnpj,
+                   {razao_expr} AS razao_social,
+                   est.uf AS uf,
+                   est.cnae_fiscal_principal AS cnae_principal_codigo,
+                   est.situacao_cadastral AS situacao_cadastral,
+                   est.nome_fantasia AS nome_fantasia,
+                   est.identificador_matriz_filial AS identificador_matriz_filial,
+                   est.municipio AS municipio_codigo
+            FROM estabelecimento est
+            LEFT JOIN empresa emp ON emp.cnpj_basico = est.cnpj_basico
+        ) TO '{parquet_path}' (FORMAT PARQUET)
+        """
+    )
+
+
+def test_assert_roundtrip_sample_is_deterministic(tmp_path):
+    """A verificação usa reservoir REPEATABLE — a mesma amostra em toda run.
+
+    Com razao_social adulterada em todas as linhas e amostra menor que o total,
+    duas chamadas devem produzir a MESMA mensagem de erro (mesmo conjunto e
+    ordem de CNPJs amostrados). Amostragem não-determinística faria a mensagem
+    variar entre chamadas.
+    """
+    parquet = tmp_path / "cnpjs.parquet"
+    con = duckdb.connect()
+    try:
+        _build_roundtrip_dataset(con, parquet, n_rows=40, tamper=True)
+
+        msgs: list[str] = []
+        for _ in range(2):
+            with pytest.raises(transform.RoundtripError) as exc:
+                transform.assert_roundtrip(con, parquet, sample_size=8)
+            msgs.append(str(exc.value))
+
+        assert msgs[0] == msgs[1]
+        # Sanidade: divergência veio do caminho de campo, não de count/missing.
+        assert "razao_social" in msgs[0]
+        assert "row count mismatch" not in msgs[0]
+    finally:
+        con.close()
+
+
+def test_assert_roundtrip_passes_on_faithful_parquet(tmp_path):
+    """Parquet fiel ao source passa sem raise, mesmo com amostra < total."""
+    parquet = tmp_path / "cnpjs.parquet"
+    con = duckdb.connect()
+    try:
+        _build_roundtrip_dataset(con, parquet, n_rows=40, tamper=False)
+        transform.assert_roundtrip(con, parquet, sample_size=8)  # não deve raise
+    finally:
+        con.close()
+
+
 def test_write_cnpjs_parquet_handles_duplicate_cnae_codigo(tmp_path):
     """write_cnpjs_parquet must not crash if lookup_cnaes has duplicate codigos.
 
