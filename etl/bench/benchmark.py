@@ -42,7 +42,7 @@ from pathlib import Path
 
 import duckdb
 
-from ficha_etl import transform
+from ficha_etl import registry, transform
 
 # The transform module logs an INFO/WARNING per table load (e.g. the utf-8
 # encoding fallback, which always fires on our ASCII synthetic CSVs). That's
@@ -311,21 +311,21 @@ def run(scale: int, chunks: int, workdir: Path, threads: int | None) -> dict:
     stage(
         "load_empresa",
         lambda: transform._create_table_from_csvs(
-            con, "empresa", [data_dir / "empresa.csv"], transform._EMPRESA_COLUMNS
+            con, "empresa", [data_dir / "empresa.csv"], registry.main_table("empresa").source
         ),
         "empresa",
     )
     stage(
         "load_simples",
         lambda: transform._create_table_from_csvs(
-            con, "simples", [data_dir / "simples.csv"], transform._SIMPLES_COLUMNS
+            con, "simples", [data_dir / "simples.csv"], registry.main_table("simples").source
         ),
         "simples",
     )
     stage(
         "load_socio",
         lambda: transform._create_table_from_csvs(
-            con, "socio", [data_dir / "socio.csv"], transform._SOCIO_COLUMNS
+            con, "socio", [data_dir / "socio.csv"], registry.main_table("socio").source
         ),
         "socio",
     )
@@ -333,7 +333,7 @@ def run(scale: int, chunks: int, workdir: Path, threads: int | None) -> dict:
     stage(
         "load_estabelecimento",
         lambda: transform._create_table_from_csvs(
-            con, "estabelecimento", est_paths, transform._ESTABELECIMENTO_COLUMNS
+            con, "estabelecimento", est_paths, registry.main_table("estabelecimento").source
         ),
         "estabelecimento",
     )
@@ -370,7 +370,7 @@ def run(scale: int, chunks: int, workdir: Path, threads: int | None) -> dict:
     # Roundtrip verify (reloads estab, like prod).
     def _verify():
         transform._create_table_from_csvs(
-            con, "estabelecimento", est_paths, transform._ESTABELECIMENTO_COLUMNS
+            con, "estabelecimento", est_paths, registry.main_table("estabelecimento").source
         )
         transform.assert_roundtrip(con, out_dir / "cnpjs.parquet", sample_size=1000)
 

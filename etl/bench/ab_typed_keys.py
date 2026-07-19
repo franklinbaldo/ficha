@@ -16,7 +16,7 @@ from pathlib import Path
 
 import duckdb
 
-from ficha_etl import transform
+from ficha_etl import registry, transform
 
 logging.getLogger("ficha_etl").setLevel(logging.ERROR)
 
@@ -30,13 +30,15 @@ def _load(con):
     for kind in ("cnaes", "municipios", "naturezas", "qualificacoes", "paises", "motivos"):
         transform.load_lookup_into_duckdb(con, kind, DATA / f"lookup_{kind}.csv")
     transform._create_table_from_csvs(
-        con, "empresa", [DATA / "empresa.csv"], transform._EMPRESA_COLUMNS
+        con, "empresa", [DATA / "empresa.csv"], registry.main_table("empresa").source
     )
     transform._create_table_from_csvs(
-        con, "simples", [DATA / "simples.csv"], transform._SIMPLES_COLUMNS
+        con, "simples", [DATA / "simples.csv"], registry.main_table("simples").source
     )
     est = sorted(DATA.glob("estabelecimento-*.csv"))
-    transform._create_table_from_csvs(con, "est", est, transform._ESTABELECIMENTO_COLUMNS)
+    transform._create_table_from_csvs(
+        con, "est", est, registry.main_table("estabelecimento").source
+    )
     con.execute(
         """
         CREATE OR REPLACE TEMP TABLE _cnae_map AS

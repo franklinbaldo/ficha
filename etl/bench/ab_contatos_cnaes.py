@@ -14,7 +14,7 @@ from pathlib import Path
 
 import duckdb
 
-from ficha_etl import transform
+from ficha_etl import registry, transform
 
 logging.getLogger("ficha_etl").setLevel(logging.ERROR)
 
@@ -109,7 +109,7 @@ def main():
     est = sorted(DATA.glob("estabelecimento-*.csv"))
     print(f"loading estabelecimento from {len(est)} CSVs...")
     transform._create_table_from_csvs(
-        con, "estabelecimento", est, transform._ESTABELECIMENTO_COLUMNS
+        con, "estabelecimento", est, registry.main_table("estabelecimento").source
     )
     n = con.execute("SELECT COUNT(*) FROM estabelecimento").fetchone()[0]
     print(f"  {n:,} rows; {N} interleaved iterations per variant\n")
