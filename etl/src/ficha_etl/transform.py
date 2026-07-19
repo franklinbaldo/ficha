@@ -23,6 +23,7 @@ import duckdb
 from rich.progress import Progress
 
 from . import fetcher as fetcher_mod
+from . import registry
 from .progress import make_progress
 from .sources import FileKind, canonical_inventory, is_valid_month
 
@@ -50,69 +51,12 @@ _LOOKUP_KINDS: tuple[FileKind, ...] = (
 
 # Layout RFB CNPJ — colunas em ordem (sem header no CSV). Tipos: tudo VARCHAR
 # pra evitar surpresas; conversões acontecem nas SELECTs finais.
-_EMPRESA_COLUMNS: tuple[str, ...] = (
-    "cnpj_basico",
-    "razao_social",
-    "natureza_juridica",
-    "qualificacao_responsavel",
-    "capital_social",
-    "porte_empresa",
-    "ente_federativo_responsavel",
-)
-_ESTABELECIMENTO_COLUMNS: tuple[str, ...] = (
-    "cnpj_basico",
-    "cnpj_ordem",
-    "cnpj_dv",
-    "identificador_matriz_filial",
-    "nome_fantasia",
-    "situacao_cadastral",
-    "data_situacao_cadastral",
-    "motivo_situacao_cadastral",
-    "nome_cidade_exterior",
-    "pais",
-    "data_inicio_atividade",
-    "cnae_fiscal_principal",
-    "cnae_fiscal_secundaria",
-    "tipo_logradouro",
-    "logradouro",
-    "numero",
-    "complemento",
-    "bairro",
-    "cep",
-    "uf",
-    "municipio",
-    "ddd_1",
-    "telefone_1",
-    "ddd_2",
-    "telefone_2",
-    "ddd_fax",
-    "fax",
-    "correio_eletronico",
-    "situacao_especial",
-    "data_situacao_especial",
-)
-_SOCIO_COLUMNS: tuple[str, ...] = (
-    "cnpj_basico",
-    "identificador_socio",
-    "nome_socio_razao_social",
-    "cnpj_cpf_socio",
-    "qualificacao_socio",
-    "data_entrada_sociedade",
-    "pais",
-    "representante_legal",
-    "nome_representante_legal",
-    "qualificacao_representante_legal",
-    "faixa_etaria",
-)
-_SIMPLES_COLUMNS: tuple[str, ...] = (
-    "cnpj_basico",
-    "opcao_simples",
-    "data_opcao_simples",
-    "data_exclusao_simples",
-    "opcao_mei",
-    "data_opcao_mei",
-    "data_exclusao_mei",
-)
+# Fonte de verdade agora é `registry` (Fase 1, RFC 0001 §8.1) — aliases
+# privados mantidos aqui pra não quebrar quem importa o símbolo antigo.
+_EMPRESA_COLUMNS = registry.EMPRESA_COLUMNS
+_ESTABELECIMENTO_COLUMNS = registry.ESTABELECIMENTO_COLUMNS
+_SOCIO_COLUMNS = registry.SOCIO_COLUMNS
+_SIMPLES_COLUMNS = registry.SIMPLES_COLUMNS
 
 
 def extract_zip(zip_path: Path, dest_dir: Path) -> list[Path]:
@@ -197,10 +141,8 @@ def extract_all(
     return out
 
 
-def _csv_columns_clause(cols: tuple[str, ...]) -> str:
-    """`{'c1': 'VARCHAR', 'c2': 'VARCHAR'}` para read_csv `columns` arg."""
-    pairs = ", ".join(f"'{c}': 'VARCHAR'" for c in cols)
-    return "{" + pairs + "}"
+# Alias — a implementação real mora em registry.csv_columns_clause (Fase 1, RFC 0001).
+_csv_columns_clause = registry.csv_columns_clause
 
 
 def _create_table_from_csvs(
@@ -215,6 +157,10 @@ def _create_table_from_csvs(
     tenta utf-8 (algumas partições da RFB foram publicadas em UTF-8).
 
     Filtra arquivos vazios pra evitar problemas no sniffer do DuckDB.
+
+    O SQL de leitura vem de `registry.read_csv_select_sql` — esta função só
+    orquestra: filtragem de arquivos vazios, tabela vazia com schema correto,
+    sniff de encoding, loop de tentativas, logging e tratamento de erro.
     """
     # Pula arquivos zero-byte (alguns ZIPs particionados podem vir vazios).
     paths = [p for p in csv_paths if p.exists() and p.stat().st_size > 0]
@@ -223,12 +169,7 @@ def _create_table_from_csvs(
         col_defs = ", ".join(f"{c} VARCHAR" for c in columns)
         con.execute(f"CREATE OR REPLACE TABLE {table} ({col_defs})")
         return
-    # Inline as a SQL list literal — parameter binding for arrays é instável.
-    # Aspas simples nos paths são escapadas dobrando-as (padrão SQL).
-    paths_literal = (
-        "[" + ", ".join(f"'{str(p).replace(chr(39), chr(39) * 2)}'" for p in paths) + "]"
-    )
-    cols_clause = _csv_columns_clause(columns)
+    spec = registry.CsvSpec(columns=columns)
 
     # Each attempt: (encoding, ignore_errors). RFB occasionally emits rows
     # that are neither valid latin-1 nor utf-8 (mixed-encoding garbage from
@@ -240,27 +181,15 @@ def _create_table_from_csvs(
     # preferable to no snapshot. The fallback is logged loudly so we
     # can see if it ever fires in production.
 
-    attempts = []
     # Sniff the first 1 MB of the first non-empty CSV.
     first_path = paths[0]
     with open(first_path, "rb") as f:
         sample = f.read(1024 * 1024)
+    attempts = registry.encoding_attempts(sample)
 
-    try:
-        sample.decode("utf-8", errors="strict")
-        # If utf-8 succeeds, use it directly with ignore_errors=True since
-        # mid-file bad bytes can still exist.
-        attempts.append(("utf-8", True))
-    except UnicodeDecodeError:
-        # If utf-8 fails to decode strictly, use latin-1.
-        attempts.append(("latin-1", False))
-
-    # Safety net: fall through to the byte-tolerant utf-8 + ignore_errors=True
-    if attempts[0] != ("utf-8", True):
-        attempts.append(("utf-8", True))
-
-    # parallel=false is load-bearing, not a perf knob. DuckDB's parallel CSV
-    # scanner range-splits a single large file across byte offsets; with
+    # parallel=false is load-bearing, not a perf knob (see CsvSpec default —
+    # registry.py has the full rationale). DuckDB's parallel CSV scanner
+    # range-splits a single large file across byte offsets; with
     # null_padding=true it cannot recover ragged rows whose fields contain a
     # quoted newline that straddles a split boundary, and aborts:
     #   "The parallel scanner does not support null_padding in conjunction
@@ -271,25 +200,11 @@ def _create_table_from_csvs(
     # is already the norm here (see PRAGMA call site), so disabling the parallel
     # reader costs nothing and makes the load deterministic across both paths.
     for encoding, ignore_errors in attempts:
+        select_sql = registry.read_csv_select_sql(
+            spec, paths, encoding=encoding, ignore_errors=ignore_errors
+        )
         try:
-            con.execute(
-                f"""
-                CREATE OR REPLACE TABLE {table} AS
-                SELECT * FROM read_csv(
-                    {paths_literal},
-                    delim=';',
-                    header=false,
-                    quote='"',
-                    encoding='{encoding}',
-                    columns={cols_clause},
-                    null_padding=true,
-                    strict_mode=false,
-                    max_line_size=16777216,
-                    parallel=false,
-                    ignore_errors={"true" if ignore_errors else "false"}
-                )
-                """
-            )
+            con.execute(f"CREATE OR REPLACE TABLE {table} AS\n{select_sql}")
             if encoding != "latin-1" or ignore_errors:
                 log.warning(
                     "tabela '%s' carregada com encoding=%s ignore_errors=%s (fallback)",
