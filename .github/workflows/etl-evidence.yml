@@ -1,0 +1,254 @@
+name: ETL Evidence Reruns
+
+# Evidence-only workflow for RFC 0001 decisions.  Pull requests run a tiny
+# smoke profile; workflow_dispatch defaults to the real five-repeat evidence
+# profile.  This workflow records data and never changes production behavior or
+# declares a performance winner automatically.
+
+on:
+  workflow_dispatch:
+    inputs:
+      scale:
+        description: Synthetic unique cnpj_basico count
+        required: true
+        default: '500000'
+        type: string
+      chunks:
+        description: Number of estabelecimento CSV chunks
+        required: true
+        default: '10'
+        type: string
+      repeats:
+        description: Repetitions per variant (5+ for decisions)
+        required: true
+        default: '5'
+        type: string
+      seed:
+        description: Strict AB/BA starting-side seed
+        required: true
+        default: '20260719'
+        type: string
+  pull_request:
+    paths:
+      - '.github/workflows/etl-evidence.yml'
+      - 'etl/bench/**'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: etl-evidence-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  evidence:
+    name: Production-profile evidence
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    env:
+      FICHA_THREADS: '1'
+      PYTHONUNBUFFERED: '1'
+    defaults:
+      run:
+        shell: bash
+        working-directory: etl
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install 3.11
+
+      - name: Install dependencies
+        run: uv sync --extra dev
+
+      - name: Resolve evidence parameters
+        id: parameters
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            scale="${{ inputs.scale }}"
+            chunks="${{ inputs.chunks }}"
+            repeats="${{ inputs.repeats }}"
+            seed="${{ inputs.seed }}"
+            profile="manual-evidence"
+          else
+            scale="500"
+            chunks="2"
+            repeats="1"
+            seed="20260719"
+            profile="pull-request-smoke"
+          fi
+          echo "scale=$scale" >> "$GITHUB_OUTPUT"
+          echo "chunks=$chunks" >> "$GITHUB_OUTPUT"
+          echo "repeats=$repeats" >> "$GITHUB_OUTPUT"
+          echo "seed=$seed" >> "$GITHUB_OUTPUT"
+          if (( scale < 500 )); then
+            echo "scale must be at least 500 so the 1-in-500 duplicate path is exercised" >&2
+            exit 2
+          fi
+          if [[ "$profile" == "manual-evidence" ]] && (( repeats < 5 )); then
+            echo "manual evidence runs require at least 5 repetitions" >&2
+            exit 2
+          fi
+          if (( chunks < 1 || repeats < 1 )); then
+            echo "chunks and repeats must be positive" >&2
+            exit 2
+          fi
+          echo "profile=$profile" >> "$GITHUB_OUTPUT"
+
+      - name: Validate evidence tooling
+        run: |
+          uv run ruff check bench/ab_codecs.py bench/dedup_evidence.py bench/run_with_peaks.py
+          uv run ruff format --check bench/ab_codecs.py bench/dedup_evidence.py bench/run_with_peaks.py
+          uv run python - <<'PY'
+          import yaml
+          from pathlib import Path
+          yaml.safe_load(Path('../.github/workflows/etl-evidence.yml').read_text())
+          PY
+
+      - name: Record runner and source metadata
+        run: |
+          mkdir -p bench/.evidence
+          {
+            echo "profile=${{ steps.parameters.outputs.profile }}"
+            echo "git_sha=$GITHUB_SHA"
+            echo "runner_os=$RUNNER_OS"
+            echo "runner_arch=$RUNNER_ARCH"
+            echo "scale=${{ steps.parameters.outputs.scale }}"
+            echo "chunks=${{ steps.parameters.outputs.chunks }}"
+            echo "repeats=${{ steps.parameters.outputs.repeats }}"
+            echo "seed=${{ steps.parameters.outputs.seed }}"
+            uname -a
+            df -h .
+          } | tee bench/.evidence/run-metadata.txt
+
+      - name: Generate shared synthetic RFB fixture
+        env:
+          SCALE: ${{ steps.parameters.outputs.scale }}
+          CHUNKS: ${{ steps.parameters.outputs.chunks }}
+        run: |
+          uv run python - <<'PY' 2>&1 | tee bench/.evidence/generate.log
+          import os
+          import sys
+          from pathlib import Path
+
+          sys.path.insert(0, 'bench')
+          from benchmark import generate
+
+          generate(int(os.environ['SCALE']), int(os.environ['CHUNKS']), Path('bench/.work/data'))
+          PY
+
+      - name: Contatos and CNAEs combined-vs-separate scans
+        run: |
+          uv run python bench/run_with_peaks.py \
+            --json bench/.evidence/contatos-cnaes-resources.json \
+            --watch database=bench/.work/ab_contatos_cnaes.duckdb \
+            --watch duckdb_tmp=bench/.work/duckdb_tmp \
+            --watch output_workdir=bench/.work/ab \
+            -- python bench/ab_contatos_cnaes.py \
+              --repeats "${{ steps.parameters.outputs.repeats }}" \
+              --seed "${{ steps.parameters.outputs.seed }}" \
+              --json bench/.evidence/contatos-cnaes.json \
+            2>&1 | tee bench/.evidence/contatos-cnaes.log
+          uv run python - <<'PY'
+          import json
+          from pathlib import Path
+          result = Path('bench/.evidence/contatos-cnaes.json')
+          data = json.loads(result.read_text())
+          data['resource_envelope'] = json.loads(
+              Path('bench/.evidence/contatos-cnaes-resources.json').read_text()
+          )
+          result.write_text(json.dumps(data, indent=2))
+          PY
+          rm -f bench/.work/ab_contatos_cnaes.duckdb
+          rm -rf bench/.work/duckdb_tmp bench/.work/ab
+
+      - name: VARCHAR-vs-UINTEGER typed keys
+        run: |
+          uv run python bench/run_with_peaks.py \
+            --json bench/.evidence/typed-keys-resources.json \
+            --watch varchar_database=bench/.work/typed-keys/varchar/bench.duckdb \
+            --watch varchar_duckdb_tmp=bench/.work/typed-keys/varchar/duckdb_tmp \
+            --watch uint_database=bench/.work/typed-keys/uint/bench.duckdb \
+            --watch uint_duckdb_tmp=bench/.work/typed-keys/uint/duckdb_tmp \
+            --watch typed_workdir=bench/.work/typed-keys \
+            -- python bench/ab_typed_keys.py \
+              --repeats "${{ steps.parameters.outputs.repeats }}" \
+              --seed "${{ steps.parameters.outputs.seed }}" \
+              --json bench/.evidence/typed-keys.json \
+            2>&1 | tee bench/.evidence/typed-keys.log
+          uv run python - <<'PY'
+          import json
+          from pathlib import Path
+          result = Path('bench/.evidence/typed-keys.json')
+          data = json.loads(result.read_text())
+          data['resource_envelope'] = json.loads(
+              Path('bench/.evidence/typed-keys-resources.json').read_text()
+          )
+          result.write_text(json.dumps(data, indent=2))
+          PY
+          rm -rf bench/.work/typed-keys
+
+      - name: ZSTD-vs-LZ4 transient chunk parts
+        run: |
+          uv run python bench/ab_codecs.py \
+            --repeats "${{ steps.parameters.outputs.repeats }}" \
+            --seed "${{ steps.parameters.outputs.seed }}" \
+            --json bench/.evidence/codecs.json \
+            2>&1 | tee bench/.evidence/codecs.log
+
+      - name: Real-loader dedup evidence
+        run: |
+          uv run python bench/dedup_evidence.py \
+            --repeats "${{ steps.parameters.outputs.repeats }}" \
+            --seed "${{ steps.parameters.outputs.seed }}" \
+            --json bench/.evidence/dedup.json \
+            2>&1 | tee bench/.evidence/dedup.log
+
+      - name: Write evidence index
+        if: always()
+        run: |
+          uv run python - <<'PY'
+          import json
+          from pathlib import Path
+
+          root = Path('bench/.evidence')
+          index = {
+              'git_sha': '${{ github.sha }}',
+              'profile': '${{ steps.parameters.outputs.profile }}',
+              'scale': int('${{ steps.parameters.outputs.scale }}'),
+              'chunks': int('${{ steps.parameters.outputs.chunks }}'),
+              'repeats': int('${{ steps.parameters.outputs.repeats }}'),
+              'seed': int('${{ steps.parameters.outputs.seed }}'),
+              'results': sorted(path.name for path in root.glob('*.json')),
+              'logs': sorted(path.name for path in root.glob('*.log')),
+          }
+          root.mkdir(parents=True, exist_ok=True)
+          (root / 'index.json').write_text(json.dumps(index, indent=2))
+          PY
+          {
+            echo "## ETL evidence rerun"
+            echo ""
+            echo "- Profile: \`${{ steps.parameters.outputs.profile }}\`"
+            echo "- Git SHA: \`${{ github.sha }}\`"
+            echo "- Scale/chunks/repeats: \`${{ steps.parameters.outputs.scale }} / ${{ steps.parameters.outputs.chunks }} / ${{ steps.parameters.outputs.repeats }}\`"
+            echo "- No automatic performance winner is declared; inspect medians together with spread and peak-resource fields."
+            echo ""
+            echo "All JSON and complete logs are attached as the \`etl-evidence-*\` artifact."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload evidence JSON and logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: etl-evidence-${{ steps.parameters.outputs.profile }}-${{ github.run_id }}
+          path: etl/bench/.evidence/
+          if-no-files-found: error
+          retention-days: 30
+          include-hidden-files: true
