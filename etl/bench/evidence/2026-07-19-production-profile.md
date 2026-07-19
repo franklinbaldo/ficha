@@ -25,8 +25,16 @@ costs; a lower single timing is never treated as a winner by itself.
 |---|---:|---:|---|---|
 | Contatos: separate scans vs one-scan `LATERAL VALUES` | 1.2048 s median, 0.0184 s spread | 1.9595 s median, 0.0609 s spread | Candidate is 62.6% slower; the 0.7547 s delta is far above spread | Keep separate scans |
 | CNAEs: current `UNION ALL` vs one-scan `list_concat` + `UNNEST` | 0.8593 s median, 0.0200 s spread | 0.9227 s median, 0.0164 s spread | Candidate is 7.4% slower; the 0.0634 s delta is above spread | Keep current writer |
-| Join key: `VARCHAR(8)` vs companion `UINTEGER` | 0.9168 s median | 1.2775 s median plus 1.1387 s one-time key setup | Per-chunk spread is high, but the candidate demonstrates no speedup; total over five alternated chunks was 5.3356 s vs 7.8790 s, and peak candidate DB size was 19.8% larger | Keep `VARCHAR(8)`; do not add companion keys |
+| Join key: `VARCHAR(8)` vs companion `UINTEGER` | 0.9168 s median | 1.2775 s median plus 1.1387 s one-time key setup | Per-chunk spread is high, but the candidate demonstrates no speedup and peak candidate DB size was 19.8% larger | Keep `VARCHAR(8)`; do not add companion keys |
 | Transient chunk codec: ZSTD vs LZ4, final output fixed at ZSTD | 11.9768 s median, 29.10 MB parts | 12.0690 s median, 40.79 MB parts | Timing delta is within noise; LZ4 parts are 40.2% larger and state peak is 14.4% larger | Keep transient ZSTD |
+
+The typed-key JSON also reports 5.3356 s vs 7.8790 s under
+`end_to_end_total_seconds`. That field is the aggregate of five repeated
+measurements of the **same representative chunk**, with key setup added once on
+the typed side. It is useful corroboration, not a measured full-snapshot total.
+The decision rests on the absence of a demonstrated per-chunk benefit plus the
+setup and resource penalties, not on pretending that aggregate is a production
+snapshot duration.
 
 These reruns confirm the earlier exploratory rejections, now under the same
 file-backed, single-threaded profile used by production.
