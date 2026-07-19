@@ -54,8 +54,12 @@ def _quoted(path: Path) -> str:
 def _main_files() -> tuple[list[ExtractedFile], list[Path]]:
     est_paths = sorted(DATA.glob("estabelecimento-*.csv"))
     files = [
-        ExtractedFile(kind="empresas", zip_name="empresa.zip", csv_path=DATA / "empresa.csv"),
-        ExtractedFile(kind="simples", zip_name="simples.zip", csv_path=DATA / "simples.csv"),
+        ExtractedFile(
+            kind="empresas", zip_name="empresa.zip", csv_path=DATA / "empresa.csv"
+        ),
+        ExtractedFile(
+            kind="simples", zip_name="simples.zip", csv_path=DATA / "simples.csv"
+        ),
         ExtractedFile(kind="socios", zip_name="socio.zip", csv_path=DATA / "socio.csv"),
         *(
             ExtractedFile(kind="estabelecimentos", zip_name=path.name, csv_path=path)
@@ -71,7 +75,8 @@ def _sample_rows(con, sample_size: int) -> list[tuple[Any, ...]]:
         return []
     n = min(sample_size, expected_n)
     fields = ", ".join(
-        f"{expr} AS {alias}" for alias, expr in transform._ROUNDTRIP_FIELDS  # noqa: SLF001
+        f"{expr} AS {alias}"
+        for alias, expr in transform._ROUNDTRIP_FIELDS  # noqa: SLF001
     )
     return con.execute(
         f"""
@@ -88,7 +93,9 @@ def _sample_rows(con, sample_size: int) -> list[tuple[Any, ...]]:
 
 
 def _sample_fingerprint(con, sample_size: int) -> str:
-    payload = json.dumps(_sample_rows(con, sample_size), ensure_ascii=False, default=str)
+    payload = json.dumps(
+        _sample_rows(con, sample_size), ensure_ascii=False, default=str
+    )
     return hashlib.sha256(payload.encode()).hexdigest()
 
 
@@ -195,11 +202,15 @@ def _prepare_fixture() -> dict[str, Any]:
             """
         )
         try:
-            transform.assert_roundtrip(con, CORRUPT_PARQUET, sample_size=DEFAULT_SAMPLE_SIZE)
+            transform.assert_roundtrip(
+                con, CORRUPT_PARQUET, sample_size=DEFAULT_SAMPLE_SIZE
+            )
         except transform.RoundtripError:
             pass
         else:
-            raise AssertionError("current verifier accepted deliberately corrupted Parquet")
+            raise AssertionError(
+                "current verifier accepted deliberately corrupted Parquet"
+            )
 
         row_count = con.execute("SELECT COUNT(*) FROM estabelecimento").fetchone()[0]
         sample_fingerprint = _sample_fingerprint(con, DEFAULT_SAMPLE_SIZE)
@@ -319,7 +330,9 @@ def main() -> None:
     parser.add_argument("--repeats", type=int, default=5)
     parser.add_argument("--seed", type=int, default=20260719)
     parser.add_argument("--sample-size", type=int, default=DEFAULT_SAMPLE_SIZE)
-    parser.add_argument("--json", type=Path, default=RESULT_ROOT / "verify-roundtrip.json")
+    parser.add_argument(
+        "--json", type=Path, default=RESULT_ROOT / "verify-roundtrip.json"
+    )
     parser.add_argument("--worker", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--variant", choices=VARIANTS, help=argparse.SUPPRESS)
     parser.add_argument("--repetition", type=int, default=0, help=argparse.SUPPRESS)
@@ -340,7 +353,9 @@ def main() -> None:
     execution_order: list[str] = []
     start_with_legacy = random.Random(args.seed).choice([True, False])
     for repetition in range(args.repeats):
-        legacy_first = start_with_legacy if repetition % 2 == 0 else not start_with_legacy
+        legacy_first = (
+            start_with_legacy if repetition % 2 == 0 else not start_with_legacy
+        )
         order = VARIANTS if legacy_first else tuple(reversed(VARIANTS))
         execution_order.append("legacy-current" if legacy_first else "current-legacy")
         for variant in order:
