@@ -537,6 +537,53 @@ def test_dedupe_cnpj_basico_table_leaves_null_keys_untouched():
         con.close()
 
 
+def test_dedupe_cnpj_basico_table_flags_conflicting_but_not_exact_duplicates(caplog):
+    """Distingue duplicata EXATA (linha idêntica, colapso sem perda) de
+    duplicata CONFLITANTE (mesmo cnpj_basico, payload diferente).
+
+    Known gap (documentado no docstring de _dedupe_cnpj_basico_table, ainda
+    aberto): ambos os casos hoje recebem o MESMO colapso determinístico --
+    esta função não implementa fail/quarentena pra conflito, só detecção e
+    logging diferenciado. Este teste prova que a DETECÇÃO distingue os dois
+    casos corretamente, não que o conflito é bloqueado (não é).
+    """
+    import logging
+
+    con = duckdb.connect()
+    try:
+        con.execute(
+            "CREATE TABLE empresa (cnpj_basico VARCHAR, razao_social VARCHAR, "
+            "natureza_juridica VARCHAR, qualificacao_responsavel VARCHAR, capital_social VARCHAR, "
+            "porte_empresa VARCHAR, ente_federativo_responsavel VARCHAR)"
+        )
+        con.execute(
+            "INSERT INTO empresa VALUES "
+            # '11111111': exact duplicate — byte-identical rows, no info loss.
+            "('11111111', 'ACME LTDA', '2062', '49', '100000,50', '03', ''), "
+            "('11111111', 'ACME LTDA', '2062', '49', '100000,50', '03', ''), "
+            # '22222222': conflicting duplicate — different razao_social.
+            "('22222222', 'BETA LTDA', '2062', '49', '1,00', '03', ''), "
+            "('22222222', 'BETA CORP', '2062', '49', '1,00', '03', '')"
+        )
+
+        with caplog.at_level(logging.WARNING, logger="ficha_etl.transform"):
+            dupes = transform._dedupe_cnpj_basico_table(con, "empresa")
+
+        assert dupes == 2  # 1 excess row for each of the two keys
+
+        error_records = [r for r in caplog.records if r.levelno >= logging.ERROR]
+        assert len(error_records) == 1, "expected exactly one conflicting-duplicate ERROR log"
+        msg = error_records[0].message
+        assert "22222222" in msg, "the conflicting key must be named in the evidence"
+        assert "11111111" not in msg, "the exact duplicate must NOT be flagged as conflicting"
+
+        # Still collapsed to 1 row each (fail/quarantine not implemented — known gap).
+        total = con.execute("SELECT COUNT(*) FROM empresa").fetchone()[0]
+        assert total == 2
+    finally:
+        con.close()
+
+
 def test_transform_snapshot_records_duplicate_rows_for_load_duckdb_stage(tmp_path):
     """Finding G do review do owner na PR #70: duplicate_rows do estágio
     "load_duckdb" reflete a contagem W13.1a real (não None) quando simples

@@ -338,14 +338,26 @@ def _dedupe_cnpj_basico_table(con: duckdb.DuckDBPyConnection, table: str) -> int
     determinística pra duplicatas semanticamente diferentes (não uma escolha
     definida-por-implementação de "o que o DuckDB decidir manter"); ordenar
     pela linha inteira garante que a mesma entrada sempre colapsa pro mesmo
-    sobrevivente, execução após execução -- ainda que a escolha entre dois
-    registros genuinamente conflitantes (ex.: duas razao_social diferentes
-    pro mesmo cnpj_basico) continue sendo uma questão de qualidade de dados
-    a montante, não resolvida por esta função.
+    sobrevivente, execução após execução.
+
+    KNOWN GAP, deliberadamente não resolvido aqui (ver issue #76):
+    esta função distingue duplicata EXATA (linha inteira idêntica -- colapso
+    sem perda de informação nenhuma) de duplicata CONFLITANTE (mesmo
+    cnpj_basico, payload diferente -- ex. duas razao_social distintas) e loga
+    as duas de forma bem diferente, mas para AMBAS ainda aplica o mesmo
+    colapso determinístico (menor valor da linha inteira em ordem
+    lexicográfica). RFC 0001 §7.9 lista "regra determinística, quarentena ou
+    falha com evidência" como as três respostas aceitáveis pra duplicata
+    conflitante; o que está implementado aqui é só a primeira. Falhar o job
+    inteiro ou desviar linhas conflitantes pra um artefato de quarentena são
+    decisões de comportamento operacional (o job mensal roda sem supervisão)
+    que merecem discussão própria antes de implementar, não uma escolha
+    unilateral enfiada numa correção de bug -- por isso ficam de fora deste
+    fix e viram trabalho de acompanhamento explícito.
 
     Performático: a sondagem DISTINCT é um único scan agregado; o rewrite
-    (window + materialização completa) só roda quando duplicatas realmente
-    existem, então um mês limpo paga ~nada.
+    (window + materialização completa, e a sondagem extra de conflito) só
+    roda quando duplicatas realmente existem, então um mês limpo paga ~nada.
     """
     extra_rows = con.execute(
         f"SELECT COUNT(*) FILTER (WHERE cnpj_basico IS NOT NULL) - COUNT(DISTINCT cnpj_basico) "
@@ -353,7 +365,32 @@ def _dedupe_cnpj_basico_table(con: duckdb.DuckDBPyConnection, table: str) -> int
     ).fetchone()[0]
     if extra_rows <= 0:
         return 0
-    tiebreak_cols = ", ".join(registry.main_table(table).source.columns)
+
+    cols = registry.main_table(table).source.columns
+    tiebreak_cols = ", ".join(cols)
+    # Struct-of-every-column per row, compared for distinctness per cnpj_basico
+    # group: a key whose duplicate rows all pack into the SAME struct is an
+    # exact (lossless) duplicate; a key with >1 distinct struct has rows that
+    # genuinely disagree on some field -- that's the case RFC 0001 §7.9 cares
+    # about, not mere repetition. `t.` prefix avoids ambiguity against the
+    # dupe_keys CTE, which also has a cnpj_basico column.
+    struct_expr = "{" + ", ".join(f"'{c}': t.{c}" for c in cols) + "}"
+    conflicting = con.execute(
+        f"""
+        WITH dupe_keys AS (
+            SELECT cnpj_basico FROM {table}
+            WHERE cnpj_basico IS NOT NULL
+            GROUP BY cnpj_basico HAVING COUNT(*) > 1
+        )
+        SELECT t.cnpj_basico
+        FROM {table} t JOIN dupe_keys dk ON dk.cnpj_basico = t.cnpj_basico
+        GROUP BY t.cnpj_basico
+        HAVING COUNT(DISTINCT {struct_expr}) > 1
+        ORDER BY t.cnpj_basico
+        LIMIT 5
+        """
+    ).fetchall()
+
     con.execute(
         f"CREATE OR REPLACE TABLE {table} AS "
         f"SELECT * FROM {table} WHERE cnpj_basico IS NULL "
@@ -361,6 +398,21 @@ def _dedupe_cnpj_basico_table(con: duckdb.DuckDBPyConnection, table: str) -> int
         f"SELECT * FROM {table} WHERE cnpj_basico IS NOT NULL "
         f"QUALIFY row_number() OVER (PARTITION BY cnpj_basico ORDER BY {tiebreak_cols}) = 1"
     )
+
+    if conflicting:
+        sample = ", ".join(row[0] for row in conflicting)
+        log.error(
+            "W13.1a: %s has %d cnpj_basico value(s) with GENUINELY CONFLICTING payloads "
+            "(different field values for the same key, not just a repeated row) -- "
+            "collapsed to the deterministic full-row-order survivor, but that choice is "
+            "NOT verified correct, only reproducible. This pipeline has no fail/quarantine "
+            "path for conflicting duplicates yet (known, tracked gap -- see issue #76). "
+            "Sample conflicting cnpj_basico (up to 5 shown): %s. Investigate the upstream "
+            "dump for these keys before trusting this snapshot for them.",
+            table,
+            len(conflicting),
+            sample,
+        )
     log.warning(
         "W13.1a: %s had %d duplicate cnpj_basico row(s) (excess rows beyond 1 per "
         "non-null key); collapsed deterministically (full-row order) to 1 row per "
@@ -387,11 +439,22 @@ def load_main_tables_into_duckdb(
     contagem já era calculada aqui pra decidir se colapsa. Chamadores que não
     precisam do valor (ex.: os testes existentes) simplesmente ignoram o
     retorno -- compatível com o `None` implícito de antes.
+
+    Dedup roda IMEDIATAMENTE após `empresa`/`simples` carregarem, dentro do
+    próprio loop -- não como uma passada separada depois que as quatro
+    tabelas já estão residentes. `MAIN_TABLES` carrega `empresa` (pequena)
+    antes de `estabelecimento` (a tabela gigante); colapsar `empresa` antes
+    de `estabelecimento` começar a carregar evita segurar uma cópia
+    maior-que-necessária de `empresa` durante a janela de maior pressão de
+    memória/disco (RFC 0001 Objetivo 3: "nenhuma etapa depende de manter
+    todas as tabelas gigantes em memória"). O mesmo vale pra `simples`
+    (dedup roda antes de `socio` carregar).
     """
     by_kind: dict[FileKind, list[Path]] = collections.defaultdict(list)
     for ef in extracted:
         by_kind[ef.kind].append(ef.csv_path)
 
+    total_dupes = 0
     for spec in registry.MAIN_TABLES:
         t0 = time.monotonic()
         log.info("loading table '%s' from %d CSV(s)...", spec.name, len(by_kind.get(spec.kind, [])))
@@ -403,8 +466,10 @@ def load_main_tables_into_duckdb(
             f"{n:,}",
             time.monotonic() - t0,
         )
+        if spec.name in ("empresa", "simples"):
+            total_dupes += _dedupe_cnpj_basico_table(con, spec.name)
 
-    return sum(_dedupe_cnpj_basico_table(con, t) for t in ("empresa", "simples"))
+    return total_dupes
 
 
 def load_lookup_into_duckdb(
