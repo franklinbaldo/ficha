@@ -334,11 +334,18 @@ def test_load_order_puts_dedupable_tables_before_estabelecimento():
     declared order (empresa, estabelecimento, simples, socio) is pinned
     separately by test_registry.test_main_tables_order_and_shape and must NOT
     change; only the physical load order in transform.py does.
+
+    Pins the exact tuple, not just set-membership: `_LOAD_ORDER` is small and
+    deliberate, and a set comparison can't catch a duplicated entry (e.g.
+    ("empresa", "simples", "estabelecimento", "socio", "empresa") would still
+    satisfy `set(order) == {...}` while loading empresa twice).
     """
+    assert transform._LOAD_ORDER == ("empresa", "simples", "estabelecimento", "socio")
+    # Redundant with the pinned tuple above, but documents *why* this order
+    # was chosen -- kept so the intent survives even if the tuple is edited.
     order = transform._LOAD_ORDER
     assert order.index("empresa") < order.index("estabelecimento")
     assert order.index("simples") < order.index("estabelecimento")
-    # Same four tables as the registry, just reordered -- nothing dropped/added.
     assert set(order) == {t.name for t in registry.MAIN_TABLES}
 
 
