@@ -4,7 +4,8 @@ Fixture preparation is untimed.  Each mode/repetition runs in a fresh child
 process, file-backed DuckDB database, and spill directory so RSS and cache state
 cannot leak between measurements.  The timed region is exactly
 `load_main_tables_into_duckdb`; lookups are loaded beforehand to match the
-production phase boundary.
+production phase boundary. Disk sampling deliberately continues through
+`CHECKPOINT` and connection close so database/WAL/temp coexistence is captured.
 """
 
 from __future__ import annotations
@@ -98,7 +99,9 @@ def _prepare_fixtures() -> dict[str, Any]:
 
 
 def _rss_peak_mib() -> float:
-    # Workers run on Linux in Actions.  ru_maxrss is KiB there.
+    # Workers run on Linux in Actions. ru_maxrss is KiB there and is cumulative
+    # for the lifetime of this worker process; callers must compare against a
+    # baseline captured immediately before the measured loader region.
     return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
 
 
@@ -109,6 +112,7 @@ def _worker(mode: str, repetition: int, output_json: Path) -> None:
     shutil.rmtree(state_dir, ignore_errors=True)
     db_path = state_dir / "bench.duckdb"
     con = open_production_connection(db_path)
+    sampler: metrics._DiskPeakSampler | None = None  # noqa: SLF001
     try:
         for kind in (
             "cnaes",
@@ -139,20 +143,20 @@ def _worker(mode: str, repetition: int, output_json: Path) -> None:
             ),
         ]
         environment = capture_environment(con, db_path)
+        rss_baseline_mib = _rss_peak_mib()
         sampler = metrics._DiskPeakSampler(  # noqa: SLF001 -- benchmark reuses production sampler
             {"duckdb_tmp": state_dir / "duckdb_tmp", "state": state_dir},
             interval=0.1,
             filesystem_path=state_dir,
         )
         sampler.start()
+
         wall_start = time.monotonic()
         cpu_start = time.process_time()
-        try:
-            duplicate_rows = transform.load_main_tables_into_duckdb(con, files)
-            wall_seconds = time.monotonic() - wall_start
-            cpu_seconds = time.process_time() - cpu_start
-        finally:
-            peaks = sampler.stop()
+        duplicate_rows = transform.load_main_tables_into_duckdb(con, files)
+        wall_seconds = time.monotonic() - wall_start
+        cpu_seconds = time.process_time() - cpu_start
+        rss_loader_end_peak_mib = _rss_peak_mib()
 
         if duplicate_rows != expected_duplicates:
             raise AssertionError(
@@ -166,17 +170,36 @@ def _worker(mode: str, repetition: int, output_json: Path) -> None:
         if simples_rows != manifest["unique_rows"]["simples"]:
             raise AssertionError(f"{mode}: simples dedup result has {simples_rows} rows")
 
+        # Keep disk sampling alive beyond the loader timer: checkpoint/flush and
+        # close can briefly coexist with WAL, the consolidated DB, and temp files.
         con.execute("CHECKPOINT")
+        database_bytes = db_path.stat().st_size
+        con.close()
+        con = None
+        peaks = sampler.stop()
+        sampler = None
+        rss_post_close_peak_mib = _rss_peak_mib()
+
         result = {
             "mode": mode,
             "repetition": repetition,
             "environment": environment,
             "wall_seconds": wall_seconds,
             "cpu_seconds": cpu_seconds,
-            "rss_peak_mib": _rss_peak_mib(),
+            "rss_baseline_mib": rss_baseline_mib,
+            "rss_loader_end_peak_mib": rss_loader_end_peak_mib,
+            "rss_loader_delta_mib": max(0.0, rss_loader_end_peak_mib - rss_baseline_mib),
+            "rss_post_close_peak_mib": rss_post_close_peak_mib,
+            "rss_post_close_delta_mib": max(0.0, rss_post_close_peak_mib - rss_baseline_mib),
+            "rss_measurement_note": (
+                "Linux ru_maxrss is process-lifetime cumulative. Baseline is captured after "
+                "lookup setup and immediately before the timed loader; deltas show only new "
+                "high-water marks after that baseline."
+            ),
+            "disk_sampling_window": "loader start through CHECKPOINT and connection close",
             "duplicate_rows": duplicate_rows,
             "result_rows": {"empresa": empresa_rows, "simples": simples_rows},
-            "database_bytes": db_path.stat().st_size,
+            "database_bytes": database_bytes,
             "duckdb_tmp_peak_bytes": peaks.get("duckdb_tmp", 0),
             "state_peak_bytes": peaks.get("state", 0),
             "filesystem_used_peak_bytes": peaks.get("filesystem", 0),
@@ -186,7 +209,10 @@ def _worker(mode: str, repetition: int, output_json: Path) -> None:
         output_json.write_text(json.dumps(result, indent=2))
         print(json.dumps(result, sort_keys=True))
     finally:
-        con.close()
+        if sampler is not None:
+            sampler.stop()
+        if con is not None:
+            con.close()
         shutil.rmtree(state_dir, ignore_errors=True)
 
 
