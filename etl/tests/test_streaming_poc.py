@@ -15,7 +15,7 @@ from pathlib import Path
 import duckdb
 import pytest
 
-from ficha_etl import transform
+from ficha_etl import registry, transform
 from ficha_etl.streaming import create_table_from_zip_streaming
 
 # ---------------------------------------------------------------------------
@@ -54,6 +54,9 @@ _ESTABELECIMENTO_COLS = (
     "situacao_especial",
     "data_situacao_especial",
 )
+# `_create_table_from_csvs` agora recebe um CsvSpec (não a tupla crua) —
+# `create_table_from_zip_streaming` continua recebendo `_ESTABELECIMENTO_COLS`.
+_ESTABELECIMENTO_SPEC = registry.CsvSpec(columns=_ESTABELECIMENTO_COLS)
 
 
 def _make_row(i: int) -> tuple[str, ...]:
@@ -137,7 +140,7 @@ def test_streaming_correctness_row_count(small_zip, tmp_path):
     extract_dir = tmp_path / "extracted"
     extracted = transform.extract_zip(small_zip, extract_dir)
     transform._create_table_from_csvs(
-        con_current, "estabelecimento", extracted, _ESTABELECIMENTO_COLS
+        con_current, "estabelecimento", extracted, _ESTABELECIMENTO_SPEC
     )
 
     # Streaming approach: no disk extract
@@ -166,7 +169,7 @@ def test_streaming_correctness_content(small_zip, tmp_path):
     extract_dir = tmp_path / "extracted"
     extracted = transform.extract_zip(small_zip, extract_dir)
     transform._create_table_from_csvs(
-        con_current, "estabelecimento", extracted, _ESTABELECIMENTO_COLS
+        con_current, "estabelecimento", extracted, _ESTABELECIMENTO_SPEC
     )
     create_table_from_zip_streaming(
         con_stream,
@@ -247,7 +250,7 @@ def test_benchmark_streaming_vs_current(bench_zip, tmp_path):
     con_current = duckdb.connect()
     extracted = transform.extract_zip(zip_path, extract_dir)
     transform._create_table_from_csvs(
-        con_current, "estabelecimento", extracted, _ESTABELECIMENTO_COLS
+        con_current, "estabelecimento", extracted, _ESTABELECIMENTO_SPEC
     )
     t_current = time.perf_counter() - t0
     disk_current = _bytes_written_to_dir(extract_dir)
