@@ -259,6 +259,36 @@ que deixaria o DuckDB escolher a materialização. As listas-distintas usam
 `_cnpjs_slim` (read_parquet + projeção) fica raw — é I/O. Equivalência bit-a-bit
 coberta por `test_write_raizes_from_cnpjs_matches_original`.
 
+### 5. Postergar materialização — quando é seguro, e quando não é
+
+Princípio geral adotado: **postergar materialização (fundir expressões Ibis
+numa única query, sem `CREATE TEMP TABLE` intermediário) sempre que possível**
+— cada fronteira de materialização tem custo (I/O do intermediário) e só se
+justifica por uma razão concreta, não por hábito. Mas "sempre que possível" é
+uma pergunta empírica, não uma preferência de estilo: uma auditoria da
+migração do `raizes` acima (2026-07-18) separou suas seis fronteiras
+materializadas em duas classes — quatro com mecanismo de OOM documentado (o
+pre-dedup de dois passos acima) e três sem histórico direto (`_raizes_counts`,
+`_raizes_empresa`, `_raizes_matriz`) — e testou diretamente se essas três
+podiam ser fundidas.
+
+[`docs/ibis-raizes-fusion-benchmark-2026-07-18.md`](../ibis-raizes-fusion-benchmark-2026-07-18.md)
+mediu isso: a 3M grupos, a versão fundida usa **menos** spill que a eager
+(0.69×); a 20M grupos, sob o mesmo teto de memória, a relação **se inverte** —
+fundida usa 2.64× mais spill e demora 3.7× mais para estourar. O
+comportamento não é monotônico, e o "vale a pena fundir" de uma escala menor
+não prediz a escala de produção (~67M grupos, além do ponto onde eager já
+vence claramente aqui).
+
+Guidance: **manter eager** para as três fronteiras nesse caso específico — a
+evidência aponta contra fundir, não apenas "não confirma que fundir é seguro".
+Mais geralmente: adiar materialização é o instinto certo por padrão, mas cada
+adiamento concreto precisa do mesmo tratamento que uma migração para Ibis
+recebe neste ADR — um benchmark medindo spill/tempo na forma real da query
+(não isolado), antes de virar código de produção. Uma fronteira sem histórico
+de OOM documentado ainda pode reintroduzir o mesmo mecanismo (pipelinar
+operadores pesados juntos) que a materialização existe para evitar.
+
 ### Fecho — a "última peça" era uma regra, e foi aplicada
 
 Toda a camada analítica *build* do ETL está agora em Ibis: **lookups ✅, socios ✅,
