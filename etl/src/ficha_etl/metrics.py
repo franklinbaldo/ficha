@@ -69,6 +69,18 @@ class ChunkMetrics:
     invoca `on_chunk` com `status="failed"` e `error=str(exc)` ANTES de
     re-levantar a exceção original (nunca no lugar dela -- reportar a
     métrica não pode suprimir uma falha real do pipeline).
+
+    `rss_peak_mib`/`duckdb_tmp_peak_mib`/`workdir_peak_mib`: picos vistos
+    ATÉ ESTE PONTO NO ESTÁGIO INTEIRO, não uma medição isolada do chunk.
+    Não existe uma thread de amostragem nova por chunk (chunks rodam sub-
+    segundo com frequência -- ver docstring de `write_cnpjs_parquet_chunked`
+    -- criar/parar uma thread daemon a cada chunk desproporcionalizaria o
+    próprio tempo do chunk); em vez disso, o writer espia o mesmo sampler
+    que já está rodando pro estágio (via `StageHandle.disk_peaks_snapshot()`)
+    e o `_rss_peak_mib()` do processo (chamada direta, sem thread). Como o
+    sampler é compartilhado entre chunks, esses três números são
+    CUMULATIVOS -- o chunk 3 herda o pico que o chunk 1 já tinha empurrado,
+    mesma limitação honesta documentada em `_rss_peak_mib`.
     """
 
     index: int
@@ -79,6 +91,9 @@ class ChunkMetrics:
     bytes_written: int | None = None
     status: str = "ok"
     error: str | None = None
+    rss_peak_mib: float | None = None
+    duckdb_tmp_peak_mib: float | None = None
+    workdir_peak_mib: float | None = None
 
     def to_json_dict(self) -> dict[str, object]:
         return {
@@ -90,6 +105,13 @@ class ChunkMetrics:
             "bytes_written": self.bytes_written,
             "status": self.status,
             "error": self.error,
+            "rss_peak_mib": round(self.rss_peak_mib, 1) if self.rss_peak_mib is not None else None,
+            "duckdb_tmp_peak_mib": (
+                round(self.duckdb_tmp_peak_mib, 1) if self.duckdb_tmp_peak_mib is not None else None
+            ),
+            "workdir_peak_mib": (
+                round(self.workdir_peak_mib, 1) if self.workdir_peak_mib is not None else None
+            ),
         }
 
 
@@ -100,6 +122,22 @@ class StageMetrics:
     Campos e nomes de `to_json_dict()` são o contrato externo de
     `metrics.json` (RFC 0001 §16) -- não renomeie sem atualizar quem lê o
     arquivo.
+
+    `casts_invalid`/`quarantine_rows`/`duplicate_rows`: RFC 0001 §16 pede
+    esses três campos, mas o pipeline ATUAL (reader legado, ver
+    `_create_table_from_csvs` em transform.py) não tem esses conceitos --
+    ele não valida casts (tudo é lido como VARCHAR e convertido só nas
+    SELECTs finais, sem rejeitar linha nenhuma por tipo inválido) nem tem
+    noção de quarentena (linha problemática vira NULL via `null_padding`
+    ou é dropada de forma agregada via `ignore_errors`, nunca contada ou
+    isolada individualmente). Esses conceitos só existem a partir da
+    camada canônica da RFC (Fase 1+, política de erro §8.2 do registry).
+    Implementá-los agora seria mudança de comportamento do pipeline atual
+    -- exatamente o que a Fase 0 existe pra NÃO fazer. Ficam `None`
+    explícito em todo o caminho atual; `duplicate_rows` é a única exceção
+    parcial (ver o comentário em `load_main_tables_into_duckdb`, que já
+    tem essa contagem calculada pra outro fim -- W13.1a -- e a repassa pro
+    estágio "load_duckdb" sem custo de query nova).
     """
 
     name: str
@@ -112,11 +150,15 @@ class StageMetrics:
     rows_written: int | None = None
     bytes_read: int | None = None
     bytes_written: int | None = None
+    files_read: int | None = None
     duckdb_tmp_peak_mib: float | None = None
     workdir_peak_mib: float | None = None
     filesystem_used_peak_mib: float | None = None
     filesystem_total_mib: float | None = None
     filesystem_used_peak_percent: float | None = None
+    casts_invalid: int | None = None
+    quarantine_rows: int | None = None
+    duplicate_rows: int | None = None
     chunks: tuple[ChunkMetrics, ...] | None = None
     extra: Mapping[str, ExtraValue] | None = None
 
@@ -137,15 +179,22 @@ class StageMetrics:
 
         Chaves (contrato externo, RFC 0001 §16):
         stage, wall_seconds, rows_read, rows_written, bytes_read,
-        bytes_written, mb_per_second, rows_per_second, rss_peak_mib,
-        rss_peak_delta_mib, duckdb_tmp_peak_mib, workdir_peak_mib,
-        filesystem_used_peak_mib, filesystem_total_mib,
-        filesystem_used_peak_percent, started_at, finished_at, chunks, extra.
+        bytes_written, files_read, mb_per_second, rows_per_second,
+        rss_peak_mib, rss_peak_delta_mib, duckdb_tmp_peak_mib,
+        workdir_peak_mib, filesystem_used_peak_mib, filesystem_total_mib,
+        filesystem_used_peak_percent, casts_invalid, quarantine_rows,
+        duplicate_rows, started_at, finished_at, chunks, extra.
 
         `filesystem_used_peak_percent` é o que a RFC 0001 §19 realmente
         pede ("permanecer abaixo de 80% do filesystem") -- o MiB absoluto
         sozinho não diz se um runner está perto do limite ou não (o mesmo
         valor é folgado num runner de 500 GiB e crítico num de 20 GiB).
+
+        `casts_invalid`/`quarantine_rows` são sempre `None` no pipeline
+        atual (ver docstring da classe -- não existem como conceito antes
+        da camada canônica); `duplicate_rows` é `None` na maioria dos
+        estágios, com um valor real só em "load_duckdb" (reaproveita a
+        contagem W13.1a já calculada ali).
         """
         return {
             "stage": self.name,
@@ -154,6 +203,7 @@ class StageMetrics:
             "rows_written": self.rows_written,
             "bytes_read": self.bytes_read,
             "bytes_written": self.bytes_written,
+            "files_read": self.files_read,
             "mb_per_second": self.mb_per_second(),
             "rows_per_second": self.rows_per_second(),
             "rss_peak_mib": round(self.rss_peak_mib, 1),
@@ -179,6 +229,9 @@ class StageMetrics:
                 if self.filesystem_used_peak_percent is not None
                 else None
             ),
+            "casts_invalid": self.casts_invalid,
+            "quarantine_rows": self.quarantine_rows,
+            "duplicate_rows": self.duplicate_rows,
             "started_at": self.started_at,
             "finished_at": self.finished_at,
             "chunks": [c.to_json_dict() for c in self.chunks] if self.chunks else [],
@@ -201,11 +254,42 @@ class StageHandle:
     rows_written: int | None = None
     bytes_read: int | None = None
     bytes_written: int | None = None
+    # RFC 0001 §16: contagem de arquivos lidos no estágio (ex.: CSVs).
+    # None onde não se aplica (ex.: writers que só leem tabelas já
+    # carregadas no DuckDB, sem tocar arquivo novo nenhum).
+    files_read: int | None = None
+    # Sempre None no pipeline atual -- ver docstring de StageMetrics pra
+    # o porquê (conceitos que só existem a partir da camada canônica).
+    casts_invalid: int | None = None
+    quarantine_rows: int | None = None
+    duplicate_rows: int | None = None
     extra: dict[str, ExtraValue] = field(default_factory=dict)
     # Preenchido por writers chunked via callback `on_chunk` (ex.:
     # `write_cnpjs_parquet_chunked`) -- ver `ChunkMetrics`. `chunks.append`
     # é o próprio callback: qualquer callable `ChunkMetrics -> None` serve.
     chunks: list[ChunkMetrics] = field(default_factory=list)
+    # Referência interna ao sampler do estágio corrente -- preenchida por
+    # `MetricsRecorder.stage()` (nunca pelo chamador). Existe só pra
+    # viabilizar `disk_peaks_snapshot()`; não faz parte do contrato
+    # público do handle (rows/bytes/extra/chunks, que o chamador escreve
+    # diretamente).
+    _sampler: _DiskPeakSampler | None = field(default=None, repr=False, compare=False)
+
+    def disk_peaks_snapshot(self) -> dict[str, int]:
+        """Pico de disco observado ATÉ AGORA no estágio corrente, em bytes.
+
+        Diferente de esperar o estágio terminar, isto espia o sampler que
+        já está rodando (sem pará-lo) -- usado por writers chunked pra
+        anotar cada `ChunkMetrics` com o pico visto até aquele chunk (ver
+        `write_cnpjs_parquet_chunked`). Chaves possíveis: "duckdb_tmp",
+        "workdir", "filesystem", "filesystem_total" (as mesmas de
+        `_DiskPeakSampler`). `{}` se o estágio não monitora nenhum
+        diretório (ex.: "lookups" sem duckdb_tmp_dir/workdir e sem
+        filesystem_path configurado no recorder).
+        """
+        if self._sampler is None:
+            return {}
+        return self._sampler.current_peaks()
 
 
 def _now_iso() -> str:
@@ -428,6 +512,20 @@ class _DiskPeakSampler:
                 return
             self._peaks[key] = size
 
+    def current_peaks(self) -> dict[str, int]:
+        """Cópia thread-safe do estado ATUAL de `_peaks`, SEM parar a amostragem.
+
+        Diferente de `stop()`, isto é só uma leitura pontual do que já foi
+        observado pela thread de fundo até agora -- não força uma amostra
+        extra fora do `interval` configurado, nem encerra a thread. Usado
+        por `StageHandle.disk_peaks_snapshot()` pra anotar `ChunkMetrics`
+        com o pico visto até aquele chunk, sem o custo/side-effect de
+        `stop()` (ver Finding F do review adversarial na PR #70: mais
+        barato que abrir um sampler novo por chunk).
+        """
+        with self._lock:
+            return dict(self._peaks)
+
     def stop(self) -> dict[str, int]:
         if not self._has_anything_to_watch():
             return {}
@@ -465,6 +563,26 @@ def _package_version() -> str:
 
     try:
         return importlib.metadata.version("ficha-etl")
+    except importlib.metadata.PackageNotFoundError:
+        return "unknown"
+
+
+def _ibis_version() -> str:
+    """Versão do ibis-framework instalado, ou 'unknown' fora de um venv com metadata.
+
+    Mesmo padrão de `_package_version` -- RFC 0001 §16 pede a versão do
+    Ibis (camada analítica compartilhada, ADR 0017, usada em vários
+    writers via `ibis.to_sql`) ao lado de código/DuckDB/schema. O nome de
+    distribuição no PyPI é "ibis-framework" (o pacote importável é `ibis`,
+    mas `importlib.metadata` indexa por nome de distribuição, não de
+    módulo). `PackageNotFoundError` vira "unknown", nunca propaga --
+    observabilidade não pode falhar o pipeline por não achar metadata de
+    um pacote.
+    """
+    import importlib.metadata
+
+    try:
+        return importlib.metadata.version("ibis-framework")
     except importlib.metadata.PackageNotFoundError:
         return "unknown"
 
@@ -607,6 +725,10 @@ class MetricsRecorder:
         started_at = _now_iso()
         t0 = time.monotonic()
         sampler = self._start_sampler(duckdb_tmp_dir, workdir, sample_interval)
+        # Expõe o sampler pro handle -- viabiliza `disk_peaks_snapshot()`
+        # (Finding F): writers chunked espiam o pico ATÉ AGORA sem precisar
+        # de um sampler novo por chunk.
+        handle._sampler = sampler  # noqa: SLF001 -- mesmo objeto, é o próprio MetricsRecorder que preenche
         try:
             yield handle
         finally:
@@ -669,6 +791,7 @@ class MetricsRecorder:
                 rows_written=handle.rows_written,
                 bytes_read=handle.bytes_read,
                 bytes_written=handle.bytes_written,
+                files_read=handle.files_read,
                 rss_peak_mib=rss_now,
                 rss_peak_delta_mib=max(0.0, rss_now - self._last_rss_mib),
                 duckdb_tmp_peak_mib=_bytes_to_mib(peaks.get("duckdb_tmp")),
@@ -676,6 +799,9 @@ class MetricsRecorder:
                 filesystem_used_peak_mib=_bytes_to_mib(fs_used),
                 filesystem_total_mib=_bytes_to_mib(fs_total),
                 filesystem_used_peak_percent=_percent(fs_used, fs_total),
+                casts_invalid=handle.casts_invalid,
+                quarantine_rows=handle.quarantine_rows,
+                duplicate_rows=handle.duplicate_rows,
                 chunks=tuple(handle.chunks) if handle.chunks else None,
                 started_at=started_at,
                 finished_at=_now_iso(),
@@ -691,6 +817,8 @@ class MetricsRecorder:
         """Formato humano compacto, uma linha por estágio (RFC 0001 §16)."""
         parts = [f"[metrics] {m.name:<20s} {m.wall_seconds:7.1f}s"]
         parts.append(f"rows={m.rows_written:,}" if m.rows_written is not None else "rows=-")
+        if m.files_read is not None:
+            parts.append(f"files={m.files_read}")
         mbps = m.mb_per_second()
         if mbps is not None:
             parts.append(f"{mbps:.1f}MB/s")
@@ -707,6 +835,8 @@ class MetricsRecorder:
                 else ""
             )
             parts.append(f"fs_used_peak={m.filesystem_used_peak_mib:.0f}MiB{pct}")
+        if m.duplicate_rows is not None:
+            parts.append(f"duplicate_rows={m.duplicate_rows}")
         if m.chunks:
             parts.append(f"chunks={len(m.chunks)}")
         log.info(" ".join(parts))
@@ -718,12 +848,16 @@ class MetricsRecorder:
         do código que gerou este run. `package_version` é
         `importlib.metadata.version("ficha-etl")`, mantido à parte por ser
         útil saber, mas travado em "0.0.1" no pyproject.toml e por isso não
-        serve como identidade (ver docstring de `_git_sha`).
+        serve como identidade (ver docstring de `_git_sha`). `ibis_version`
+        segue o mesmo padrão de `package_version` (metadata do venv,
+        "unknown" se ausente). `schema_version` já é o parâmetro do
+        próprio `MetricsRecorder` -- exposto aqui sem transformação.
         """
         return {
             "code_version": _git_sha(),
             "package_version": _package_version(),
             "duckdb_version": duckdb.__version__,
+            "ibis_version": _ibis_version(),
             "schema_version": self.schema_version,
             "month": self.month,
             "pragmas": dict(self.pragmas),

@@ -55,6 +55,7 @@ def test_stage_to_json_dict_has_stable_keys():
         "rows_written",
         "bytes_read",
         "bytes_written",
+        "files_read",
         "mb_per_second",
         "rows_per_second",
         "rss_peak_mib",
@@ -64,6 +65,9 @@ def test_stage_to_json_dict_has_stable_keys():
         "filesystem_used_peak_mib",
         "filesystem_total_mib",
         "filesystem_used_peak_percent",
+        "casts_invalid",
+        "quarantine_rows",
+        "duplicate_rows",
         "started_at",
         "finished_at",
         "chunks",
@@ -269,6 +273,57 @@ def test_stage_disk_peak_tracks_workdir_growth(tmp_path):
     m = recorder.stages[-1]
     assert m.workdir_peak_mib is not None
     assert m.workdir_peak_mib >= 2.9
+
+
+# -----------------------------------------------------------------------------
+# Finding F do review do owner na PR #70: picos de RSS/disco por chunk sem
+# thread nova por chunk -- `current_peaks()` (leitura pontual, não pára o
+# sampler) + `StageHandle.disk_peaks_snapshot()` (delega pro sampler do
+# estágio corrente).
+# -----------------------------------------------------------------------------
+
+
+def test_disk_peak_sampler_current_peaks_does_not_stop_thread(tmp_path):
+    d = tmp_path / "d"
+    d.mkdir()
+    sampler = metrics._DiskPeakSampler({"workdir": d}, interval=0.05)
+    sampler.start()
+    try:
+        time.sleep(0.02)
+        (d / "big.bin").write_bytes(b"0" * (2 * 1024 * 1024))
+        time.sleep(0.15)
+        peaks = sampler.current_peaks()
+        assert peaks["workdir"] >= 2 * 1024 * 1024
+        # A thread continua viva -- current_peaks() não é stop().
+        assert sampler._thread is not None
+        assert sampler._thread.is_alive()
+    finally:
+        sampler.stop()
+
+
+def test_stage_handle_disk_peaks_snapshot_empty_without_sampler():
+    handle = metrics.StageHandle(name="s")
+    assert handle.disk_peaks_snapshot() == {}
+
+
+def test_stage_handle_disk_peaks_snapshot_delegates_to_sampler(tmp_path):
+    """MetricsRecorder.stage() preenche handle._sampler -- disk_peaks_snapshot()
+    do handle tem que refletir o mesmo pico que o sampler observou, mesmo
+    ANTES do estágio terminar (é justamente o ponto: espiar no meio)."""
+    recorder = metrics.MetricsRecorder(month="2026-07", schema_version="1.0.0")
+    workdir = tmp_path / "work"
+    workdir.mkdir()
+
+    with recorder.stage("writer", workdir=workdir, sample_interval=0.05) as handle:
+        (workdir / "out.bin").write_bytes(b"x" * (3 * 1024 * 1024))
+        time.sleep(0.15)
+        mid_stage_peaks = handle.disk_peaks_snapshot()
+        assert mid_stage_peaks.get("workdir", 0) >= 3 * 1024 * 1024
+
+    # Depois do estágio terminar (sampler já parado), o snapshot continua
+    # disponível (stop() preserva o último estado em _peaks).
+    final_peaks = handle.disk_peaks_snapshot()
+    assert final_peaks.get("workdir", 0) >= 3 * 1024 * 1024
 
 
 # -----------------------------------------------------------------------------
@@ -516,6 +571,78 @@ def test_envelope_uses_git_sha_as_code_version(monkeypatch):
 
 
 # -----------------------------------------------------------------------------
+# Finding G do review do owner na PR #70: campos do §16 ainda ausentes --
+# ibis_version no envelope; files_read/casts_invalid/quarantine_rows/
+# duplicate_rows em StageMetrics (os três últimos sempre None na Fase 0,
+# documentados como lacuna real, não inventados).
+# -----------------------------------------------------------------------------
+
+
+def test_envelope_includes_ibis_version():
+    recorder = metrics.MetricsRecorder(month="2026-07", schema_version="1.0.0")
+    envelope = recorder.to_envelope()
+    assert "ibis_version" in envelope
+    assert envelope["ibis_version"] != ""
+
+
+def test_ibis_version_returns_unknown_when_package_missing(monkeypatch):
+    import importlib.metadata
+
+    def fake_version(name):
+        raise importlib.metadata.PackageNotFoundError(name)
+
+    monkeypatch.setattr(importlib.metadata, "version", fake_version)
+    assert metrics._ibis_version() == "unknown"
+
+
+def test_envelope_exposes_schema_version_unchanged():
+    recorder = metrics.MetricsRecorder(month="2026-07", schema_version="9.9.9")
+    envelope = recorder.to_envelope()
+    assert envelope["schema_version"] == "9.9.9"
+
+
+def test_stage_files_read_is_settable_and_serializes():
+    recorder = metrics.MetricsRecorder(month="2026-07", schema_version="1.0.0")
+    with recorder.stage("extract") as handle:
+        handle.files_read = 37
+    m = recorder.stages[-1]
+    assert m.files_read == 37
+    assert m.to_json_dict()["files_read"] == 37
+
+
+def test_stage_files_read_defaults_to_none_when_not_applicable():
+    recorder = metrics.MetricsRecorder(month="2026-07", schema_version="1.0.0")
+    with recorder.stage("cnpj_contatos"):
+        pass
+    m = recorder.stages[-1]
+    assert m.files_read is None
+
+
+def test_stage_casts_invalid_and_quarantine_rows_always_none_in_phase_0():
+    """RFC 0001 §16 pede esses campos, mas o reader legado não tem esse
+    conceito (ver docstring de StageMetrics) -- devem ficar None sempre,
+    nunca um valor inventado."""
+    recorder = metrics.MetricsRecorder(month="2026-07", schema_version="1.0.0")
+    with recorder.stage("load_duckdb"):
+        pass
+    m = recorder.stages[-1]
+    assert m.casts_invalid is None
+    assert m.quarantine_rows is None
+    d = m.to_json_dict()
+    assert d["casts_invalid"] is None
+    assert d["quarantine_rows"] is None
+
+
+def test_stage_duplicate_rows_settable_via_handle():
+    recorder = metrics.MetricsRecorder(month="2026-07", schema_version="1.0.0")
+    with recorder.stage("load_duckdb") as handle:
+        handle.duplicate_rows = 3
+    m = recorder.stages[-1]
+    assert m.duplicate_rows == 3
+    assert m.to_json_dict()["duplicate_rows"] == 3
+
+
+# -----------------------------------------------------------------------------
 # Finding #4 do review adversarial da PR #70: ChunkMetrics -- serialização
 # estável (o teste de integração fim-a-fim com write_cnpjs_parquet_chunked
 # vive em test_transform.py, junto do resto dos testes desse writer).
@@ -536,6 +663,9 @@ def test_chunk_metrics_to_json_dict():
         "bytes_written": None,
         "status": "ok",
         "error": None,
+        "rss_peak_mib": None,
+        "duckdb_tmp_peak_mib": None,
+        "workdir_peak_mib": None,
     }
 
 
