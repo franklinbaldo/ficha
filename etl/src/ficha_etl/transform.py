@@ -15,7 +15,7 @@ import os
 import shutil
 import time
 import zipfile
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -23,6 +23,7 @@ import duckdb
 from rich.progress import Progress
 
 from . import fetcher as fetcher_mod
+from . import metrics as metrics_mod
 from . import registry
 from .progress import make_progress
 from .sources import FileKind, canonical_inventory, is_valid_month
@@ -308,8 +309,18 @@ def pick_threads() -> int:
 def load_main_tables_into_duckdb(
     con: duckdb.DuckDBPyConnection,
     extracted: Iterable[ExtractedFile],
-) -> None:
-    """Carrega Empresa/Estabelecimento/Socio/Simples no DuckDB."""
+) -> int:
+    """Carrega Empresa/Estabelecimento/Socio/Simples no DuckDB.
+
+    Devolve a contagem W13.1a (nº de `cnpj_basico` em `simples` com mais de
+    uma linha) -- não o total de linhas duplicadas, apenas quantos valores
+    de `cnpj_basico` violam a suposição 1:1. `transform_snapshot` repassa
+    esse número pro `duplicate_rows` do estágio "load_duckdb" (RFC 0001
+    §16) sem custo de query nova, já que essa contagem já era calculada
+    aqui pra decidir se loga o warning. Chamadores que não precisam do
+    valor (ex.: os testes existentes) simplesmente ignoram o retorno --
+    compatível com o `None` implícito de antes.
+    """
     by_kind: dict[FileKind, list[Path]] = collections.defaultdict(list)
     for ef in extracted:
         by_kind[ef.kind].append(ef.csv_path)
@@ -343,6 +354,7 @@ def load_main_tables_into_duckdb(
             "See docs/perf-plan-2026-05.md §13.1 for the fix.",
             dupes,
         )
+    return dupes
 
 
 def load_lookup_into_duckdb(
@@ -677,6 +689,9 @@ def write_cnpjs_parquet_chunked(
     con: duckdb.DuckDBPyConnection,
     estabelecimento_csv_paths: list[Path],
     output_path: Path,
+    *,
+    on_chunk: Callable[[metrics_mod.ChunkMetrics], None] | None = None,
+    disk_peaks_fn: Callable[[], dict[str, int]] | None = None,
 ) -> None:
     """Write cnpjs.parquet by loading one estabelecimento CSV at a time.
 
@@ -699,6 +714,49 @@ def write_cnpjs_parquet_chunked(
     single unfiltered chunk-join expensive enough to blow the disk. A
     semi-join (not the bucket digit-match) is used here because chunks are
     RFB's own arbitrary ZIP split, not aligned to any `cnpj_basico` prefix.
+
+    `on_chunk`: callback opcional invocado UMA vez por CSV não-vazio, logo
+    depois do DROP TABLE daquele chunk, com um `metrics.ChunkMetrics`
+    (index, nome do CSV, wall-clock, linhas/bytes daquele chunk só). RFC
+    0001 §16 exige registro por estágio E POR CHUNK -- o agregado do
+    `StageMetrics` do estágio "cnpjs_chunked" esconde a variação entre
+    chunks, que é justamente onde o incidente histórico de OOM apareceu
+    (chunk 0/10, não o total). `None` (default) preserva o comportamento
+    anterior sem nenhum overhead de callback.
+
+    Se o processamento de um chunk lançar exceção (ex.: OOM no COPY), o
+    chunk é reportado via `on_chunk` com `status="failed"` e
+    `error=str(exc)` ANTES da exceção original propagar pra fora desta
+    função -- sem isso, o chunk culpado (o dado mais importante pro
+    diagnóstico de um crash no meio do writer) simplesmente sumia do
+    `metrics.json`, já que o `finally` externo só limpa tabelas/parts_dir,
+    não registra nada por chunk. O callback documenta a falha, nunca a
+    suprime: a exceção original é sempre re-levantada.
+
+    `rows_written` de cada `ChunkMetrics` vem de `COUNT(*)` sobre o
+    PARQUET do chunk já escrito, não da tabela `estabelecimento` de
+    entrada -- a contagem de entrada não reflete fan-out real de um JOIN
+    (ex.: uma duplicata em `simples` multiplicaria linhas, ver W13.1a
+    acima; hoje isso só gera warning, não falha, então usar a contagem de
+    entrada deixaria a métrica errada silenciosamente). Falha ao medir
+    (stat/COUNT) DEPOIS de um COPY bem-sucedido vira `log.warning` e deixa
+    `rows_written`/`bytes_read`/`bytes_written` como `None` -- nunca
+    propaga (o parquet do chunk já está gravado corretamente; medir a
+    saída é observabilidade, não pode derrubar o pipeline por causa disso).
+
+    `disk_peaks_fn`: callable opcional que devolve o pico de disco (bytes)
+    observado ATÉ AGORA no estágio inteiro -- tipicamente
+    `StageHandle.disk_peaks_snapshot()`. Pico de RSS/disco POR CHUNK (que a
+    RFC 0001 §16 pede "idealmente") NÃO usa uma thread de amostragem nova
+    por chunk: chunks individuais frequentemente rodam em menos de 1s (ver
+    os testes com fixtures pequenas), e criar/parar um `_DiskPeakSampler` a
+    cada chunk desproporcionalizaria o próprio tempo do chunk. Em vez
+    disso, o writer espia (sem parar) o MESMO sampler que já está rodando
+    pro estágio inteiro -- por isso os três campos de pico em
+    `ChunkMetrics` são CUMULATIVOS (o teto visto até aquele chunk, não uma
+    medição isolada dele), mesma limitação honesta documentada em
+    `metrics._rss_peak_mib`. `None` (default) deixa os três campos de pico
+    de cada `ChunkMetrics` como `None` -- não quebra chamadores existentes.
     """
     import ibis
 
@@ -734,45 +792,131 @@ def write_cnpjs_parquet_chunked(
                 log.info("    chunk %d: skipping empty CSV %s", i, csv_path.name)
                 continue
 
-            log.info(
-                "    chunk %d/%d: loading %s", i, len(estabelecimento_csv_paths), csv_path.name
-            )
-            _create_table_from_csvs(
-                con, "estabelecimento", [csv_path], registry.main_table("estabelecimento").source
-            )
+            t_chunk = time.monotonic()
+            try:
+                log.info(
+                    "    chunk %d/%d: loading %s",
+                    i,
+                    len(estabelecimento_csv_paths),
+                    csv_path.name,
+                )
+                _create_table_from_csvs(
+                    con,
+                    "estabelecimento",
+                    [csv_path],
+                    registry.main_table("estabelecimento").source,
+                )
 
-            n = con.execute("SELECT COUNT(*) FROM estabelecimento").fetchone()[0]
-            if n == 0:
-                log.info("    chunk %d: 0 rows — skipping", i)
+                n = con.execute("SELECT COUNT(*) FROM estabelecimento").fetchone()[0]
+                if n == 0:
+                    log.info("    chunk %d: 0 rows — skipping", i)
+                    con.execute("DROP TABLE IF EXISTS estabelecimento")
+                    continue
+
+                # Pre-filter empresa/simples to this chunk's cnpj_basico values
+                # (semi-join: left table's own columns, no fan-out, one row per
+                # match) BEFORE the big projection JOIN below.
+                est = icon.table("estabelecimento")
+                _materialize("_emp_c", icon.table("empresa").semi_join(est, "cnpj_basico"))
+                _materialize("_smp_c", icon.table("simples").semi_join(est, "cnpj_basico"))
+
+                part_path = parts_dir / f"chunk-{i}.parquet"
+                # order_by=False: the global merge step sorts by cnpj, so
+                # per-chunk ORDER BY is unnecessary and wasteful.
+                _select_sql = _cnpjs_chunk_select_sql(
+                    "estabelecimento", "_emp_c", "_smp_c", "_cnae_map", order_by=False
+                )
+                con.execute(
+                    f"""
+                    COPY (
+                        {_select_sql}
+                    ) TO '{part_path}' (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 200000)
+                    """
+                )
+                log.info("    chunk %d: wrote %s", i, part_path.name)
+                written_parts.append(part_path)
+
                 con.execute("DROP TABLE IF EXISTS estabelecimento")
-                continue
+                con.execute("DROP TABLE IF EXISTS _emp_c")
+                con.execute("DROP TABLE IF EXISTS _smp_c")
 
-            # Pre-filter empresa/simples to this chunk's cnpj_basico values
-            # (semi-join: left table's own columns, no fan-out, one row per
-            # match) BEFORE the big projection JOIN below.
-            est = icon.table("estabelecimento")
-            _materialize("_emp_c", icon.table("empresa").semi_join(est, "cnpj_basico"))
-            _materialize("_smp_c", icon.table("simples").semi_join(est, "cnpj_basico"))
-
-            part_path = parts_dir / f"chunk-{i}.parquet"
-            # order_by=False: the global merge step sorts by cnpj, so
-            # per-chunk ORDER BY is unnecessary and wasteful.
-            _select_sql = _cnpjs_chunk_select_sql(
-                "estabelecimento", "_emp_c", "_smp_c", "_cnae_map", order_by=False
-            )
-            con.execute(
-                f"""
-                COPY (
-                    {_select_sql}
-                ) TO '{part_path}' (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 200000)
-                """
-            )
-            log.info("    chunk %d: wrote %s", i, part_path.name)
-            written_parts.append(part_path)
-
-            con.execute("DROP TABLE IF EXISTS estabelecimento")
-            con.execute("DROP TABLE IF EXISTS _emp_c")
-            con.execute("DROP TABLE IF EXISTS _smp_c")
+                if on_chunk is not None:
+                    # rows_written vem do PARQUET já escrito, não de `n`
+                    # (a contagem da tabela de ENTRADA, antes dos joins) --
+                    # `n` não reflete fan-out real de um JOIN (ex.: uma
+                    # duplicata em simples faria write_cnpjs_parquet
+                    # multiplicar linhas, ver W13.1a acima; hoje isso só
+                    # gera warning, não falha, então a métrica silenciosa
+                    # ficaria errada). COUNT(*) sobre parquet é
+                    # metadata-only (barato, confirmado na rodada anterior
+                    # via _record_parquet_output em transform_snapshot).
+                    #
+                    # Essas leituras rodam DEPOIS que o chunk já foi
+                    # escrito com sucesso -- uma falha aqui (disco cheio
+                    # bem na hora do stat, corrupção transitória na
+                    # leitura) NUNCA pode derrubar o pipeline por causa de
+                    # observabilidade; vira warning e os três campos ficam
+                    # None (nunca um valor incorreto), preservando o
+                    # parquet de produção já gravado.
+                    try:
+                        chunk_rows_written = con.execute(
+                            f"SELECT COUNT(*) FROM read_parquet('{part_path}')"
+                        ).fetchone()[0]
+                        chunk_bytes_read = csv_path.stat().st_size
+                        chunk_bytes_written = part_path.stat().st_size
+                    except (OSError, duckdb.Error) as measure_exc:
+                        log.warning(
+                            "metrics: falha ao medir chunk %d (%s) após escrita "
+                            "bem-sucedida: %s -- rows/bytes ficam None (parquet "
+                            "de produção intacto)",
+                            i,
+                            csv_path.name,
+                            measure_exc,
+                        )
+                        chunk_rows_written = chunk_bytes_read = chunk_bytes_written = None
+                    _peaks = disk_peaks_fn() if disk_peaks_fn is not None else {}
+                    on_chunk(
+                        metrics_mod.ChunkMetrics(
+                            index=i,
+                            csv_name=csv_path.name,
+                            wall_seconds=time.monotonic() - t_chunk,
+                            rows_written=chunk_rows_written,
+                            bytes_read=chunk_bytes_read,
+                            bytes_written=chunk_bytes_written,
+                            rss_peak_mib=metrics_mod._rss_peak_mib(),
+                            duckdb_tmp_peak_mib=metrics_mod._bytes_to_mib(_peaks.get("duckdb_tmp")),
+                            workdir_peak_mib=metrics_mod._bytes_to_mib(_peaks.get("workdir")),
+                        )
+                    )
+            except Exception as exc:
+                # O chunk culpado é o dado mais importante pro diagnóstico
+                # de um OOM/crash no meio do writer chunked -- sem isso ele
+                # simplesmente sumia do metrics.json quando falhava (o
+                # `finally` externo só limpa tabelas/parts_dir, não
+                # registra nada por chunk). Reporta o que deu pra medir
+                # ANTES de deixar a exceção propagar -- a métrica documenta
+                # a falha, nunca a suprime (princípio inverso do handling
+                # em metrics.py: lá o teardown de métricas não pode
+                # mascarar a exceção real; aqui o callback de métrica não
+                # pode ENGOLIR uma exceção real). RSS/disco entram aqui
+                # também -- o pico até o momento da falha é o dado mais
+                # valioso pro diagnóstico (ex.: um OOM costuma aparecer
+                # como pico de RSS subindo antes de estourar).
+                if on_chunk is not None:
+                    _peaks = disk_peaks_fn() if disk_peaks_fn is not None else {}
+                    on_chunk(
+                        metrics_mod.ChunkMetrics(
+                            index=i,
+                            csv_name=csv_path.name,
+                            wall_seconds=time.monotonic() - t_chunk,
+                            status="failed",
+                            error=str(exc),
+                            rss_peak_mib=metrics_mod._rss_peak_mib(),
+                            duckdb_tmp_peak_mib=metrics_mod._bytes_to_mib(_peaks.get("duckdb_tmp")),
+                            workdir_peak_mib=metrics_mod._bytes_to_mib(_peaks.get("workdir")),
+                        )
+                    )
+                raise
 
         if not written_parts:
             # No chunks written — produce an empty parquet with the right schema.
@@ -1471,6 +1615,66 @@ def write_socios_parquet(
     )
 
 
+def _record_parquet_output(
+    con: duckdb.DuckDBPyConnection,
+    handle: metrics_mod.StageHandle,
+    path: Path,
+    *,
+    codec: str | None = None,
+    row_group_size: int | None = None,
+) -> None:
+    """Preenche bytes/linhas escritas no handle de métricas após um COPY TO PARQUET.
+
+    `COUNT(*)` sobre um parquet recém-escrito é praticamente grátis no
+    DuckDB: cada row-group carrega sua própria contagem no footer, então a
+    query soma metadados sem decodificar nenhuma coluna. Verificado
+    manualmente contra os parquets deste pipeline (dezenas de milhões de
+    linhas) -- tempo indistinguível do overhead de abrir o arquivo. Por
+    isso essa medição roda sempre, sem feature flag nem custo perceptível
+    somado ao write que já aconteceu.
+
+    `codec`/`row_group_size`: constantes literais do próprio `COPY TO
+    PARQUET` do writer chamador (ex.: "ZSTD"/200000). RFC 0001 §16 pede
+    esses dois campos; não há como descobri-los de volta a partir do
+    parquet sem reabrir o footer com uma lib de baixo nível, então o
+    chamador simplesmente repassa o que ele mesmo escreveu no COPY.
+    Guardados em `handle.extra` (não campos próprios de `StageMetrics`)
+    porque são metadados do WRITER, não do estágio, e podem variar por
+    writer -- `write_lookup_parquets` usa ROW_GROUP_SIZE 100000, por
+    exemplo, contra o 200000 de todo o resto que passa por esta função.
+
+    Falha de LEITURA aqui (stat ou COUNT) NUNCA pode derrubar o pipeline:
+    o parquet já foi escrito com sucesso ANTES desta função rodar. Um
+    `OSError` (disco cheio bem na hora do stat, arquivo removido por outro
+    processo) ou `duckdb.Error` (corrupção transitória na leitura, conexão
+    fechada) vira `log.warning` e deixa `bytes_written`/`rows_written`
+    como `None` -- nunca um valor incorreto, e o output de produção já
+    escrito permanece intocado. Mesmo princípio de `write_json`:
+    observabilidade nunca é motivo pra falhar um pipeline que já produziu
+    dados corretos.
+    """
+    if codec is not None:
+        handle.extra["codec"] = codec
+    if row_group_size is not None:
+        handle.extra["row_group_size"] = row_group_size
+    try:
+        # Variáveis locais primeiro -- ou os dois campos são atribuídos, ou
+        # nenhum (nunca um bytes_written "real" ao lado de um rows_written
+        # None por causa de uma falha a meio caminho).
+        bytes_written = path.stat().st_size
+        rows_written = con.execute(f"SELECT COUNT(*) FROM read_parquet('{path}')").fetchone()[0]
+    except (OSError, duckdb.Error) as exc:
+        log.warning(
+            "metrics: falha ao medir %s após escrita bem-sucedida: %s -- "
+            "bytes_written/rows_written ficam None (output de produção intacto)",
+            path,
+            exc,
+        )
+        return
+    handle.bytes_written = bytes_written
+    handle.rows_written = rows_written
+
+
 def transform_snapshot(
     month: str,
     *,
@@ -1499,6 +1703,13 @@ def transform_snapshot(
     chain = chain or fetcher_mod.default_chain(month, cache_dir=cache_dir)
     extract_dir = cache_dir / month / "extracted"
 
+    # Fase 0 (RFC 0001 §16/19): baseline de observabilidade -- SEM mudança
+    # de comportamento nos dados produzidos. `recorder` só mede; nada aqui
+    # decide ordem de estágios, PRAGMAs ou conteúdo dos parquets.
+    recorder = metrics_mod.MetricsRecorder(
+        month=month, schema_version=schema_version, filesystem_path=cache_dir
+    )
+
     owns_progress = progress is None
     progress = progress or make_progress()
     if owns_progress:
@@ -1508,60 +1719,85 @@ def transform_snapshot(
     # not a fourth top-level stage).
     phase_task = progress.add_task("transform: extract", total=3)
 
-    t_total = time.monotonic()
-    log.info("=== PHASE 1/4: extract 37 ZIPs for %s ===", month)
-    t0 = time.monotonic()
-    extracted = extract_all(month, chain, extract_dir, progress=progress)
-    log.info("=== PHASE 1/4 done in %.0fs ===", time.monotonic() - t0)
-    progress.update(phase_task, description="transform: load into DuckDB", advance=1)
-
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    # Usa arquivo temporário em vez de in-memory para suportar o dataset real
-    # da RFB (~60 M linhas) sem estourar RAM.
+    con: duckdb.DuckDBPyConnection | None = None
     db_path = cache_dir / month / "transform.duckdb"
-    db_path.parent.mkdir(parents=True, exist_ok=True)
-    log.info("=== PHASE 2/4: load into DuckDB (%s) ===", db_path)
-    t0 = time.monotonic()
-    con = duckdb.connect(str(db_path))
-    # Cap memory and force on-disk spill. Sized at runtime via
-    # `pick_memory_limit_gb()` — reads /proc/meminfo, reserves
-    # _OS_HEADROOM_GB for OS + runner agent + Python heap + tee buffer
-    # + DuckDB brief overshoots, and never exceeds _MEMORY_FRACTION of
-    # total. On the 16 GB GH free-tier runner this picks ~10 GB (was
-    # hard-coded to that until 2026-05). Self-hosted bigger boxes auto
-    # scale up; override via FICHA_MEMORY_LIMIT_GB env. Explicit limit +
-    # dedicated temp dir on the same partition as db_path makes spill
-    # behavior predictable. Original 6 GB tuning was for legacy 7 GB
-    # tier (PR #24, run 25514278003); per Kilo Code Review on PR #27,
-    # 12 GB on a 16 GB runner trimmed the safety margin too thin.
-    _mem_gb = pick_memory_limit_gb()
-    con.execute(f"PRAGMA memory_limit='{_mem_gb}GB'")
-    con.execute(f"PRAGMA temp_directory='{db_path.parent / 'duckdb_tmp'}'")
-    # Reduce per-query memory pressure during the big JOIN at phase 3.
-    # DuckDB's default preserves input ordering, which buffers more in
-    # memory; we sort by `cnpj` at write time anyway, so insertion order
-    # of intermediates doesn't matter. Saves ~30% on temp spill size.
-    con.execute("PRAGMA preserve_insertion_order=false")
-    # Reduce parallelism. Each thread holds its own working set during
-    # the 70M x 67M VARCHAR-keyed hash join in write_cnpjs_parquet --
-    # 4 threads (default) blew through 70 GB of temp spill (run
-    # 25518175202). Cutting to 1 sacrifices wall time for peak memory:
-    # cnpjs took 32 min with threads=2 in run 25522678418, so threads=1
-    # bumps that to ~60 min, fitting in the 350 min runner budget.
-    # threads=1 also helps raizes' LIST_DISTINCT(LIST(...)) GROUP BY
-    # avoid the 5.5 GB OOM that bit run 25522678418.
-    _threads = pick_threads()
-    con.execute(f"PRAGMA threads={_threads}")
     try:
+        t_total = time.monotonic()
+        log.info("=== PHASE 1/4: extract 37 ZIPs for %s ===", month)
+        t0 = time.monotonic()
+        with recorder.stage("extract", workdir=extract_dir) as _mh_extract:
+            extracted = extract_all(month, chain, extract_dir, progress=progress)
+            _mh_extract.bytes_read = sum(
+                ef.csv_path.stat().st_size for ef in extracted if ef.csv_path.exists()
+            )
+            _mh_extract.files_read = len(extracted)
+        log.info("=== PHASE 1/4 done in %.0fs ===", time.monotonic() - t0)
+        progress.update(phase_task, description="transform: load into DuckDB", advance=1)
+
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        # Usa arquivo temporário em vez de in-memory para suportar o dataset real
+        # da RFB (~60 M linhas) sem estourar RAM.
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+        log.info("=== PHASE 2/4: load into DuckDB (%s) ===", db_path)
+        t0 = time.monotonic()
+        con = duckdb.connect(str(db_path))
+        # Cap memory and force on-disk spill. Sized at runtime via
+        # `pick_memory_limit_gb()` — reads /proc/meminfo, reserves
+        # _OS_HEADROOM_GB for OS + runner agent + Python heap + tee buffer
+        # + DuckDB brief overshoots, and never exceeds _MEMORY_FRACTION of
+        # total. On the 16 GB GH free-tier runner this picks ~10 GB (was
+        # hard-coded to that until 2026-05). Self-hosted bigger boxes auto
+        # scale up; override via FICHA_MEMORY_LIMIT_GB env. Explicit limit +
+        # dedicated temp dir on the same partition as db_path makes spill
+        # behavior predictable. Original 6 GB tuning was for legacy 7 GB
+        # tier (PR #24, run 25514278003); per Kilo Code Review on PR #27,
+        # 12 GB on a 16 GB runner trimmed the safety margin too thin.
+        _mem_gb = pick_memory_limit_gb()
+        con.execute(f"PRAGMA memory_limit='{_mem_gb}GB'")
+        con.execute(f"PRAGMA temp_directory='{db_path.parent / 'duckdb_tmp'}'")
+        # Reduce per-query memory pressure during the big JOIN at phase 3.
+        # DuckDB's default preserves input ordering, which buffers more in
+        # memory; we sort by `cnpj` at write time anyway, so insertion order
+        # of intermediates doesn't matter. Saves ~30% on temp spill size.
+        con.execute("PRAGMA preserve_insertion_order=false")
+        # Reduce parallelism. Each thread holds its own working set during
+        # the 70M x 67M VARCHAR-keyed hash join in write_cnpjs_parquet --
+        # 4 threads (default) blew through 70 GB of temp spill (run
+        # 25518175202). Cutting to 1 sacrifices wall time for peak memory:
+        # cnpjs took 32 min with threads=2 in run 25522678418, so threads=1
+        # bumps that to ~60 min, fitting in the 350 min runner budget.
+        # threads=1 also helps raizes' LIST_DISTINCT(LIST(...)) GROUP BY
+        # avoid the 5.5 GB OOM that bit run 25522678418.
+        _threads = pick_threads()
+        con.execute(f"PRAGMA threads={_threads}")
+        recorder.capture_pragmas(con)
+        _duckdb_tmp_dir = db_path.parent / "duckdb_tmp"
         # Lookups primeiro (necessárias pros JOINs dos parquets)
-        for ef in extracted:
-            if ef.kind in _LOOKUP_KINDS:
-                load_lookup_into_duckdb(con, ef.kind, ef.csv_path)
-                log.info("  lookup '%s' loaded", ef.kind)
+        with recorder.stage("lookups") as _mh_lookups:
+            _lookup_rows = 0
+            _lookup_files = 0
+            for ef in extracted:
+                if ef.kind in _LOOKUP_KINDS:
+                    load_lookup_into_duckdb(con, ef.kind, ef.csv_path)
+                    log.info("  lookup '%s' loaded", ef.kind)
+                    _lookup_rows += con.execute(
+                        f"SELECT COUNT(*) FROM lookup_{ef.kind}"
+                    ).fetchone()[0]
+                    _lookup_files += 1
+            _mh_lookups.rows_written = _lookup_rows
+            _mh_lookups.files_read = _lookup_files
 
         # Tabelas grandes
-        load_main_tables_into_duckdb(con, extracted)
+        with recorder.stage(
+            "load_duckdb", duckdb_tmp_dir=_duckdb_tmp_dir, workdir=extract_dir
+        ) as _mh_load:
+            _mh_load.duplicate_rows = load_main_tables_into_duckdb(con, extracted)
+            _mh_load.rows_written = sum(
+                con.execute(f"SELECT COUNT(*) FROM {t.name}").fetchone()[0]
+                for t in registry.MAIN_TABLES
+            )
+            _mh_load.files_read = sum(1 for ef in extracted if ef.kind not in _LOOKUP_KINDS)
         log.info("=== PHASE 2/4 done in %.0fs ===", time.monotonic() - t0)
         progress.update(phase_task, description="transform: write parquets", advance=1)
 
@@ -1655,7 +1891,15 @@ def transform_snapshot(
             try:
                 log.info("  writing %s.parquet...", name)
                 tp = time.monotonic()
-                fn(con, output_dir / f"{name}.parquet")
+                with recorder.stage(name, workdir=output_dir) as _mh:
+                    fn(con, output_dir / f"{name}.parquet")
+                    _record_parquet_output(
+                        con,
+                        _mh,
+                        output_dir / f"{name}.parquet",
+                        codec="ZSTD",
+                        row_group_size=200000,
+                    )
                 size_mb = (output_dir / f"{name}.parquet").stat().st_size / 1024 / 1024
                 log.info(
                     "  wrote %s.parquet — %.1f MB in %.0fs",
@@ -1685,7 +1929,23 @@ def transform_snapshot(
         # Peak RAM: ~5 GB instead of ~70 GB.
         log.info("  writing cnpjs.parquet (chunked — %d CSVs)...", len(estabelecimento_csv_paths))
         tp = time.monotonic()
-        write_cnpjs_parquet_chunked(con, estabelecimento_csv_paths, output_dir / "cnpjs.parquet")
+        with recorder.stage(
+            "cnpjs_chunked", duckdb_tmp_dir=_duckdb_tmp_dir, workdir=output_dir
+        ) as _mh_cnpjs:
+            write_cnpjs_parquet_chunked(
+                con,
+                estabelecimento_csv_paths,
+                output_dir / "cnpjs.parquet",
+                on_chunk=_mh_cnpjs.chunks.append,
+                disk_peaks_fn=_mh_cnpjs.disk_peaks_snapshot,
+            )
+            _record_parquet_output(
+                con, _mh_cnpjs, output_dir / "cnpjs.parquet", codec="ZSTD", row_group_size=200000
+            )
+            _mh_cnpjs.bytes_read = sum(
+                p.stat().st_size for p in estabelecimento_csv_paths if p.exists()
+            )
+            _mh_cnpjs.files_read = len(estabelecimento_csv_paths)
         size_mb = (output_dir / "cnpjs.parquet").stat().st_size / 1024 / 1024
         log.info("  wrote cnpjs.parquet — %.1f MB in %.0fs", size_mb, time.monotonic() - tp)
 
@@ -1699,17 +1959,35 @@ def transform_snapshot(
                     verify_sample_size,
                 )
                 t_verify = time.monotonic()
-                # Re-load estabelecimento from all CSVs so assert_roundtrip can
-                # compare against the original source rows. After write_cnpjs_parquet_chunked
-                # each chunk's table was dropped; we reload the full set here.
-                if estabelecimento_csv_paths:
-                    _create_table_from_csvs(
-                        con,
-                        "estabelecimento",
-                        estabelecimento_csv_paths,
-                        registry.main_table("estabelecimento").source,
+                # O reload de estabelecimento entra DENTRO do estágio medido de
+                # propósito (finding do owner na PR #70): reler todos os CSVs de
+                # estabelecimento pode levar minutos, inflar transform.duckdb e
+                # gerar spill -- e só acontece por causa de verify=True. Medir só
+                # o assert_roundtrip em si (como antes) reportava tempo/picos
+                # artificialmente baixos pro estágio "roundtrip_verify", exatamente
+                # o custo que a Fase 0 existe pra atribuir ao pipeline real.
+                with recorder.stage(
+                    "roundtrip_verify", duckdb_tmp_dir=_duckdb_tmp_dir, workdir=extract_dir
+                ) as _mh_verify:
+                    # Re-load estabelecimento from all CSVs so assert_roundtrip can
+                    # compare against the original source rows. After write_cnpjs_parquet_chunked
+                    # each chunk's table was dropped; we reload the full set here.
+                    if estabelecimento_csv_paths:
+                        _create_table_from_csvs(
+                            con,
+                            "estabelecimento",
+                            estabelecimento_csv_paths,
+                            registry.main_table("estabelecimento").source,
+                        )
+                    _mh_verify.bytes_read = sum(
+                        p.stat().st_size for p in estabelecimento_csv_paths if p.exists()
                     )
-                assert_roundtrip(con, cnpjs_parquet, sample_size=verify_sample_size)
+                    _mh_verify.files_read = len(estabelecimento_csv_paths)
+                    assert_roundtrip(con, cnpjs_parquet, sample_size=verify_sample_size)
+                    _mh_verify.rows_read = min(
+                        verify_sample_size,
+                        con.execute("SELECT COUNT(*) FROM estabelecimento").fetchone()[0],
+                    )
                 con.execute("DROP TABLE IF EXISTS estabelecimento")
                 log.info("=== PHASE 4/4 roundtrip OK in %.0fs ===", time.monotonic() - t_verify)
 
@@ -1720,9 +1998,16 @@ def transform_snapshot(
         # --- Step 5: Write raizes from cnpjs.parquet (no tables needed) ---
         log.info("  writing raizes.parquet (from cnpjs.parquet)...")
         tp = time.monotonic()
-        write_raizes_parquet_from_cnpjs(
-            con, output_dir / "cnpjs.parquet", output_dir / "raizes.parquet"
-        )
+        with recorder.stage(
+            "raizes", duckdb_tmp_dir=_duckdb_tmp_dir, workdir=output_dir
+        ) as _mh_raizes:
+            write_raizes_parquet_from_cnpjs(
+                con, output_dir / "cnpjs.parquet", output_dir / "raizes.parquet"
+            )
+            _record_parquet_output(
+                con, _mh_raizes, output_dir / "raizes.parquet", codec="ZSTD", row_group_size=200000
+            )
+            _mh_raizes.bytes_read = (output_dir / "cnpjs.parquet").stat().st_size
         size_mb = (output_dir / "raizes.parquet").stat().st_size / 1024 / 1024
         log.info("  wrote raizes.parquet — %.1f MB in %.0fs", size_mb, time.monotonic() - tp)
 
@@ -1738,7 +2023,15 @@ def transform_snapshot(
             try:
                 log.info("  writing %s.parquet...", name)
                 tp = time.monotonic()
-                fn(con, output_dir / f"{name}.parquet")
+                with recorder.stage(name, workdir=output_dir) as _mh:
+                    fn(con, output_dir / f"{name}.parquet")
+                    _record_parquet_output(
+                        con,
+                        _mh,
+                        output_dir / f"{name}.parquet",
+                        codec="ZSTD",
+                        row_group_size=200000,
+                    )
                 size_mb = (output_dir / f"{name}.parquet").stat().st_size / 1024 / 1024
                 log.info(
                     "  wrote %s.parquet — %.1f MB in %.0fs",
@@ -1760,8 +2053,10 @@ def transform_snapshot(
 
         log.info("transform_snapshot total: %.0fs", time.monotonic() - t_total)
     finally:
-        con.close()
-        db_path.unlink(missing_ok=True)
+        recorder.write_json(cache_dir / month / "metrics" / "transform_metrics.json")
+        if con is not None:
+            con.close()
+            db_path.unlink(missing_ok=True)
         if owns_progress:
             progress.stop()
 
