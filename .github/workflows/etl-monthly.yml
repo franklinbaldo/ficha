@@ -166,6 +166,21 @@ jobs:
           [ "$NO_VERIFY"   = "true" ] && EXTRA_ARGS="$EXTRA_ARGS --no-verify"
           uv run ficha-etl run --month "$MONTH" $EXTRA_ARGS
 
+      # RFC 0001 §16/19: transform_metrics.json (baseline por estágio, RSS,
+      # pico de disco/filesystem, e detalhe por chunk) é o dado mais valioso
+      # justamente quando o pipeline falha no meio -- e sem este step ele
+      # desaparecia junto com o runner ao fim do job. `always()` roda mesmo
+      # com "Run pipeline" falho (é quando as métricas parciais importam
+      # mais); `if-no-files-found: warn` evita reprovar o job só porque a
+      # falha foi tão cedo que nem o diretório de métricas chegou a existir.
+      - name: Upload transform metrics
+        if: always() && steps.month.outputs.should_run == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: transform-metrics-${{ steps.month.outputs.value }}
+          path: etl/.cache/${{ steps.month.outputs.value }}/metrics/transform_metrics.json
+          if-no-files-found: warn
+
       - name: Commit updated manifest
         if: >-
           steps.month.outputs.should_run == 'true' &&

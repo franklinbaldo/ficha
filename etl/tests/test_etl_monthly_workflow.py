@@ -52,3 +52,43 @@ def test_dry_run_summary_step_is_mutually_exclusive_with_commit() -> None:
 def test_skip_upload_input_documents_manifest_behavior() -> None:
     text = WORKFLOW_PATH.read_text(encoding="utf-8")
     assert "Dry-run local: não faz upload nem publica o manifesto" in text
+
+
+# -----------------------------------------------------------------------------
+# Finding D do review do owner na PR #70: transform_metrics.json (RFC 0001
+# §16/19 — baseline por estágio, RSS, pico de disco/filesystem, chunks)
+# nunca saía do runner. Sem um step de artifact, os dados mais valiosos pra
+# diagnosticar um incidente (métricas parciais de uma falha no meio do
+# pipeline) desapareciam junto com o runner ao fim do job.
+# -----------------------------------------------------------------------------
+
+
+def test_upload_transform_metrics_step_exists_and_runs_always() -> None:
+    step = _step("Upload transform metrics")
+    # always() precisa estar presente -- é justamente quando o pipeline
+    # falha no meio que as métricas parciais mais importam pro diagnóstico.
+    assert "always()" in step["if"]
+    assert "steps.month.outputs.should_run == 'true'" in step["if"]
+
+
+def test_upload_transform_metrics_step_uses_upload_artifact_with_expected_shape() -> None:
+    step = _step("Upload transform metrics")
+    assert step["uses"].startswith("actions/upload-artifact@")
+    with_block = step["with"]
+    assert with_block["name"] == "transform-metrics-${{ steps.month.outputs.value }}"
+    assert with_block["path"] == (
+        "etl/.cache/${{ steps.month.outputs.value }}/metrics/transform_metrics.json"
+    )
+    # warn, não error: uma falha cedo o bastante pra nem criar o diretório
+    # de métricas não pode reprovar o job só por causa deste step.
+    assert with_block["if-no-files-found"] == "warn"
+
+
+def test_upload_transform_metrics_step_runs_before_manifest_commit() -> None:
+    """Ordem importa só por higiene de leitura do workflow (não há
+    dependência de dado entre os dois steps) -- upload de métricas antes do
+    commit do manifest, ambos após "Run pipeline"."""
+    steps = _load_workflow()["jobs"]["run"]["steps"]
+    names = [s.get("name") for s in steps]
+    assert names.index("Run pipeline") < names.index("Upload transform metrics")
+    assert names.index("Upload transform metrics") < names.index("Commit updated manifest")

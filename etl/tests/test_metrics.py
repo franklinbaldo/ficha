@@ -9,6 +9,7 @@ Cobertura:
 
 from __future__ import annotations
 
+import collections
 import json
 import logging
 import shutil
@@ -61,6 +62,8 @@ def test_stage_to_json_dict_has_stable_keys():
         "duckdb_tmp_peak_mib",
         "workdir_peak_mib",
         "filesystem_used_peak_mib",
+        "filesystem_total_mib",
+        "filesystem_used_peak_percent",
         "started_at",
         "finished_at",
         "chunks",
@@ -321,14 +324,15 @@ def test_disk_peak_sampler_filesystem_only_no_named_dirs(tmp_path):
     assert peaks["filesystem"] > 0
 
 
-def test_filesystem_used_bytes_walks_up_to_existing_ancestor(tmp_path):
+def test_filesystem_usage_walks_up_to_existing_ancestor(tmp_path):
     """`path` pode ainda não existir quando o sampler arranca (ex.:
     cache_dir/<month>/ só é criado depois do 1º estágio) -- não deve
     devolver None nem explodir, só subir pro ancestral existente mais próximo."""
     missing = tmp_path / "does" / "not" / "exist" / "yet"
-    used = metrics._filesystem_used_bytes(missing)
-    assert used is not None
-    assert used > 0
+    usage = metrics._filesystem_usage(missing)
+    assert usage is not None
+    assert usage.used > 0
+    assert usage.total > 0
 
 
 def test_stage_filesystem_peak_recorded_for_every_stage_when_configured(tmp_path):
@@ -346,6 +350,85 @@ def test_stage_filesystem_peak_recorded_for_every_stage_when_configured(tmp_path
     m = recorder.stages[-1]
     assert m.filesystem_used_peak_mib is not None
     assert m.filesystem_used_peak_mib > 0
+
+
+# -----------------------------------------------------------------------------
+# Finding A do review do owner na PR #70: o gate de 80% da RFC 0001 §19 é
+# uma FRAÇÃO do mount ("abaixo de 80% da capacidade do runner"), não um
+# valor absoluto de MiB -- o mesmo pico em MiB é folgado num runner grande e
+# crítico num pequeno. StageMetrics precisa do denominador (`total`) e da
+# fração já calculada (`percent`), não só do numerador.
+# -----------------------------------------------------------------------------
+
+_FakeDiskUsage = collections.namedtuple("_FakeDiskUsage", ["total", "used", "free"])
+
+
+def test_filesystem_usage_returns_used_and_total_from_one_call(monkeypatch, tmp_path):
+    calls: list[Path] = []
+
+    def fake_disk_usage(path):
+        calls.append(Path(path))
+        return _FakeDiskUsage(total=1_000, used=400, free=600)
+
+    monkeypatch.setattr(metrics.shutil, "disk_usage", fake_disk_usage)
+    usage = metrics._filesystem_usage(tmp_path)
+
+    assert usage is not None
+    assert usage.used == 400
+    assert usage.total == 1_000
+    assert len(calls) == 1  # uma única chamada de disk_usage -- used e total vêm dela
+
+
+def test_percent_helper_matches_manual_calc():
+    assert metrics._percent(400, 1_000) == pytest.approx(40.0)
+    assert metrics._percent(None, 1_000) is None
+    assert metrics._percent(400, None) is None
+    assert metrics._percent(400, 0) is None
+
+
+def test_stage_filesystem_used_peak_percent_matches_manual_calculation(monkeypatch, tmp_path):
+    """Monkeypatch shutil.disk_usage com (total, used) conhecidos e confere
+    que filesystem_used_peak_percent bate com a conta manual used/total*100."""
+    total_bytes = 1_000 * 1024 * 1024  # 1000 MiB
+    used_bytes = 812 * 1024 * 1024  # 812 MiB
+
+    def fake_disk_usage(path):
+        return _FakeDiskUsage(total=total_bytes, used=used_bytes, free=total_bytes - used_bytes)
+
+    monkeypatch.setattr(metrics.shutil, "disk_usage", fake_disk_usage)
+
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    recorder = metrics.MetricsRecorder(
+        month="2026-07", schema_version="1.0.0", filesystem_path=cache_dir
+    )
+    with recorder.stage("s", sample_interval=0.05):
+        time.sleep(0.1)
+
+    m = recorder.stages[-1]
+    assert m.filesystem_total_mib == pytest.approx(1000.0, rel=1e-6)
+    assert m.filesystem_used_peak_mib == pytest.approx(812.0, rel=1e-6)
+    expected_percent = used_bytes / total_bytes * 100
+    assert m.filesystem_used_peak_percent == pytest.approx(expected_percent, rel=1e-6)
+
+    d = m.to_json_dict()
+    assert d["filesystem_total_mib"] == pytest.approx(1000.0, rel=1e-6)
+    assert d["filesystem_used_peak_percent"] == pytest.approx(expected_percent, rel=1e-2)
+
+
+def test_disk_peak_sampler_records_filesystem_total_alongside_used(monkeypatch, tmp_path):
+    def fake_disk_usage(path):
+        return _FakeDiskUsage(total=5_000, used=1_234, free=3_766)
+
+    monkeypatch.setattr(metrics.shutil, "disk_usage", fake_disk_usage)
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    sampler = metrics._DiskPeakSampler({}, interval=0.05, filesystem_path=cache_dir)
+    sampler.start()
+    time.sleep(0.1)
+    peaks = sampler.stop()
+    assert peaks["filesystem"] == 1_234
+    assert peaks["filesystem_total"] == 5_000
 
 
 # -----------------------------------------------------------------------------
@@ -451,7 +534,23 @@ def test_chunk_metrics_to_json_dict():
         "rows_written": 10,
         "bytes_read": None,
         "bytes_written": None,
+        "status": "ok",
+        "error": None,
     }
+
+
+def test_chunk_metrics_failed_status_serializes():
+    cm = metrics.ChunkMetrics(
+        index=1,
+        csv_name="Estabelecimentos1.csv",
+        wall_seconds=0.5,
+        status="failed",
+        error="RuntimeError: falha simulada",
+    )
+    d = cm.to_json_dict()
+    assert d["status"] == "failed"
+    assert d["error"] == "RuntimeError: falha simulada"
+    assert d["rows_written"] is None
 
 
 def test_stage_chunks_serialize_in_to_json_dict():

@@ -711,6 +711,32 @@ def write_cnpjs_parquet_chunked(
     chunks, que é justamente onde o incidente histórico de OOM apareceu
     (chunk 0/10, não o total). `None` (default) preserva o comportamento
     anterior sem nenhum overhead de callback.
+
+    Se o processamento de um chunk lançar exceção (ex.: OOM no COPY), o
+    chunk é reportado via `on_chunk` com `status="failed"` e
+    `error=str(exc)` ANTES da exceção original propagar pra fora desta
+    função -- sem isso, o chunk culpado (o dado mais importante pro
+    diagnóstico de um crash no meio do writer) simplesmente sumia do
+    `metrics.json`, já que o `finally` externo só limpa tabelas/parts_dir,
+    não registra nada por chunk. O callback documenta a falha, nunca a
+    suprime: a exceção original é sempre re-levantada.
+
+    `rows_written` de cada `ChunkMetrics` vem de `COUNT(*)` sobre o
+    PARQUET do chunk já escrito, não da tabela `estabelecimento` de
+    entrada -- a contagem de entrada não reflete fan-out real de um JOIN
+    (ex.: uma duplicata em `simples` multiplicaria linhas, ver W13.1a
+    acima; hoje isso só gera warning, não falha, então usar a contagem de
+    entrada deixaria a métrica errada silenciosamente).
+
+    Pico de RSS/disco POR CHUNK (que a RFC 0001 §16 pede "idealmente") foi
+    deliberadamente OMITIDO aqui: chunks individuais frequentemente rodam
+    em menos de 1s (ver os testes com fixtures pequenas), e o
+    `_DiskPeakSampler` já paga o custo de iniciar/parar uma thread daemon
+    por chamada -- fazer isso a cada chunk desproporcionalizaria o próprio
+    tempo do chunk. O pico de RSS/disco do estágio inteiro
+    ("cnpjs_chunked", em `StageMetrics`) já cobre o agregado; o que faltava
+    e este fix resolve é rows/bytes/status por chunk, que são baratos
+    (leituras de metadata/stat já feitas de qualquer forma).
     """
     import ibis
 
@@ -747,57 +773,98 @@ def write_cnpjs_parquet_chunked(
                 continue
 
             t_chunk = time.monotonic()
-            log.info(
-                "    chunk %d/%d: loading %s", i, len(estabelecimento_csv_paths), csv_path.name
-            )
-            _create_table_from_csvs(
-                con, "estabelecimento", [csv_path], registry.main_table("estabelecimento").source
-            )
-
-            n = con.execute("SELECT COUNT(*) FROM estabelecimento").fetchone()[0]
-            if n == 0:
-                log.info("    chunk %d: 0 rows — skipping", i)
-                con.execute("DROP TABLE IF EXISTS estabelecimento")
-                continue
-
-            # Pre-filter empresa/simples to this chunk's cnpj_basico values
-            # (semi-join: left table's own columns, no fan-out, one row per
-            # match) BEFORE the big projection JOIN below.
-            est = icon.table("estabelecimento")
-            _materialize("_emp_c", icon.table("empresa").semi_join(est, "cnpj_basico"))
-            _materialize("_smp_c", icon.table("simples").semi_join(est, "cnpj_basico"))
-
-            part_path = parts_dir / f"chunk-{i}.parquet"
-            # order_by=False: the global merge step sorts by cnpj, so
-            # per-chunk ORDER BY is unnecessary and wasteful.
-            _select_sql = _cnpjs_chunk_select_sql(
-                "estabelecimento", "_emp_c", "_smp_c", "_cnae_map", order_by=False
-            )
-            con.execute(
-                f"""
-                COPY (
-                    {_select_sql}
-                ) TO '{part_path}' (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 200000)
-                """
-            )
-            log.info("    chunk %d: wrote %s", i, part_path.name)
-            written_parts.append(part_path)
-
-            con.execute("DROP TABLE IF EXISTS estabelecimento")
-            con.execute("DROP TABLE IF EXISTS _emp_c")
-            con.execute("DROP TABLE IF EXISTS _smp_c")
-
-            if on_chunk is not None:
-                on_chunk(
-                    metrics_mod.ChunkMetrics(
-                        index=i,
-                        csv_name=csv_path.name,
-                        wall_seconds=time.monotonic() - t_chunk,
-                        rows_written=n,
-                        bytes_read=csv_path.stat().st_size,
-                        bytes_written=part_path.stat().st_size,
-                    )
+            try:
+                log.info(
+                    "    chunk %d/%d: loading %s",
+                    i,
+                    len(estabelecimento_csv_paths),
+                    csv_path.name,
                 )
+                _create_table_from_csvs(
+                    con,
+                    "estabelecimento",
+                    [csv_path],
+                    registry.main_table("estabelecimento").source,
+                )
+
+                n = con.execute("SELECT COUNT(*) FROM estabelecimento").fetchone()[0]
+                if n == 0:
+                    log.info("    chunk %d: 0 rows — skipping", i)
+                    con.execute("DROP TABLE IF EXISTS estabelecimento")
+                    continue
+
+                # Pre-filter empresa/simples to this chunk's cnpj_basico values
+                # (semi-join: left table's own columns, no fan-out, one row per
+                # match) BEFORE the big projection JOIN below.
+                est = icon.table("estabelecimento")
+                _materialize("_emp_c", icon.table("empresa").semi_join(est, "cnpj_basico"))
+                _materialize("_smp_c", icon.table("simples").semi_join(est, "cnpj_basico"))
+
+                part_path = parts_dir / f"chunk-{i}.parquet"
+                # order_by=False: the global merge step sorts by cnpj, so
+                # per-chunk ORDER BY is unnecessary and wasteful.
+                _select_sql = _cnpjs_chunk_select_sql(
+                    "estabelecimento", "_emp_c", "_smp_c", "_cnae_map", order_by=False
+                )
+                con.execute(
+                    f"""
+                    COPY (
+                        {_select_sql}
+                    ) TO '{part_path}' (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 200000)
+                    """
+                )
+                log.info("    chunk %d: wrote %s", i, part_path.name)
+                written_parts.append(part_path)
+
+                con.execute("DROP TABLE IF EXISTS estabelecimento")
+                con.execute("DROP TABLE IF EXISTS _emp_c")
+                con.execute("DROP TABLE IF EXISTS _smp_c")
+
+                if on_chunk is not None:
+                    # rows_written vem do PARQUET já escrito, não de `n`
+                    # (a contagem da tabela de ENTRADA, antes dos joins) --
+                    # `n` não reflete fan-out real de um JOIN (ex.: uma
+                    # duplicata em simples faria write_cnpjs_parquet
+                    # multiplicar linhas, ver W13.1a acima; hoje isso só
+                    # gera warning, não falha, então a métrica silenciosa
+                    # ficaria errada). COUNT(*) sobre parquet é
+                    # metadata-only (barato, confirmado na rodada anterior
+                    # via _record_parquet_output em transform_snapshot).
+                    chunk_rows_written = con.execute(
+                        f"SELECT COUNT(*) FROM read_parquet('{part_path}')"
+                    ).fetchone()[0]
+                    on_chunk(
+                        metrics_mod.ChunkMetrics(
+                            index=i,
+                            csv_name=csv_path.name,
+                            wall_seconds=time.monotonic() - t_chunk,
+                            rows_written=chunk_rows_written,
+                            bytes_read=csv_path.stat().st_size,
+                            bytes_written=part_path.stat().st_size,
+                        )
+                    )
+            except Exception as exc:
+                # O chunk culpado é o dado mais importante pro diagnóstico
+                # de um OOM/crash no meio do writer chunked -- sem isso ele
+                # simplesmente sumia do metrics.json quando falhava (o
+                # `finally` externo só limpa tabelas/parts_dir, não
+                # registra nada por chunk). Reporta o que deu pra medir
+                # ANTES de deixar a exceção propagar -- a métrica documenta
+                # a falha, nunca a suprime (princípio inverso do handling
+                # em metrics.py: lá o teardown de métricas não pode
+                # mascarar a exceção real; aqui o callback de métrica não
+                # pode ENGOLIR uma exceção real).
+                if on_chunk is not None:
+                    on_chunk(
+                        metrics_mod.ChunkMetrics(
+                            index=i,
+                            csv_name=csv_path.name,
+                            wall_seconds=time.monotonic() - t_chunk,
+                            status="failed",
+                            error=str(exc),
+                        )
+                    )
+                raise
 
         if not written_parts:
             # No chunks written — produce an empty parquet with the right schema.
@@ -1782,17 +1849,29 @@ def transform_snapshot(
                     verify_sample_size,
                 )
                 t_verify = time.monotonic()
-                # Re-load estabelecimento from all CSVs so assert_roundtrip can
-                # compare against the original source rows. After write_cnpjs_parquet_chunked
-                # each chunk's table was dropped; we reload the full set here.
-                if estabelecimento_csv_paths:
-                    _create_table_from_csvs(
-                        con,
-                        "estabelecimento",
-                        estabelecimento_csv_paths,
-                        registry.main_table("estabelecimento").source,
+                # O reload de estabelecimento entra DENTRO do estágio medido de
+                # propósito (finding do owner na PR #70): reler todos os CSVs de
+                # estabelecimento pode levar minutos, inflar transform.duckdb e
+                # gerar spill -- e só acontece por causa de verify=True. Medir só
+                # o assert_roundtrip em si (como antes) reportava tempo/picos
+                # artificialmente baixos pro estágio "roundtrip_verify", exatamente
+                # o custo que a Fase 0 existe pra atribuir ao pipeline real.
+                with recorder.stage(
+                    "roundtrip_verify", duckdb_tmp_dir=_duckdb_tmp_dir, workdir=extract_dir
+                ) as _mh_verify:
+                    # Re-load estabelecimento from all CSVs so assert_roundtrip can
+                    # compare against the original source rows. After write_cnpjs_parquet_chunked
+                    # each chunk's table was dropped; we reload the full set here.
+                    if estabelecimento_csv_paths:
+                        _create_table_from_csvs(
+                            con,
+                            "estabelecimento",
+                            estabelecimento_csv_paths,
+                            registry.main_table("estabelecimento").source,
+                        )
+                    _mh_verify.bytes_read = sum(
+                        p.stat().st_size for p in estabelecimento_csv_paths if p.exists()
                     )
-                with recorder.stage("roundtrip_verify") as _mh_verify:
                     assert_roundtrip(con, cnpjs_parquet, sample_size=verify_sample_size)
                     _mh_verify.rows_read = min(
                         verify_sample_size,

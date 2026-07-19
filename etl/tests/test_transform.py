@@ -1,4 +1,5 @@
 import json
+import time
 import zipfile
 from pathlib import Path
 
@@ -806,6 +807,51 @@ def test_transform_snapshot_with_verify_passes(tmp_path, all_zips_dir):
     # Sem exceção = passou
 
 
+def test_transform_snapshot_roundtrip_verify_metrics_include_reload_time(
+    tmp_path, all_zips_dir, monkeypatch
+):
+    """Finding C do review do owner na PR #70: o reload completo de
+    `estabelecimento` pro roundtrip precisa estar DENTRO do estágio medido
+    "roundtrip_verify", não antes dele -- senão o baseline reporta
+    tempo/picos artificialmente baixos pra verificação, exatamente o custo
+    que a Fase 0 existe pra medir.
+
+    Prova injetando um sleep mensurável em `_create_table_from_csvs` só na
+    chamada do RELOAD (que passa a lista COMPLETA de CSVs de
+    estabelecimento, ao contrário do write chunked, que passa 1 CSV por
+    vez) e conferindo que o `wall_seconds` do estágio no metrics.json
+    inclui esse tempo.
+    """
+    chain = fetcher.ChainedFetcher(fetchers=[_ZipDirFetcher(all_zips_dir)])
+    output_dir = tmp_path / "output"
+    cache_dir = tmp_path / "cache"
+
+    real_create_table = transform._create_table_from_csvs
+    sleep_seconds = 0.3
+
+    def _slow_create_table(con_, table, csv_paths, spec):
+        if len(csv_paths) > 1:  # reload completo (roundtrip), não um chunk de 1 CSV
+            time.sleep(sleep_seconds)
+        return real_create_table(con_, table, csv_paths, spec)
+
+    monkeypatch.setattr(transform, "_create_table_from_csvs", _slow_create_table)
+
+    transform.transform_snapshot(
+        "2026-04",
+        cache_dir=cache_dir,
+        output_dir=output_dir,
+        chain=chain,
+        skip_unimplemented=False,
+        verify=True,
+        verify_sample_size=4,
+    )
+
+    metrics_path = cache_dir / "2026-04" / "metrics" / "transform_metrics.json"
+    data = json.loads(metrics_path.read_text())
+    verify_stage = next(s for s in data["stages"] if s["stage"] == "roundtrip_verify")
+    assert verify_stage["wall_seconds"] >= sleep_seconds
+
+
 def test_assert_roundtrip_detects_row_count_mismatch(tmp_path, all_zips_dir):
     """Se o parquet tem rows diferente do estabelecimento original, falha."""
     chain = fetcher.ChainedFetcher(fetchers=[_ZipDirFetcher(all_zips_dir)])
@@ -1241,6 +1287,73 @@ def test_write_cnpjs_parquet_chunked_calls_on_chunk_per_nonempty_csv(tmp_path):
         con.close()
 
 
+def test_write_cnpjs_parquet_chunked_rows_written_reflects_join_fanout_not_input_count(tmp_path):
+    """Finding B do review do owner na PR #70: `rows_written` tem que vir
+    do PARQUET escrito, não da contagem da tabela `estabelecimento` de
+    ENTRADA -- prova com um cenário onde os dois números DIVERGEM de
+    propósito: uma duplicata em `simples` pro mesmo cnpj_basico causa
+    fan-out no LEFT JOIN (W13.1a), então 1 linha de estabelecimento vira 2
+    linhas no parquet do chunk."""
+    con = duckdb.connect()
+    try:
+        for kind in transform._LOOKUP_KINDS:
+            con.execute(
+                f"CREATE OR REPLACE TABLE lookup_{kind} (codigo VARCHAR, descricao VARCHAR)"
+            )
+        con.execute(
+            """
+            CREATE TABLE empresa (
+                cnpj_basico VARCHAR, razao_social VARCHAR, natureza_juridica VARCHAR,
+                qualificacao_responsavel VARCHAR, capital_social VARCHAR,
+                porte_empresa VARCHAR, ente_federativo_responsavel VARCHAR
+            )
+            """
+        )
+        con.execute(
+            "INSERT INTO empresa VALUES "
+            "('11111111', 'ACME LTDA', '2062', '49', '100000,00', '03', '')"
+        )
+        con.execute(
+            """
+            CREATE TABLE simples (
+                cnpj_basico VARCHAR, opcao_simples VARCHAR, data_opcao_simples VARCHAR,
+                data_exclusao_simples VARCHAR, opcao_mei VARCHAR, data_opcao_mei VARCHAR,
+                data_exclusao_mei VARCHAR
+            )
+            """
+        )
+        # Duplicata proposital: 2 linhas de simples pro MESMO cnpj_basico ->
+        # fan-out no LEFT JOIN -- 1 estabelecimento vira 2 linhas no parquet.
+        con.execute("INSERT INTO simples VALUES ('11111111', 'S', '20200101', '', 'N', '', '')")
+        con.execute(
+            "INSERT INTO simples VALUES ('11111111', 'N', '20210101', '20220101', 'N', '', '')"
+        )
+
+        # 1 única linha de estabelecimento na entrada (n=1 se contássemos a
+        # tabela de entrada, como o código fazia antes do fix).
+        chunk_row = [r for r in ESTABELECIMENTO_ROWS if r[0] == "11111111"][:1]
+
+        def _write_csv(path: Path, rows: list[tuple[str, ...]]) -> None:
+            body = "\n".join(";".join(f'"{c}"' for c in row) for row in rows) + "\n"
+            path.write_bytes(body.encode("latin-1"))
+
+        csv_a = tmp_path / "chunk_a.csv"
+        _write_csv(csv_a, chunk_row)
+
+        recorded: list = []
+        out_path = tmp_path / "cnpjs.parquet"
+        transform.write_cnpjs_parquet_chunked(con, [csv_a], out_path, on_chunk=recorded.append)
+
+        assert len(recorded) == 1
+        actual_parquet_rows = con.execute(f"SELECT COUNT(*) FROM '{out_path}'").fetchone()[0]
+        assert actual_parquet_rows == 2  # fan-out: 1 estabelecimento x 2 simples
+        # rows_written bate com o PARQUET (2), não com a entrada (1) --
+        # antes do fix isso reportaria 1 (o bug que o finding B aponta).
+        assert recorded[0].rows_written == 2
+    finally:
+        con.close()
+
+
 def test_write_cnpjs_parquet_chunked_skips_empty_csv_without_calling_on_chunk(tmp_path):
     """CSV de 0 bytes na lista -- não deve gerar chamada a on_chunk (o
     finding pede "uma vez por CSV NÃO-vazio")."""
@@ -1291,6 +1404,85 @@ def test_write_cnpjs_parquet_chunked_skips_empty_csv_without_calling_on_chunk(tm
         assert len(recorded) == 1
         assert recorded[0].csv_name == csv_a.name
         assert recorded[0].index == 1  # posição real na lista, não reindexado
+    finally:
+        con.close()
+
+
+def test_write_cnpjs_parquet_chunked_reports_failed_chunk_and_reraises(tmp_path, monkeypatch):
+    """Finding B do review do owner na PR #70: um chunk que falha no meio do
+    processamento (ex.: OOM) precisa continuar aparecendo no metrics.json
+    (status="failed") E a exceção original ainda tem que propagar pra fora
+    de write_cnpjs_parquet_chunked -- o callback de métrica documenta a
+    falha, nunca a suprime."""
+    con = duckdb.connect()
+    try:
+        for kind in transform._LOOKUP_KINDS:
+            con.execute(
+                f"CREATE OR REPLACE TABLE lookup_{kind} (codigo VARCHAR, descricao VARCHAR)"
+            )
+        con.execute(
+            """
+            CREATE TABLE empresa (
+                cnpj_basico VARCHAR, razao_social VARCHAR, natureza_juridica VARCHAR,
+                qualificacao_responsavel VARCHAR, capital_social VARCHAR,
+                porte_empresa VARCHAR, ente_federativo_responsavel VARCHAR
+            )
+            """
+        )
+        for row in EMPRESA_ROWS:
+            con.execute("INSERT INTO empresa VALUES (?, ?, ?, ?, ?, ?, ?)", list(row))
+        con.execute(
+            """
+            CREATE TABLE simples (
+                cnpj_basico VARCHAR, opcao_simples VARCHAR, data_opcao_simples VARCHAR,
+                data_exclusao_simples VARCHAR, opcao_mei VARCHAR, data_opcao_mei VARCHAR,
+                data_exclusao_mei VARCHAR
+            )
+            """
+        )
+
+        chunk_a_rows = [r for r in ESTABELECIMENTO_ROWS if r[0] == "11111111"]
+        chunk_b_rows = [r for r in ESTABELECIMENTO_ROWS if r[0] != "11111111"]
+
+        def _write_csv(path: Path, rows: list[tuple[str, ...]]) -> None:
+            body = "\n".join(";".join(f'"{c}"' for c in row) for row in rows) + "\n"
+            path.write_bytes(body.encode("latin-1"))
+
+        csv_a = tmp_path / "chunk_a.csv"
+        csv_b = tmp_path / "chunk_b.csv"
+        _write_csv(csv_a, chunk_a_rows)
+        _write_csv(csv_b, chunk_b_rows)
+
+        real_create_table = transform._create_table_from_csvs
+
+        def _flaky_create_table(con_, table, csv_paths, spec):
+            # Cada chunk chama isto com uma lista de 1 CSV só -- falha
+            # especificamente no chunk cujo CSV é csv_b (índice 1).
+            if csv_paths and csv_paths[0].name == csv_b.name:
+                raise RuntimeError("falha simulada no chunk B (OOM)")
+            return real_create_table(con_, table, csv_paths, spec)
+
+        monkeypatch.setattr(transform, "_create_table_from_csvs", _flaky_create_table)
+
+        recorded: list = []
+        out_path = tmp_path / "cnpjs.parquet"
+        with pytest.raises(RuntimeError, match="falha simulada no chunk B"):
+            transform.write_cnpjs_parquet_chunked(
+                con, [csv_a, csv_b], out_path, on_chunk=recorded.append
+            )
+
+        assert len(recorded) == 2
+        assert recorded[0].status == "ok"
+        assert recorded[0].csv_name == csv_a.name
+        assert recorded[0].index == 0
+
+        assert recorded[1].status == "failed"
+        assert recorded[1].csv_name == csv_b.name
+        assert recorded[1].index == 1
+        assert recorded[1].rows_written is None
+        assert recorded[1].error is not None
+        assert "falha simulada no chunk B" in recorded[1].error
+        assert recorded[1].wall_seconds >= 0
     finally:
         con.close()
 

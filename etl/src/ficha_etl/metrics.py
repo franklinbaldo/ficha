@@ -62,6 +62,13 @@ class ChunkMetrics:
     do writer chunked foi isolado no chunk 0/10 -- ver a docstring de
     `write_cnpjs_parquet_chunked` em transform.py -- não visível olhando só
     o total do estágio).
+
+    `status`/`error`: um chunk que lança exceção no meio do processamento
+    (ex.: OOM num `COPY`) precisa continuar aparecendo no `metrics.json` --
+    é o chunk culpado, o dado mais importante pro diagnóstico. O writer
+    invoca `on_chunk` com `status="failed"` e `error=str(exc)` ANTES de
+    re-levantar a exceção original (nunca no lugar dela -- reportar a
+    métrica não pode suprimir uma falha real do pipeline).
     """
 
     index: int
@@ -70,6 +77,8 @@ class ChunkMetrics:
     rows_written: int | None = None
     bytes_read: int | None = None
     bytes_written: int | None = None
+    status: str = "ok"
+    error: str | None = None
 
     def to_json_dict(self) -> dict[str, object]:
         return {
@@ -79,6 +88,8 @@ class ChunkMetrics:
             "rows_written": self.rows_written,
             "bytes_read": self.bytes_read,
             "bytes_written": self.bytes_written,
+            "status": self.status,
+            "error": self.error,
         }
 
 
@@ -104,6 +115,8 @@ class StageMetrics:
     duckdb_tmp_peak_mib: float | None = None
     workdir_peak_mib: float | None = None
     filesystem_used_peak_mib: float | None = None
+    filesystem_total_mib: float | None = None
+    filesystem_used_peak_percent: float | None = None
     chunks: tuple[ChunkMetrics, ...] | None = None
     extra: Mapping[str, ExtraValue] | None = None
 
@@ -126,7 +139,13 @@ class StageMetrics:
         stage, wall_seconds, rows_read, rows_written, bytes_read,
         bytes_written, mb_per_second, rows_per_second, rss_peak_mib,
         rss_peak_delta_mib, duckdb_tmp_peak_mib, workdir_peak_mib,
-        filesystem_used_peak_mib, started_at, finished_at, chunks, extra.
+        filesystem_used_peak_mib, filesystem_total_mib,
+        filesystem_used_peak_percent, started_at, finished_at, chunks, extra.
+
+        `filesystem_used_peak_percent` é o que a RFC 0001 §19 realmente
+        pede ("permanecer abaixo de 80% do filesystem") -- o MiB absoluto
+        sozinho não diz se um runner está perto do limite ou não (o mesmo
+        valor é folgado num runner de 500 GiB e crítico num de 20 GiB).
         """
         return {
             "stage": self.name,
@@ -148,6 +167,16 @@ class StageMetrics:
             "filesystem_used_peak_mib": (
                 round(self.filesystem_used_peak_mib, 1)
                 if self.filesystem_used_peak_mib is not None
+                else None
+            ),
+            "filesystem_total_mib": (
+                round(self.filesystem_total_mib, 1)
+                if self.filesystem_total_mib is not None
+                else None
+            ),
+            "filesystem_used_peak_percent": (
+                round(self.filesystem_used_peak_percent, 2)
+                if self.filesystem_used_peak_percent is not None
                 else None
             ),
             "started_at": self.started_at,
@@ -248,8 +277,8 @@ def _dir_size_bytes(path: Path) -> int:
     return sum(_iter_file_sizes(path))
 
 
-def _filesystem_used_bytes(path: Path) -> int | None:
-    """Bytes USADOS no mount que contém `path`, via `shutil.disk_usage` (stdlib).
+def _filesystem_usage(path: Path) -> shutil._ntuple_diskusage | None:  # noqa: SLF001
+    """Uso (total, used, free) do mount que contém `path`, via `shutil.disk_usage`.
 
     Somar o tamanho de diretórios monitorados por nome (`_dir_size_bytes`
     sobre `duckdb_tmp`/`workdir`) só vê o que o próprio pipeline sabe que
@@ -261,6 +290,12 @@ def _filesystem_used_bytes(path: Path) -> int | None:
     a uma soma parcial de diretórios conhecidos -- por isso esse número vem
     de `disk_usage`, que reporta o mount inteiro, cross-platform, sem
     depender de sabermos nomear cada arquivo grande que o pipeline cria.
+
+    Devolve o `total` JUNTO com o `used` na mesma chamada -- não faça duas
+    chamadas de `disk_usage` separadas pra "used" e "total": elas poderiam
+    observar estados diferentes do mount se algo escrever entre as duas
+    (o `total` da partição não muda de amostra pra amostra, mas o `used`
+    sim, e a dupla precisa vir consistente da mesma leitura).
 
     Sobe pela árvore de diretórios até achar um ancestral existente antes
     de chamar `disk_usage` -- `path` pode ainda não existir no momento em
@@ -277,16 +312,31 @@ def _filesystem_used_bytes(path: Path) -> int | None:
             return None
         probe = parent
     try:
-        return shutil.disk_usage(probe).used
+        return shutil.disk_usage(probe)
     except OSError:
         return None
+
+
+def _percent(part: int | None, whole: int | None) -> float | None:
+    """`part / whole * 100`, ou None se algo faltar ou `whole` for zero/None.
+
+    Usado pra derivar `filesystem_used_peak_percent` a partir dos bytes
+    brutos (não dos MiB já arredondados) -- calculado uma vez, na hora de
+    montar o `StageMetrics`, não guardado por amostra (RFC 0001 §19: o gate
+    de 80% é sobre essa fração, não sobre o MiB absoluto, que sozinho não
+    diz se um runner está perto do limite ou não).
+    """
+    if part is None or not whole:
+        return None
+    return part / whole * 100
 
 
 class _DiskPeakSampler:
     """Sampler em thread daemon: soma o tamanho de diretórios periodicamente
     e guarda o máximo observado por diretório -- mais, opcionalmente, o pico
-    de uso do filesystem inteiro (`_filesystem_used_bytes`) sob a chave
-    especial `"filesystem"`.
+    de uso do filesystem inteiro (`_filesystem_usage`) sob as chaves
+    especiais `"filesystem"` (pico de bytes usados) e `"filesystem_total"`
+    (capacidade total do mount, constante entre amostras do mesmo mount).
 
     Trade-off de amostragem: o sampler só olha o filesystem a cada
     `interval` segundos (default 5s). Um pico de disco que sobe e desce
@@ -313,6 +363,7 @@ class _DiskPeakSampler:
         self._peaks: dict[str, int] = dict.fromkeys(dirs, 0)
         if filesystem_path is not None:
             self._peaks["filesystem"] = 0
+            self._peaks["filesystem_total"] = 0
         self._lock = threading.Lock()
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
@@ -356,9 +407,20 @@ class _DiskPeakSampler:
             self._update_peak(key, _dir_size_bytes(path))
         if self._filesystem_path is None:
             return
-        used = _filesystem_used_bytes(self._filesystem_path)
-        if used is not None:
-            self._update_peak("filesystem", used)
+        usage = _filesystem_usage(self._filesystem_path)
+        if usage is not None:
+            self._record_filesystem_usage(usage)
+
+    def _record_filesystem_usage(self, usage: shutil._ntuple_diskusage) -> None:  # noqa: SLF001
+        """Atualiza pico de `used` + `total` observado a partir de UMA amostra.
+
+        `used` e `total` vêm do mesmo objeto `usage` (uma única chamada de
+        `disk_usage`, ver `_filesystem_usage`) -- nunca duas leituras
+        separadas que poderiam observar o mount em momentos diferentes.
+        """
+        self._update_peak("filesystem", usage.used)
+        with self._lock:
+            self._peaks["filesystem_total"] = usage.total
 
     def _update_peak(self, key: str, size: int) -> None:
         with self._lock:
@@ -598,6 +660,8 @@ class MetricsRecorder:
             wall = time.monotonic() - t0
             peaks = sampler.stop() if sampler is not None else {}
             rss_now = _rss_peak_mib()
+            fs_used = peaks.get("filesystem")
+            fs_total = peaks.get("filesystem_total")
             stage_metrics = StageMetrics(
                 name=handle.name,
                 wall_seconds=wall,
@@ -609,7 +673,9 @@ class MetricsRecorder:
                 rss_peak_delta_mib=max(0.0, rss_now - self._last_rss_mib),
                 duckdb_tmp_peak_mib=_bytes_to_mib(peaks.get("duckdb_tmp")),
                 workdir_peak_mib=_bytes_to_mib(peaks.get("workdir")),
-                filesystem_used_peak_mib=_bytes_to_mib(peaks.get("filesystem")),
+                filesystem_used_peak_mib=_bytes_to_mib(fs_used),
+                filesystem_total_mib=_bytes_to_mib(fs_total),
+                filesystem_used_peak_percent=_percent(fs_used, fs_total),
                 chunks=tuple(handle.chunks) if handle.chunks else None,
                 started_at=started_at,
                 finished_at=_now_iso(),
@@ -635,7 +701,12 @@ class MetricsRecorder:
         if m.workdir_peak_mib is not None:
             parts.append(f"workdir_peak={m.workdir_peak_mib:.0f}MiB")
         if m.filesystem_used_peak_mib is not None:
-            parts.append(f"fs_used_peak={m.filesystem_used_peak_mib:.0f}MiB")
+            pct = (
+                f"/{m.filesystem_used_peak_percent:.1f}%"
+                if m.filesystem_used_peak_percent is not None
+                else ""
+            )
+            parts.append(f"fs_used_peak={m.filesystem_used_peak_mib:.0f}MiB{pct}")
         if m.chunks:
             parts.append(f"chunks={len(m.chunks)}")
         log.info(" ".join(parts))
