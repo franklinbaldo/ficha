@@ -23,6 +23,7 @@ import duckdb
 from rich.progress import Progress
 
 from . import fetcher as fetcher_mod
+from . import metrics as metrics_mod
 from . import registry
 from .progress import make_progress
 from .sources import FileKind, canonical_inventory, is_valid_month
@@ -1471,6 +1472,23 @@ def write_socios_parquet(
     )
 
 
+def _record_parquet_output(
+    con: duckdb.DuckDBPyConnection, handle: metrics_mod.StageHandle, path: Path
+) -> None:
+    """Preenche bytes/linhas escritas no handle de métricas após um COPY TO PARQUET.
+
+    `COUNT(*)` sobre um parquet recém-escrito é praticamente grátis no
+    DuckDB: cada row-group carrega sua própria contagem no footer, então a
+    query soma metadados sem decodificar nenhuma coluna. Verificado
+    manualmente contra os parquets deste pipeline (dezenas de milhões de
+    linhas) -- tempo indistinguível do overhead de abrir o arquivo. Por
+    isso essa medição roda sempre, sem feature flag nem custo perceptível
+    somado ao write que já aconteceu.
+    """
+    handle.bytes_written = path.stat().st_size
+    handle.rows_written = con.execute(f"SELECT COUNT(*) FROM read_parquet('{path}')").fetchone()[0]
+
+
 def transform_snapshot(
     month: str,
     *,
@@ -1499,6 +1517,11 @@ def transform_snapshot(
     chain = chain or fetcher_mod.default_chain(month, cache_dir=cache_dir)
     extract_dir = cache_dir / month / "extracted"
 
+    # Fase 0 (RFC 0001 §16/19): baseline de observabilidade -- SEM mudança
+    # de comportamento nos dados produzidos. `recorder` só mede; nada aqui
+    # decide ordem de estágios, PRAGMAs ou conteúdo dos parquets.
+    recorder = metrics_mod.MetricsRecorder(month=month, schema_version=schema_version)
+
     owns_progress = progress is None
     progress = progress or make_progress()
     if owns_progress:
@@ -1511,7 +1534,11 @@ def transform_snapshot(
     t_total = time.monotonic()
     log.info("=== PHASE 1/4: extract 37 ZIPs for %s ===", month)
     t0 = time.monotonic()
-    extracted = extract_all(month, chain, extract_dir, progress=progress)
+    with recorder.stage("extract", workdir=extract_dir) as _mh_extract:
+        extracted = extract_all(month, chain, extract_dir, progress=progress)
+        _mh_extract.bytes_read = sum(
+            ef.csv_path.stat().st_size for ef in extracted if ef.csv_path.exists()
+        )
     log.info("=== PHASE 1/4 done in %.0fs ===", time.monotonic() - t0)
     progress.update(phase_task, description="transform: load into DuckDB", advance=1)
 
@@ -1553,15 +1580,30 @@ def transform_snapshot(
     # avoid the 5.5 GB OOM that bit run 25522678418.
     _threads = pick_threads()
     con.execute(f"PRAGMA threads={_threads}")
+    recorder.capture_pragmas(con)
+    _duckdb_tmp_dir = db_path.parent / "duckdb_tmp"
     try:
         # Lookups primeiro (necessárias pros JOINs dos parquets)
-        for ef in extracted:
-            if ef.kind in _LOOKUP_KINDS:
-                load_lookup_into_duckdb(con, ef.kind, ef.csv_path)
-                log.info("  lookup '%s' loaded", ef.kind)
+        with recorder.stage("lookups") as _mh_lookups:
+            _lookup_rows = 0
+            for ef in extracted:
+                if ef.kind in _LOOKUP_KINDS:
+                    load_lookup_into_duckdb(con, ef.kind, ef.csv_path)
+                    log.info("  lookup '%s' loaded", ef.kind)
+                    _lookup_rows += con.execute(
+                        f"SELECT COUNT(*) FROM lookup_{ef.kind}"
+                    ).fetchone()[0]
+            _mh_lookups.rows_written = _lookup_rows
 
         # Tabelas grandes
-        load_main_tables_into_duckdb(con, extracted)
+        with recorder.stage(
+            "load_duckdb", duckdb_tmp_dir=_duckdb_tmp_dir, workdir=extract_dir
+        ) as _mh_load:
+            load_main_tables_into_duckdb(con, extracted)
+            _mh_load.rows_written = sum(
+                con.execute(f"SELECT COUNT(*) FROM {t.name}").fetchone()[0]
+                for t in registry.MAIN_TABLES
+            )
         log.info("=== PHASE 2/4 done in %.0fs ===", time.monotonic() - t0)
         progress.update(phase_task, description="transform: write parquets", advance=1)
 
@@ -1655,7 +1697,9 @@ def transform_snapshot(
             try:
                 log.info("  writing %s.parquet...", name)
                 tp = time.monotonic()
-                fn(con, output_dir / f"{name}.parquet")
+                with recorder.stage(name, workdir=output_dir) as _mh:
+                    fn(con, output_dir / f"{name}.parquet")
+                    _record_parquet_output(con, _mh, output_dir / f"{name}.parquet")
                 size_mb = (output_dir / f"{name}.parquet").stat().st_size / 1024 / 1024
                 log.info(
                     "  wrote %s.parquet — %.1f MB in %.0fs",
@@ -1685,7 +1729,16 @@ def transform_snapshot(
         # Peak RAM: ~5 GB instead of ~70 GB.
         log.info("  writing cnpjs.parquet (chunked — %d CSVs)...", len(estabelecimento_csv_paths))
         tp = time.monotonic()
-        write_cnpjs_parquet_chunked(con, estabelecimento_csv_paths, output_dir / "cnpjs.parquet")
+        with recorder.stage(
+            "cnpjs_chunked", duckdb_tmp_dir=_duckdb_tmp_dir, workdir=output_dir
+        ) as _mh_cnpjs:
+            write_cnpjs_parquet_chunked(
+                con, estabelecimento_csv_paths, output_dir / "cnpjs.parquet"
+            )
+            _record_parquet_output(con, _mh_cnpjs, output_dir / "cnpjs.parquet")
+            _mh_cnpjs.bytes_read = sum(
+                p.stat().st_size for p in estabelecimento_csv_paths if p.exists()
+            )
         size_mb = (output_dir / "cnpjs.parquet").stat().st_size / 1024 / 1024
         log.info("  wrote cnpjs.parquet — %.1f MB in %.0fs", size_mb, time.monotonic() - tp)
 
@@ -1709,7 +1762,12 @@ def transform_snapshot(
                         estabelecimento_csv_paths,
                         registry.main_table("estabelecimento").source,
                     )
-                assert_roundtrip(con, cnpjs_parquet, sample_size=verify_sample_size)
+                with recorder.stage("roundtrip_verify") as _mh_verify:
+                    assert_roundtrip(con, cnpjs_parquet, sample_size=verify_sample_size)
+                    _mh_verify.rows_read = min(
+                        verify_sample_size,
+                        con.execute("SELECT COUNT(*) FROM estabelecimento").fetchone()[0],
+                    )
                 con.execute("DROP TABLE IF EXISTS estabelecimento")
                 log.info("=== PHASE 4/4 roundtrip OK in %.0fs ===", time.monotonic() - t_verify)
 
@@ -1720,9 +1778,14 @@ def transform_snapshot(
         # --- Step 5: Write raizes from cnpjs.parquet (no tables needed) ---
         log.info("  writing raizes.parquet (from cnpjs.parquet)...")
         tp = time.monotonic()
-        write_raizes_parquet_from_cnpjs(
-            con, output_dir / "cnpjs.parquet", output_dir / "raizes.parquet"
-        )
+        with recorder.stage(
+            "raizes", duckdb_tmp_dir=_duckdb_tmp_dir, workdir=output_dir
+        ) as _mh_raizes:
+            write_raizes_parquet_from_cnpjs(
+                con, output_dir / "cnpjs.parquet", output_dir / "raizes.parquet"
+            )
+            _record_parquet_output(con, _mh_raizes, output_dir / "raizes.parquet")
+            _mh_raizes.bytes_read = (output_dir / "cnpjs.parquet").stat().st_size
         size_mb = (output_dir / "raizes.parquet").stat().st_size / 1024 / 1024
         log.info("  wrote raizes.parquet — %.1f MB in %.0fs", size_mb, time.monotonic() - tp)
 
@@ -1738,7 +1801,9 @@ def transform_snapshot(
             try:
                 log.info("  writing %s.parquet...", name)
                 tp = time.monotonic()
-                fn(con, output_dir / f"{name}.parquet")
+                with recorder.stage(name, workdir=output_dir) as _mh:
+                    fn(con, output_dir / f"{name}.parquet")
+                    _record_parquet_output(con, _mh, output_dir / f"{name}.parquet")
                 size_mb = (output_dir / f"{name}.parquet").stat().st_size / 1024 / 1024
                 log.info(
                     "  wrote %s.parquet — %.1f MB in %.0fs",
@@ -1760,6 +1825,10 @@ def transform_snapshot(
 
         log.info("transform_snapshot total: %.0fs", time.monotonic() - t_total)
     finally:
+        # Escreve metrics.json mesmo em caminho de erro (run parcial ainda é
+        # dado útil pra diagnosticar onde o pipeline morreu) -- write_json
+        # nunca propaga falha de I/O (ver docstring em metrics.py).
+        recorder.write_json(cache_dir / month / "metrics" / "transform_metrics.json")
         con.close()
         db_path.unlink(missing_ok=True)
         if owns_progress:
