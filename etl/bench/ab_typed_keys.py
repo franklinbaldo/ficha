@@ -55,9 +55,7 @@ N = 5
 SEED = 20260719  # fixed -- same starting side + alternation every run, not "randomized"
 
 
-def _setup(
-    con: duckdb.DuckDBPyConnection, *, typed: bool, label: str
-) -> tuple[list[Path], float]:
+def _setup(con: duckdb.DuckDBPyConnection, *, typed: bool, label: str) -> tuple[list[Path], float]:
     """Load one isolated benchmark state and return (est CSVs, key setup cost).
 
     Both states use the real production lookup/main-table loaders, including
@@ -77,10 +75,7 @@ def _setup(
         *(ExtractedFile(kind="estabelecimentos", zip_name=p.name, csv_path=p) for p in est_paths),
     ]
     dupes = transform.load_main_tables_into_duckdb(con, main_table_files)
-    print(
-        f"  {label}: load_main_tables_into_duckdb collapsed "
-        f"{dupes} duplicate cnpj_basico row(s)"
-    )
+    print(f"  {label}: load_main_tables_into_duckdb collapsed {dupes} duplicate cnpj_basico row(s)")
     con.execute("DROP TABLE IF EXISTS estabelecimento")
 
     con.execute(
@@ -153,12 +148,8 @@ def _run_chunk(
                 f"CREATE OR REPLACE TEMP TABLE {table} AS {ibis.to_sql(expr, dialect='duckdb')}"
             )
 
-        _materialize(
-            "_emp_c", icon.table(empresa_source).semi_join(estabelecimento, join_col)
-        )
-        _materialize(
-            "_smp_c", icon.table(simples_source).semi_join(estabelecimento, join_col)
-        )
+        _materialize("_emp_c", icon.table(empresa_source).semi_join(estabelecimento, join_col))
+        _materialize("_smp_c", icon.table(simples_source).semi_join(estabelecimento, join_col))
 
         select_sql = transform._cnpjs_chunk_select_sql(
             "estabelecimento", "_emp_c", "_smp_c", "_cnae_map", order_by=False
@@ -168,15 +159,13 @@ def _run_chunk(
                 "LEFT JOIN _emp_c ON _emp_c.cnpj_basico = estabelecimento.cnpj_basico"
             )
             new_empresa_join = (
-                "LEFT JOIN _emp_c ON "
-                "_emp_c.cnpj_basico_key = estabelecimento.cnpj_basico_key"
+                "LEFT JOIN _emp_c ON _emp_c.cnpj_basico_key = estabelecimento.cnpj_basico_key"
             )
             old_simples_join = (
                 "LEFT JOIN _smp_c ON _smp_c.cnpj_basico = estabelecimento.cnpj_basico"
             )
             new_simples_join = (
-                "LEFT JOIN _smp_c ON "
-                "_smp_c.cnpj_basico_key = estabelecimento.cnpj_basico_key"
+                "LEFT JOIN _smp_c ON _smp_c.cnpj_basico_key = estabelecimento.cnpj_basico_key"
             )
             assert old_empresa_join in select_sql and old_simples_join in select_sql, (
                 "join predicate not found -- _cnpjs_chunk_select_sql's SQL shape changed; "
@@ -227,14 +216,11 @@ def main() -> None:
         print(f"  varchar db: {VARCHAR_DB_PATH}")
         print(f"  uint db:    {UINT_DB_PATH}")
 
-        varchar_paths, varchar_setup_cost = _setup(
-            con_varchar, typed=False, label="varchar"
-        )
+        varchar_paths, varchar_setup_cost = _setup(con_varchar, typed=False, label="varchar")
         uint_paths, key_cost = _setup(con_uint, typed=True, label="uint")
         if not varchar_paths or not uint_paths:
             raise SystemExit(
-                "no estabelecimento-*.csv found under bench/.work/data -- "
-                "run benchmark.py first"
+                "no estabelecimento-*.csv found under bench/.work/data -- run benchmark.py first"
             )
         if varchar_paths != uint_paths:
             raise AssertionError("varchar and uint states resolved different CSV chunk lists")
@@ -263,9 +249,7 @@ def main() -> None:
         result: ABResult = run_ab(
             n=args.repeats,
             seed=args.seed,
-            fn_a=lambda: _run_chunk(
-                con_varchar, chunk, typed=False, tag="varchar"
-            )[0],
+            fn_a=lambda: _run_chunk(con_varchar, chunk, typed=False, tag="varchar")[0],
             fn_b=lambda: _run_chunk(con_uint, chunk, typed=True, tag="uint")[0],
             label_a="varchar",
             label_b="uint",
