@@ -27,8 +27,9 @@ actually exercised, not bypassed. Numbers are wall-clock seconds on **this**
 machine — compare a stage against itself across a code change, not against
 another machine. `bench/.work/` is gitignored.
 
-The production-shaped default is 10 estabelecimento chunks, matching the RFB
-inventory `Estabelecimentos0.zip` through `Estabelecimentos9.zip`.
+Decision-grade runs use 10 estabelecimento chunks, matching the RFB inventory
+`Estabelecimentos0.zip` through `Estabelecimentos9.zip`; pass `--chunks 10`
+explicitly for local runs. The Actions decision profile already defaults to 10.
 
 `--repeats` controls how many times a stage sequence (`benchmark.py`) or A/B
 pair (`ab_*.py`) runs — default 1 for `benchmark.py` (quick dev iteration), 5
