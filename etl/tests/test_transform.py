@@ -744,6 +744,49 @@ def test_transform_snapshot_invalid_month():
 
 
 # -----------------------------------------------------------------------------
+# Finding #2 do review adversarial da PR #70: uma falha ANTES de
+# `duckdb.connect()` (ex.: dentro do estágio "extract") corria inteiramente
+# fora do try/finally que escreve metrics.json -- nenhum baseline parcial
+# sobrevivia a essa falha. O try/finally agora envolve tudo desde antes do
+# estágio "extract".
+# -----------------------------------------------------------------------------
+
+
+def test_transform_snapshot_writes_partial_metrics_when_extract_fails(
+    tmp_path, all_zips_dir, monkeypatch
+):
+    """Uma exceção dentro de extract_all (fora do antigo try/finally, antes
+    de duckdb.connect() sequer rodar) ainda deve deixar um
+    transform_metrics.json no disco, com o estágio "extract" registrado
+    (mesmo que parcial) -- baseline parcial é dado útil pra diagnosticar
+    onde o pipeline morreu."""
+    chain = fetcher.ChainedFetcher(fetchers=[_ZipDirFetcher(all_zips_dir)])
+    output_dir = tmp_path / "output"
+    cache_dir = tmp_path / "cache"
+
+    def _boom(*args, **kwargs):
+        raise RuntimeError("falha simulada em extract_all")
+
+    monkeypatch.setattr(transform, "extract_all", _boom)
+
+    with pytest.raises(RuntimeError, match="falha simulada em extract_all"):
+        transform.transform_snapshot(
+            "2026-04",
+            cache_dir=cache_dir,
+            output_dir=output_dir,
+            chain=chain,
+            skip_unimplemented=False,
+        )
+
+    metrics_path = cache_dir / "2026-04" / "metrics" / "transform_metrics.json"
+    assert metrics_path.exists(), "metrics.json deve sobreviver mesmo a uma falha em extract_all"
+    data = json.loads(metrics_path.read_text())
+    assert data["month"] == "2026-04"
+    stage_names = [s["stage"] for s in data["stages"]]
+    assert "extract" in stage_names
+
+
+# -----------------------------------------------------------------------------
 # Roundtrip-equivalence (ADR 0009)
 # -----------------------------------------------------------------------------
 
@@ -1115,6 +1158,141 @@ def test_write_cnpjs_parquet_chunked_matches_full_write(tmp_path, all_zips_dir):
         )
     finally:
         compare_con.close()
+
+
+# -----------------------------------------------------------------------------
+# Finding #4 do review adversarial da PR #70: RFC 0001 §16 exige registro
+# por estágio E POR CHUNK -- write_cnpjs_parquet_chunked precisa reportar um
+# ChunkMetrics por CSV não-vazio via `on_chunk`, não só o agregado do
+# estágio inteiro (o incidente histórico de OOM foi isolado no chunk 0/10,
+# invisível olhando só o total).
+# -----------------------------------------------------------------------------
+
+
+def test_write_cnpjs_parquet_chunked_calls_on_chunk_per_nonempty_csv(tmp_path):
+    con = duckdb.connect()
+    try:
+        for kind in transform._LOOKUP_KINDS:
+            con.execute(
+                f"CREATE OR REPLACE TABLE lookup_{kind} (codigo VARCHAR, descricao VARCHAR)"
+            )
+        con.execute(
+            """
+            CREATE TABLE empresa (
+                cnpj_basico VARCHAR, razao_social VARCHAR, natureza_juridica VARCHAR,
+                qualificacao_responsavel VARCHAR, capital_social VARCHAR,
+                porte_empresa VARCHAR, ente_federativo_responsavel VARCHAR
+            )
+            """
+        )
+        for row in EMPRESA_ROWS:
+            con.execute("INSERT INTO empresa VALUES (?, ?, ?, ?, ?, ?, ?)", list(row))
+        con.execute(
+            """
+            CREATE TABLE simples (
+                cnpj_basico VARCHAR, opcao_simples VARCHAR, data_opcao_simples VARCHAR,
+                data_exclusao_simples VARCHAR, opcao_mei VARCHAR, data_opcao_mei VARCHAR,
+                data_exclusao_mei VARCHAR
+            )
+            """
+        )
+
+        # 2 CSVs "de chunk" não-vazios, cnpj_basico distintos -- simula o
+        # split real por ZIP da RFB (arbitrário, não alinhado a nenhum
+        # prefixo de cnpj_basico).
+        chunk_a_rows = [r for r in ESTABELECIMENTO_ROWS if r[0] == "11111111"]
+        chunk_b_rows = [r for r in ESTABELECIMENTO_ROWS if r[0] != "11111111"]
+        assert chunk_a_rows and chunk_b_rows  # sanity da fixture
+
+        def _write_csv(path: Path, rows: list[tuple[str, ...]]) -> None:
+            body = "\n".join(";".join(f'"{c}"' for c in row) for row in rows) + "\n"
+            path.write_bytes(body.encode("latin-1"))
+
+        csv_a = tmp_path / "chunk_a.csv"
+        csv_b = tmp_path / "chunk_b.csv"
+        _write_csv(csv_a, chunk_a_rows)
+        _write_csv(csv_b, chunk_b_rows)
+
+        recorded: list = []
+        out_path = tmp_path / "cnpjs.parquet"
+        transform.write_cnpjs_parquet_chunked(
+            con, [csv_a, csv_b], out_path, on_chunk=recorded.append
+        )
+
+        assert len(recorded) == 2  # um por CSV não-vazio
+        for idx, (chunk_metrics, csv_path, expected_rows) in enumerate(
+            (
+                (recorded[0], csv_a, len(chunk_a_rows)),
+                (recorded[1], csv_b, len(chunk_b_rows)),
+            )
+        ):
+            assert chunk_metrics.index == idx
+            assert chunk_metrics.csv_name == csv_path.name
+            assert chunk_metrics.rows_written == expected_rows
+            assert chunk_metrics.wall_seconds >= 0
+            assert chunk_metrics.bytes_read == csv_path.stat().st_size
+            assert chunk_metrics.bytes_written is not None
+            assert chunk_metrics.bytes_written > 0
+
+        # rows_written de cada chunk bate com o parquet final (métricas plausíveis).
+        total_rows = con.execute(f"SELECT COUNT(*) FROM '{out_path}'").fetchone()[0]
+        assert total_rows == sum(c.rows_written for c in recorded)
+    finally:
+        con.close()
+
+
+def test_write_cnpjs_parquet_chunked_skips_empty_csv_without_calling_on_chunk(tmp_path):
+    """CSV de 0 bytes na lista -- não deve gerar chamada a on_chunk (o
+    finding pede "uma vez por CSV NÃO-vazio")."""
+    con = duckdb.connect()
+    try:
+        for kind in transform._LOOKUP_KINDS:
+            con.execute(
+                f"CREATE OR REPLACE TABLE lookup_{kind} (codigo VARCHAR, descricao VARCHAR)"
+            )
+        con.execute(
+            """
+            CREATE TABLE empresa (
+                cnpj_basico VARCHAR, razao_social VARCHAR, natureza_juridica VARCHAR,
+                qualificacao_responsavel VARCHAR, capital_social VARCHAR,
+                porte_empresa VARCHAR, ente_federativo_responsavel VARCHAR
+            )
+            """
+        )
+        for row in EMPRESA_ROWS:
+            con.execute("INSERT INTO empresa VALUES (?, ?, ?, ?, ?, ?, ?)", list(row))
+        con.execute(
+            """
+            CREATE TABLE simples (
+                cnpj_basico VARCHAR, opcao_simples VARCHAR, data_opcao_simples VARCHAR,
+                data_exclusao_simples VARCHAR, opcao_mei VARCHAR, data_opcao_mei VARCHAR,
+                data_exclusao_mei VARCHAR
+            )
+            """
+        )
+
+        chunk_a_rows = [r for r in ESTABELECIMENTO_ROWS if r[0] == "11111111"]
+
+        def _write_csv(path: Path, rows: list[tuple[str, ...]]) -> None:
+            body = "\n".join(";".join(f'"{c}"' for c in row) for row in rows) + "\n"
+            path.write_bytes(body.encode("latin-1"))
+
+        csv_a = tmp_path / "chunk_a.csv"
+        _write_csv(csv_a, chunk_a_rows)
+        empty_csv = tmp_path / "chunk_empty.csv"
+        empty_csv.write_bytes(b"")
+
+        recorded: list = []
+        out_path = tmp_path / "cnpjs.parquet"
+        transform.write_cnpjs_parquet_chunked(
+            con, [empty_csv, csv_a], out_path, on_chunk=recorded.append
+        )
+
+        assert len(recorded) == 1
+        assert recorded[0].csv_name == csv_a.name
+        assert recorded[0].index == 1  # posição real na lista, não reindexado
+    finally:
+        con.close()
 
 
 # -----------------------------------------------------------------------------

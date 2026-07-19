@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
+import shutil
 import time
 from pathlib import Path
 
@@ -59,8 +60,10 @@ def test_stage_to_json_dict_has_stable_keys():
         "rss_peak_delta_mib",
         "duckdb_tmp_peak_mib",
         "workdir_peak_mib",
+        "filesystem_used_peak_mib",
         "started_at",
         "finished_at",
+        "chunks",
         "extra",
     }
     assert d["stage"] == "noop"
@@ -75,6 +78,9 @@ def test_stage_without_watch_dirs_has_none_disk_peaks():
     m = recorder.stages[-1]
     assert m.duckdb_tmp_peak_mib is None
     assert m.workdir_peak_mib is None
+    # Recorder criado sem filesystem_path -- nenhum stage amostra o mount.
+    assert m.filesystem_used_peak_mib is None
+    assert m.chunks is None
 
 
 def test_stage_extra_field_serializes():
@@ -260,6 +266,207 @@ def test_stage_disk_peak_tracks_workdir_growth(tmp_path):
     m = recorder.stages[-1]
     assert m.workdir_peak_mib is not None
     assert m.workdir_peak_mib >= 2.9
+
+
+# -----------------------------------------------------------------------------
+# Finding #1 do review adversarial da PR #70: o sampler por nome de
+# diretório (duckdb_tmp/workdir) não vê arquivos grandes que o pipeline cria
+# FORA desses dirs (ex.: cache_dir/<month>/transform.duckdb, irmão de
+# duckdb_tmp). `filesystem_path` mede o mount inteiro via
+# `shutil.disk_usage`, que é a métrica que importa pro gate de 80% da RFC
+# 0001 §19.
+# -----------------------------------------------------------------------------
+
+
+def test_disk_peak_sampler_filesystem_peak_sees_sibling_file_outside_watched_dirs(tmp_path):
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    duckdb_tmp = cache_dir / "duckdb_tmp"
+    duckdb_tmp.mkdir()
+
+    baseline_used = shutil.disk_usage(cache_dir).used
+
+    sampler = metrics._DiskPeakSampler(
+        {"duckdb_tmp": duckdb_tmp}, interval=0.05, filesystem_path=cache_dir
+    )
+    sampler.start()
+    try:
+        time.sleep(0.02)
+        # "transform.duckdb" simulado -- irmão de duckdb_tmp, NUNCA listado
+        # em `_DiskPeakSampler._dirs` por nome (o cenário real do finding).
+        sibling_db = cache_dir / "transform.duckdb"
+        sibling_db.write_bytes(b"0" * (20 * 1024 * 1024))  # 20 MiB
+        time.sleep(0.2)
+    finally:
+        peaks = sampler.stop()
+
+    # O dir monitorado por nome continua vazio -- o arquivo não está dentro dele.
+    assert peaks["duckdb_tmp"] == 0
+    # Mas o pico de filesystem viu o crescimento, porque mede o mount
+    # inteiro via disk_usage, não a soma dos dirs monitorados.
+    assert peaks["filesystem"] > baseline_used
+
+
+def test_disk_peak_sampler_filesystem_only_no_named_dirs(tmp_path):
+    """Um sampler só com filesystem_path (sem duckdb_tmp_dir/workdir) ainda
+    deve arrancar a thread e amostrar -- o guard `_has_anything_to_watch`
+    não pode considerar isso "nada pra ver"."""
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    sampler = metrics._DiskPeakSampler({}, interval=0.05, filesystem_path=cache_dir)
+    sampler.start()
+    time.sleep(0.1)
+    peaks = sampler.stop()
+    assert "filesystem" in peaks
+    assert peaks["filesystem"] > 0
+
+
+def test_filesystem_used_bytes_walks_up_to_existing_ancestor(tmp_path):
+    """`path` pode ainda não existir quando o sampler arranca (ex.:
+    cache_dir/<month>/ só é criado depois do 1º estágio) -- não deve
+    devolver None nem explodir, só subir pro ancestral existente mais próximo."""
+    missing = tmp_path / "does" / "not" / "exist" / "yet"
+    used = metrics._filesystem_used_bytes(missing)
+    assert used is not None
+    assert used > 0
+
+
+def test_stage_filesystem_peak_recorded_for_every_stage_when_configured(tmp_path):
+    """Diferente de duckdb_tmp/workdir (escolhidos por chamada de `stage()`),
+    `filesystem_path` é configurado uma vez no `MetricsRecorder` e vale pra
+    TODO estágio -- inclusive um sem nenhum watch dir próprio (ex.:
+    "lookups", que hoje não passa duckdb_tmp_dir/workdir)."""
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    recorder = metrics.MetricsRecorder(
+        month="2026-07", schema_version="1.0.0", filesystem_path=cache_dir
+    )
+    with recorder.stage("lookups", sample_interval=0.05):
+        time.sleep(0.1)
+    m = recorder.stages[-1]
+    assert m.filesystem_used_peak_mib is not None
+    assert m.filesystem_used_peak_mib > 0
+
+
+# -----------------------------------------------------------------------------
+# Finding #3 do review adversarial da PR #70: code_version precisa
+# identificar o COMMIT que gerou o run, não a versão fixa do pacote.
+# -----------------------------------------------------------------------------
+
+
+def test_git_sha_uses_github_sha_env(monkeypatch):
+    monkeypatch.setenv("GITHUB_SHA", "abc123deadbeef")
+    assert metrics._git_sha() == "abc123deadbeef"
+
+
+def test_git_sha_falls_back_to_git_subprocess(monkeypatch):
+    monkeypatch.delenv("GITHUB_SHA", raising=False)
+
+    class _FakeCompleted:
+        def __init__(self, stdout, returncode=0):
+            self.stdout = stdout
+            self.returncode = returncode
+
+    def fake_run(cmd, **kwargs):
+        if cmd[:2] == ["git", "rev-parse"]:
+            return _FakeCompleted("deadbeef1234\n")
+        if cmd[:2] == ["git", "status"]:
+            return _FakeCompleted("")  # working tree limpa
+        raise AssertionError(f"unexpected git command {cmd}")
+
+    monkeypatch.setattr(metrics.subprocess, "run", fake_run)
+    assert metrics._git_sha() == "deadbeef1234"
+
+
+def test_git_sha_marks_dirty_tree(monkeypatch):
+    monkeypatch.delenv("GITHUB_SHA", raising=False)
+
+    class _FakeCompleted:
+        def __init__(self, stdout, returncode=0):
+            self.stdout = stdout
+            self.returncode = returncode
+
+    def fake_run(cmd, **kwargs):
+        if cmd[:2] == ["git", "rev-parse"]:
+            return _FakeCompleted("deadbeef1234\n")
+        if cmd[:2] == ["git", "status"]:
+            return _FakeCompleted(" M some_file.py\n")
+        raise AssertionError(f"unexpected git command {cmd}")
+
+    monkeypatch.setattr(metrics.subprocess, "run", fake_run)
+    assert metrics._git_sha() == "deadbeef1234-dirty"
+
+
+def test_git_sha_returns_unknown_when_subprocess_fails(monkeypatch):
+    monkeypatch.delenv("GITHUB_SHA", raising=False)
+
+    def fake_run(cmd, **kwargs):
+        raise OSError("git not installed (simulated)")
+
+    monkeypatch.setattr(metrics.subprocess, "run", fake_run)
+    assert metrics._git_sha() == "unknown"
+
+
+def test_git_sha_returns_unknown_when_git_rev_parse_fails_cleanly(monkeypatch):
+    """`git rev-parse` roda mas devolve returncode != 0 (ex.: não é um repo
+    git) -- sem exceção nenhuma, só um resultado "falhou"."""
+    monkeypatch.delenv("GITHUB_SHA", raising=False)
+
+    class _FakeCompleted:
+        def __init__(self, stdout, returncode):
+            self.stdout = stdout
+            self.returncode = returncode
+
+    def fake_run(cmd, **kwargs):
+        return _FakeCompleted("", 128)
+
+    monkeypatch.setattr(metrics.subprocess, "run", fake_run)
+    assert metrics._git_sha() == "unknown"
+
+
+def test_envelope_uses_git_sha_as_code_version(monkeypatch):
+    monkeypatch.setenv("GITHUB_SHA", "envelopesha123")
+    recorder = metrics.MetricsRecorder(month="2026-07", schema_version="1.0.0")
+    envelope = recorder.to_envelope()
+    assert envelope["code_version"] == "envelopesha123"
+    assert "package_version" in envelope
+
+
+# -----------------------------------------------------------------------------
+# Finding #4 do review adversarial da PR #70: ChunkMetrics -- serialização
+# estável (o teste de integração fim-a-fim com write_cnpjs_parquet_chunked
+# vive em test_transform.py, junto do resto dos testes desse writer).
+# -----------------------------------------------------------------------------
+
+
+def test_chunk_metrics_to_json_dict():
+    cm = metrics.ChunkMetrics(
+        index=2, csv_name="Estabelecimentos2.csv", wall_seconds=1.2345, rows_written=10
+    )
+    d = cm.to_json_dict()
+    assert d == {
+        "index": 2,
+        "csv_name": "Estabelecimentos2.csv",
+        "wall_seconds": 1.234,
+        "rows_written": 10,
+        "bytes_read": None,
+        "bytes_written": None,
+    }
+
+
+def test_stage_chunks_serialize_in_to_json_dict():
+    recorder = metrics.MetricsRecorder(month="2026-07", schema_version="1.0.0")
+    with recorder.stage("cnpjs_chunked") as handle:
+        handle.chunks.append(
+            metrics.ChunkMetrics(index=0, csv_name="a.csv", wall_seconds=0.5, rows_written=3)
+        )
+        handle.chunks.append(
+            metrics.ChunkMetrics(index=1, csv_name="b.csv", wall_seconds=0.7, rows_written=5)
+        )
+    d = recorder.stages[-1].to_json_dict()
+    assert len(d["chunks"]) == 2
+    assert d["chunks"][0]["csv_name"] == "a.csv"
+    assert d["chunks"][1]["rows_written"] == 5
 
 
 # -----------------------------------------------------------------------------

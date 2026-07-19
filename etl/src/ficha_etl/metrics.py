@@ -33,6 +33,8 @@ import json
 import logging
 import os
 import resource
+import shutil
+import subprocess
 import sys
 import threading
 import time
@@ -48,6 +50,36 @@ log = logging.getLogger(__name__)
 # Tipos aceitos no sub-dict `extra` de StageMetrics -- qualquer coisa que
 # serialize direto em JSON sem transformação.
 ExtraValue = str | int | float | bool
+
+
+@dataclass(frozen=True)
+class ChunkMetrics:
+    """Métricas de UM chunk dentro de um writer chunked (ex.: cnpjs_chunked).
+
+    RFC 0001 §16 exige registro por estágio E POR CHUNK -- o agregado de
+    `StageMetrics` esconde a variação entre chunks, que é justamente o que
+    importa pra achar um chunk fora da curva (o incidente histórico de OOM
+    do writer chunked foi isolado no chunk 0/10 -- ver a docstring de
+    `write_cnpjs_parquet_chunked` em transform.py -- não visível olhando só
+    o total do estágio).
+    """
+
+    index: int
+    csv_name: str
+    wall_seconds: float
+    rows_written: int | None = None
+    bytes_read: int | None = None
+    bytes_written: int | None = None
+
+    def to_json_dict(self) -> dict[str, object]:
+        return {
+            "index": self.index,
+            "csv_name": self.csv_name,
+            "wall_seconds": round(self.wall_seconds, 3),
+            "rows_written": self.rows_written,
+            "bytes_read": self.bytes_read,
+            "bytes_written": self.bytes_written,
+        }
 
 
 @dataclass(frozen=True)
@@ -71,6 +103,8 @@ class StageMetrics:
     bytes_written: int | None = None
     duckdb_tmp_peak_mib: float | None = None
     workdir_peak_mib: float | None = None
+    filesystem_used_peak_mib: float | None = None
+    chunks: tuple[ChunkMetrics, ...] | None = None
     extra: Mapping[str, ExtraValue] | None = None
 
     def mb_per_second(self) -> float | None:
@@ -92,7 +126,7 @@ class StageMetrics:
         stage, wall_seconds, rows_read, rows_written, bytes_read,
         bytes_written, mb_per_second, rows_per_second, rss_peak_mib,
         rss_peak_delta_mib, duckdb_tmp_peak_mib, workdir_peak_mib,
-        started_at, finished_at, extra.
+        filesystem_used_peak_mib, started_at, finished_at, chunks, extra.
         """
         return {
             "stage": self.name,
@@ -111,8 +145,14 @@ class StageMetrics:
             "workdir_peak_mib": (
                 round(self.workdir_peak_mib, 1) if self.workdir_peak_mib is not None else None
             ),
+            "filesystem_used_peak_mib": (
+                round(self.filesystem_used_peak_mib, 1)
+                if self.filesystem_used_peak_mib is not None
+                else None
+            ),
             "started_at": self.started_at,
             "finished_at": self.finished_at,
+            "chunks": [c.to_json_dict() for c in self.chunks] if self.chunks else [],
             "extra": dict(self.extra) if self.extra else {},
         }
 
@@ -133,6 +173,10 @@ class StageHandle:
     bytes_read: int | None = None
     bytes_written: int | None = None
     extra: dict[str, ExtraValue] = field(default_factory=dict)
+    # Preenchido por writers chunked via callback `on_chunk` (ex.:
+    # `write_cnpjs_parquet_chunked`) -- ver `ChunkMetrics`. `chunks.append`
+    # é o próprio callback: qualquer callable `ChunkMetrics -> None` serve.
+    chunks: list[ChunkMetrics] = field(default_factory=list)
 
 
 def _now_iso() -> str:
@@ -204,9 +248,45 @@ def _dir_size_bytes(path: Path) -> int:
     return sum(_iter_file_sizes(path))
 
 
+def _filesystem_used_bytes(path: Path) -> int | None:
+    """Bytes USADOS no mount que contém `path`, via `shutil.disk_usage` (stdlib).
+
+    Somar o tamanho de diretórios monitorados por nome (`_dir_size_bytes`
+    sobre `duckdb_tmp`/`workdir`) só vê o que o próprio pipeline sabe que
+    está escrevendo. Isso deixa de fora, por exemplo,
+    `cache_dir/<month>/transform.duckdb` -- o arquivo de banco pode ter
+    vários GiB e nunca fica dentro de `duckdb_tmp` nem de `workdir` (é
+    irmão do primeiro, não filho). O gate de aceitação da RFC 0001 §19
+    ("permanecer abaixo de 80% do filesystem") se refere ao disco REAL, não
+    a uma soma parcial de diretórios conhecidos -- por isso esse número vem
+    de `disk_usage`, que reporta o mount inteiro, cross-platform, sem
+    depender de sabermos nomear cada arquivo grande que o pipeline cria.
+
+    Sobe pela árvore de diretórios até achar um ancestral existente antes
+    de chamar `disk_usage` -- `path` pode ainda não existir no momento em
+    que o sampler arranca (ex.: `cache_dir/<month>/` só é criado depois do
+    primeiro estágio). Devolve None se nada nunca existir (não deveria
+    acontecer -- toda árvore tem "/" como ancestral) ou se `disk_usage`
+    falhar por qualquer razão: ruído de infraestrutura da amostragem, não
+    deve derrubar o sampler.
+    """
+    probe = path
+    while not probe.exists():
+        parent = probe.parent
+        if parent == probe:
+            return None
+        probe = parent
+    try:
+        return shutil.disk_usage(probe).used
+    except OSError:
+        return None
+
+
 class _DiskPeakSampler:
     """Sampler em thread daemon: soma o tamanho de diretórios periodicamente
-    e guarda o máximo observado por diretório.
+    e guarda o máximo observado por diretório -- mais, opcionalmente, o pico
+    de uso do filesystem inteiro (`_filesystem_used_bytes`) sob a chave
+    especial `"filesystem"`.
 
     Trade-off de amostragem: o sampler só olha o filesystem a cada
     `interval` segundos (default 5s). Um pico de disco que sobe e desce
@@ -214,21 +294,34 @@ class _DiskPeakSampler:
     estágios deste pipeline (minutos, não segundos) isso é aceitável -- o
     objetivo do baseline é a ordem de grandeza do pico sustentado, não o
     instante exato de um spill transitório de milissegundos. Custo por
-    amostra é um `os.walk` sobre os diretórios monitorados; desprezível
-    frente à duração típica de um estágio (extract/load/write rodam por
-    dezenas de segundos a minutos, não os poucos ms que um walk custa).
+    amostra é um `os.walk` sobre os diretórios monitorados + uma chamada
+    `disk_usage`; desprezível frente à duração típica de um estágio
+    (extract/load/write rodam por dezenas de segundos a minutos, não os
+    poucos ms que isso custa).
     """
 
-    def __init__(self, dirs: dict[str, Path], *, interval: float = 5.0) -> None:
+    def __init__(
+        self,
+        dirs: dict[str, Path],
+        *,
+        interval: float = 5.0,
+        filesystem_path: Path | None = None,
+    ) -> None:
         self._dirs = dirs
         self._interval = interval
+        self._filesystem_path = filesystem_path
         self._peaks: dict[str, int] = dict.fromkeys(dirs, 0)
+        if filesystem_path is not None:
+            self._peaks["filesystem"] = 0
         self._lock = threading.Lock()
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
 
+    def _has_anything_to_watch(self) -> bool:
+        return bool(self._dirs) or self._filesystem_path is not None
+
     def start(self) -> None:
-        if not self._dirs:
+        if not self._has_anything_to_watch():
             return
         self._thread = threading.Thread(
             target=self._run, name="ficha-etl-disk-sampler", daemon=True
@@ -261,6 +354,11 @@ class _DiskPeakSampler:
     def _sample_once(self) -> None:
         for key, path in self._dirs.items():
             self._update_peak(key, _dir_size_bytes(path))
+        if self._filesystem_path is None:
+            return
+        used = _filesystem_used_bytes(self._filesystem_path)
+        if used is not None:
+            self._update_peak("filesystem", used)
 
     def _update_peak(self, key: str, size: int) -> None:
         with self._lock:
@@ -269,7 +367,7 @@ class _DiskPeakSampler:
             self._peaks[key] = size
 
     def stop(self) -> dict[str, int]:
-        if not self._dirs:
+        if not self._has_anything_to_watch():
             return {}
         self._stop_event.set()
         if self._thread is not None:
@@ -292,14 +390,77 @@ class _DiskPeakSampler:
             return dict(self._peaks)
 
 
-def _code_version() -> str:
-    """Versão do pacote ficha-etl instalado, ou 'unknown' fora de um venv com metadata."""
+def _package_version() -> str:
+    """Versão do pacote ficha-etl instalado, ou 'unknown' fora de um venv com metadata.
+
+    NÃO é a identidade de código do run -- `pyproject.toml` fixa essa versão
+    em "0.0.1" e não é bumped por commit, então todo run gera o mesmo valor
+    aqui independente de qual implementação rodou. Mantido como campo
+    separado (`package_version` no envelope) porque ainda é útil saber qual
+    release do pacote está instalada; a identidade real é `_git_sha()`.
+    """
     import importlib.metadata
 
     try:
         return importlib.metadata.version("ficha-etl")
     except importlib.metadata.PackageNotFoundError:
         return "unknown"
+
+
+def _run_git(*args: str) -> subprocess.CompletedProcess[str] | None:
+    """Roda `git <args>` capturando stdout como texto. None se `git` falhar
+    por qualquer razão (não instalado, não é um repo git, timeout, etc.) --
+    ruído de infraestrutura da coleta de métricas, nunca deve propagar."""
+    try:
+        return subprocess.run(
+            ["git", *args], capture_output=True, text=True, check=False, timeout=10
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
+def _git_tree_is_dirty() -> bool:
+    result = _run_git("status", "--porcelain")
+    if result is None or result.returncode != 0:
+        return False
+    return bool(result.stdout.strip())
+
+
+def _git_sha() -> str:
+    """SHA do commit que gerou este run -- a identidade real do código executado.
+
+    `_package_version()` fica travado em "0.0.1", então não diferencia qual
+    implementação produziu um `metrics.json` -- esse é o campo de
+    identidade que RFC 0001 §16 pede ("versão do código").
+
+    Precedência:
+    1. `GITHUB_SHA` -- Actions já injeta isso em todo job, sem precisar
+       rodar `git` (mais barato, e funciona mesmo num checkout raso/sem
+       histórico completo);
+    2. `git rev-parse HEAD` via subprocess -- cobre dev local e backfills
+       fora de Actions;
+    3. `"unknown"` se nenhum dos dois funcionar (não é um repo git, `git`
+       não instalado, etc.) -- observabilidade não pode falhar o pipeline
+       por não conseguir identificar o próprio código.
+
+    Quando o SHA vem de `git` (não de `GITHUB_SHA`, que já reflete um
+    checkout limpo por definição), sufixa "-dirty" se
+    `git status --porcelain` reportar mudanças não commitadas -- distingue
+    um run de dev com working tree suja de um run limpo de CI.
+    """
+    env_sha = os.environ.get("GITHUB_SHA", "").strip()
+    if env_sha:
+        return env_sha
+
+    result = _run_git("rev-parse", "HEAD")
+    if result is None or result.returncode != 0:
+        return "unknown"
+    sha = result.stdout.strip()
+    if not sha:
+        return "unknown"
+    if _git_tree_is_dirty():
+        return f"{sha}-dirty"
+    return sha
 
 
 class MetricsRecorder:
@@ -310,12 +471,27 @@ class MetricsRecorder:
     o sampler de disco interno roda em thread própria.
     """
 
-    def __init__(self, *, month: str, schema_version: str) -> None:
+    def __init__(
+        self,
+        *,
+        month: str,
+        schema_version: str,
+        filesystem_path: Path | None = None,
+    ) -> None:
+        """`filesystem_path`: qualquer path dentro do mount cujo pico de uso
+        (RFC 0001 §19: gate de 80% do filesystem) deve ser rastreado em
+        TODO estágio, além dos picos de diretório específicos que cada
+        `stage()` já opta por monitorar via `duckdb_tmp_dir`/`workdir`.
+        Tipicamente `cache_dir` (cobre `transform.duckdb`, `duckdb_tmp` e
+        os CSVs extraídos, todos sob o mesmo mount). None desativa essa
+        amostragem (ex.: em testes unitários de estágios isolados).
+        """
         self.month = month
         self.schema_version = schema_version
         self.stages: list[StageMetrics] = []
         self.pragmas: dict[str, str] = {}
         self._last_rss_mib = _rss_peak_mib()
+        self._filesystem_path = filesystem_path
 
     def capture_pragmas(self, con: duckdb.DuckDBPyConnection) -> None:
         """Lê de volta os PRAGMAs que EFETIVAMENTE valeram (RFC 0001 §16).
@@ -348,7 +524,14 @@ class MetricsRecorder:
         nomeados de `StageMetrics` (`duckdb_tmp_peak_mib`/`workdir_peak_mib`)
         exigidos pela RFC 0001 §16 -- preferido a um `watch_dirs: dict`
         genérico cruzando a fronteira do módulo sem tipo, o que violaria a
-        regra de "nenhum dict solto cruzando fronteira de módulo".
+        regra de "nenhum dict solto cruzando fronteira de módulo". Além
+        desses dois, se o `MetricsRecorder` foi criado com
+        `filesystem_path`, TODO estágio também amostra
+        `filesystem_used_peak_mib` (via `shutil.disk_usage` no mount real) --
+        essa é a métrica que importa pro gate de 80% do filesystem (RFC 0001
+        §19), já que soma de diretórios monitorados por nome pode deixar de
+        fora arquivos grandes que o pipeline cria fora deles (ex.:
+        `transform.duckdb`).
 
         O handle devolvido é mutável: o chamador seta rows/bytes conforme
         descobre (ex.: depois do COPY TO PARQUET). Se o corpo do `with`
@@ -367,18 +550,19 @@ class MetricsRecorder:
         finally:
             self._finalize_stage(handle, started_at=started_at, t0=t0, sampler=sampler)
 
-    @staticmethod
     def _start_sampler(
-        duckdb_tmp_dir: Path | None, workdir: Path | None, sample_interval: float
+        self, duckdb_tmp_dir: Path | None, workdir: Path | None, sample_interval: float
     ) -> _DiskPeakSampler | None:
         watch: dict[str, Path] = {}
         if duckdb_tmp_dir is not None:
             watch["duckdb_tmp"] = duckdb_tmp_dir
         if workdir is not None:
             watch["workdir"] = workdir
-        if not watch:
+        if not watch and self._filesystem_path is None:
             return None
-        sampler = _DiskPeakSampler(watch, interval=sample_interval)
+        sampler = _DiskPeakSampler(
+            watch, interval=sample_interval, filesystem_path=self._filesystem_path
+        )
         sampler.start()
         return sampler
 
@@ -425,6 +609,8 @@ class MetricsRecorder:
                 rss_peak_delta_mib=max(0.0, rss_now - self._last_rss_mib),
                 duckdb_tmp_peak_mib=_bytes_to_mib(peaks.get("duckdb_tmp")),
                 workdir_peak_mib=_bytes_to_mib(peaks.get("workdir")),
+                filesystem_used_peak_mib=_bytes_to_mib(peaks.get("filesystem")),
+                chunks=tuple(handle.chunks) if handle.chunks else None,
                 started_at=started_at,
                 finished_at=_now_iso(),
                 extra=dict(handle.extra) if handle.extra else None,
@@ -448,12 +634,24 @@ class MetricsRecorder:
             parts.append(f"duckdb_tmp_peak={m.duckdb_tmp_peak_mib:.0f}MiB")
         if m.workdir_peak_mib is not None:
             parts.append(f"workdir_peak={m.workdir_peak_mib:.0f}MiB")
+        if m.filesystem_used_peak_mib is not None:
+            parts.append(f"fs_used_peak={m.filesystem_used_peak_mib:.0f}MiB")
+        if m.chunks:
+            parts.append(f"chunks={len(m.chunks)}")
         log.info(" ".join(parts))
 
     def to_envelope(self) -> dict[str, object]:
-        """Payload completo de `metrics.json` (RFC 0001 §16/17)."""
+        """Payload completo de `metrics.json` (RFC 0001 §16/17).
+
+        `code_version` é o SHA do commit (`_git_sha()`) -- a identidade real
+        do código que gerou este run. `package_version` é
+        `importlib.metadata.version("ficha-etl")`, mantido à parte por ser
+        útil saber, mas travado em "0.0.1" no pyproject.toml e por isso não
+        serve como identidade (ver docstring de `_git_sha`).
+        """
         return {
-            "code_version": _code_version(),
+            "code_version": _git_sha(),
+            "package_version": _package_version(),
             "duckdb_version": duckdb.__version__,
             "schema_version": self.schema_version,
             "month": self.month,
@@ -482,4 +680,4 @@ class MetricsRecorder:
             )
 
 
-__all__ = ["MetricsRecorder", "StageHandle", "StageMetrics"]
+__all__ = ["ChunkMetrics", "MetricsRecorder", "StageHandle", "StageMetrics"]

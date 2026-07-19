@@ -15,7 +15,7 @@ import os
 import shutil
 import time
 import zipfile
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -678,6 +678,8 @@ def write_cnpjs_parquet_chunked(
     con: duckdb.DuckDBPyConnection,
     estabelecimento_csv_paths: list[Path],
     output_path: Path,
+    *,
+    on_chunk: Callable[[metrics_mod.ChunkMetrics], None] | None = None,
 ) -> None:
     """Write cnpjs.parquet by loading one estabelecimento CSV at a time.
 
@@ -700,6 +702,15 @@ def write_cnpjs_parquet_chunked(
     single unfiltered chunk-join expensive enough to blow the disk. A
     semi-join (not the bucket digit-match) is used here because chunks are
     RFB's own arbitrary ZIP split, not aligned to any `cnpj_basico` prefix.
+
+    `on_chunk`: callback opcional invocado UMA vez por CSV não-vazio, logo
+    depois do DROP TABLE daquele chunk, com um `metrics.ChunkMetrics`
+    (index, nome do CSV, wall-clock, linhas/bytes daquele chunk só). RFC
+    0001 §16 exige registro por estágio E POR CHUNK -- o agregado do
+    `StageMetrics` do estágio "cnpjs_chunked" esconde a variação entre
+    chunks, que é justamente onde o incidente histórico de OOM apareceu
+    (chunk 0/10, não o total). `None` (default) preserva o comportamento
+    anterior sem nenhum overhead de callback.
     """
     import ibis
 
@@ -735,6 +746,7 @@ def write_cnpjs_parquet_chunked(
                 log.info("    chunk %d: skipping empty CSV %s", i, csv_path.name)
                 continue
 
+            t_chunk = time.monotonic()
             log.info(
                 "    chunk %d/%d: loading %s", i, len(estabelecimento_csv_paths), csv_path.name
             )
@@ -774,6 +786,18 @@ def write_cnpjs_parquet_chunked(
             con.execute("DROP TABLE IF EXISTS estabelecimento")
             con.execute("DROP TABLE IF EXISTS _emp_c")
             con.execute("DROP TABLE IF EXISTS _smp_c")
+
+            if on_chunk is not None:
+                on_chunk(
+                    metrics_mod.ChunkMetrics(
+                        index=i,
+                        csv_name=csv_path.name,
+                        wall_seconds=time.monotonic() - t_chunk,
+                        rows_written=n,
+                        bytes_read=csv_path.stat().st_size,
+                        bytes_written=part_path.stat().st_size,
+                    )
+                )
 
         if not written_parts:
             # No chunks written — produce an empty parquet with the right schema.
@@ -1520,7 +1544,9 @@ def transform_snapshot(
     # Fase 0 (RFC 0001 §16/19): baseline de observabilidade -- SEM mudança
     # de comportamento nos dados produzidos. `recorder` só mede; nada aqui
     # decide ordem de estágios, PRAGMAs ou conteúdo dos parquets.
-    recorder = metrics_mod.MetricsRecorder(month=month, schema_version=schema_version)
+    recorder = metrics_mod.MetricsRecorder(
+        month=month, schema_version=schema_version, filesystem_path=cache_dir
+    )
 
     owns_progress = progress is None
     progress = progress or make_progress()
@@ -1531,58 +1557,59 @@ def transform_snapshot(
     # not a fourth top-level stage).
     phase_task = progress.add_task("transform: extract", total=3)
 
-    t_total = time.monotonic()
-    log.info("=== PHASE 1/4: extract 37 ZIPs for %s ===", month)
-    t0 = time.monotonic()
-    with recorder.stage("extract", workdir=extract_dir) as _mh_extract:
-        extracted = extract_all(month, chain, extract_dir, progress=progress)
-        _mh_extract.bytes_read = sum(
-            ef.csv_path.stat().st_size for ef in extracted if ef.csv_path.exists()
-        )
-    log.info("=== PHASE 1/4 done in %.0fs ===", time.monotonic() - t0)
-    progress.update(phase_task, description="transform: load into DuckDB", advance=1)
-
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    # Usa arquivo temporário em vez de in-memory para suportar o dataset real
-    # da RFB (~60 M linhas) sem estourar RAM.
+    con: duckdb.DuckDBPyConnection | None = None
     db_path = cache_dir / month / "transform.duckdb"
-    db_path.parent.mkdir(parents=True, exist_ok=True)
-    log.info("=== PHASE 2/4: load into DuckDB (%s) ===", db_path)
-    t0 = time.monotonic()
-    con = duckdb.connect(str(db_path))
-    # Cap memory and force on-disk spill. Sized at runtime via
-    # `pick_memory_limit_gb()` — reads /proc/meminfo, reserves
-    # _OS_HEADROOM_GB for OS + runner agent + Python heap + tee buffer
-    # + DuckDB brief overshoots, and never exceeds _MEMORY_FRACTION of
-    # total. On the 16 GB GH free-tier runner this picks ~10 GB (was
-    # hard-coded to that until 2026-05). Self-hosted bigger boxes auto
-    # scale up; override via FICHA_MEMORY_LIMIT_GB env. Explicit limit +
-    # dedicated temp dir on the same partition as db_path makes spill
-    # behavior predictable. Original 6 GB tuning was for legacy 7 GB
-    # tier (PR #24, run 25514278003); per Kilo Code Review on PR #27,
-    # 12 GB on a 16 GB runner trimmed the safety margin too thin.
-    _mem_gb = pick_memory_limit_gb()
-    con.execute(f"PRAGMA memory_limit='{_mem_gb}GB'")
-    con.execute(f"PRAGMA temp_directory='{db_path.parent / 'duckdb_tmp'}'")
-    # Reduce per-query memory pressure during the big JOIN at phase 3.
-    # DuckDB's default preserves input ordering, which buffers more in
-    # memory; we sort by `cnpj` at write time anyway, so insertion order
-    # of intermediates doesn't matter. Saves ~30% on temp spill size.
-    con.execute("PRAGMA preserve_insertion_order=false")
-    # Reduce parallelism. Each thread holds its own working set during
-    # the 70M x 67M VARCHAR-keyed hash join in write_cnpjs_parquet --
-    # 4 threads (default) blew through 70 GB of temp spill (run
-    # 25518175202). Cutting to 1 sacrifices wall time for peak memory:
-    # cnpjs took 32 min with threads=2 in run 25522678418, so threads=1
-    # bumps that to ~60 min, fitting in the 350 min runner budget.
-    # threads=1 also helps raizes' LIST_DISTINCT(LIST(...)) GROUP BY
-    # avoid the 5.5 GB OOM that bit run 25522678418.
-    _threads = pick_threads()
-    con.execute(f"PRAGMA threads={_threads}")
-    recorder.capture_pragmas(con)
-    _duckdb_tmp_dir = db_path.parent / "duckdb_tmp"
     try:
+        t_total = time.monotonic()
+        log.info("=== PHASE 1/4: extract 37 ZIPs for %s ===", month)
+        t0 = time.monotonic()
+        with recorder.stage("extract", workdir=extract_dir) as _mh_extract:
+            extracted = extract_all(month, chain, extract_dir, progress=progress)
+            _mh_extract.bytes_read = sum(
+                ef.csv_path.stat().st_size for ef in extracted if ef.csv_path.exists()
+            )
+        log.info("=== PHASE 1/4 done in %.0fs ===", time.monotonic() - t0)
+        progress.update(phase_task, description="transform: load into DuckDB", advance=1)
+
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        # Usa arquivo temporário em vez de in-memory para suportar o dataset real
+        # da RFB (~60 M linhas) sem estourar RAM.
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+        log.info("=== PHASE 2/4: load into DuckDB (%s) ===", db_path)
+        t0 = time.monotonic()
+        con = duckdb.connect(str(db_path))
+        # Cap memory and force on-disk spill. Sized at runtime via
+        # `pick_memory_limit_gb()` — reads /proc/meminfo, reserves
+        # _OS_HEADROOM_GB for OS + runner agent + Python heap + tee buffer
+        # + DuckDB brief overshoots, and never exceeds _MEMORY_FRACTION of
+        # total. On the 16 GB GH free-tier runner this picks ~10 GB (was
+        # hard-coded to that until 2026-05). Self-hosted bigger boxes auto
+        # scale up; override via FICHA_MEMORY_LIMIT_GB env. Explicit limit +
+        # dedicated temp dir on the same partition as db_path makes spill
+        # behavior predictable. Original 6 GB tuning was for legacy 7 GB
+        # tier (PR #24, run 25514278003); per Kilo Code Review on PR #27,
+        # 12 GB on a 16 GB runner trimmed the safety margin too thin.
+        _mem_gb = pick_memory_limit_gb()
+        con.execute(f"PRAGMA memory_limit='{_mem_gb}GB'")
+        con.execute(f"PRAGMA temp_directory='{db_path.parent / 'duckdb_tmp'}'")
+        # Reduce per-query memory pressure during the big JOIN at phase 3.
+        # DuckDB's default preserves input ordering, which buffers more in
+        # memory; we sort by `cnpj` at write time anyway, so insertion order
+        # of intermediates doesn't matter. Saves ~30% on temp spill size.
+        con.execute("PRAGMA preserve_insertion_order=false")
+        # Reduce parallelism. Each thread holds its own working set during
+        # the 70M x 67M VARCHAR-keyed hash join in write_cnpjs_parquet --
+        # 4 threads (default) blew through 70 GB of temp spill (run
+        # 25518175202). Cutting to 1 sacrifices wall time for peak memory:
+        # cnpjs took 32 min with threads=2 in run 25522678418, so threads=1
+        # bumps that to ~60 min, fitting in the 350 min runner budget.
+        # threads=1 also helps raizes' LIST_DISTINCT(LIST(...)) GROUP BY
+        # avoid the 5.5 GB OOM that bit run 25522678418.
+        _threads = pick_threads()
+        con.execute(f"PRAGMA threads={_threads}")
+        recorder.capture_pragmas(con)
+        _duckdb_tmp_dir = db_path.parent / "duckdb_tmp"
         # Lookups primeiro (necessárias pros JOINs dos parquets)
         with recorder.stage("lookups") as _mh_lookups:
             _lookup_rows = 0
@@ -1733,7 +1760,10 @@ def transform_snapshot(
             "cnpjs_chunked", duckdb_tmp_dir=_duckdb_tmp_dir, workdir=output_dir
         ) as _mh_cnpjs:
             write_cnpjs_parquet_chunked(
-                con, estabelecimento_csv_paths, output_dir / "cnpjs.parquet"
+                con,
+                estabelecimento_csv_paths,
+                output_dir / "cnpjs.parquet",
+                on_chunk=_mh_cnpjs.chunks.append,
             )
             _record_parquet_output(con, _mh_cnpjs, output_dir / "cnpjs.parquet")
             _mh_cnpjs.bytes_read = sum(
@@ -1825,12 +1855,10 @@ def transform_snapshot(
 
         log.info("transform_snapshot total: %.0fs", time.monotonic() - t_total)
     finally:
-        # Escreve metrics.json mesmo em caminho de erro (run parcial ainda é
-        # dado útil pra diagnosticar onde o pipeline morreu) -- write_json
-        # nunca propaga falha de I/O (ver docstring em metrics.py).
         recorder.write_json(cache_dir / month / "metrics" / "transform_metrics.json")
-        con.close()
-        db_path.unlink(missing_ok=True)
+        if con is not None:
+            con.close()
+            db_path.unlink(missing_ok=True)
         if owns_progress:
             progress.stop()
 
