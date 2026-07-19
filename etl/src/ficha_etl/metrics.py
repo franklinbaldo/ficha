@@ -171,24 +171,37 @@ def _bytes_to_mib(size_bytes: int | None) -> float | None:
     return size_bytes / (1024 * 1024)
 
 
-def _dir_size_bytes(path: Path) -> int:
-    """Soma o tamanho de todos os arquivos sob `path` (recursivo)."""
+def _iter_file_sizes(path: Path) -> Iterator[int]:
+    """Percorre `path` recursivamente e gera o tamanho de cada arquivo.
+
+    Qualquer `OSError` no `stat()` de um arquivo individual -- não só
+    `FileNotFoundError`, também `PermissionError`, `NotADirectoryError`,
+    um handle NFS caído, etc. -- é ruído de
+    infraestrutura da amostragem de disco (concorrência normal com o
+    próprio pipeline: partes temporárias de COPY sendo trocadas, spill do
+    DuckDB sendo liberado), não um evento de fluxo de negócio: o arquivo é
+    pulado, nunca propaga. `os.walk` já ignora por padrão erros ao LISTAR
+    um diretório (sem `onerror`, ele pula a entrada problemática sozinho);
+    só o `stat()` por arquivo precisa de proteção explícita aqui.
+
+    Isolar isso num gerador mantém os consumidores (`_dir_size_bytes`,
+    `_sample_once`) num único `for` + guard clause, sem o `for→for→try`
+    aninhado que estaria em cada um deles.
+    """
     if not path.exists():
-        return 0
-    total = 0
+        return
     for root, _dirnames, filenames in os.walk(path):
         for filename in filenames:
             file_path = Path(root) / filename
             try:
-                total += file_path.stat().st_size
-            except FileNotFoundError:
-                # Arquivo desapareceu entre a listagem do os.walk e o stat --
-                # concorrência normal com o próprio pipeline (partes
-                # temporárias de COPY sendo trocadas, spill do DuckDB sendo
-                # liberado). Ruído de infraestrutura da amostragem, não um
-                # evento de fluxo de negócio: ignora e segue somando o resto.
+                yield file_path.stat().st_size
+            except OSError:
                 continue
-    return total
+
+
+def _dir_size_bytes(path: Path) -> int:
+    """Soma o tamanho de todos os arquivos sob `path` (recursivo)."""
+    return sum(_iter_file_sizes(path))
 
 
 class _DiskPeakSampler:
@@ -226,16 +239,34 @@ class _DiskPeakSampler:
         # Amostra imediatamente ao entrar -- sem isso, um estágio mais curto
         # que `interval` (ex.: lookups, <1s) nunca teria nenhuma leitura
         # antes do stop() rodar a amostra final.
+        #
+        # `_sample_once` já engole todo OSError esperado internamente (via
+        # `_iter_file_sizes`); o try/except aqui é uma rede de segurança
+        # pra qualquer coisa GENUINAMENTE inesperada (bug de programação,
+        # erro que não é OSError). Sem isso, uma exceção nesta thread
+        # daemon mata a amostragem silenciosamente -- só apareceria em
+        # stderr via threading.excepthook, sem nenhum sinal no
+        # metrics.json/log estruturado. Loga UMA vez e encerra o loop (não
+        # fica tentando de novo pra não spammar o log a cada `interval`).
         while not self._stop_event.is_set():
-            self._sample_once()
+            try:
+                self._sample_once()
+            except Exception as exc:
+                log.warning(
+                    "metrics: sampler de disco parou de amostrar após erro inesperado: %s", exc
+                )
+                return
             self._stop_event.wait(self._interval)
 
     def _sample_once(self) -> None:
         for key, path in self._dirs.items():
-            size = _dir_size_bytes(path)
-            with self._lock:
-                if size > self._peaks[key]:
-                    self._peaks[key] = size
+            self._update_peak(key, _dir_size_bytes(path))
+
+    def _update_peak(self, key: str, size: int) -> None:
+        with self._lock:
+            if size <= self._peaks[key]:
+                return
+            self._peaks[key] = size
 
     def stop(self) -> dict[str, int]:
         if not self._dirs:
@@ -243,6 +274,16 @@ class _DiskPeakSampler:
         self._stop_event.set()
         if self._thread is not None:
             self._thread.join(timeout=self._interval + 1)
+            if self._thread.is_alive():
+                # Não bloqueia mais -- só avisa. Uma thread daemon presa
+                # (ex.: `os.walk` pendurado num mount de rede morto) não
+                # pode travar o teardown do estágio; ela morre sozinha
+                # quando o processo termina (daemon=True).
+                log.warning(
+                    "metrics: thread do disk sampler ainda viva após join(timeout=%.1fs) -- "
+                    "seguindo sem bloquear",
+                    self._interval + 1,
+                )
         # Amostra final direto nesta thread -- cobre o tamanho no instante
         # exato do teardown, mesmo que a thread de fundo ainda estivesse
         # dormindo em `wait()` quando paramos.
@@ -311,29 +352,70 @@ class MetricsRecorder:
 
         O handle devolvido é mutável: o chamador seta rows/bytes conforme
         descobre (ex.: depois do COPY TO PARQUET). Se o corpo do `with`
-        levantar uma exceção, o estágio ainda é registrado (com os campos
-        que tiverem sido preenchidos até ali) -- útil pra diagnosticar uma
-        falha no meio de um estágio longo.
+        levantar uma exceção, essa exceção é a ÚNICA coisa que propaga --
+        qualquer falha no teardown de métricas (parar o sampler, montar o
+        `StageMetrics`, logar) é blindada em `_finalize_stage` e vira só
+        `log.warning`, nunca re-levanta e nunca mascara a exceção original
+        do corpo (ver docstring de `_finalize_stage`).
         """
         handle = StageHandle(name=name)
         started_at = _now_iso()
         t0 = time.monotonic()
+        sampler = self._start_sampler(duckdb_tmp_dir, workdir, sample_interval)
+        try:
+            yield handle
+        finally:
+            self._finalize_stage(handle, started_at=started_at, t0=t0, sampler=sampler)
+
+    @staticmethod
+    def _start_sampler(
+        duckdb_tmp_dir: Path | None, workdir: Path | None, sample_interval: float
+    ) -> _DiskPeakSampler | None:
         watch: dict[str, Path] = {}
         if duckdb_tmp_dir is not None:
             watch["duckdb_tmp"] = duckdb_tmp_dir
         if workdir is not None:
             watch["workdir"] = workdir
-        sampler = _DiskPeakSampler(watch, interval=sample_interval) if watch else None
-        if sampler is not None:
-            sampler.start()
+        if not watch:
+            return None
+        sampler = _DiskPeakSampler(watch, interval=sample_interval)
+        sampler.start()
+        return sampler
+
+    def _finalize_stage(
+        self,
+        handle: StageHandle,
+        *,
+        started_at: str,
+        t0: float,
+        sampler: _DiskPeakSampler | None,
+    ) -> None:
+        """Fecha o estágio: pára o sampler, monta e registra o `StageMetrics`.
+
+        Roda dentro do `finally` de `stage()` -- por isso TUDO aqui é
+        blindado num único `try/except Exception` que só loga um warning e
+        nunca re-levanta. Se o teardown falhar por qualquer razão (ex.: um
+        `OSError` genuinamente inesperado que escapou de `_dir_size_bytes`,
+        um bug na construção do `StageMetrics`), essa falha NÃO PODE:
+
+        1. mascarar a exceção real do corpo do `with` (se houver) -- em
+           Python, uma exceção levantada dentro de um `finally` substitui a
+           exceção em voo, que vira só `__context__` e some da vista de
+           quem chamou; ou
+        2. derrubar um `with` que, do ponto de vista do corpo, terminou
+           com sucesso -- ex.: o loop de writers em `transform.py` que
+           usa `except NotImplementedError` logo após o `with
+           recorder.stage(...)` esperaria terminar normalmente.
+
+        Mesmo padrão de `write_json`: observabilidade nunca é motivo pra
+        derrubar (ou mascarar a falha real de) o pipeline.
+        """
         try:
-            yield handle
-        finally:
             wall = time.monotonic() - t0
             peaks = sampler.stop() if sampler is not None else {}
             rss_now = _rss_peak_mib()
             stage_metrics = StageMetrics(
-                name=name,
+                name=handle.name,
                 wall_seconds=wall,
                 rows_read=handle.rows_read,
                 rows_written=handle.rows_written,
@@ -350,6 +432,8 @@ class MetricsRecorder:
             self._last_rss_mib = rss_now
             self.stages.append(stage_metrics)
             self._log_stage(stage_metrics)
+        except Exception as exc:
+            log.warning("metrics: falha ao finalizar estágio %r: %s", handle.name, exc)
 
     def _log_stage(self, m: StageMetrics) -> None:
         """Formato humano compacto, uma linha por estágio (RFC 0001 §16)."""

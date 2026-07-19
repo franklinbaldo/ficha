@@ -164,6 +164,76 @@ def test_dir_size_bytes_ignores_file_vanished_between_listing_and_stat(tmp_path,
     assert size == 100  # só a.txt contou; vanishing.txt foi ignorado sem crash
 
 
+def test_dir_size_bytes_ignores_any_oserror_not_just_file_not_found(tmp_path, monkeypatch):
+    """Finding #2 do review adversarial: `_dir_size_bytes` deve engolir
+    QUALQUER OSError (PermissionError, NotADirectoryError, etc.), não só
+    FileNotFoundError."""
+    d = tmp_path / "d"
+    d.mkdir()
+    (d / "a.txt").write_bytes(b"x" * 100)
+    (d / "cursed.txt").write_bytes(b"y" * 50)
+
+    real_stat = Path.stat
+
+    def flaky_stat(self, *args, **kwargs):
+        if self.name == "cursed.txt":
+            raise PermissionError(str(self))
+        return real_stat(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", flaky_stat)
+    assert metrics._dir_size_bytes(d) == 100
+
+
+def test_disk_peak_sampler_thread_stops_and_warns_on_unexpected_error(
+    tmp_path, monkeypatch, caplog
+):
+    """Finding #3: uma exceção genuinamente inesperada dentro do loop de
+    amostragem não pode matar a thread daemon em silêncio -- tem que logar
+    um warning e encerrar o loop de forma limpa (sem virar spam)."""
+    d = tmp_path / "d"
+    d.mkdir()
+    sampler = metrics._DiskPeakSampler({"workdir": d}, interval=0.02)
+
+    def boom(self):
+        raise RuntimeError("erro inesperado simulado")
+
+    monkeypatch.setattr(metrics._DiskPeakSampler, "_sample_once", boom)
+
+    with caplog.at_level(logging.WARNING):
+        sampler.start()
+        assert sampler._thread is not None
+        sampler._thread.join(timeout=1.0)
+
+    assert not sampler._thread.is_alive()
+    assert any("sampler" in r.message.lower() for r in caplog.records)
+
+
+class _FakeStuckThread:
+    """Dublê de threading.Thread que nunca reporta ter terminado -- simula
+    uma thread de amostragem presa (ex.: os.walk pendurado num mount morto)."""
+
+    def join(self, timeout: float | None = None) -> None:
+        return None
+
+    def is_alive(self) -> bool:
+        return True
+
+
+def test_disk_peak_sampler_stop_warns_if_thread_still_alive(tmp_path, caplog):
+    """Finding #6: se a thread não morrer dentro do timeout do join, stop()
+    deve avisar e seguir em frente sem bloquear -- nunca travar o teardown."""
+    d = tmp_path / "d"
+    d.mkdir()
+    sampler = metrics._DiskPeakSampler({"workdir": d}, interval=0.01)
+    sampler._thread = _FakeStuckThread()  # type: ignore[assignment]
+
+    with caplog.at_level(logging.WARNING):
+        peaks = sampler.stop()
+
+    assert isinstance(peaks, dict)  # stop() seguiu em frente e devolveu algo
+    assert any("thread" in r.message.lower() for r in caplog.records)
+
+
 def test_disk_peak_sampler_detects_growth(tmp_path):
     d = tmp_path / "d"
     d.mkdir()
@@ -190,6 +260,62 @@ def test_stage_disk_peak_tracks_workdir_growth(tmp_path):
     m = recorder.stages[-1]
     assert m.workdir_peak_mib is not None
     assert m.workdir_peak_mib >= 2.9
+
+
+# -----------------------------------------------------------------------------
+# Finding #1 do review adversarial + regressão exigida (finding #4): uma
+# falha no TEARDOWN do stage() (sampler.stop() -> _dir_size_bytes) nunca
+# pode mascarar a exceção real do corpo do `with`, nem derrubar um corpo
+# que teria terminado com sucesso.
+# -----------------------------------------------------------------------------
+
+
+def test_stage_teardown_failure_does_not_mask_body_exception(tmp_path, monkeypatch, caplog):
+    """Corpo do `with` levanta sua própria exceção E o teardown (sampler
+    ativo) também falha ao amostrar pela última vez -- a exceção que
+    propaga tem que ser a ORIGINAL do corpo, não a do teardown, e um
+    warning precisa ter sido logado."""
+    recorder = metrics.MetricsRecorder(month="2026-07", schema_version="1.0.0")
+    workdir = tmp_path / "work"
+    workdir.mkdir()
+
+    def boom_dir_size(path):
+        raise PermissionError("simulated stale mount")
+
+    monkeypatch.setattr(metrics, "_dir_size_bytes", boom_dir_size)
+
+    with caplog.at_level(logging.WARNING):
+        with pytest.raises(ValueError, match="original body error") as exc_info:
+            with recorder.stage("failing_with_disk", workdir=workdir) as handle:
+                handle.rows_read = 1
+                raise ValueError("original body error")
+
+    # A exceção propagada é a original -- não foi substituída pela do
+    # teardown (que, se tivesse vazado, apareceria como PermissionError).
+    assert exc_info.type is ValueError
+    assert any("metrics" in r.message.lower() for r in caplog.records)
+
+
+def test_stage_teardown_failure_alone_does_not_raise(tmp_path, monkeypatch, caplog):
+    """Corpo do `with` termina com sucesso, só o teardown falha -- nenhuma
+    exceção pode propagar (o with tem que se comportar como bem-sucedido
+    do ponto de vista do chamador), mas um warning precisa aparecer."""
+    recorder = metrics.MetricsRecorder(month="2026-07", schema_version="1.0.0")
+    workdir = tmp_path / "work"
+    workdir.mkdir()
+
+    def boom_dir_size(path):
+        raise PermissionError("simulated stale mount")
+
+    monkeypatch.setattr(metrics, "_dir_size_bytes", boom_dir_size)
+
+    with caplog.at_level(logging.WARNING):
+        with recorder.stage("ok_body_bad_teardown", workdir=workdir) as handle:
+            handle.rows_written = 5
+        # Nenhuma exceção chegou até aqui -- se chegasse, o teste já teria
+        # falhado no próprio `with` acima.
+
+    assert any("metrics" in r.message.lower() for r in caplog.records)
 
 
 # -----------------------------------------------------------------------------
