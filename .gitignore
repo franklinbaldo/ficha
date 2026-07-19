@@ -71,6 +71,7 @@ htmlcov/
 etl/output/
 etl/output_*/
 etl/.cache/
+etl/bench/.work/
 experiments/**/output/
 experiments/**/.cache/
 *.parquet
