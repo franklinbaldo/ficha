@@ -667,11 +667,15 @@ def write_cnpjs_parquet(
             # Use the shared helper for the SELECT logic; bucket tables
             # _est_b / _emp_b / _smp_b are the aliases used here.
             _select_sql = _cnpjs_chunk_select_sql("_est_b", "_emp_b", "_smp_b", "_cnae_map")
+            # LZ4, not ZSTD: these parts are transient — the merge below reads
+            # them back and re-compresses the final output with ZSTD. Paying
+            # ZSTD's slow encode on bytes we immediately discard is pure waste;
+            # LZ4 encodes several times faster and the parts never leave disk.
             con.execute(
                 f"""
             COPY (
                 {_select_sql}
-            ) TO '{_part_path}' (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 200000)
+            ) TO '{_part_path}' (FORMAT PARQUET, COMPRESSION LZ4, ROW_GROUP_SIZE 200000)
             """
             )
             # Drop the bucket temps so their working set + on-disk
@@ -843,11 +847,16 @@ def write_cnpjs_parquet_chunked(
                 _select_sql = _cnpjs_chunk_select_sql(
                     "estabelecimento", "_emp_c", "_smp_c", "_cnae_map", order_by=False
                 )
+                # LZ4, not ZSTD: chunk parts are transient — the merge step
+                # below reads them all back, globally sorts by cnpj, and
+                # re-compresses the final cnpjs.parquet with ZSTD. ZSTD-encoding
+                # these throwaway bytes is wasted CPU; LZ4 is much faster to
+                # write and the parts stay on local disk.
                 con.execute(
                     f"""
                     COPY (
                         {_select_sql}
-                    ) TO '{part_path}' (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 200000)
+                    ) TO '{part_path}' (FORMAT PARQUET, COMPRESSION LZ4, ROW_GROUP_SIZE 200000)
                     """
                 )
                 log.info("    chunk %d: wrote %s", i, part_path.name)
@@ -2127,34 +2136,49 @@ def assert_roundtrip(
     if expected_n == 0:
         return  # nada pra amostrar
 
-    # Sample N CNPJs
+    # Sample N CNPJs and compare against the Parquet in ONE query.
+    #
+    # Antes: ORDER BY random() sobre os ~71M estabelecimentos (sort/materialize
+    # global) + uma consulta ao Parquet por CNPJ amostrado (até 1000 lookups
+    # individuais). Agora: reservoir sample de passe único e determinístico
+    # (REPEATABLE → reprodutível entre runs) na tabela base, depois um único
+    # LEFT JOIN contra o Parquet. Custo cai de "sort de 71M + N seeks" para
+    # "um scan amostrado + um join de N linhas".
     n = min(sample_size, expected_n)
+    aliases = [alias for alias, _ in _ROUNDTRIP_FIELDS]
+    src_cols = ", ".join(f"src.{a} AS src_{a}" for a in aliases)
+    pq_cols = ", ".join(f"pq.{a} AS pq_{a}" for a in aliases)
     sample_query = f"""
-        SELECT est.cnpj_basico || est.cnpj_ordem || est.cnpj_dv AS cnpj,
-               {", ".join(expr + " AS " + alias for alias, expr in _ROUNDTRIP_FIELDS)}
-        FROM estabelecimento est
-        LEFT JOIN empresa emp ON emp.cnpj_basico = est.cnpj_basico
-        ORDER BY random()
-        LIMIT {n}
+        WITH sampled_est AS (
+            SELECT *
+            FROM estabelecimento
+            USING SAMPLE reservoir({n} ROWS) REPEATABLE(42)
+        ),
+        src AS (
+            SELECT est.cnpj_basico || est.cnpj_ordem || est.cnpj_dv AS cnpj,
+                   {", ".join(expr + " AS " + alias for alias, expr in _ROUNDTRIP_FIELDS)}
+            FROM sampled_est est
+            LEFT JOIN empresa emp ON emp.cnpj_basico = est.cnpj_basico
+        )
+        SELECT src.cnpj, pq.cnpj AS _pq_cnpj, {src_cols}, {pq_cols}
+        FROM src
+        LEFT JOIN read_parquet('{cnpjs_parquet}') pq ON pq.cnpj = src.cnpj
     """
     sampled = con.execute(sample_query).fetchall()
 
-    field_names = ["cnpj"] + [alias for alias, _ in _ROUNDTRIP_FIELDS]
-    parquet_select = ", ".join(field_names)
-
+    # Layout das colunas: [cnpj, _pq_cnpj, src_<aliases...>, pq_<aliases...>].
+    k = len(aliases)
     divergences: list[str] = []
     for row in sampled:
         cnpj = row[0]
-        actual = con.execute(
-            f"SELECT {parquet_select} FROM '{cnpjs_parquet}' WHERE cnpj = ?",
-            [cnpj],
-        ).fetchone()
-        if actual is None:
+        if row[1] is None:  # _pq_cnpj NULL → CNPJ ausente do Parquet
             divergences.append(f"{cnpj}: missing from parquet")
             continue
-        for i, (alias, _) in enumerate(_ROUNDTRIP_FIELDS, start=1):
-            if row[i] != actual[i]:
-                divergences.append(f"{cnpj}.{alias}: source={row[i]!r} parquet={actual[i]!r}")
+        for j, alias in enumerate(aliases):
+            src_v = row[2 + j]
+            pq_v = row[2 + k + j]
+            if src_v != pq_v:
+                divergences.append(f"{cnpj}.{alias}: source={src_v!r} parquet={pq_v!r}")
 
     if divergences:
         head = divergences[:10]
