@@ -32,7 +32,7 @@ from ficha_etl.transform import pick_memory_limit_gb, pick_threads
 # alternation scheme, what capture_environment records) -- independent of
 # git_sha, which tracks the exact commit but doesn't say at a glance whether
 # two JSON results are comparable under the same rules.
-HARNESS_VERSION = "2026-07-profile-v2"
+HARNESS_VERSION = "2026-07-profile-v3"
 
 
 def open_production_connection(db_path: Path) -> duckdb.DuckDBPyConnection:
@@ -164,13 +164,11 @@ class ABResult:
             f"spread={self.spread_b:.3f}s  n={len(self.times_b)}"
         )
         ratio = self.median_b / self.median_a if self.median_a else float("nan")
-        # A spread wider than the median delta means "noise-dominated" --
-        # flagged explicitly. No automatic "X faster" verdict beyond that:
-        # with n=1 both spreads are 0 and a single run would otherwise be
-        # declared a winner, contradicting the point of running an A/B at
-        # all. Callers judge significance themselves from ratio + spread.
+        # A spread at least as wide as the median delta means "noise-dominated".
+        # No automatic "X faster" verdict: with n=1 both spreads are zero and
+        # a single run must not be declared a meaningful winner.
         delta = abs(self.median_a - self.median_b)
-        noisy = delta < max(self.spread_a, self.spread_b)
+        noisy = delta <= max(self.spread_a, self.spread_b)
         note = " (WITHIN NOISE: spread >= delta)" if noisy else ""
         print(f"  ratio {self.label_b}/{self.label_a} = {ratio:.2f}{note}")
 
