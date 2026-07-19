@@ -306,6 +306,17 @@ def pick_threads() -> int:
     return 1
 
 
+# Physical load order for load_main_tables_into_duckdb -- deliberately NOT
+# registry.MAIN_TABLES's declared order (empresa, estabelecimento, simples,
+# socio; pinned by test_main_tables_order_and_shape). empresa and simples
+# both get an in-place dedup rewrite right after they load (see
+# _dedupe_cnpj_basico_table); loading both of them before the giant
+# estabelecimento table means that rewrite never runs while estabelecimento
+# is already resident -- the point of peak memory/disk pressure this
+# ordering exists to avoid.
+_LOAD_ORDER: tuple[str, ...] = ("empresa", "simples", "estabelecimento", "socio")
+
+
 def _dedupe_cnpj_basico_table(con: duckdb.DuckDBPyConnection, table: str) -> int:
     """Colapsa `table` (empresa ou simples) para 1 linha por `cnpj_basico`
     não-nulo. Devolve o nº de linhas excedentes encontradas (0 se já limpo).
@@ -370,26 +381,39 @@ def _dedupe_cnpj_basico_table(con: duckdb.DuckDBPyConnection, table: str) -> int
     tiebreak_cols = ", ".join(cols)
     # Struct-of-every-column per row, compared for distinctness per cnpj_basico
     # group: a key whose duplicate rows all pack into the SAME struct is an
-    # exact (lossless) duplicate; a key with >1 distinct struct has rows that
-    # genuinely disagree on some field -- that's the case RFC 0001 §7.9 cares
-    # about, not mere repetition. `t.` prefix avoids ambiguity against the
-    # dupe_keys CTE, which also has a cnpj_basico column.
+    # exact (value-identical after CSV parsing -- not literally "same raw
+    # bytes", since this compares parsed DuckDB VARCHAR/struct values)
+    # duplicate; a key with >1 distinct struct has rows that genuinely
+    # disagree on some field -- that's the case RFC 0001 §7.9 cares about,
+    # not mere repetition. `t.` prefix avoids ambiguity against the dupe_keys
+    # CTE, which also has a cnpj_basico column.
+    #
+    # total vs. sample are computed together in one query specifically so the
+    # reported total is never silently capped by the sample size: an earlier
+    # version of this query had a bare `... LIMIT 5` and then reported
+    # `len(result)` as "the number of conflicting keys" -- correct only when
+    # there happen to be <=5 of them, silently wrong (undercounting) above
+    # that. `list(... ORDER BY ...)[1:5]` (DuckDB list slicing is 1-indexed)
+    # takes the sample from the SAME aggregation the count comes from, so the
+    # two can never drift apart.
     struct_expr = "{" + ", ".join(f"'{c}': t.{c}" for c in cols) + "}"
-    conflicting = con.execute(
+    conflicting_total, conflicting_sample = con.execute(
         f"""
         WITH dupe_keys AS (
             SELECT cnpj_basico FROM {table}
             WHERE cnpj_basico IS NOT NULL
             GROUP BY cnpj_basico HAVING COUNT(*) > 1
+        ),
+        conflicting_keys AS (
+            SELECT t.cnpj_basico
+            FROM {table} t JOIN dupe_keys dk ON dk.cnpj_basico = t.cnpj_basico
+            GROUP BY t.cnpj_basico
+            HAVING COUNT(DISTINCT {struct_expr}) > 1
         )
-        SELECT t.cnpj_basico
-        FROM {table} t JOIN dupe_keys dk ON dk.cnpj_basico = t.cnpj_basico
-        GROUP BY t.cnpj_basico
-        HAVING COUNT(DISTINCT {struct_expr}) > 1
-        ORDER BY t.cnpj_basico
-        LIMIT 5
+        SELECT COUNT(*), list(cnpj_basico ORDER BY cnpj_basico)[1:5]
+        FROM conflicting_keys
         """
-    ).fetchall()
+    ).fetchone()
 
     con.execute(
         f"CREATE OR REPLACE TABLE {table} AS "
@@ -399,18 +423,24 @@ def _dedupe_cnpj_basico_table(con: duckdb.DuckDBPyConnection, table: str) -> int
         f"QUALIFY row_number() OVER (PARTITION BY cnpj_basico ORDER BY {tiebreak_cols}) = 1"
     )
 
-    if conflicting:
-        sample = ", ".join(row[0] for row in conflicting)
+    if conflicting_total:
+        sample = ", ".join(conflicting_sample)
+        shown = (
+            f" (showing {len(conflicting_sample)})"
+            if conflicting_total > len(conflicting_sample)
+            else ""
+        )
         log.error(
             "W13.1a: %s has %d cnpj_basico value(s) with GENUINELY CONFLICTING payloads "
             "(different field values for the same key, not just a repeated row) -- "
             "collapsed to the deterministic full-row-order survivor, but that choice is "
             "NOT verified correct, only reproducible. This pipeline has no fail/quarantine "
             "path for conflicting duplicates yet (known, tracked gap -- see issue #76). "
-            "Sample conflicting cnpj_basico (up to 5 shown): %s. Investigate the upstream "
-            "dump for these keys before trusting this snapshot for them.",
+            "Sample conflicting cnpj_basico%s: %s. Investigate the upstream dump for these "
+            "keys before trusting this snapshot for them.",
             table,
-            len(conflicting),
+            conflicting_total,
+            shown,
             sample,
         )
     log.warning(
@@ -440,22 +470,27 @@ def load_main_tables_into_duckdb(
     precisam do valor (ex.: os testes existentes) simplesmente ignoram o
     retorno -- compatível com o `None` implícito de antes.
 
-    Dedup roda IMEDIATAMENTE após `empresa`/`simples` carregarem, dentro do
-    próprio loop -- não como uma passada separada depois que as quatro
-    tabelas já estão residentes. `MAIN_TABLES` carrega `empresa` (pequena)
-    antes de `estabelecimento` (a tabela gigante); colapsar `empresa` antes
-    de `estabelecimento` começar a carregar evita segurar uma cópia
-    maior-que-necessária de `empresa` durante a janela de maior pressão de
-    memória/disco (RFC 0001 Objetivo 3: "nenhuma etapa depende de manter
-    todas as tabelas gigantes em memória"). O mesmo vale pra `simples`
-    (dedup roda antes de `socio` carregar).
+    Dedup roda IMEDIATAMENTE após `empresa`/`simples` carregarem -- não como
+    uma passada separada depois que as quatro tabelas já estão residentes.
+    `registry.MAIN_TABLES` declara a ordem canônica (empresa, estabelecimento,
+    simples, socio -- pinada por `test_main_tables_order_and_shape`, não deve
+    mudar) mas a ORDEM DE CARGA física usada aqui é deliberadamente diferente:
+    `_LOAD_ORDER` carrega as duas tabelas pequenas e dedupáveis (`empresa`,
+    `simples`) ANTES da tabela gigante (`estabelecimento`), pra que o rewrite
+    completo do dedup nunca aconteça com `estabelecimento` já residente --
+    exatamente a janela de maior pressão de memória/disco (RFC 0001 Objetivo
+    3: "nenhuma etapa depende de manter todas as tabelas gigantes em
+    memória"). Isso é intencionalmente independente da ordem declarativa do
+    registry (que documenta o schema, não a estratégia de carga) -- daí ser
+    uma constante separada aqui, não uma reordenação de `MAIN_TABLES`.
     """
     by_kind: dict[FileKind, list[Path]] = collections.defaultdict(list)
     for ef in extracted:
         by_kind[ef.kind].append(ef.csv_path)
 
     total_dupes = 0
-    for spec in registry.MAIN_TABLES:
+    for name in _LOAD_ORDER:
+        spec = registry.main_table(name)
         t0 = time.monotonic()
         log.info("loading table '%s' from %d CSV(s)...", spec.name, len(by_kind.get(spec.kind, [])))
         _create_table_from_csvs(con, spec.name, by_kind.get(spec.kind, []), spec.source)
