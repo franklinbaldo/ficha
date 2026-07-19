@@ -113,14 +113,17 @@ jobs:
         # ab_typed_keys.py both read from directly (hardcoded, no --workdir
         # flag of their own) — running benchmark.py against a different
         # workdir here would leave them nothing to load.
+        #
+        # Invoked from etl/ (the job's default working-directory), NOT from
+        # inside bench/ — every script's default/hardcoded paths (--workdir
+        # default bench/.work, DATA/OUT/DB_PATH = bench/.work/...) assume
+        # that cwd, matching the usage examples in bench/README.md.
         run: |
-          cd bench
-          uv run python benchmark.py --scale 200 --chunks 2 --repeats 1 \
-            --json .work/benchmark.json
-          uv run python ab_contatos_cnaes.py --repeats 1
-          uv run python ab_typed_keys.py --repeats 1
-          rm -rf .work
-          rm -rf .work-smoke
+          uv run python bench/benchmark.py --scale 200 --chunks 2 --repeats 1 \
+            --json bench/.work/benchmark.json
+          uv run python bench/ab_contatos_cnaes.py --repeats 1
+          uv run python bench/ab_typed_keys.py --repeats 1
+          rm -rf bench/.work
 
   ficha-py:
     name: ficha-py/
