@@ -4,6 +4,10 @@ Decisões arquiteturais do FICHA, registradas no momento em que são tomadas.
 
 Formato: cada ADR é um markdown curto (ideal: 1 página) com **contexto**, **decisão**, **consequências**. Numerados sequencialmente. Nunca editar um ADR após "Accepted" — se mudar de ideia, escrever novo ADR que **supersedes** o antigo.
 
+Propostas maiores, ainda dependentes de discussão ou benchmark, vivem em
+[`docs/rfc/`](../rfc/README.md). Uma RFC aprovada normalmente se desdobra em ADRs
+menores, cada um registrando uma decisão concreta.
+
 ## Status
 
 | # | Título | Status |
