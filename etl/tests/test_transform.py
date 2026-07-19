@@ -438,6 +438,101 @@ def test_load_main_tables_dedupes_empresa_duplicates(tmp_path, caplog):
         total = con.execute("SELECT COUNT(*) FROM empresa").fetchone()[0]
         distinct = con.execute("SELECT COUNT(DISTINCT cnpj_basico) FROM empresa").fetchone()[0]
         assert total == distinct
+        # Review finding on the first version of this fix: the tiebreak used
+        # to be ORDER BY cnpj_basico, which is constant within its own
+        # PARTITION BY and breaks no tie at all -- so the survivor was
+        # whatever DuckDB happened to keep, not a deterministic choice
+        # (RFC 0001 §7.9). Assert the SPECIFIC survivor the current full-row
+        # tiebreak picks, not just that "a row" survived: "ACME LTDA" sorts
+        # before "ACME LTDA (DUP)" (shorter string that's a strict prefix
+        # sorts first), so it must be the one kept.
+        survivor = con.execute(
+            "SELECT razao_social FROM empresa WHERE cnpj_basico = '11111111'"
+        ).fetchone()[0]
+        assert survivor == "ACME LTDA", (
+            f"expected deterministic survivor 'ACME LTDA', got {survivor!r}"
+        )
+    finally:
+        con.close()
+
+
+def test_dedupe_cnpj_basico_table_is_deterministic_across_runs(tmp_path):
+    """Mesma entrada -> mesmo sobrevivente, toda vez (RFC 0001 §7.9/Objetivo 6).
+
+    Reconstrói a tabela do zero e roda o dedup duas vezes; o sobrevivente
+    escolhido deve ser idêntico nas duas rodadas -- não apenas "uma linha
+    restou", que é exatamente o que o teste antigo checava e não pegava um
+    tiebreak não-determinístico.
+    """
+
+    def _build_and_dedupe(con):
+        con.execute(
+            "CREATE OR REPLACE TABLE empresa (cnpj_basico VARCHAR, razao_social VARCHAR, "
+            "natureza_juridica VARCHAR, qualificacao_responsavel VARCHAR, capital_social VARCHAR, "
+            "porte_empresa VARCHAR, ente_federativo_responsavel VARCHAR)"
+        )
+        con.execute(
+            "INSERT INTO empresa VALUES "
+            "('22222222', 'ZULU LTDA', '2062', '49', '1,00', '03', ''), "
+            "('22222222', 'ALFA LTDA', '2062', '49', '1,00', '03', ''), "
+            "('22222222', 'MIKE LTDA', '2062', '49', '1,00', '03', '')"
+        )
+        dupes = transform._dedupe_cnpj_basico_table(con, "empresa")
+        survivor = con.execute("SELECT razao_social FROM empresa").fetchone()[0]
+        return dupes, survivor
+
+    con = duckdb.connect()
+    try:
+        dupes1, survivor1 = _build_and_dedupe(con)
+    finally:
+        con.close()
+
+    con2 = duckdb.connect()
+    try:
+        dupes2, survivor2 = _build_and_dedupe(con2)
+    finally:
+        con2.close()
+
+    assert dupes1 == dupes2 == 2
+    assert survivor1 == survivor2 == "ALFA LTDA"  # alphabetically first of the three
+
+
+def test_dedupe_cnpj_basico_table_leaves_null_keys_untouched():
+    """NULL cnpj_basico nunca deve ser tratado como duplicata de outro NULL.
+
+    COUNT(DISTINCT cnpj_basico) ignora NULL por padrão SQL; contar
+    COUNT(*) - COUNT(DISTINCT ...) sobre TODAS as linhas reportaria N linhas
+    NULL não-relacionadas como duplicatas, e PARTITION BY agrupa todo NULL
+    numa partição só -- o que apagaria silenciosamente registros distintos
+    que só têm em comum a ausência de chave. Nenhuma das três linhas abaixo
+    é duplicata de outra (razao_social distintas); todas devem sobreviver.
+    """
+    con = duckdb.connect()
+    try:
+        con.execute(
+            "CREATE TABLE empresa (cnpj_basico VARCHAR, razao_social VARCHAR, "
+            "natureza_juridica VARCHAR, qualificacao_responsavel VARCHAR, capital_social VARCHAR, "
+            "porte_empresa VARCHAR, ente_federativo_responsavel VARCHAR)"
+        )
+        con.execute(
+            "INSERT INTO empresa VALUES "
+            "(NULL, 'NULA UM LTDA', '2062', '49', '1,00', '03', ''), "
+            "(NULL, 'NULA DOIS LTDA', '2062', '49', '1,00', '03', ''), "
+            "('33333333', 'TERCEIRA LTDA', '2062', '49', '1,00', '03', '')"
+        )
+
+        dupes = transform._dedupe_cnpj_basico_table(con, "empresa")
+
+        assert dupes == 0, "NULL-keyed rows must not be counted as duplicates of each other"
+        total = con.execute("SELECT COUNT(*) FROM empresa").fetchone()[0]
+        assert total == 3, "NULL-keyed rows must not be collapsed away"
+        null_names = {
+            r[0]
+            for r in con.execute(
+                "SELECT razao_social FROM empresa WHERE cnpj_basico IS NULL"
+            ).fetchall()
+        }
+        assert null_names == {"NULA UM LTDA", "NULA DOIS LTDA"}
     finally:
         con.close()
 

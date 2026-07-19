@@ -306,21 +306,87 @@ def pick_threads() -> int:
     return 1
 
 
+def _dedupe_cnpj_basico_table(con: duckdb.DuckDBPyConnection, table: str) -> int:
+    """Colapsa `table` (empresa ou simples) para 1 linha por `cnpj_basico`
+    não-nulo. Devolve o nº de linhas excedentes encontradas (0 se já limpo).
+
+    W13.1a: `write_cnpjs_parquet` faz LEFT JOIN de `empresa`/`simples` em
+    `estabelecimento` por `cnpj_basico` (ver `_cnpjs_chunk_select_sql`); um
+    `cnpj_basico` duplicado nessas tabelas multiplica linhas de
+    `estabelecimento` no join, e `cnpjs.parquet` termina com mais linhas que
+    `estabelecimento` -- o roundtrip-equivalence check falha. A RFB pretende
+    1 linha por empresa/optante, mas os dumps brutos não garantem isso;
+    `empresa` não tinha checagem nenhuma antes desta função existir, o que
+    produziu um mismatch de +532k linhas observado pela primeira vez em
+    2026-07.
+
+    NULL em `cnpj_basico` é deliberadamente excluído da contagem e do
+    colapso: `COUNT(DISTINCT cnpj_basico)` já ignora NULL (padrão SQL), então
+    contar `COUNT(*) - COUNT(DISTINCT ...)` sobre TODAS as linhas reportaria
+    N linhas NULL não-relacionadas como "N-1 duplicatas" -- e `PARTITION BY`
+    agrupa todo NULL numa única partição independente do resto da linha, o
+    que faria `QUALIFY row_number()=1` apagar silenciosamente registros
+    NULL-keyed genuinamente distintos, só porque nenhum deles tem chave. Um
+    `cnpj_basico` NULL nunca bate no LEFT JOIN de qualquer forma (`NULL =
+    NULL` não é verdadeiro em SQL), então essas linhas são inofensivas ao
+    invariante de roundtrip que esta função protege -- deixá-las intocadas é
+    estritamente mais seguro que adivinhar.
+
+    O desempate do `row_number()` ordena por TODAS as colunas da tabela (via
+    o próprio registry, não só `cnpj_basico` -- que é constante dentro da
+    sua partição e não desempata nada). RFC 0001 §7.9 exige regra
+    determinística pra duplicatas semanticamente diferentes (não uma escolha
+    definida-por-implementação de "o que o DuckDB decidir manter"); ordenar
+    pela linha inteira garante que a mesma entrada sempre colapsa pro mesmo
+    sobrevivente, execução após execução -- ainda que a escolha entre dois
+    registros genuinamente conflitantes (ex.: duas razao_social diferentes
+    pro mesmo cnpj_basico) continue sendo uma questão de qualidade de dados
+    a montante, não resolvida por esta função.
+
+    Performático: a sondagem DISTINCT é um único scan agregado; o rewrite
+    (window + materialização completa) só roda quando duplicatas realmente
+    existem, então um mês limpo paga ~nada.
+    """
+    extra_rows = con.execute(
+        f"SELECT COUNT(*) FILTER (WHERE cnpj_basico IS NOT NULL) - COUNT(DISTINCT cnpj_basico) "
+        f"FROM {table}"
+    ).fetchone()[0]
+    if extra_rows <= 0:
+        return 0
+    tiebreak_cols = ", ".join(registry.main_table(table).source.columns)
+    con.execute(
+        f"CREATE OR REPLACE TABLE {table} AS "
+        f"SELECT * FROM {table} WHERE cnpj_basico IS NULL "
+        "UNION ALL "
+        f"SELECT * FROM {table} WHERE cnpj_basico IS NOT NULL "
+        f"QUALIFY row_number() OVER (PARTITION BY cnpj_basico ORDER BY {tiebreak_cols}) = 1"
+    )
+    log.warning(
+        "W13.1a: %s had %d duplicate cnpj_basico row(s) (excess rows beyond 1 per "
+        "non-null key); collapsed deterministically (full-row order) to 1 row per "
+        "cnpj_basico to preserve the cnpjs<->estabelecimento roundtrip invariant. "
+        "NULL-keyed rows were left untouched. Investigate the upstream dump if this "
+        "count is unexpected.",
+        table,
+        extra_rows,
+    )
+    return extra_rows
+
+
 def load_main_tables_into_duckdb(
     con: duckdb.DuckDBPyConnection,
     extracted: Iterable[ExtractedFile],
 ) -> int:
     """Carrega Empresa/Estabelecimento/Socio/Simples no DuckDB.
 
-    Devolve a contagem W13.1a (nº total de `cnpj_basico` em `empresa` e
-    `simples` com mais de uma linha, somado entre as duas tabelas) -- não
-    o total de linhas duplicadas, apenas quantos valores de `cnpj_basico`
-    violavam a suposição 1:1 antes do dedup abaixo. `transform_snapshot`
-    repassa esse número pro `duplicate_rows` do estágio "load_duckdb"
-    (RFC 0001 §16) sem custo de query nova, já que essa contagem já era
-    calculada aqui pra decidir se colapsa. Chamadores que não precisam do
-    valor (ex.: os testes existentes) simplesmente ignoram o retorno --
-    compatível com o `None` implícito de antes.
+    Devolve a contagem W13.1a (nº total de linhas excedentes em `empresa` e
+    `simples` além de 1 por `cnpj_basico` não-nulo, somado entre as duas
+    tabelas) -- ver `_dedupe_cnpj_basico_table` pra definição exata e o
+    porquê. `transform_snapshot` repassa esse número pro `duplicate_rows` do
+    estágio "load_duckdb" (RFC 0001 §16) sem custo de query nova, já que essa
+    contagem já era calculada aqui pra decidir se colapsa. Chamadores que não
+    precisam do valor (ex.: os testes existentes) simplesmente ignoram o
+    retorno -- compatível com o `None` implícito de antes.
     """
     by_kind: dict[FileKind, list[Path]] = collections.defaultdict(list)
     for ef in extracted:
@@ -338,40 +404,7 @@ def load_main_tables_into_duckdb(
             time.monotonic() - t0,
         )
 
-    # W13.1a: empresa and simples MUST be exactly 1 row per cnpj_basico.
-    # write_cnpjs_parquet LEFT JOINs both ON cnpj_basico (see
-    # _cnpjs_chunk_select_sql); any duplicate cnpj_basico there fans out
-    # estabelecimento rows, so cnpjs.parquet ends up with MORE rows than
-    # estabelecimento and the roundtrip-equivalence check in transform_snapshot
-    # fails. RFB intends 1 row per empresa/optante, but the raw dumps do not
-    # guarantee it -- empresa had no check at all before, which is what
-    # produced a +532k cnpjs<->estabelecimento mismatch first observed 2026-07.
-    #
-    # Performático: the DISTINCT probe is a single aggregate scan per table;
-    # the rewrite (a window + full materialization) runs ONLY when duplicates
-    # actually exist, so a clean month pays ~nothing. row_number keeps a whole
-    # row per cnpj_basico -- never mixing columns across duplicate rows.
-    total_dupes = 0
-    for card_table in ("empresa", "simples"):
-        extra_rows = con.execute(
-            f"SELECT COUNT(*) - COUNT(DISTINCT cnpj_basico) FROM {card_table}"
-        ).fetchone()[0]
-        if extra_rows <= 0:
-            continue
-        total_dupes += extra_rows
-        con.execute(
-            f"CREATE OR REPLACE TABLE {card_table} AS "
-            f"SELECT * FROM {card_table} "
-            "QUALIFY row_number() OVER (PARTITION BY cnpj_basico ORDER BY cnpj_basico) = 1"
-        )
-        log.warning(
-            "W13.1a: %s had %d duplicate cnpj_basico row(s); collapsed to 1 row "
-            "per cnpj_basico to preserve the cnpjs<->estabelecimento roundtrip "
-            "invariant. Investigate the upstream dump if this count is unexpected.",
-            card_table,
-            extra_rows,
-        )
-    return total_dupes
+    return sum(_dedupe_cnpj_basico_table(con, t) for t in ("empresa", "simples"))
 
 
 def load_lookup_into_duckdb(
