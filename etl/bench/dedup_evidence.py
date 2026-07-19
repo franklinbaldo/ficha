@@ -132,13 +132,9 @@ def _worker(mode: str, repetition: int, output_json: Path) -> None:
                 zip_name=f"simples-{mode}.zip",
                 csv_path=FIXTURES / mode / "simples.csv",
             ),
-            ExtractedFile(
-                kind="socios", zip_name="socio.zip", csv_path=DATA / "socio.csv"
-            ),
+            ExtractedFile(kind="socios", zip_name="socio.zip", csv_path=DATA / "socio.csv"),
             *(
-                ExtractedFile(
-                    kind="estabelecimentos", zip_name=path.name, csv_path=path
-                )
+                ExtractedFile(kind="estabelecimentos", zip_name=path.name, csv_path=path)
                 for path in est_paths
             ),
         ]
@@ -166,13 +162,9 @@ def _worker(mode: str, repetition: int, output_json: Path) -> None:
         empresa_rows = con.execute("SELECT COUNT(*) FROM empresa").fetchone()[0]
         simples_rows = con.execute("SELECT COUNT(*) FROM simples").fetchone()[0]
         if empresa_rows != manifest["unique_rows"]["empresa"]:
-            raise AssertionError(
-                f"{mode}: empresa dedup result has {empresa_rows} rows"
-            )
+            raise AssertionError(f"{mode}: empresa dedup result has {empresa_rows} rows")
         if simples_rows != manifest["unique_rows"]["simples"]:
-            raise AssertionError(
-                f"{mode}: simples dedup result has {simples_rows} rows"
-            )
+            raise AssertionError(f"{mode}: simples dedup result has {simples_rows} rows")
 
         con.execute("CHECKPOINT")
         result = {
@@ -238,10 +230,7 @@ def main() -> None:
     execution_order: list[list[str]] = []
     start = random.Random(args.seed).randrange(len(MODES))
     for repetition in range(args.repeats):
-        order = [
-            MODES[(start + repetition + offset) % len(MODES)]
-            for offset in range(len(MODES))
-        ]
+        order = [MODES[(start + repetition + offset) % len(MODES)] for offset in range(len(MODES))]
         execution_order.append(order)
         for mode in order:
             worker_json = raw_results / f"{mode}-rep{repetition}.json"

@@ -73,19 +73,11 @@ def _setup_state(codec: str) -> tuple[list[Path], int]:
         ):
             transform.load_lookup_into_duckdb(con, kind, DATA / f"lookup_{kind}.csv")
         files = [
-            ExtractedFile(
-                kind="empresas", zip_name="empresa.zip", csv_path=DATA / "empresa.csv"
-            ),
-            ExtractedFile(
-                kind="simples", zip_name="simples.zip", csv_path=DATA / "simples.csv"
-            ),
-            ExtractedFile(
-                kind="socios", zip_name="socio.zip", csv_path=DATA / "socio.csv"
-            ),
+            ExtractedFile(kind="empresas", zip_name="empresa.zip", csv_path=DATA / "empresa.csv"),
+            ExtractedFile(kind="simples", zip_name="simples.zip", csv_path=DATA / "simples.csv"),
+            ExtractedFile(kind="socios", zip_name="socio.zip", csv_path=DATA / "socio.csv"),
             *(
-                ExtractedFile(
-                    kind="estabelecimentos", zip_name=path.name, csv_path=path
-                )
+                ExtractedFile(kind="estabelecimentos", zip_name=path.name, csv_path=path)
                 for path in est_paths
             ),
         ]
@@ -251,9 +243,7 @@ def main() -> None:
     zstd_paths, zstd_duplicates = _setup_state("ZSTD")
     lz4_paths, lz4_duplicates = _setup_state("LZ4")
     if zstd_paths != lz4_paths:
-        raise AssertionError(
-            "codec states resolved different estabelecimento chunk lists"
-        )
+        raise AssertionError("codec states resolved different estabelecimento chunk lists")
     if zstd_duplicates != lz4_duplicates:
         raise AssertionError("codec states observed different duplicate counts")
 
@@ -270,9 +260,7 @@ def main() -> None:
         zstd_output = Path(verify_zstd["output_path"])
         lz4_output = Path(verify_lz4["output_path"])
         try:
-            assert_parquet_equivalent(
-                zstd_output, lz4_output, "zstd-parts", "lz4-parts"
-            )
+            assert_parquet_equivalent(zstd_output, lz4_output, "zstd-parts", "lz4-parts")
             print("  outputs verified equivalent\n")
         finally:
             zstd_output.unlink(missing_ok=True)
