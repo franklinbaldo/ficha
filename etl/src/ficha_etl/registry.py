@@ -141,6 +141,22 @@ MAIN_TABLES: tuple[TableSpec, ...] = (
 )
 
 
+def main_table(name: str) -> TableSpec:
+    """Busca um `TableSpec` em `MAIN_TABLES` pelo nome da tabela.
+
+    Acesso canônico pra quem precisa do CsvSpec de uma tabela principal
+    (ex.: reload de estabelecimento no writer chunked / roundtrip) sem
+    reimportar a tupla de colunas crua. `name` errado é erro de programação
+    (typo, tabela removida do registry), não fluxo de negócio — falha loud
+    com ValueError em vez de devolver None (guard clause, sem exceção como
+    controle de fluxo esperado).
+    """
+    for spec in MAIN_TABLES:
+        if spec.name == name:
+            return spec
+    raise ValueError(f"main_table: nenhuma TableSpec com name={name!r} em MAIN_TABLES")
+
+
 def csv_columns_clause(columns: tuple[str, ...]) -> str:
     """`{'c1': 'VARCHAR', 'c2': 'VARCHAR'}` para read_csv `columns` arg."""
     pairs = ", ".join(f"'{c}': 'VARCHAR'" for c in columns)

@@ -6,6 +6,8 @@ Cobertura:
   c) encoding_attempts — mesma semântica do sniff atual em transform.py.
   d) Fixtures comportamentais load-bearing via _create_table_from_csvs real.
   e) paths_literal — escaping de apóstrofo.
+  f) _create_table_from_csvs honra o CsvSpec passado (não reconstrói com
+     defaults) — e main_table() como acesso canônico a TableSpec.
 """
 
 from __future__ import annotations
@@ -13,6 +15,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import duckdb
+import pytest
 
 from ficha_etl import registry
 from ficha_etl.registry import CsvSpec
@@ -240,7 +243,7 @@ def test_quoted_newline_preserved(tmp_path):
 
     con = duckdb.connect()
     try:
-        _create_table_from_csvs(con, "t_newline", [csv_path], ("c1", "c2", "c3"))
+        _create_table_from_csvs(con, "t_newline", [csv_path], CsvSpec(columns=("c1", "c2", "c3")))
         rows = con.execute("SELECT * FROM t_newline").fetchall()
         assert rows == [("1", "linha1\nlinha2", "3")]
     finally:
@@ -264,7 +267,7 @@ def test_ragged_row_null_padded(tmp_path):
 
     con = duckdb.connect()
     try:
-        _create_table_from_csvs(con, "t_ragged", [csv_path], ("c1", "c2", "c3"))
+        _create_table_from_csvs(con, "t_ragged", [csv_path], CsvSpec(columns=("c1", "c2", "c3")))
         rows = con.execute("SELECT * FROM t_ragged ORDER BY c1").fetchall()
         assert rows == [("1", "2", None), ("a1", "b1", "c1"), ("a2", "b2", "c2")]
     finally:
@@ -280,7 +283,7 @@ def test_mixed_encoding_loads_via_fallback(tmp_path):
 
     con = duckdb.connect()
     try:
-        _create_table_from_csvs(con, "t_mixed", [csv_path], ("c1", "c2", "c3"))
+        _create_table_from_csvs(con, "t_mixed", [csv_path], CsvSpec(columns=("c1", "c2", "c3")))
         rows = con.execute("SELECT * FROM t_mixed").fetchall()
         assert rows == [("1", "2", "Olá Mundo")]
     finally:
@@ -299,7 +302,10 @@ def test_empty_file_among_nonempty_is_skipped(tmp_path):
     con = duckdb.connect()
     try:
         _create_table_from_csvs(
-            con, "t_mixed_empty", [empty_path, nonempty_path], ("c1", "c2", "c3")
+            con,
+            "t_mixed_empty",
+            [empty_path, nonempty_path],
+            CsvSpec(columns=("c1", "c2", "c3")),
         )
         rows = con.execute("SELECT * FROM t_mixed_empty").fetchall()
         assert rows == [("1", "2", "3")]
@@ -313,7 +319,7 @@ def test_all_empty_paths_creates_empty_table_with_schema(tmp_path):
 
     con = duckdb.connect()
     try:
-        _create_table_from_csvs(con, "t_empty", [], ("c1", "c2", "c3"))
+        _create_table_from_csvs(con, "t_empty", [], CsvSpec(columns=("c1", "c2", "c3")))
         rows = con.execute("SELECT * FROM t_empty").fetchall()
         assert rows == []
         cols = con.execute("DESCRIBE t_empty").fetchall()
@@ -335,8 +341,59 @@ def test_path_with_apostrophe_loads_without_sql_error(tmp_path):
 
     con = duckdb.connect()
     try:
-        _create_table_from_csvs(con, "t_apostrophe", [csv_path], ("c1", "c2", "c3"))
+        spec = CsvSpec(columns=("c1", "c2", "c3"))
+        _create_table_from_csvs(con, "t_apostrophe", [csv_path], spec)
         rows = con.execute("SELECT * FROM t_apostrophe").fetchall()
         assert rows == [("1", "2", "3")]
     finally:
         con.close()
+
+
+# -----------------------------------------------------------------------------
+# f) _create_table_from_csvs honra o CsvSpec — regressão do bypass reportado
+#    pelo owner na PR #69 (a função reconstruía CsvSpec(columns=...) com
+#    defaults, ignorando qualquer override declarado no registry).
+# -----------------------------------------------------------------------------
+
+
+def test_create_table_from_csvs_honors_custom_delimiter(tmp_path):
+    """CsvSpec.delimiter é realmente usado pelo reader, não apenas aceito e descartado.
+
+    Prova em dois lados, com o MESMO arquivo (separado por vírgula, sem ';'):
+    - CsvSpec(delimiter=',') lê corretamente as 3 colunas;
+    - CsvSpec() (default, delimiter=';') falha ao carregar — o sniffer do
+      DuckDB só encontra 1 campo por linha (não há ';' no arquivo), o que
+      diverge do schema de 3 colunas declarado e aborta com RuntimeError.
+    Isso prova que o delimiter do spec chega de fato ao SQL executado — se
+    `_create_table_from_csvs` reconstruísse um CsvSpec com defaults (o bug
+    reportado), o primeiro caso falharia do mesmo jeito que o segundo.
+    """
+    from ficha_etl.transform import _create_table_from_csvs
+
+    csv_path = tmp_path / "comma.csv"
+    _write_bytes(csv_path, b'"1","2","3"\n')
+
+    con = duckdb.connect()
+    try:
+        comma_spec = CsvSpec(columns=("c1", "c2", "c3"), delimiter=",")
+        _create_table_from_csvs(con, "t_comma", [csv_path], comma_spec)
+        rows = con.execute("SELECT * FROM t_comma").fetchall()
+        assert rows == [("1", "2", "3")]
+
+        default_spec = CsvSpec(columns=("c1", "c2", "c3"))  # delimiter=';' default
+        with pytest.raises(RuntimeError, match="nenhum encoding funcionou"):
+            _create_table_from_csvs(con, "t_default_delim", [csv_path], default_spec)
+    finally:
+        con.close()
+
+
+def test_main_table_found():
+    spec = registry.main_table("estabelecimento")
+    assert spec.name == "estabelecimento"
+    assert spec.kind == "estabelecimentos"
+    assert spec.source.columns == registry.ESTABELECIMENTO_COLUMNS
+
+
+def test_main_table_not_found_raises_value_error():
+    with pytest.raises(ValueError, match="nao_existe"):
+        registry.main_table("nao_existe")

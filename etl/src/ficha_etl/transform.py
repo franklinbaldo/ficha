@@ -51,11 +51,11 @@ _LOOKUP_KINDS: tuple[FileKind, ...] = (
 
 # Layout RFB CNPJ — colunas em ordem (sem header no CSV). Tipos: tudo VARCHAR
 # pra evitar surpresas; conversões acontecem nas SELECTs finais.
-# Fonte de verdade agora é `registry` (Fase 1, RFC 0001 §8.1) — aliases
-# privados mantidos aqui pra não quebrar quem importa o símbolo antigo.
+# Fonte de verdade agora é `registry` (Fase 1, RFC 0001 §8.1). Só mantemos
+# alias pros dois símbolos com consumidor real remanescente (test_transform.py);
+# `_ESTABELECIMENTO_COLUMNS`/`_SOCIO_COLUMNS` foram removidos por não terem
+# mais nenhum consumidor após os call sites migrarem pra `registry.main_table`.
 _EMPRESA_COLUMNS = registry.EMPRESA_COLUMNS
-_ESTABELECIMENTO_COLUMNS = registry.ESTABELECIMENTO_COLUMNS
-_SOCIO_COLUMNS = registry.SOCIO_COLUMNS
 _SIMPLES_COLUMNS = registry.SIMPLES_COLUMNS
 
 
@@ -145,27 +145,30 @@ def _create_table_from_csvs(
     con: duckdb.DuckDBPyConnection,
     table: str,
     csv_paths: Iterable[Path],
-    columns: tuple[str, ...],
+    spec: registry.CsvSpec,
 ) -> None:
-    """Cria/recria `table` lendo todos os CSVs com layout RFB padrão.
+    """Cria/recria `table` lendo todos os CSVs conforme `spec`.
 
     Tenta latin-1 primeiro (encoding histórico da RFB); se falhar por encoding,
     tenta utf-8 (algumas partições da RFB foram publicadas em UTF-8).
 
     Filtra arquivos vazios pra evitar problemas no sniffer do DuckDB.
 
-    O SQL de leitura vem de `registry.read_csv_select_sql` — esta função só
-    orquestra: filtragem de arquivos vazios, tabela vazia com schema correto,
-    sniff de encoding, loop de tentativas, logging e tratamento de erro.
+    `spec` vem do registry (chamador decide qual TableSpec/CsvSpec usar) —
+    esta função nunca reconstrói um CsvSpec com defaults, senão qualquer
+    override futuro (delimiter, quote, parallel, etc.) seria silenciosamente
+    ignorado. O SQL de leitura vem de `registry.read_csv_select_sql`; esta
+    função só orquestra: filtragem de arquivos vazios, tabela vazia com
+    schema correto, sniff de encoding, loop de tentativas, logging e
+    tratamento de erro.
     """
     # Pula arquivos zero-byte (alguns ZIPs particionados podem vir vazios).
     paths = [p for p in csv_paths if p.exists() and p.stat().st_size > 0]
     if not paths:
         # Tabela vazia com schema correto, pra que JOINs não quebrem.
-        col_defs = ", ".join(f"{c} VARCHAR" for c in columns)
+        col_defs = ", ".join(f"{c} VARCHAR" for c in spec.columns)
         con.execute(f"CREATE OR REPLACE TABLE {table} ({col_defs})")
         return
-    spec = registry.CsvSpec(columns=columns)
 
     # Each attempt: (encoding, ignore_errors). RFB occasionally emits rows
     # that are neither valid latin-1 nor utf-8 (mixed-encoding garbage from
@@ -314,7 +317,7 @@ def load_main_tables_into_duckdb(
     for spec in registry.MAIN_TABLES:
         t0 = time.monotonic()
         log.info("loading table '%s' from %d CSV(s)...", spec.name, len(by_kind.get(spec.kind, [])))
-        _create_table_from_csvs(con, spec.name, by_kind.get(spec.kind, []), spec.source.columns)
+        _create_table_from_csvs(con, spec.name, by_kind.get(spec.kind, []), spec.source)
         n = con.execute(f"SELECT COUNT(*) FROM {spec.name}").fetchone()[0]
         log.info(
             "loaded '%s' — %s rows in %.1fs",
@@ -734,7 +737,9 @@ def write_cnpjs_parquet_chunked(
             log.info(
                 "    chunk %d/%d: loading %s", i, len(estabelecimento_csv_paths), csv_path.name
             )
-            _create_table_from_csvs(con, "estabelecimento", [csv_path], _ESTABELECIMENTO_COLUMNS)
+            _create_table_from_csvs(
+                con, "estabelecimento", [csv_path], registry.main_table("estabelecimento").source
+            )
 
             n = con.execute("SELECT COUNT(*) FROM estabelecimento").fetchone()[0]
             if n == 0:
@@ -1699,7 +1704,10 @@ def transform_snapshot(
                 # each chunk's table was dropped; we reload the full set here.
                 if estabelecimento_csv_paths:
                     _create_table_from_csvs(
-                        con, "estabelecimento", estabelecimento_csv_paths, _ESTABELECIMENTO_COLUMNS
+                        con,
+                        "estabelecimento",
+                        estabelecimento_csv_paths,
+                        registry.main_table("estabelecimento").source,
                     )
                 assert_roundtrip(con, cnpjs_parquet, sample_size=verify_sample_size)
                 con.execute("DROP TABLE IF EXISTS estabelecimento")

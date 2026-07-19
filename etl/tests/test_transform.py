@@ -5,7 +5,7 @@ from pathlib import Path
 import duckdb
 import pytest
 
-from ficha_etl import fetcher, transform
+from ficha_etl import fetcher, registry, transform
 from ficha_etl.sources import canonical_inventory
 
 
@@ -958,7 +958,8 @@ def test_create_table_from_csvs_sniff_utf8(tmp_path, caplog):
     con = duckdb.connect()
     try:
         with caplog.at_level(logging.WARNING):
-            _create_table_from_csvs(con, "test_table", [csv_path], ("c1", "c2", "c3"))
+            spec = registry.CsvSpec(columns=("c1", "c2", "c3"))
+            _create_table_from_csvs(con, "test_table", [csv_path], spec)
 
         assert (
             "tabela 'test_table' carregada com encoding=utf-8 ignore_errors=True (fallback)"
@@ -983,7 +984,8 @@ def test_create_table_from_csvs_sniff_latin1(tmp_path, caplog):
     con = duckdb.connect()
     try:
         with caplog.at_level(logging.WARNING):
-            _create_table_from_csvs(con, "test_table_latin", [csv_path], ("c1", "c2", "c3"))
+            spec = registry.CsvSpec(columns=("c1", "c2", "c3"))
+            _create_table_from_csvs(con, "test_table_latin", [csv_path], spec)
 
         assert "fallback" not in caplog.text  # latin-1 without ignore_errors does not log fallback
 
@@ -1046,7 +1048,8 @@ def _setup_duckdb_with_lookups_empresa_simples(
         ("empresa", "empresas", transform._EMPRESA_COLUMNS),
         ("simples", "simples", transform._SIMPLES_COLUMNS),
     ):
-        transform._create_table_from_csvs(con, table, by_kind.get(kind, []), cols)
+        spec = registry.CsvSpec(columns=cols)
+        transform._create_table_from_csvs(con, table, by_kind.get(kind, []), spec)
 
 
 def test_write_cnpjs_parquet_chunked_matches_full_write(tmp_path, all_zips_dir):
