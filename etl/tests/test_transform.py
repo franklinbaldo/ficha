@@ -323,8 +323,10 @@ def test_load_lookup_preserves_iso_encoding(tmp_path):
         con.close()
 
 
-def test_load_main_tables_warns_on_simples_duplicates(tmp_path, caplog):
-    """W13.1a: load_main_tables logs a warning when simples has duplicate cnpj_basico."""
+def test_load_main_tables_dedupes_simples_duplicates(tmp_path, caplog):
+    """W13.1a: load_main_tables collapses duplicate cnpj_basico rows in simples to
+    1-per-basico (and logs it) so the downstream LEFT JOIN can't fan out
+    estabelecimento."""
     import logging
 
     con = duckdb.connect()
@@ -373,6 +375,64 @@ def test_load_main_tables_warns_on_simples_duplicates(tmp_path, caplog):
         assert any("W13.1a" in r.message for r in caplog.records), (
             "Expected W13.1a warning for duplicate simples rows"
         )
+        # The dedup fix: simples is now exactly 1 row per cnpj_basico.
+        n = con.execute("SELECT COUNT(*) FROM simples WHERE cnpj_basico = '11111111'").fetchone()[0]
+        assert n == 1, f"expected simples deduped to 1 row for 11111111, got {n}"
+    finally:
+        con.close()
+
+
+def test_load_main_tables_dedupes_empresa_duplicates(tmp_path, caplog):
+    """W13.1a regression for the +532k mismatch: a duplicate cnpj_basico in
+    empresa is collapsed to 1 row so estabelecimento LEFT JOIN empresa can't
+    fan out, keeping cnpjs.parquet row count == estabelecimento row count."""
+    import logging
+
+    con = duckdb.connect()
+    try:
+        zips = tmp_path / "zips"
+        rows_for_kind = {
+            "cnaes": LOOKUP_FIXTURES["cnaes"],
+            "motivos": LOOKUP_FIXTURES["motivos"],
+            "municipios": LOOKUP_FIXTURES["municipios"],
+            "naturezas": LOOKUP_FIXTURES["naturezas"],
+            "paises": LOOKUP_FIXTURES["paises"],
+            "qualificacoes": LOOKUP_FIXTURES["qualificacoes"],
+            # Duplicate cnpj_basico '11111111' — the raw-dump anomaly that fanned
+            # out estabelecimento in write_cnpjs_parquet (empresa had no check).
+            "empresas": [
+                *EMPRESA_ROWS,
+                ("11111111", "ACME LTDA (DUP)", "2062", "49", "100000,50", "03", ""),
+            ],
+            "estabelecimentos": ESTABELECIMENTO_ROWS,
+            "socios": SOCIO_ROWS,
+            "simples": SIMPLES_ROWS,
+        }
+        zips.mkdir()
+        seen: set[str] = set()
+        for spec in canonical_inventory():
+            rows = rows_for_kind.get(spec.kind, [])
+            if spec.kind in seen:
+                rows = []
+            seen.add(spec.kind)
+            _zip_with_csv(zips / spec.name, f"{spec.name.removesuffix('.zip')}.CSV", rows)
+
+        chain = fetcher.ChainedFetcher(fetchers=[_ZipDirFetcher(zips)])
+        extracted = transform.extract_all("2026-04", chain, tmp_path / "extracted")
+
+        with caplog.at_level(logging.WARNING, logger="ficha_etl.transform"):
+            transform.load_main_tables_into_duckdb(con, extracted)
+
+        assert any("W13.1a" in r.message and "empresa" in r.message for r in caplog.records), (
+            "Expected W13.1a warning naming empresa for the duplicate cnpj_basico"
+        )
+        # empresa is collapsed to exactly 1 row per cnpj_basico.
+        n = con.execute("SELECT COUNT(*) FROM empresa WHERE cnpj_basico = '11111111'").fetchone()[0]
+        assert n == 1, f"expected empresa deduped to 1 row for 11111111, got {n}"
+        total, distinct = con.execute(
+            "SELECT COUNT(*), COUNT(DISTINCT cnpj_basico) FROM empresa"
+        ).fetchone()
+        assert total == distinct, "empresa must be 1 row per cnpj_basico after load"
     finally:
         con.close()
 

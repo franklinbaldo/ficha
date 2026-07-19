@@ -417,22 +417,38 @@ def load_main_tables_into_duckdb(
             time.monotonic() - t0,
         )
 
-    # W13.1a: verify 1:1 cardinality assumption for simples.
-    # write_cnpjs_parquet does LEFT JOIN simples ON cnpj_basico — if simples
-    # has multiple rows per cnpj_basico the join silently multiplies
-    # estabelecimento rows. RFB's intent is 1 row per empresa but this has
-    # never been empirically confirmed on a completed bootstrap run.
-    dupes = con.execute(
-        "SELECT COUNT(*) FROM ("
-        "  SELECT cnpj_basico FROM simples GROUP BY cnpj_basico HAVING COUNT(*) > 1"
-        ")"
-    ).fetchone()[0]
-    if dupes > 0:
+    # W13.1a: empresa and simples MUST be exactly 1 row per cnpj_basico.
+    # write_cnpjs_parquet LEFT JOINs both ON cnpj_basico (see
+    # _cnpjs_chunk_select_sql); any duplicate cnpj_basico there fans out
+    # estabelecimento rows, so cnpjs.parquet ends up with MORE rows than
+    # estabelecimento and the roundtrip-equivalence check in transform_snapshot
+    # fails. RFB intends 1 row per empresa/optante, but the raw dumps do not
+    # guarantee it — empresa had no check at all before, which is what produced
+    # the +532k cnpjs<->estabelecimento mismatch first observed 2026-07.
+    #
+    # Performático: the DISTINCT probe is a single aggregate scan; the rewrite
+    # (a window + full materialization) runs ONLY when duplicates actually
+    # exist, so a clean month pays ~nothing. row_number keeps a whole row per
+    # cnpj_basico — never mixing columns across duplicate rows — and we log the
+    # collapsed count so a genuine upstream anomaly stays visible instead of
+    # silently multiplying the wide denormalized output.
+    for card_table in ("empresa", "simples"):
+        extra_rows = con.execute(
+            f"SELECT COUNT(*) - COUNT(DISTINCT cnpj_basico) FROM {card_table}"
+        ).fetchone()[0]
+        if extra_rows <= 0:
+            continue
+        con.execute(
+            f"CREATE OR REPLACE TABLE {card_table} AS "
+            f"SELECT * FROM {card_table} "
+            "QUALIFY row_number() OVER (PARTITION BY cnpj_basico ORDER BY cnpj_basico) = 1"
+        )
         log.warning(
-            "W13.1a: simples has %d cnpj_basico value(s) with multiple rows — "
-            "LEFT JOIN in write_cnpjs_parquet may silently multiply rows. "
-            "See docs/perf-plan-2026-05.md §13.1 for the fix.",
-            dupes,
+            "W13.1a: %s had %d duplicate cnpj_basico row(s); collapsed to 1 row "
+            "per cnpj_basico to preserve the cnpjs<->estabelecimento roundtrip "
+            "invariant. Investigate the upstream dump if this count is unexpected.",
+            card_table,
+            extra_rows,
         )
 
 
