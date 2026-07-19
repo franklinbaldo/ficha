@@ -141,10 +141,6 @@ def extract_all(
     return out
 
 
-# Alias — a implementação real mora em registry.csv_columns_clause (Fase 1, RFC 0001).
-_csv_columns_clause = registry.csv_columns_clause
-
-
 def _create_table_from_csvs(
     con: duckdb.DuckDBPyConnection,
     table: str,
@@ -315,19 +311,14 @@ def load_main_tables_into_duckdb(
     for ef in extracted:
         by_kind[ef.kind].append(ef.csv_path)
 
-    for table, kind, cols in (
-        ("empresa", "empresas", _EMPRESA_COLUMNS),
-        ("estabelecimento", "estabelecimentos", _ESTABELECIMENTO_COLUMNS),
-        ("simples", "simples", _SIMPLES_COLUMNS),
-        ("socio", "socios", _SOCIO_COLUMNS),
-    ):
+    for spec in registry.MAIN_TABLES:
         t0 = time.monotonic()
-        log.info("loading table '%s' from %d CSV(s)...", table, len(by_kind.get(kind, [])))
-        _create_table_from_csvs(con, table, by_kind.get(kind, []), cols)
-        n = con.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+        log.info("loading table '%s' from %d CSV(s)...", spec.name, len(by_kind.get(spec.kind, [])))
+        _create_table_from_csvs(con, spec.name, by_kind.get(spec.kind, []), spec.source.columns)
+        n = con.execute(f"SELECT COUNT(*) FROM {spec.name}").fetchone()[0]
         log.info(
             "loaded '%s' — %s rows in %.1fs",
-            table,
+            spec.name,
             f"{n:,}",
             time.monotonic() - t0,
         )

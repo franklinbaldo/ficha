@@ -155,10 +155,20 @@ def test_simples_columns_layout_frozen():
 
 
 def test_main_tables_order_and_shape():
+    """Pina ordem e pares (name, kind) — é isto que load_main_tables_into_duckdb
+    consome hoje via `for spec in registry.MAIN_TABLES`, então qualquer
+    reordenação ou renomeação acidental aqui quebra o load real."""
     names = [t.name for t in registry.MAIN_TABLES]
     kinds = [t.kind for t in registry.MAIN_TABLES]
+    name_kind_pairs = [(t.name, t.kind) for t in registry.MAIN_TABLES]
     assert names == ["empresa", "estabelecimento", "simples", "socio"]
     assert kinds == ["empresas", "estabelecimentos", "simples", "socios"]
+    assert name_kind_pairs == [
+        ("empresa", "empresas"),
+        ("estabelecimento", "estabelecimentos"),
+        ("simples", "simples"),
+        ("socio", "socios"),
+    ]
     by_name = {t.name: t for t in registry.MAIN_TABLES}
     assert by_name["empresa"].source.columns == registry.EMPRESA_COLUMNS
     assert by_name["estabelecimento"].source.columns == registry.ESTABELECIMENTO_COLUMNS
