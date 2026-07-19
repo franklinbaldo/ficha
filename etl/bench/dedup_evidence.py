@@ -173,9 +173,9 @@ def _worker(mode: str, repetition: int, output_json: Path) -> None:
         # Keep disk sampling alive beyond the loader timer: checkpoint/flush and
         # close can briefly coexist with WAL, the consolidated DB, and temp files.
         con.execute("CHECKPOINT")
-        database_bytes = db_path.stat().st_size
         con.close()
         con = None
+        database_bytes = db_path.stat().st_size
         peaks = sampler.stop()
         sampler = None
         rss_post_close_peak_mib = _rss_peak_mib()
