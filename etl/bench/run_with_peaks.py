@@ -103,8 +103,10 @@ def main() -> None:
         "command": command,
         "exit_code": process.returncode,
         "wall_seconds": wall_seconds,
-        "child_user_cpu_seconds": child_usage_after.ru_utime - child_usage_before.ru_utime,
-        "child_system_cpu_seconds": child_usage_after.ru_stime - child_usage_before.ru_stime,
+        "child_user_cpu_seconds": child_usage_after.ru_utime
+        - child_usage_before.ru_utime,
+        "child_system_cpu_seconds": child_usage_after.ru_stime
+        - child_usage_before.ru_stime,
         # Linux Actions runner: ru_maxrss is KiB.  This wrapper runs one command,
         # so RUSAGE_CHILDREN is a useful process-tree peak envelope.
         "child_rss_peak_mib": child_usage_after.ru_maxrss / 1024,
