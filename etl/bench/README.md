@@ -38,9 +38,19 @@ run. `bench/.work/` is gitignored.
 | Single-query `reservoir REPEATABLE` verify | `verify_roundtrip` | **23.4s → 1.1s** at 300k (21×); the old `ORDER BY random()` + 1000 point-lookups dominated the whole run |
 | One-scan contatos (`LATERAL VALUES`) | `write_cnpj_contatos` | **2.04× slower** (0.835s → 1.700s at 1M). Output identical, but rejected — DuckDB parallelizes the 4 independent scans better than one correlated fan-out. |
 | One-scan cnaes (`list_concat`+`UNNEST`) | `write_cnpj_cnaes` | **1.16× slower** (0.743s → 0.862s). Rejected for the same reason. |
+| `UINTEGER` companion join key vs `VARCHAR(8)` `cnpj_basico` | cnpjs empresa/simples join | **~0% (within noise)** — min 3.228s vs 3.169s over 10 interleaved iters (2%, non-monotonic), and materializing the key costs ~1.9s. Rejected. |
 
 The contatos/cnaes result is why the "collapse to one scan" idea was **not**
 merged: the scans are over an already-loaded in-memory columnar table (cheap and
 parallel), so eliminating them by doing more per-row work is a net loss. Keep the
 UNION-ALL versions. `ab_contatos_cnaes.py` is retained as the evidence and as a
 template for future same-stage A/Bs.
+
+The typed-key result (`ab_typed_keys.py`) says the join key isn't the
+bottleneck: an 8-char `cnpj_basico` is short enough that DuckDB's string hash
+join is already as fast as an integer one, so a companion column adds width and
+plumbing for no measurable gain. The genuinely expensive things in the transform
+are the **roundtrip verify** (fixed — see row 1) and **CSV parsing**, which is
+why the only structural lever left worth prototyping is parsing each
+estabelecimento CSV once instead of ~3× (one-pass fan-out), not typed columns or
+scan fusion.
