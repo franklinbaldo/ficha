@@ -1,24 +1,23 @@
 """A/B: does a UINTEGER companion join key beat VARCHAR(8) cnpj_basico for the
 per-chunk cnpjs join `write_cnpjs_parquet_chunked` actually runs in production?
 
-Methodology review on the original version of this script (before this
-rewrite) found it measured a different shape than production: whole tables
-loaded once via `duckdb.connect()` (in-memory, default threads), the typed
-key added via a single `ALTER TABLE` + `UPDATE` on already-resident tables.
-`write_cnpjs_parquet_chunked` never does that -- it loads ONE estabelecimento
-CSV chunk at a time (via `_create_table_from_csvs`, exactly as production's
-loader does) and semi-joins `empresa`/`simples` down to `_emp_c`/`_smp_c` for
-JUST that chunk's keys before the big projection join. This rewrite runs the
-SAME per-chunk semi-join + materialize + COPY sequence
-`write_cnpjs_parquet_chunked` uses, on a fixed representative chunk, so the
-"does the join key type matter" question is asked about the actual code path
-the answer would change.
-
 Uses the shared production profile (`bench/_profile.py`): file-backed
 connection with production PRAGMAs, `load_main_tables_into_duckdb` (dedup
 included -- the synthetic empresa/simples have injected duplicates, see
-`benchmark.py`'s `generate()`), deterministic AB/BA alternation (fixed seed),
-median + spread reported, never a single "best run".
+`benchmark.py`'s `generate()`), strict AB/BA alternation (seed picks only the
+starting side), median + spread reported, never a single "best run".
+
+The varchar and typed sides use INDEPENDENT table state: `empresa`/`simples`
+stay pure VARCHAR (what the varchar baseline actually joins against in
+production -- it never carries a key column at all) and a separate
+`empresa_typed`/`simples_typed` pair carries the UINTEGER companion key,
+materialized via CREATE...AS SELECT (one CTAS pass, the shape a typed-load
+step would actually take) rather than ALTER TABLE + UPDATE on the shared
+table (which would (a) contaminate the varchar baseline's join with an unused
+extra column production doesn't have, and (b) measure an in-place schema
+mutation, not a load-time materialization). Per-chunk estabelecimento is the
+same: the typed variant CTASes its own typed `estabelecimento` from a raw
+staging load, the varchar variant never gains the column at all.
 """
 
 from __future__ import annotations
@@ -32,7 +31,13 @@ from pathlib import Path
 import duckdb
 import ibis
 
-from _profile import ABResult, capture_environment, open_production_connection, run_ab
+from _profile import (
+    ABResult,
+    assert_parquet_equivalent,
+    capture_environment,
+    open_production_connection,
+    run_ab,
+)
 from ficha_etl import registry, transform
 from ficha_etl.transform import ExtractedFile
 
@@ -42,16 +47,17 @@ DATA = Path("bench/.work/data")
 OUT = Path("bench/.work/ab")
 DB_PATH = Path("bench/.work/ab_typed_keys.duckdb")
 N = 5
-SEED = 20260719  # fixed -- same alternation sequence every run, not "randomized"
+SEED = 20260719  # fixed -- same starting side + alternation every run, not "randomized"
 
 
 def _setup(con: duckdb.DuckDBPyConnection) -> tuple[list[Path], float]:
     """Real production loader for lookups + empresa/simples/socio/estabelecimento
-    (dedup included), then a one-time UINTEGER companion key materialized on
-    the now-deduped empresa/simples -- a legitimate one-time cost paid once
-    per snapshot run, not per chunk (the per-chunk key cost for
-    estabelecimento is measured separately, inside the timed A/B, since
-    production loads estabelecimento fresh per chunk).
+    (dedup included), leaving `empresa`/`simples` pure VARCHAR -- exactly what
+    production has -- then a ONE-TIME `empresa_typed`/`simples_typed` pair
+    materialized via CREATE...AS SELECT with the UINTEGER companion key. This
+    is a real one-time cost paid once per snapshot run; it's returned
+    separately here but folded into the typed side's reported end-to-end
+    total in `main()`, not left as a side observation nobody adds up.
 
     load_main_tables_into_duckdb full-loads estabelecimento as a side effect
     (that's what it does in production too, for the scan-based writers) --
@@ -83,34 +89,49 @@ def _setup(con: duckdb.DuckDBPyConnection) -> tuple[list[Path], float]:
 
     t0 = time.monotonic()
     for tbl in ("empresa", "simples"):
-        con.execute(f"ALTER TABLE {tbl} ADD COLUMN cnpj_basico_key UINTEGER")
-        con.execute(f"UPDATE {tbl} SET cnpj_basico_key = TRY_CAST(cnpj_basico AS UINTEGER)")
+        con.execute(
+            f"CREATE OR REPLACE TABLE {tbl}_typed AS "
+            f"SELECT *, TRY_CAST(cnpj_basico AS UINTEGER) AS cnpj_basico_key FROM {tbl}"
+        )
     key_cost = time.monotonic() - t0
 
     return est_paths, key_cost
 
 
-def _run_chunk(con: duckdb.DuckDBPyConnection, csv_path: Path, typed: bool, tag: str) -> float:
+def _run_chunk(
+    con: duckdb.DuckDBPyConnection, csv_path: Path, typed: bool, tag: str, *, keep: bool = False
+) -> tuple[float, Path]:
     """One iteration of the REAL write_cnpjs_parquet_chunked inner-loop body
     for a single chunk: load the chunk's estabelecimento CSV fresh (exactly
     as production does -- `_create_table_from_csvs`, not a table already
     resident from a prior iteration), semi-join empresa/simples down to
-    `_emp_c`/`_smp_c` for this chunk's keys, project + COPY. `typed=True`
-    additionally materializes the chunk's own `cnpj_basico_key` (a per-chunk
-    cost, since production would pay it fresh each chunk too) and switches
-    the semi-join + final join predicates to the typed column.
+    `_emp_c`/`_smp_c` for this chunk's keys, project + COPY (ZSTD, matching
+    production's actual codec -- LZ4 was never validated for production disk
+    peak and isn't what write_cnpjs_parquet_chunked uses).
+
+    `typed=True` loads into a raw staging table first, then CTASes the real
+    `estabelecimento` with its own `cnpj_basico_key` added (a per-chunk cost,
+    since production would pay it fresh each chunk too) and joins
+    `empresa_typed`/`simples_typed` on that key. `typed=False` loads straight
+    into `estabelecimento` and joins the untouched `empresa`/`simples` on
+    `cnpj_basico` -- no key column exists anywhere on this path, matching
+    what production's varchar-only pipeline actually has today.
     """
     t0 = time.monotonic()
-    transform._create_table_from_csvs(
-        con, "estabelecimento", [csv_path], registry.main_table("estabelecimento").source
-    )
-    join_col = "cnpj_basico"
+    spec = registry.main_table("estabelecimento").source
     if typed:
-        con.execute("ALTER TABLE estabelecimento ADD COLUMN cnpj_basico_key UINTEGER")
+        transform._create_table_from_csvs(con, "_est_raw", [csv_path], spec)
         con.execute(
-            "UPDATE estabelecimento SET cnpj_basico_key = TRY_CAST(cnpj_basico AS UINTEGER)"
+            "CREATE OR REPLACE TABLE estabelecimento AS "
+            "SELECT *, TRY_CAST(cnpj_basico AS UINTEGER) AS cnpj_basico_key FROM _est_raw"
         )
+        con.execute("DROP TABLE IF EXISTS _est_raw")
         join_col = "cnpj_basico_key"
+        emp_src, smp_src = "empresa_typed", "simples_typed"
+    else:
+        transform._create_table_from_csvs(con, "estabelecimento", [csv_path], spec)
+        join_col = "cnpj_basico"
+        emp_src, smp_src = "empresa", "simples"
 
     icon = ibis.duckdb.from_connection(con)
     est = icon.table("estabelecimento")
@@ -120,8 +141,8 @@ def _run_chunk(con: duckdb.DuckDBPyConnection, csv_path: Path, typed: bool, tag:
             f"CREATE OR REPLACE TEMP TABLE {table} AS {ibis.to_sql(expr, dialect='duckdb')}"
         )
 
-    _materialize("_emp_c", icon.table("empresa").semi_join(est, join_col))
-    _materialize("_smp_c", icon.table("simples").semi_join(est, join_col))
+    _materialize("_emp_c", icon.table(emp_src).semi_join(est, join_col))
+    _materialize("_smp_c", icon.table(smp_src).semi_join(est, join_col))
 
     select_sql = transform._cnpjs_chunk_select_sql(
         "estabelecimento", "_emp_c", "_smp_c", "_cnae_map", order_by=False
@@ -139,14 +160,15 @@ def _run_chunk(con: duckdb.DuckDBPyConnection, csv_path: Path, typed: bool, tag:
 
     part_path = OUT / f"{tag}.parquet"
     con.execute(
-        f"COPY ({select_sql}) TO '{part_path}' (FORMAT PARQUET, COMPRESSION LZ4, ROW_GROUP_SIZE 200000)"
+        f"COPY ({select_sql}) TO '{part_path}' (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 200000)"
     )
-    part_path.unlink(missing_ok=True)
+    if not keep:
+        part_path.unlink(missing_ok=True)
 
     con.execute("DROP TABLE IF EXISTS estabelecimento")
     con.execute("DROP TABLE IF EXISTS _emp_c")
     con.execute("DROP TABLE IF EXISTS _smp_c")
-    return time.monotonic() - t0
+    return time.monotonic() - t0, part_path
 
 
 def main() -> None:
@@ -177,25 +199,55 @@ def main() -> None:
         f"{key_cost:.2f}s"
     )
 
+    print("verifying varchar/typed output equivalent before timing...")
+    _, varchar_path = _run_chunk(con, chunk, typed=False, tag="verify_varchar", keep=True)
+    _, typed_path = _run_chunk(con, chunk, typed=True, tag="verify_uint", keep=True)
+    try:
+        assert_parquet_equivalent(varchar_path, typed_path, "varchar", "uint")
+        print("  varchar/uint output verified equivalent\n")
+    finally:
+        varchar_path.unlink(missing_ok=True)
+        typed_path.unlink(missing_ok=True)
+
     result: ABResult = run_ab(
         n=args.repeats,
         seed=args.seed,
-        fn_a=lambda: _run_chunk(con, chunk, typed=False, tag="varchar"),
-        fn_b=lambda: _run_chunk(con, chunk, typed=True, tag="uint"),
+        fn_a=lambda: _run_chunk(con, chunk, typed=False, tag="varchar")[0],
+        fn_b=lambda: _run_chunk(con, chunk, typed=True, tag="uint")[0],
         label_a="varchar",
         label_b="uint",
     )
     print(
-        f"\n{args.repeats} AB/BA-alternated iterations (seed={args.seed}), one representative chunk:"
+        f"{args.repeats} AB/BA-alternated iterations (seed={args.seed}), one representative chunk:"
     )
     result.print_summary()
+
+    total_varchar = sum(result.times_a)
+    total_uint = key_cost + sum(result.times_b)
+    print(
+        f"\n  end-to-end total across {args.repeats} chunk(s), typed side including its "
+        f"one-time {key_cost:.2f}s key setup:"
+    )
+    print(f"    varchar total = {total_varchar:.3f}s")
+    print(
+        f"    uint    total = {total_uint:.3f}s  (= {key_cost:.3f}s setup + {sum(result.times_b):.3f}s chunks)"
+    )
 
     con.close()
 
     if args.json:
+        args.json.parent.mkdir(parents=True, exist_ok=True)
         args.json.write_text(
             json.dumps(
-                {"environment": env, "key_setup_seconds": round(key_cost, 4), **result.to_dict()},
+                {
+                    "environment": env,
+                    "key_setup_seconds": round(key_cost, 4),
+                    "end_to_end_total_seconds": {
+                        "varchar": round(total_varchar, 4),
+                        "uint": round(total_uint, 4),
+                    },
+                    **result.to_dict(),
+                },
                 indent=2,
             )
         )

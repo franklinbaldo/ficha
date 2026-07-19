@@ -39,12 +39,26 @@ behavior. The findings and the fixes:
 | Finding | Fix |
 |---|---|
 | `duckdb.connect()` (in-memory, default threads) — production forces `threads=1` + `memory_limit`/`temp_directory`/`preserve_insertion_order` | `bench/_profile.py:open_production_connection()` — file-backed, same PRAGMAs `transform_snapshot` uses, via the same `pick_memory_limit_gb`/`pick_threads` |
-| No record of what configuration/machine actually ran | `bench/_profile.py:capture_environment()` — DuckDB version, effective threads/memory_limit/preserve_insertion_order (read back via `current_setting`, not just what was requested), platform, CPU count, in every JSON result |
-| A/B always ran OLD before NEW — warm-cache/CPU-throttle drift always favors the same side | `bench/_profile.py:run_ab()` — alternates which variant runs first each iteration, seeded (fixed `SEED = 20260719`), so the order is reproducible, not "randomized" |
-| Reported the minimum of N runs — one lucky run can look like a real result | `ABResult.median_a`/`median_b` + `spread_a`/`spread_b` — median and spread reported together; `print_summary()` explicitly flags "WITHIN NOISE" when the spread is wider than the delta, rather than picking a winner anyway |
+| No record of what configuration/machine actually ran | `bench/_profile.py:capture_environment()` — DuckDB version, effective threads/memory_limit/preserve_insertion_order/temp_directory (read back via `current_setting`, not just what was requested), platform, CPU count, git SHA, harness version, in every JSON result |
+| A/B always ran OLD before NEW — warm-cache/CPU-throttle drift always favors the same side | `bench/_profile.py:run_ab()` — strictly alternates which variant runs first, seeded (fixed `SEED = 20260719`) only to pick the *starting* side, so the order is reproducible, not "randomized" |
+| Reported the minimum of N runs — one lucky run can look like a real result | `ABResult.median_a`/`median_b` + `spread_a`/`spread_b` — median and spread reported together; `print_summary()` explicitly flags "WITHIN NOISE" when the spread is wider than the delta, and never declares an "X faster" winner on its own |
 | Bypassed `load_main_tables_into_duckdb` (called `_create_table_from_csvs` per table by hand) — the dedup path (and its cost) was never measured, and synthetic empresa declared no duplicates | `benchmark.py`/`ab_typed_keys.py` call the real `load_main_tables_into_duckdb`; `generate()` injects a duplicate empresa/simples row (conflicting payload) for 1 in 500 bases |
 | Typed-key A/B loaded whole tables once and cast via `ALTER TABLE`+`UPDATE` — production's chunked writer loads one estabelecimento CSV chunk at a time and semi-joins `empresa`/`simples` down to `_emp_c`/`_smp_c` for just that chunk | `ab_typed_keys.py` now runs the actual `write_cnpjs_parquet_chunked` inner-loop body (load chunk → semi-join materialize → project + COPY) on a fixed representative chunk, str vs. typed key |
-| `bench/` wasn't linted or run by CI — a schema-registry refactor silently broke all three scripts (removed columns they still referenced) while lint+tests stayed green | `ci.yml`'s `etl` job now lints `bench/` too, and runs all three scripts at tiny scale (`--scale 200 --repeats 1`) as a smoke check |
+| `bench/` wasn't linted or run by CI — a schema-registry refactor silently broke all three scripts (removed columns they still referenced) while lint+tests stayed green | `ci.yml`'s `etl` job now lints `bench/` too, and runs all three scripts as a smoke check |
+
+A second review round (2026-07) on the first fix found the typed-key A/B still
+wasn't measuring an independent, production-faithful state, and no A/B
+verified its two sides actually agreed on the output. Those findings and
+their fixes:
+
+| Finding | Fix |
+|---|---|
+| `ab_typed_keys.py` still added the UINTEGER key via `ALTER TABLE`+`UPDATE` on the *shared* `empresa`/`simples`/`estabelecimento` tables — exactly the in-place-mutation shape the first review round removed elsewhere — and the varchar baseline ended up joining against tables that carried an unused key column production's varchar path never has | `empresa`/`simples`/`estabelecimento` stay pure VARCHAR for the varchar side; a separate `empresa_typed`/`simples_typed` (+ per-chunk typed `estabelecimento`) is materialized via `CREATE TABLE ... AS SELECT` instead — independent state per side, not a shared table mutated in place |
+| The one-time `empresa`/`simples` key-materialization cost was measured but only surfaced as a side observation (`key_setup_seconds` in the JSON), never added into any reported total — a real per-snapshot cost the typed approach must pay was effectively invisible | `main()` now prints and reports an explicit end-to-end total per side, `uint total = key_cost + sum(chunk times)`, alongside the per-chunk median/spread |
+| `ab_typed_keys.py`'s per-chunk COPY used `COMPRESSION LZ4` — production's `write_cnpjs_parquet_chunked` uses `COMPRESSION ZSTD` (LZ4 was never validated for production disk peak, see the dedup-fix history) — so the harness wasn't running the codec production actually runs | Switched to `ZSTD`, matching `transform.py` exactly |
+| Neither A/B script checked that its two variants produced the *same* output — a rewritten query that's faster but wrong (dropped rows, different NULL handling, changed types) would read as a win | `_profile.py:assert_parquet_equivalent()` — schema + full-content diff (`EXCEPT ALL` both directions) run once, untimed, before the timed loop; both scripts now fail loudly if the sides disagree |
+| The CI smoke check ran `--scale 200`, but `generate()`'s duplicate injection is 1-in-500 bases — the smoke check never actually exercised the dedup path it claimed to guard | `ci.yml` bumped to `--scale 500` (guarantees one injected duplicate at base=500) |
+| `args.json.write_text(...)` assumed its parent directory already existed | All three scripts now `args.json.parent.mkdir(parents=True, exist_ok=True)` before writing |
 
 Stage order in `benchmark.py` mirrors `transform_snapshot`: load lookups → one
 `load_main_tables_into_duckdb` call (empresa/estabelecimento/simples/socio +

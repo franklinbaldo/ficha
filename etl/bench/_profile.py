@@ -19,6 +19,7 @@ import os
 import platform
 import random
 import statistics
+import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
@@ -26,6 +27,12 @@ from typing import Any, Callable
 import duckdb
 
 from ficha_etl.transform import pick_memory_limit_gb, pick_threads
+
+# Bump when the *methodology* in this module changes (connection setup,
+# alternation scheme, what capture_environment records) -- independent of
+# git_sha, which tracks the exact commit but doesn't say at a glance whether
+# two JSON results are comparable under the same rules.
+HARNESS_VERSION = "2026-07-profile-v2"
 
 
 def open_production_connection(db_path: Path) -> duckdb.DuckDBPyConnection:
@@ -61,11 +68,15 @@ def capture_environment(con: duckdb.DuckDBPyConnection, db_path: Path) -> dict[s
     memory_limit = con.execute("SELECT current_setting('memory_limit')").fetchone()[0]
     threads = con.execute("SELECT current_setting('threads')").fetchone()[0]
     preserve_order = con.execute("SELECT current_setting('preserve_insertion_order')").fetchone()[0]
+    temp_directory = con.execute("SELECT current_setting('temp_directory')").fetchone()[0]
     return {
+        "harness_version": HARNESS_VERSION,
+        "git_sha": _git_sha(),
         "duckdb_version": duckdb.__version__,
         "threads": str(threads),
         "memory_limit": str(memory_limit),
         "preserve_insertion_order": str(preserve_order),
+        "temp_directory": str(temp_directory),
         "connection_type": "file-backed",
         "connection_path": str(db_path),
         "platform": platform.platform(),
@@ -77,6 +88,25 @@ def capture_environment(con: duckdb.DuckDBPyConnection, db_path: Path) -> dict[s
 
 def _cpu_count() -> int | None:
     return os.cpu_count()
+
+
+def _git_sha() -> str:
+    """Best-effort exact commit a result was produced against -- a JSON
+    result without this can't be tied back to the code that ran it once the
+    branch moves on. Falls back to "unknown" rather than raising: a missing
+    git binary or a non-repo checkout shouldn't crash the benchmark itself.
+    """
+    try:
+        out = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=Path(__file__).resolve().parent,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        return out.stdout.strip()
+    except (OSError, subprocess.CalledProcessError):
+        return "unknown"
 
 
 @dataclass
@@ -135,19 +165,14 @@ class ABResult:
         )
         ratio = self.median_b / self.median_a if self.median_a else float("nan")
         # A spread wider than the median delta means "noise-dominated" --
-        # flagged explicitly rather than silently picking a winner anyway.
+        # flagged explicitly. No automatic "X faster" verdict beyond that:
+        # with n=1 both spreads are 0 and a single run would otherwise be
+        # declared a winner, contradicting the point of running an A/B at
+        # all. Callers judge significance themselves from ratio + spread.
         delta = abs(self.median_a - self.median_b)
         noisy = delta < max(self.spread_a, self.spread_b)
-        verdict = (
-            "WITHIN NOISE (spread >= delta)"
-            if noisy
-            else (
-                f"{self.label_b} faster"
-                if self.median_b < self.median_a
-                else f"{self.label_a} faster"
-            )
-        )
-        print(f"  ratio {self.label_b}/{self.label_a} = {ratio:.2f}  -> {verdict}")
+        note = " (WITHIN NOISE: spread >= delta)" if noisy else ""
+        print(f"  ratio {self.label_b}/{self.label_a} = {ratio:.2f}{note}")
 
 
 def run_ab(
@@ -159,15 +184,19 @@ def run_ab(
     label_b: str = "B",
 ) -> ABResult:
     """Run `fn_a`/`fn_b` (each returning an elapsed-seconds float) `n` times
-    each, alternating which one runs FIRST each iteration using a seeded RNG
-    -- never "always A before B" (which lets warm-cache/CPU-throttle drift
-    always favor the same side). Same seed -> same alternation sequence,
-    every run -- reproducible, not just "randomized".
+    each, STRICTLY alternating which one runs first -- never "always A before
+    B" (which lets warm-cache/CPU-throttle drift always favor the same side).
+    The seed only picks which side starts; every iteration after that flips
+    deterministically. A per-iteration coin flip (the previous approach) is
+    reproducible but not balanced -- at low `n` it can land on the same side
+    several times in a row, which is exactly the drift this is meant to
+    cancel out.
     """
-    rng = random.Random(seed)
+    start_with_a = random.Random(seed).choice([True, False])
     result = ABResult(label_a=label_a, label_b=label_b, seed=seed)
-    for _ in range(n):
-        if rng.random() < 0.5:
+    for i in range(n):
+        a_first = start_with_a if i % 2 == 0 else not start_with_a
+        if a_first:
             result.times_a.append(fn_a())
             result.times_b.append(fn_b())
             result.order.append("AB")
@@ -176,3 +205,45 @@ def run_ab(
             result.times_a.append(fn_a())
             result.order.append("BA")
     return result
+
+
+def assert_parquet_equivalent(path_a: Path, path_b: Path, label_a: str, label_b: str) -> None:
+    """Fail loudly if `path_a`/`path_b` don't hold the same rows (regardless
+    of order) and the same schema.
+
+    An A/B that only measures wall-clock and never checks this would happily
+    report a "faster" variant that's actually wrong -- a rewritten query that
+    silently drops rows, mishandles NULLs, or changes a column's type reads
+    as a win on this harness unless something checks the output, not just
+    the time it took to produce it. Meant to run ONCE, untimed, before the
+    timed A/B loop -- not on every iteration.
+    """
+    con = duckdb.connect()
+    try:
+        schema_a = con.execute(f"DESCRIBE SELECT * FROM read_parquet('{path_a}')").fetchall()
+        schema_b = con.execute(f"DESCRIBE SELECT * FROM read_parquet('{path_b}')").fetchall()
+        if schema_a != schema_b:
+            raise AssertionError(
+                f"{label_a} vs {label_b}: schema mismatch\n  {label_a}: {schema_a}\n"
+                f"  {label_b}: {schema_b}"
+            )
+        diff = con.execute(
+            f"""
+            SELECT COUNT(*) FROM (
+                (SELECT * FROM read_parquet('{path_a}')
+                 EXCEPT ALL
+                 SELECT * FROM read_parquet('{path_b}'))
+                UNION ALL
+                (SELECT * FROM read_parquet('{path_b}')
+                 EXCEPT ALL
+                 SELECT * FROM read_parquet('{path_a}'))
+            )
+            """
+        ).fetchone()[0]
+        if diff != 0:
+            raise AssertionError(
+                f"{label_a} vs {label_b}: {diff} row(s) differ -- not equivalent, "
+                "timed comparison would be measuring a correctness change, not a speed change"
+            )
+    finally:
+        con.close()
