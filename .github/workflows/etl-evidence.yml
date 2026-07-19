@@ -16,7 +16,7 @@ on:
       chunks:
         description: Number of estabelecimento CSV chunks
         required: true
-        default: '8'
+        default: '10'
         type: string
       repeats:
         description: Repetitions per variant (5+ for decisions)
