@@ -515,6 +515,7 @@ def main() -> None:
     )
     result = run(args.scale, args.chunks, args.workdir, args.repeats)
     if args.json:
+        args.json.parent.mkdir(parents=True, exist_ok=True)
         args.json.write_text(json.dumps(result, indent=2))
         print(f"  wrote {args.json}")
 

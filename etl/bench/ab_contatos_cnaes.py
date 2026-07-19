@@ -24,7 +24,13 @@ from pathlib import Path
 
 import duckdb
 
-from _profile import ABResult, capture_environment, open_production_connection, run_ab
+from _profile import (
+    ABResult,
+    assert_parquet_equivalent,
+    capture_environment,
+    open_production_connection,
+    run_ab,
+)
 from ficha_etl import registry, transform
 
 logging.getLogger("ficha_etl").setLevel(logging.ERROR)
@@ -105,15 +111,38 @@ NEW_CNAES = """
 """
 
 
-def _time_copy(con: duckdb.DuckDBPyConnection, sql: str, tag: str) -> float:
-    path = OUT / f"{tag}.parquet"
+def _copy(con: duckdb.DuckDBPyConnection, sql: str, path: Path) -> float:
     t0 = time.monotonic()
     con.execute(
         f"COPY ({sql}) TO '{path}' (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 200000)"
     )
-    dt = time.monotonic() - t0
+    return time.monotonic() - t0
+
+
+def _time_copy(con: duckdb.DuckDBPyConnection, sql: str, tag: str) -> float:
+    path = OUT / f"{tag}.parquet"
+    dt = _copy(con, sql, path)
     path.unlink(missing_ok=True)
     return dt
+
+
+def _verify_equivalent(
+    con: duckdb.DuckDBPyConnection, pair: str, old_sql: str, new_sql: str
+) -> None:
+    """Untimed, run once before the timed A/B loop -- proves `old_sql` and
+    `new_sql` produce the same rows before a wall-clock difference between
+    them is allowed to mean anything.
+    """
+    old_path = OUT / f"{pair}_verify_old.parquet"
+    new_path = OUT / f"{pair}_verify_new.parquet"
+    _copy(con, old_sql, old_path)
+    _copy(con, new_sql, new_path)
+    try:
+        assert_parquet_equivalent(old_path, new_path, "old", "new")
+        print(f"  {pair}: old/new output verified equivalent")
+    finally:
+        old_path.unlink(missing_ok=True)
+        new_path.unlink(missing_ok=True)
 
 
 def main() -> None:
@@ -144,11 +173,17 @@ def main() -> None:
     n = con.execute("SELECT COUNT(*) FROM estabelecimento").fetchone()[0]
     print(f"  {n:,} rows; {args.repeats} AB/BA-alternated iterations per pair (seed={args.seed})\n")
 
-    results: dict[str, ABResult] = {}
-    for pair, old_sql, new_sql in (
+    pairs = (
         ("contatos", OLD_CONTATOS, NEW_CONTATOS),
         ("cnaes", OLD_CNAES, NEW_CNAES),
-    ):
+    )
+    print("verifying old/new produce equivalent output before timing...")
+    for pair, old_sql, new_sql in pairs:
+        _verify_equivalent(con, pair, old_sql, new_sql)
+    print()
+
+    results: dict[str, ABResult] = {}
+    for pair, old_sql, new_sql in pairs:
         results[pair] = run_ab(
             n=args.repeats,
             seed=args.seed,
@@ -166,6 +201,7 @@ def main() -> None:
     con.close()
 
     if args.json:
+        args.json.parent.mkdir(parents=True, exist_ok=True)
         args.json.write_text(
             json.dumps(
                 {"environment": env, "results": {k: v.to_dict() for k, v in results.items()}},
