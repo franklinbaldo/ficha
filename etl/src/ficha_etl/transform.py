@@ -667,15 +667,21 @@ def write_cnpjs_parquet(
             # Use the shared helper for the SELECT logic; bucket tables
             # _est_b / _emp_b / _smp_b are the aliases used here.
             _select_sql = _cnpjs_chunk_select_sql("_est_b", "_emp_b", "_smp_b", "_cnae_map")
-            # LZ4, not ZSTD: these parts are transient — the merge below reads
-            # them back and re-compresses the final output with ZSTD. Paying
-            # ZSTD's slow encode on bytes we immediately discard is pure waste;
-            # LZ4 encodes several times faster and the parts never leave disk.
+            # ZSTD, not LZ4, for these transient parts. LZ4 was tried here and
+            # reverted (review finding on the original PR): LZ4 saves CPU on
+            # the throwaway encode but produces larger intermediate files,
+            # which INCREASES peak disk usage while parts + spill + the final
+            # merged file coexist -- exactly the failure mode this pipeline has
+            # hit before (see the OOM/disk-exhaustion history in this
+            # function's docstring and write_cnpjs_parquet_chunked's). RFC
+            # 0001 §7.10/§13.4 requires comparing CPU, size, AND peak disk at
+            # production profile before a codec change; that measurement
+            # hasn't been done, so ZSTD stays until it has.
             con.execute(
                 f"""
             COPY (
                 {_select_sql}
-            ) TO '{_part_path}' (FORMAT PARQUET, COMPRESSION LZ4, ROW_GROUP_SIZE 200000)
+            ) TO '{_part_path}' (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 200000)
             """
             )
             # Drop the bucket temps so their working set + on-disk
@@ -847,16 +853,21 @@ def write_cnpjs_parquet_chunked(
                 _select_sql = _cnpjs_chunk_select_sql(
                     "estabelecimento", "_emp_c", "_smp_c", "_cnae_map", order_by=False
                 )
-                # LZ4, not ZSTD: chunk parts are transient — the merge step
-                # below reads them all back, globally sorts by cnpj, and
-                # re-compresses the final cnpjs.parquet with ZSTD. ZSTD-encoding
-                # these throwaway bytes is wasted CPU; LZ4 is much faster to
-                # write and the parts stay on local disk.
+                # ZSTD, not LZ4, for these transient chunk parts. LZ4 was
+                # tried here and reverted (review finding on the original
+                # PR): LZ4 saves CPU on the throwaway encode but produces
+                # larger intermediate files, which INCREASES peak disk usage
+                # while parts + spill + the final merged file coexist --
+                # exactly the failure mode this function's own docstring
+                # documents (OOM/95 GiB temp-spill history). RFC 0001
+                # §7.10/§13.4 requires comparing CPU, size, AND peak disk at
+                # production profile before a codec change; that measurement
+                # hasn't been done, so ZSTD stays until it has.
                 con.execute(
                     f"""
                     COPY (
                         {_select_sql}
-                    ) TO '{part_path}' (FORMAT PARQUET, COMPRESSION LZ4, ROW_GROUP_SIZE 200000)
+                    ) TO '{part_path}' (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 200000)
                     """
                 )
                 log.info("    chunk %d: wrote %s", i, part_path.name)
