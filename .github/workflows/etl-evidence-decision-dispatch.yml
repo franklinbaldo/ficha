@@ -1,0 +1,84 @@
+name: Dispatch Decision-Grade ETL Evidence
+
+# Temporary operational workflow: dispatch the merged workflow on main with its
+# decision-grade defaults, wait for completion, and forward the resulting
+# artifact onto this pull-request run so it can be inspected through the PR.
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/etl-evidence-decision-dispatch.yml'
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  dispatch-and-forward:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - name: Dispatch merged evidence workflow
+        id: dispatch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          gh workflow run etl-evidence.yml \
+            --ref main \
+            -f scale=500000 \
+            -f chunks=10 \
+            -f repeats=5 \
+            -f seed=20260719
+
+          run_id=""
+          for _ in $(seq 1 60); do
+            run_id="$(
+              gh run list \
+                --workflow etl-evidence.yml \
+                --event workflow_dispatch \
+                --branch main \
+                --limit 20 \
+                --json databaseId,createdAt \
+                --jq '.[] | select(.createdAt >= "'"$started_at"'") | .databaseId' \
+                | head -n 1
+            )"
+            [[ -n "$run_id" ]] && break
+            sleep 5
+          done
+          if [[ -z "$run_id" ]]; then
+            echo "Could not locate the dispatched workflow run" >&2
+            exit 1
+          fi
+          echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+          echo "Dispatched ETL evidence run: $run_id"
+
+      - name: Wait for decision-grade run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_ID: ${{ steps.dispatch.outputs.run_id }}
+        run: gh run watch "$RUN_ID" --exit-status
+
+      - name: Download decision evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_ID: ${{ steps.dispatch.outputs.run_id }}
+        shell: bash
+        run: |
+          mkdir -p forwarded-evidence
+          gh run download "$RUN_ID" \
+            --name "etl-evidence-manual-evidence-$RUN_ID" \
+            --dir forwarded-evidence
+          printf '%s\n' "$RUN_ID" > forwarded-evidence/source-run-id.txt
+
+      - name: Forward evidence artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: forwarded-etl-decision-evidence-${{ steps.dispatch.outputs.run_id }}
+          path: forwarded-evidence/
+          if-no-files-found: error
+          retention-days: 30
