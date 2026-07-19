@@ -1,6 +1,6 @@
 # RFC 0001 — ETL V2: pipeline canônico tipado sob computação restrita
 
-**Status:** Proposed  
+**Status:** Accepted  
 **Data:** 2026-07-19  
 **Escopo:** aquisição, ingestão, transformação, validação e publicação dos snapshots RFB
 
