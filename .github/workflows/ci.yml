@@ -92,12 +92,35 @@ jobs:
       - name: Lint
         if: steps.changes.outputs.etl == 'true'
         run: |
-          uv run ruff check src tests
-          uv run ruff format --check src tests
+          uv run ruff check src tests bench
+          uv run ruff format --check src tests bench
 
       - name: Test
         if: steps.changes.outputs.etl == 'true'
         run: uv run pytest tests
+
+      - name: Benchmark harness smoke
+        if: steps.changes.outputs.etl == 'true'
+        # Proves every bench/ script still starts and completes end-to-end on
+        # a tiny synthetic fixture — bench/ is exercised by nothing else in
+        # CI, which is exactly how a prior schema-registry refactor silently
+        # broke it (removed columns the scripts still referenced) with
+        # lint+tests both green. Tiny scale keeps this fast; it's a smoke
+        # check (does it run at all), not a benchmark run.
+        #
+        # benchmark.py runs first, WITHOUT --workdir override: it populates
+        # the default bench/.work/data cache that ab_contatos_cnaes.py and
+        # ab_typed_keys.py both read from directly (hardcoded, no --workdir
+        # flag of their own) — running benchmark.py against a different
+        # workdir here would leave them nothing to load.
+        run: |
+          cd bench
+          uv run python benchmark.py --scale 200 --chunks 2 --repeats 1 \
+            --json .work/benchmark.json
+          uv run python ab_contatos_cnaes.py --repeats 1
+          uv run python ab_typed_keys.py --repeats 1
+          rm -rf .work
+          rm -rf .work-smoke
 
   ficha-py:
     name: ficha-py/

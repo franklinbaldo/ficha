@@ -1,27 +1,39 @@
-"""Definitive A/B: old multi-scan vs new one-scan, same process, same table,
-interleaved iterations — cancels all cross-session thermal/background drift.
+"""A/B: old multi-scan vs new one-scan queries for cnpj_contatos/cnpj_cnaes.
 
-Loads the cached 1M estabelecimento once, then runs each variant's real COPY
-(to a throwaway parquet, so write cost is included) N times, alternating
-old/new so any drift hits both equally. Reports min (least-noise) per variant.
+Uses the shared production profile (`bench/_profile.py`): file-backed
+connection with production PRAGMAs (memory_limit, temp_directory,
+preserve_insertion_order, threads=1), deterministic AB/BA alternation (fixed
+seed -- not "always OLD before NEW", which lets warm-cache/CPU-throttle drift
+always favor the same side), median + spread reported, never a single "best
+run wins".
+
+Scope note: this script only reads `estabelecimento` (the queries under test
+don't touch empresa/simples), so it loads that one table directly via
+`_create_table_from_csvs` rather than the full `load_main_tables_into_duckdb`
+-- there's no dedup path to exercise here (see `ab_typed_keys.py` and
+`benchmark.py` for where empresa/simples dedup is actually measured).
 """
 
 from __future__ import annotations
 
+import argparse
+import json
 import logging
 import time
 from pathlib import Path
 
 import duckdb
 
+from _profile import ABResult, capture_environment, open_production_connection, run_ab
 from ficha_etl import registry, transform
 
 logging.getLogger("ficha_etl").setLevel(logging.ERROR)
 
 DATA = Path("bench/.work/data")
 OUT = Path("bench/.work/ab")
-OUT.mkdir(parents=True, exist_ok=True)
+DB_PATH = Path("bench/.work/ab_contatos_cnaes.duckdb")
 N = 5
+SEED = 20260719  # fixed -- same alternation sequence every run, not "randomized"
 
 OLD_CONTATOS = """
   SELECT cnpj_basico || cnpj_ordem || cnpj_dv AS cnpj, cnpj_basico AS cnpj_base,
@@ -93,8 +105,8 @@ NEW_CNAES = """
 """
 
 
-def time_copy(con, sql, tag, i):
-    path = OUT / f"{tag}-{i}.parquet"
+def _time_copy(con: duckdb.DuckDBPyConnection, sql: str, tag: str) -> float:
+    path = OUT / f"{tag}.parquet"
     t0 = time.monotonic()
     con.execute(
         f"COPY ({sql}) TO '{path}' (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 200000)"
@@ -104,36 +116,63 @@ def time_copy(con, sql, tag, i):
     return dt
 
 
-def main():
-    con = duckdb.connect()
+def main() -> None:
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--repeats", type=int, default=N, help="A/B iterations per pair")
+    ap.add_argument("--seed", type=int, default=SEED, help="alternation seed")
+    ap.add_argument("--json", type=Path, default=None)
+    args = ap.parse_args()
+
+    OUT.mkdir(parents=True, exist_ok=True)
+    DB_PATH.unlink(missing_ok=True)
+    con = open_production_connection(DB_PATH)
+    env = capture_environment(con, DB_PATH)
+    print(
+        f"production profile: threads={env['threads']} memory_limit={env['memory_limit']} "
+        f"duckdb={env['duckdb_version']}"
+    )
+
     est = sorted(DATA.glob("estabelecimento-*.csv"))
+    if not est:
+        raise SystemExit(
+            "no estabelecimento-*.csv found under bench/.work/data — run benchmark.py first"
+        )
     print(f"loading estabelecimento from {len(est)} CSVs...")
     transform._create_table_from_csvs(
         con, "estabelecimento", est, registry.main_table("estabelecimento").source
     )
     n = con.execute("SELECT COUNT(*) FROM estabelecimento").fetchone()[0]
-    print(f"  {n:,} rows; {N} interleaved iterations per variant\n")
+    print(f"  {n:,} rows; {args.repeats} AB/BA-alternated iterations per pair (seed={args.seed})\n")
 
-    results = {"contatos_old": [], "contatos_new": [], "cnaes_old": [], "cnaes_new": []}
-    for i in range(N):
-        # interleave so thermal drift hits old and new equally
-        results["contatos_old"].append(time_copy(con, OLD_CONTATOS, "cont_old", i))
-        results["contatos_new"].append(time_copy(con, NEW_CONTATOS, "cont_new", i))
-        results["cnaes_old"].append(time_copy(con, OLD_CNAES, "cnae_old", i))
-        results["cnaes_new"].append(time_copy(con, NEW_CNAES, "cnae_new", i))
-        print(
-            f"  iter {i}: "
-            f"cont old={results['contatos_old'][-1]:.2f} new={results['contatos_new'][-1]:.2f}  "
-            f"cnae old={results['cnaes_old'][-1]:.2f} new={results['cnaes_new'][-1]:.2f}"
+    results: dict[str, ABResult] = {}
+    for pair, old_sql, new_sql in (
+        ("contatos", OLD_CONTATOS, NEW_CONTATOS),
+        ("cnaes", OLD_CNAES, NEW_CNAES),
+    ):
+        results[pair] = run_ab(
+            n=args.repeats,
+            seed=args.seed,
+            fn_a=lambda sql=old_sql, tag=f"{pair}_old": _time_copy(con, sql, tag),
+            fn_b=lambda sql=new_sql, tag=f"{pair}_new": _time_copy(con, sql, tag),
+            label_a="old",
+            label_b="new",
         )
 
-    print("\n=== min seconds (least noise) ===")
-    for pair in ("contatos", "cnaes"):
-        o = min(results[f"{pair}_old"])
-        w = min(results[f"{pair}_new"])
-        verdict = "NEW faster" if w < o else "OLD faster"
-        print(f"  {pair:<10} old={o:.3f}  new={w:.3f}  ratio new/old={w / o:.2f}  -> {verdict}")
+    print("=== results (median + spread, never a single best run) ===")
+    for pair, result in results.items():
+        print(f"\n{pair}:")
+        result.print_summary()
+
     con.close()
+
+    if args.json:
+        args.json.write_text(
+            json.dumps(
+                {"environment": env, "results": {k: v.to_dict() for k, v in results.items()}},
+                indent=2,
+            )
+        )
+        print(f"\n  wrote {args.json}")
 
 
 if __name__ == "__main__":
