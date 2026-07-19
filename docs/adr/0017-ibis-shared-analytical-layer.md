@@ -247,10 +247,22 @@ Guidance atualizada:
   histórico (o `LIST(DISTINCT)` naive estourou 4 GB a 1/10 da escala no
   benchmark). Confirmar em CI na escala de produção antes de trocar o código.
 
-### Fecho — a "última peça" é uma regra, não um bloqueio
+### 4. `raizes.parquet` migrado para Ibis (aplicando a regra do benchmark)
 
-Com os dois benchmarks, toda a camada analítica do ETL é migrável para Ibis:
-lookups ✅ e socios ✅ já migrados; `cnpjs` de baixo risco; `raizes` viável desde
-que a lista-distinta use o pre-dedup de dois passos, não o distinct-collect
-idiomático. Não há mais alvo "proibido" — há uma regra de como expressar a
-agregação distinta.
+`write_raizes_parquet_from_cnpjs` (`transform.py`, o writer que o pipeline
+usa de fato) agora compila suas queries em Ibis. As **6 fronteiras de
+materialização** (temp tables, na mesma ordem) são preservadas de propósito —
+a forma exata da execução é o que segura o OOM histórico (perf-plan §1.1), então
+cada temp table é uma expressão Ibis própria materializada, não um único SELECT
+que deixaria o DuckDB escolher a materialização. As listas-distintas usam
+`.distinct().collect().sort()` (a regra do benchmark), nunca `collect(distinct=True)`.
+`_cnpjs_slim` (read_parquet + projeção) fica raw — é I/O. Equivalência bit-a-bit
+coberta por `test_write_raizes_from_cnpjs_matches_original`.
+
+### Fecho — a "última peça" era uma regra, e foi aplicada
+
+Toda a camada analítica *build* do ETL está agora em Ibis: **lookups ✅, socios ✅,
+raizes ✅** migrados; `cnpjs` continua em SQL bruto por enquanto (join direto,
+benchmark diz baixo risco — migrável quando quiser, confirmando em CI na escala
+de produção). Não há mais alvo "proibido": o `raizes`, que o ADR temia, foi
+migrado preservando as fronteiras de materialização e a regra do two-step.
