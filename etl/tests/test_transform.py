@@ -325,6 +325,23 @@ def test_load_lookup_preserves_iso_encoding(tmp_path):
         con.close()
 
 
+def test_load_order_puts_dedupable_tables_before_estabelecimento():
+    """`_LOAD_ORDER` must load `empresa` and `simples` (both get an in-place
+    dedup rewrite) BEFORE `estabelecimento` (the giant table) -- otherwise the
+    rewrite runs while estabelecimento is already resident, exactly the peak
+    memory/disk window this ordering exists to avoid. Deliberately checked
+    against `_LOAD_ORDER`, not `registry.MAIN_TABLES` -- the registry's
+    declared order (empresa, estabelecimento, simples, socio) is pinned
+    separately by test_registry.test_main_tables_order_and_shape and must NOT
+    change; only the physical load order in transform.py does.
+    """
+    order = transform._LOAD_ORDER
+    assert order.index("empresa") < order.index("estabelecimento")
+    assert order.index("simples") < order.index("estabelecimento")
+    # Same four tables as the registry, just reordered -- nothing dropped/added.
+    assert set(order) == {t.name for t in registry.MAIN_TABLES}
+
+
 def test_load_main_tables_dedupes_simples_duplicates(tmp_path, caplog):
     """W13.1a: load_main_tables collapses simples to 1 row per cnpj_basico."""
     import logging
@@ -558,7 +575,8 @@ def test_dedupe_cnpj_basico_table_flags_conflicting_but_not_exact_duplicates(cap
         )
         con.execute(
             "INSERT INTO empresa VALUES "
-            # '11111111': exact duplicate — byte-identical rows, no info loss.
+            # '11111111': exact duplicate — value-identical rows (same parsed
+            # VARCHAR values, not a claim about matching raw CSV bytes), no info loss.
             "('11111111', 'ACME LTDA', '2062', '49', '100000,50', '03', ''), "
             "('11111111', 'ACME LTDA', '2062', '49', '100000,50', '03', ''), "
             # '22222222': conflicting duplicate — different razao_social.
@@ -580,6 +598,45 @@ def test_dedupe_cnpj_basico_table_flags_conflicting_but_not_exact_duplicates(cap
         # Still collapsed to 1 row each (fail/quarantine not implemented — known gap).
         total = con.execute("SELECT COUNT(*) FROM empresa").fetchone()[0]
         assert total == 2
+    finally:
+        con.close()
+
+
+def test_dedupe_cnpj_basico_table_reports_true_total_beyond_sample_size(caplog):
+    """Regression: an earlier version computed the sample with `LIMIT 5` and
+    then reported `len(sample)` as "the number of conflicting keys" -- correct
+    only when there happen to be <=5, silently WRONG (undercounting) above
+    that. Six conflicting keys pins it: the reported total must be 6, not the
+    5-row sample size, even though the sample itself is still capped at 5.
+    """
+    import logging
+
+    con = duckdb.connect()
+    try:
+        con.execute(
+            "CREATE TABLE empresa (cnpj_basico VARCHAR, razao_social VARCHAR, "
+            "natureza_juridica VARCHAR, qualificacao_responsavel VARCHAR, capital_social VARCHAR, "
+            "porte_empresa VARCHAR, ente_federativo_responsavel VARCHAR)"
+        )
+        rows = []
+        for i in range(6):
+            key = f"{i:08d}"
+            rows.append(f"('{key}', 'NOME A {i}', '2062', '49', '1,00', '03', '')")
+            rows.append(f"('{key}', 'NOME B {i}', '2062', '49', '1,00', '03', '')")
+        con.execute("INSERT INTO empresa VALUES " + ", ".join(rows))
+
+        with caplog.at_level(logging.WARNING, logger="ficha_etl.transform"):
+            dupes = transform._dedupe_cnpj_basico_table(con, "empresa")
+
+        assert dupes == 6  # 1 excess row per key, 6 keys
+
+        error_records = [r for r in caplog.records if r.levelno >= logging.ERROR]
+        assert len(error_records) == 1
+        msg = error_records[0].message
+        assert "6 cnpj_basico" in msg, f"expected the true total (6) in the message, got: {msg!r}"
+        # Sample is capped at 5, but every key must still be checked deduped.
+        total = con.execute("SELECT COUNT(*) FROM empresa").fetchone()[0]
+        assert total == 6
     finally:
         con.close()
 
