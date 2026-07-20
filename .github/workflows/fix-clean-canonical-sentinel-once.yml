@@ -1,0 +1,64 @@
+name: Fix Clean Canonical Sentinel Once
+
+on:
+  push:
+    branches:
+      - feat/canonical-estabelecimento-checkpoint
+    paths:
+      - '.github/workflows/fix-clean-canonical-sentinel-once.yml'
+      - 'etl/src/ficha_etl/canonical.py'
+      - 'etl/tests/test_canonical_part.py'
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+      - name: Align invalid-date accounting with registry
+        working-directory: etl
+        run: |
+          uv python install 3.11
+          uv sync --extra dev
+          uv run python - <<'PY'
+          from pathlib import Path
+
+          module = Path('src/ficha_etl/canonical.py')
+          text = module.read_text()
+          old = 'f"AND TRIM({source}) NOT IN (\'\', \'0\') "'
+          new = 'f"AND TRIM({source}) <> \'\' "'
+          if text.count(old) != 1:
+              raise SystemExit('expected invalid-cast predicate exactly once')
+          module.write_text(text.replace(old, new))
+
+          tests = Path('tests/test_canonical_part.py')
+          text = tests.read_text()
+          replacements = {
+              '"data_situacao_cadastral": 0,': '"data_situacao_cadastral": 1,',
+              'assert stage["casts_invalid"] == 1': 'assert stage["casts_invalid"] == 2',
+          }
+          for old, new in replacements.items():
+              if text.count(old) != 1:
+                  raise SystemExit(f'expected assertion exactly once: {old!r}')
+              text = text.replace(old, new)
+          tests.write_text(text)
+          PY
+          uv run ruff format src/ficha_etl/canonical.py tests/test_canonical_part.py
+          uv run ruff check src/ficha_etl/canonical.py tests/test_canonical_part.py
+          uv run python -m py_compile src/ficha_etl/canonical.py tests/test_canonical_part.py
+      - name: Commit clean files and remove one-shot workflow
+        run: |
+          rm .github/workflows/fix-clean-canonical-sentinel-once.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'fix(etl): count nonblank invalid canonical dates'
+          git push origin HEAD:${{ github.ref_name }}
