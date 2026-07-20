@@ -22,7 +22,7 @@ from typing import Any
 
 import httpx
 
-from . import canonical_shadow, download, mirror, registry, transform
+from . import canonical_shadow, download, mirror, registry, sources, transform
 from .sources import RemoteFile, is_valid_month
 
 _MANIFEST_FORMAT_VERSION = 1
@@ -84,6 +84,30 @@ def estabelecimento_remote(month: str, part: int) -> RemoteFile:
         url=mirror.raw_file_url(month, name),
         kind="estabelecimentos",
     )
+
+
+def single_file_remote(table_name: str, month: str) -> RemoteFile:
+    """Return the IA mirror source for a table with EXACTLY ONE physical
+    file per ``sources.canonical_inventory()`` (e.g. ``simples`` --
+    ``estabelecimento``/``empresa``/``socio`` are NOT single-file, so they
+    don't use this: estabelecimento keeps its own per-part
+    ``estabelecimento_remote`` above, and empresa's ten-part resolution
+    lives in ``canonical_history_empresa.py``). Shared, reusable single-file
+    remote resolution, so a new single-file table's historical runner
+    doesn't need to reimplement this lookup.
+    """
+    if not is_valid_month(month):
+        raise ValueError(f"month must be YYYY-MM, got {month!r}")
+    table = registry.main_table(table_name)
+    matches = [spec for spec in sources.canonical_inventory() if spec.kind == table.kind]
+    if len(matches) != 1:
+        raise ValueError(
+            f"{table_name}: single_file_remote requires exactly one physical file, "
+            f"sources.canonical_inventory() declares {len(matches)}: "
+            f"{[spec.name for spec in matches]!r}"
+        )
+    name = matches[0].name
+    return RemoteFile(name=name, url=mirror.raw_file_url(month, name), kind=table.kind)
 
 
 def _paths(root: Path, part: int) -> dict[str, Path]:

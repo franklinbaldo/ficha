@@ -21,12 +21,12 @@ from ficha_etl.registry import (
 )
 
 
-def test_estabelecimento_and_empresa_have_canonical_contracts_simples_socio_dont():
+def test_estabelecimento_empresa_and_simples_have_canonical_contracts_socio_doesnt():
     by_name = {table.name: table for table in registry.MAIN_TABLES}
 
     assert by_name["estabelecimento"].canonical is registry.ESTABELECIMENTO_CANONICAL
     assert by_name["empresa"].canonical is registry.EMPRESA_CANONICAL
-    assert by_name["simples"].canonical is None
+    assert by_name["simples"].canonical is registry.SIMPLES_CANONICAL
     assert by_name["socio"].canonical is None
 
 
@@ -430,3 +430,134 @@ def test_empresa_canonical_projection_casts_capital_social_correctly():
     types = {name: duckdb_type for name, duckdb_type, *_ in described}
     assert types["cnpj_basico"] == "VARCHAR"
     assert types["capital_social"] == "DECIMAL(18,2)"
+
+
+# -----------------------------------------------------------------------------
+# SIMPLES_CANONICAL -- #97 slice 4 (RFC 0001 Fase 3)
+# -----------------------------------------------------------------------------
+
+
+def test_simples_canonical_preserves_every_raw_column_once_in_source_order():
+    spec = registry.SIMPLES_CANONICAL
+    mapped_sources = [column.source for column in spec.columns]
+
+    assert mapped_sources == list(registry.SIMPLES_COLUMNS)
+    assert len(mapped_sources) == len(set(mapped_sources))
+
+
+def test_simples_primary_key_is_required_failing_and_critical():
+    spec = registry.SIMPLES_CANONICAL
+    by_name = {column.name: column for column in spec.columns}
+
+    assert spec.schema_version == 1
+    assert spec.primary_key == ("cnpj_basico",)
+    key_column = by_name["cnpj_basico"]
+    assert key_column.duckdb_type == "VARCHAR"
+    assert key_column.nullable is False
+    assert key_column.invalid_policy == "fail"
+    assert key_column.publication_critical is True
+
+
+def test_simples_date_columns_are_typed_with_null_and_count_policy():
+    spec = registry.SIMPLES_CANONICAL
+    by_name = {column.name: column for column in spec.columns}
+    date_fields = {
+        "data_opcao_simples",
+        "data_exclusao_simples",
+        "data_opcao_mei",
+        "data_exclusao_mei",
+    }
+
+    for name in date_fields:
+        column = by_name[name]
+        assert column.duckdb_type == "DATE"
+        assert column.nullable is True
+        assert column.invalid_policy == "null-and-count"
+        assert column.cast_sql == "try_strptime(nullif({source}, ''), '%Y%m%d')::DATE"
+
+
+def test_simples_other_fields_stay_varchar_and_optional():
+    spec = registry.SIMPLES_CANONICAL
+    by_name = {column.name: column for column in spec.columns}
+    other_fields = {"opcao_simples", "opcao_mei"}
+    date_fields = {
+        "data_opcao_simples",
+        "data_exclusao_simples",
+        "data_opcao_mei",
+        "data_exclusao_mei",
+    }
+
+    assert other_fields == set(registry.SIMPLES_COLUMNS) - {"cnpj_basico"} - date_fields
+    for name in other_fields:
+        column = by_name[name]
+        assert column.duckdb_type == "VARCHAR"
+        assert column.nullable is True
+        assert column.invalid_policy == "preserve-as-string"
+        assert column.publication_critical is False
+
+
+def test_simples_lineage_and_physical_layout_match_estabelecimento_pattern():
+    spec = registry.SIMPLES_CANONICAL
+
+    assert spec.lineage == registry.ESTABELECIMENTO_CANONICAL.lineage
+    assert spec.bucket_key is None
+    assert spec.codec is None
+    assert spec.row_group_size is None
+
+
+def test_simples_duplicate_semantics_are_declared_not_estabelecimento_defaults():
+    """Simples' raw input is known NOT to be unique by cnpj_basico --
+    `_dedupe_cnpj_basico_table` (transform.py) already collapses both exact
+    and conflicting duplicates for it, the same call as for empresa (see
+    `load_main_tables_into_duckdb`'s loop over `("empresa", "simples")`).
+    This pins that the registry declares that ACTUAL current behavior
+    instead of defaulting to estabelecimento's "unique" assumption, which
+    would misrepresent it -- regardless of whether any one historical
+    snapshot happens to measure zero duplicates.
+    """
+    assert registry.SIMPLES_CANONICAL.source_cardinality == "duplicates-expected"
+    assert registry.SIMPLES_CANONICAL.duplicate_policy == "deterministic-collapse"
+
+
+def test_simples_canonical_projection_casts_dates_correctly():
+    source_columns = registry.SIMPLES_COLUMNS
+    con = duckdb.connect()
+    try:
+        definitions = ", ".join(
+            f"{registry.quote_identifier(name)} VARCHAR" for name in source_columns
+        )
+        con.execute(f"CREATE TABLE raw_simples ({definitions})")
+
+        base = dict.fromkeys(source_columns, "")
+        valid = {**base, "cnpj_basico": "00000001", "data_opcao_simples": "20200115"}
+        blank = {**base, "cnpj_basico": "00000002", "data_opcao_simples": ""}
+        malformed = {**base, "cnpj_basico": "00000003", "data_opcao_simples": "not-a-date"}
+
+        placeholders = ", ".join("?" for _ in source_columns)
+        con.executemany(
+            f"INSERT INTO raw_simples VALUES ({placeholders})",
+            [[row[name] for name in source_columns] for row in (valid, blank, malformed)],
+        )
+
+        projection = registry.canonical_projection_sql(
+            registry.SIMPLES_CANONICAL, source_alias="raw_simples"
+        )
+        rows = con.execute(
+            f"SELECT {projection} FROM raw_simples AS raw_simples ORDER BY cnpj_basico"
+        ).fetchall()
+        described = con.execute(
+            f"DESCRIBE SELECT {projection} FROM raw_simples AS raw_simples"
+        ).fetchall()
+    finally:
+        con.close()
+
+    positions = {name: index for index, name in enumerate(source_columns)}
+    date_idx = positions["data_opcao_simples"]
+    assert rows[0][date_idx] == date(2020, 1, 15)
+    assert rows[1][date_idx] is None  # blank
+    assert rows[2][date_idx] is None  # malformed nonblank
+
+    types = {name: duckdb_type for name, duckdb_type, *_ in described}
+    assert types["cnpj_basico"] == "VARCHAR"
+    assert types["data_opcao_simples"] == "DATE"
+    assert types["opcao_simples"] == "VARCHAR"

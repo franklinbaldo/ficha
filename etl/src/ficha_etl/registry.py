@@ -429,6 +429,46 @@ EMPRESA_CANONICAL = ParquetSpec(
     duplicate_policy="deterministic-collapse",
 )
 
+_SIMPLES_REQUIRED_COLUMNS = frozenset({"cnpj_basico"})
+_SIMPLES_DATE_COLUMNS = frozenset(
+    {"data_opcao_simples", "data_exclusao_simples", "data_opcao_mei", "data_exclusao_mei"}
+)
+
+SIMPLES_CANONICAL = ParquetSpec(
+    schema_version=1,
+    columns=tuple(
+        _date_column(name)
+        if name in _SIMPLES_DATE_COLUMNS
+        else _string_column(
+            name,
+            required=name in _SIMPLES_REQUIRED_COLUMNS,
+            publication_critical=name in _SIMPLES_REQUIRED_COLUMNS,
+        )
+        for name in SIMPLES_COLUMNS
+    ),
+    primary_key=("cnpj_basico",),
+    # `transform.load_main_tables_into_duckdb` already runs
+    # `_dedupe_cnpj_basico_table` for "simples" -- the exact same call, on
+    # the exact same key, as "empresa" (see the loop over
+    # `("empresa", "simples")` there). The raw source is therefore ALREADY
+    # known, in production, not to be unique by `cnpj_basico` -- declaring
+    # `source_cardinality="unique"` here would misstate a fact the loader
+    # itself already contradicts, regardless of whether any one historical
+    # snapshot happens to contain zero duplicates (see the real run
+    # documented in docs/canonical-simples-history.md, which measured this
+    # for 2026-04 specifically -- a measured result for that snapshot, not
+    # a reason to declare the raw source unique in general).
+    #
+    # "deterministic-collapse" is the CURRENT, transitional production
+    # policy, not a verified semantic truth -- issue #76 tracks the open
+    # decision of whether genuinely conflicting duplicates (different
+    # payload, same key) should instead fail or be quarantined. Nothing
+    # here resolves #76: no fail-on-conflict behavior, no quarantine
+    # writer, no change to `_dedupe_cnpj_basico_table` or the monthly ETL.
+    source_cardinality="duplicates-expected",
+    duplicate_policy="deterministic-collapse",
+)
+
 
 # A ordem declarativa documenta o schema; a estratégia física de carga pode
 # usar uma ordem própria em transform.py.
@@ -445,7 +485,12 @@ MAIN_TABLES: tuple[TableSpec, ...] = (
         source=CsvSpec(columns=ESTABELECIMENTO_COLUMNS),
         canonical=ESTABELECIMENTO_CANONICAL,
     ),
-    TableSpec(name="simples", kind="simples", source=CsvSpec(columns=SIMPLES_COLUMNS)),
+    TableSpec(
+        name="simples",
+        kind="simples",
+        source=CsvSpec(columns=SIMPLES_COLUMNS),
+        canonical=SIMPLES_CANONICAL,
+    ),
     TableSpec(name="socio", kind="socios", source=CsvSpec(columns=SOCIO_COLUMNS)),
 )
 
