@@ -384,6 +384,47 @@ def _invalid_casts(
     return result
 
 
+def _sample_keys_sql(raw_table: str, spec: registry.ParquetSpec, size: int) -> str:
+    """SQL selecting the deterministic sample of up to ``size`` primary keys.
+
+    Every candidate row's primary key is ranked by ``hash()`` of the key
+    text salted with the fixed sample seed -- a pure function of VALUE, not
+    of which physical row/part/scan-order it came from -- and the top
+    ``size`` by that rank are kept. This is the ONLY place that ranking is
+    computed: both :func:`_sample` (the fingerprint) and
+    :func:`_sample_mismatches` (raw-to-canonical validation) select through
+    this exact query, so they always describe the identical set of rows --
+    two independent samples could otherwise silently drift (fingerprint
+    describing keys A/B/C while mismatch validation ran over D/E/F).
+
+    Deliberately NOT ``USING SAMPLE reservoir(...)``: reservoir sampling's
+    selection depends on the order rows are fed to the sampling operator, so
+    even with ``REPEATABLE(seed)`` a different input part/row order (or scan
+    strategy) could select a different subset once the sample is smaller
+    than the dataset.
+    """
+    keys = [registry.quote_identifier(name) for name in spec.primary_key]
+    key_list = ", ".join(keys)
+    key_text = " || '|' || ".join(f"CAST({key} AS VARCHAR)" for key in keys)
+    rank_expr = f"hash(({key_text}) || '|{_SAMPLE_SEED}')"
+    return (
+        f"SELECT {key_list} FROM (\n"
+        f"    SELECT {key_list}, {rank_expr} AS _sample_rank FROM {raw_table}\n"
+        f") ORDER BY _sample_rank, {key_list} LIMIT {size}"
+    )
+
+
+def _selected_sample_keys(
+    con: duckdb.DuckDBPyConnection, raw_table: str, spec: registry.ParquetSpec, size: int
+) -> list[tuple]:
+    """Run :func:`_sample_keys_sql` and return the selected primary-key
+    tuples (in hash-rank order). Exposed so callers/tests can discover
+    exactly which keys a given ``raw_table``/``size`` selects without
+    hardcoding assumptions about which key ``hash()`` ranks first.
+    """
+    return con.execute(_sample_keys_sql(raw_table, spec, size)).fetchall()
+
+
 def _sample(
     con: duckdb.DuckDBPyConnection,
     raw_table: str,
@@ -391,39 +432,21 @@ def _sample(
     requested: int,
     rows_available: int,
 ) -> tuple[int, str]:
-    """Select up to ``requested`` primary keys and return (count, a SHA256
-    fingerprint of the selected keys).
+    """Select up to ``requested`` primary keys (see :func:`_sample_keys_sql`)
+    and return (count, a SHA256 fingerprint of the selected keys).
 
-    Selection is a deterministic function of each row's primary-key VALUES,
-    not of scan order: every candidate key is ranked by ``hash()`` (a pure
-    function of the key text, independent of which physical row/part it came
-    from) salted with the fixed sample seed, and the top ``requested`` keys
-    by that rank are kept. This is NOT ``USING SAMPLE reservoir(...)`` --
-    reservoir sampling's selection depends on the order rows are fed to the
-    sampling operator, so even with ``REPEATABLE(seed)`` a different input
-    part/row order (or scan strategy) could select a different subset of
-    rows once the sample is smaller than the dataset, silently changing
-    ``sample_fingerprint`` for identical logical input. The final fingerprint
-    is computed over the selected keys re-sorted by primary-key value (not
-    by hash rank), matching the pre-existing fingerprint contract's ordering.
+    The fingerprint is computed over the selected keys re-sorted by
+    primary-key value (not by hash rank), matching the pre-existing
+    fingerprint contract's ordering.
     """
     size = min(max(0, requested), rows_available)
     if not size:
         return 0, hashlib.sha256(b"[]").hexdigest()
     keys = [registry.quote_identifier(name) for name in spec.primary_key]
     key_list = ", ".join(keys)
-    key_text = " || '|' || ".join(f"CAST({key} AS VARCHAR)" for key in keys)
-    rank_expr = f"hash(({key_text}) || '|{_SAMPLE_SEED}')"
     rows = con.execute(
-        f"""
-        WITH ranked AS (
-            SELECT {key_list}, {rank_expr} AS _sample_rank FROM {raw_table}
-        ),
-        selected AS (
-            SELECT {key_list} FROM ranked ORDER BY _sample_rank, {key_list} LIMIT {size}
-        )
-        SELECT {key_list} FROM selected ORDER BY {key_list}
-        """
+        f"WITH selected AS (\n{_sample_keys_sql(raw_table, spec, size)}\n)\n"
+        f"SELECT {key_list} FROM selected ORDER BY {key_list}"
     ).fetchall()
     encoded = json.dumps(rows, default=str, separators=(",", ":")).encode()
     return len(rows), hashlib.sha256(encoded).hexdigest()
@@ -482,11 +505,23 @@ def _sample_mismatches(
     """``source_file_sql`` mirrors ``_select_sql``'s parameter -- a quoted
     literal for single-part writes, or ``src.<tag column>`` for dataset
     writes, so the written ``_source_file`` lineage is checked against
-    whichever expression actually produced it."""
+    whichever expression actually produced it.
+
+    Validates raw-to-canonical consistency for the SAME deterministic
+    sample :func:`_sample` fingerprinted -- joined in through
+    :func:`_sample_keys_sql`, not an independently reservoir-sampled set of
+    rows, so ``sample_fingerprint`` and ``sample_mismatches`` always
+    describe the identical rows. By this point key diagnostics have already
+    passed and any deterministic collapse has already run, so every primary
+    key in ``raw_table`` is unique and non-blank -- joining ``raw_table`` to
+    the selected-key relation through every primary-key component returns
+    exactly one row per selected key.
+    """
     if not size:
         return 0
     keys = [registry.quote_identifier(name) for name in spec.primary_key]
     join = " AND ".join(f"can.{key} = src.{key}" for key in keys)
+    sample_join = " AND ".join(f"src.{key} = dsk.{key}" for key in keys)
     checks = ['can."_source_file" IS NULL']
     for column in spec.columns:
         raw = f"src.{registry.quote_identifier(column.source)}"
@@ -516,9 +551,12 @@ def _sample_mismatches(
     return int(
         con.execute(
             f"""
-            WITH sampled AS (
-                SELECT * FROM {raw_table}
-                USING SAMPLE reservoir({size} ROWS) REPEATABLE({_SAMPLE_SEED})
+            WITH _deterministic_sample AS (
+                {_sample_keys_sql(raw_table, spec, size)}
+            ),
+            sampled AS (
+                SELECT src.* FROM {raw_table} AS src
+                JOIN _deterministic_sample AS dsk ON {sample_join}
             )
             SELECT COUNT(*)
             FROM sampled AS src

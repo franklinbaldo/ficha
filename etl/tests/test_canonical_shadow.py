@@ -610,6 +610,96 @@ def test_empresa_dataset_sample_fingerprint_independent_of_scan_order(tmp_path):
     assert report_fwd.sample_fingerprint == report_rev.sample_fingerprint
 
 
+def test_sample_mismatches_validates_the_same_keys_sample_fingerprinted(tmp_path):
+    """_sample_mismatches must join through the SAME deterministic sample-key
+    selection _sample() fingerprinted, not an independently reservoir-sampled
+    (and therefore potentially different) set of rows. Six distinct keys,
+    sample_size=3, reversed part+row order in the second run. Corrupts the
+    WRITTEN canonical Parquet directly (post-write, since the writer's own
+    round-trip check would otherwise fail closed on a real mismatch) for one
+    key inside the deterministic sample and one key outside it: only the
+    in-sample corruption may be detected, proving fingerprint and validation
+    share one bounded subset rather than two unrelated samples. Which key
+    lands "inside" vs "outside" is discovered via _selected_sample_keys, not
+    hardcoded, since that depends on DuckDB's hash() ranking.
+    """
+    table = registry.main_table("empresa")
+    spec = table.canonical
+    sample_size = 3
+    all_keys = [f"{n:08d}" for n in range(1, 7)]
+
+    def run(tag: str, *, reverse_parts: bool, reverse_rows: bool):
+        rows_by_part = {
+            "Empresas0.zip": [_empresa_row(cnpj_basico=k) for k in all_keys[:3]],
+            "Empresas5.zip": [_empresa_row(cnpj_basico=k) for k in all_keys[3:]],
+        }
+        if reverse_rows:
+            rows_by_part = {name: list(reversed(rows)) for name, rows in rows_by_part.items()}
+        parts = _write_empresa_dataset(tmp_path / f"dataset-{tag}", rows_by_part)
+        if reverse_parts:
+            parts = list(reversed(parts))
+        output = tmp_path / f"part-{tag}.parquet"
+
+        con = duckdb.connect()
+        try:
+            report = canonical_shadow.write_canonical_dataset(
+                con, "empresa", parts, output, source_snapshot="2026-07", sample_size=sample_size
+            )
+            assert report.status == "ok"
+            assert report.sample_mismatches == 0  # writer's own round-trip check passed
+
+            raw_table = canonical_shadow._raw_table_name("empresa")
+            selected = canonical_shadow._selected_sample_keys(con, raw_table, spec, sample_size)
+            selected_keys = {row[0] for row in selected}
+            outside_keys = set(all_keys) - selected_keys
+            assert len(selected_keys) == sample_size
+            assert outside_keys  # sanity: sample_size < total distinct keys
+
+            in_sample_key = sorted(selected_keys)[0]
+            outside_key = sorted(outside_keys)[0]
+
+            con.execute(
+                "CREATE OR REPLACE TABLE _corrupt_stage AS SELECT * FROM read_parquet(?)",
+                [str(output)],
+            )
+            con.execute(
+                "UPDATE _corrupt_stage SET razao_social = 'CORRUPTED' WHERE cnpj_basico = ?",
+                [in_sample_key],
+            )
+            con.execute(
+                "UPDATE _corrupt_stage SET razao_social = 'CORRUPTED' WHERE cnpj_basico = ?",
+                [outside_key],
+            )
+            corrupted_path = tmp_path / f"corrupted-{tag}.parquet"
+            con.execute(
+                f"COPY _corrupt_stage TO "
+                f"{canonical_shadow._literal(str(corrupted_path))} (FORMAT PARQUET)"
+            )
+
+            source_file_sql = f"src.{canonical_shadow._SOURCE_FILE_TAG}"
+            mismatches = canonical_shadow._sample_mismatches(
+                con,
+                raw_table,
+                spec,
+                corrupted_path,
+                sample_size,
+                source_file_sql,
+                "2026-07",
+            )
+        finally:
+            con.close()
+        return mismatches
+
+    mismatches_fwd = run("fwd", reverse_parts=False, reverse_rows=False)
+    mismatches_rev = run("rev", reverse_parts=True, reverse_rows=True)
+
+    # Only the in-sample corruption is counted -- the outside-sample one is
+    # invisible to validation, proving the bounded subset is respected.
+    assert mismatches_fwd == 1
+    assert mismatches_rev == 1
+    assert mismatches_fwd == mismatches_rev
+
+
 def test_empresa_dataset_counts_include_cross_part_occurrences(tmp_path):
     """duplicate_key_count/duplicate_key_rows must reflect the FULL logical
     dataset, not just within-part duplicates -- a key repeated across three
