@@ -167,8 +167,9 @@ def test_run_offline_complete_dataset_writes_durable_manifest(tmp_path):
 
     resource = manifest["resource_summary"]
     assert resource["files_read"] == 10  # not the single-part runner's hardcoded 1
-    # Pinned against metrics.StageMetrics.to_json_dict()'s real key names
-    # (wall_seconds/rss_peak_delta_mib) -- a mismatched key here would
+    assert resource["scope"] == "canonical-writer-stage"  # not total orchestration time
+    # Pinned against metrics.StageMetrics.to_json_dict()'s real, STABLE key
+    # names (wall_seconds/rss_peak_delta_mib) -- a mismatched key here would
     # silently produce an all-null resource_summary instead of failing.
     assert isinstance(resource["wall_seconds"], (int, float))
     assert resource["wall_seconds"] >= 0
@@ -275,6 +276,10 @@ def test_multiple_zip_members_fail_with_durable_failure_evidence(tmp_path):
     assert "expected exactly one" in failure["error"]
     # Sources processed before the failure are still recorded.
     assert any(entry["name"] == "Empresas0.zip" for entry in failure["sources"])
+    # The downloaded (copied-from-override) ZIP that FAILED extraction must
+    # not linger on disk just because its own extraction failed -- nor may
+    # any earlier successfully-processed part's ZIP.
+    assert not any((root / "run" / "raw").glob("*.zip"))
 
 
 def test_cli_rejects_malformed_zip_override(tmp_path):
@@ -282,6 +287,83 @@ def test_cli_rejects_malformed_zip_override(tmp_path):
         ["--month", "2026-04", "--root", str(tmp_path / "run"), "--zip", "not-a-valid-entry"]
     )
     assert result == 2
+
+
+def test_cli_rejects_duplicate_zip_override_name(tmp_path):
+    zip_path = tmp_path / "Empresas0.zip"
+    zip_path.write_bytes(_zip_bytes([_row()]))
+    result = canonical_history_empresa.main(
+        [
+            "--month",
+            "2026-04",
+            "--root",
+            str(tmp_path / "run"),
+            "--zip",
+            f"Empresas0.zip={zip_path}",
+            "--zip",
+            f"Empresas0.zip={zip_path}",
+        ]
+    )
+    assert result == 2
+    assert not (tmp_path / "run").exists()
+
+
+def test_run_rejects_override_name_outside_expected_part_set(tmp_path):
+    zip_path = tmp_path / "fixture.zip"
+    zip_path.write_bytes(_zip_bytes([_row()]))
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise AssertionError(
+            f"network was touched ({request.method} {request.url}) despite an invalid "
+            "override name that should fail before any I/O"
+        )
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(ValueError, match="not in the expected empresa part set"):
+            canonical_history_empresa.run_historical_empresa_dataset(
+                "2026-04",
+                tmp_path / "run",
+                zip_overrides={"Empresas10.zip": zip_path},  # not a real part name
+                client=client,
+            )
+
+
+def test_run_validates_every_override_before_any_download(tmp_path):
+    """A bad override (missing file) among several valid ones must fail
+    BEFORE preflight/download touches the network for the other parts --
+    proven here by a client that raises if it is ever called at all."""
+    root = tmp_path / "dataset"
+    rows_by_part = {name: [_row(cnpj_basico=f"{i:08d}")] for i, name in enumerate(_ALL_PARTS)}
+    overrides = _write_offline_dataset(root / "fixtures", rows_by_part)
+    overrides["Empresas4.zip"] = root / "fixtures" / "does-not-exist.zip"  # never written
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise AssertionError(
+            f"network was touched ({request.method} {request.url}) despite an invalid "
+            "override that should fail before any download starts"
+        )
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(FileNotFoundError, match="Empresas4.zip"):
+            canonical_history_empresa.run_historical_empresa_dataset(
+                "2026-04", root / "run", zip_overrides=overrides, client=client
+            )
+    assert not (root / "run").exists()
+
+
+def test_run_rejects_override_that_is_not_a_valid_zip(tmp_path):
+    root = tmp_path / "dataset"
+    rows_by_part = {name: [_row(cnpj_basico=f"{i:08d}")] for i, name in enumerate(_ALL_PARTS)}
+    overrides = _write_offline_dataset(root / "fixtures", rows_by_part)
+    not_a_zip = root / "fixtures" / "Empresas4.zip"
+    not_a_zip.write_bytes(b"not actually a zip file")
+    overrides["Empresas4.zip"] = not_a_zip
+
+    with pytest.raises(RuntimeError, match="not a valid ZIP"):
+        canonical_history_empresa.run_historical_empresa_dataset(
+            "2026-04", root / "run", zip_overrides=overrides
+        )
+    assert not (root / "run").exists()
 
 
 def test_cli_offline_end_to_end(tmp_path, capsys):

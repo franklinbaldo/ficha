@@ -148,28 +148,43 @@ jobs:
           PY
 
       - name: Validate the complete ten-part set is required
-        # A deliberately nonexistent IA snapshot (not the real 2026-04 used
-        # above) so the eight non-overridden parts' preflight HEADs return a
-        # fast non-200 (archive.org answers a nonexistent item's file path
-        # with 503, not 404, but preflight treats any non-200 as missing)
-        # instead of the run silently succeeding by falling back to the real
-        # mirror -- this step must never download real snapshot data, only
-        # issue a handful of fast HEAD requests that are expected to fail.
+        # Fully offline: an httpx.MockTransport stands in for the network so
+        # this step -- like the rest of the PR smoke job -- never depends on
+        # real network availability. Calls run_historical_empresa_dataset()
+        # directly (not the CLI, which always builds its own real client) so
+        # the mock client can be injected.
         run: |
-          set +e
-          uv run python -m ficha_etl.canonical_history_empresa \
-            --month 1900-01 \
-            --root .canonical-empresa-smoke/run-incomplete \
-            --sample-size 10 \
-            --zip "Empresas0.zip=.canonical-empresa-smoke/fixtures/Empresas0.zip" \
-            --zip "Empresas1.zip=.canonical-empresa-smoke/fixtures/Empresas1.zip"
-          status=$?
-          set -e
-          if [ "$status" -eq 0 ]; then
-            echo "::error::runner accepted an incomplete (2/10) source set -- must fail closed"
-            exit 1
-          fi
-          echo "confirmed: incomplete source set fails closed (exit $status)"
+          uv run python - <<'PY'
+          import httpx
+
+          from pathlib import Path
+
+          from ficha_etl import canonical_history_empresa
+
+          def handler(request: httpx.Request) -> httpx.Response:
+              return httpx.Response(503)  # every non-overridden remote "unavailable"
+
+          overrides = {
+              "Empresas0.zip": Path(".canonical-empresa-smoke/fixtures/Empresas0.zip"),
+              "Empresas1.zip": Path(".canonical-empresa-smoke/fixtures/Empresas1.zip"),
+          }
+          with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+              try:
+                  canonical_history_empresa.run_historical_empresa_dataset(
+                      "2026-04",
+                      Path(".canonical-empresa-smoke/run-incomplete"),
+                      sample_size=10,
+                      zip_overrides=overrides,
+                      client=client,
+                  )
+              except RuntimeError as exc:
+                  assert "preflight failed" in str(exc), exc
+                  print(f"confirmed: incomplete source set fails closed ({exc})")
+              else:
+                  raise AssertionError(
+                      "runner accepted an incomplete (2/10) source set -- must fail closed"
+                  )
+          PY
 
   historical:
     if: github.event_name == 'workflow_dispatch'
@@ -252,7 +267,8 @@ jobs:
                 "- Schema match: `" + (.quality_summary.schema_matches|tostring) + "`",
                 "- Sample mismatches (n=" + (.quality_summary.sample_size|tostring) + "): `" + (.quality_summary.sample_mismatches|tostring) + "`",
                 "- Output: `" + (.output.bytes|tostring) + " bytes`, sha256 `" + .output.sha256 + "`",
-                "- Wall time: `" + (.resource_summary.wall_seconds|tostring) + "s`, RSS peak: `" + (.resource_summary.rss_peak_mib|tostring) + " MiB`, filesystem peak: `" + (.resource_summary.filesystem_used_peak_percent|tostring) + "%`"
+                "- Canonical writer stage wall time (NOT total job time -- see the job duration in the Actions UI for that): `" + (.resource_summary.wall_seconds|tostring) + "s`",
+                "- RSS peak: `" + (.resource_summary.rss_peak_mib|tostring) + " MiB`, filesystem peak: `" + (.resource_summary.filesystem_used_peak_percent|tostring) + "%`"
               ' "$MANIFEST"
             elif [ -f "$FAILURE" ]; then
               jq -r '
