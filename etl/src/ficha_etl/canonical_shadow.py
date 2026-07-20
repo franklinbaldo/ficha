@@ -12,6 +12,7 @@ import json
 import logging
 import shutil
 import sys
+import uuid
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Literal
@@ -125,7 +126,7 @@ def _invalid_casts(con: duckdb.DuckDBPyConnection, spec: registry.ParquetSpec) -
         result[column.name] = int(
             con.execute(
                 f"SELECT COUNT(*) FROM {_RAW_TABLE} AS src "
-                f"WHERE {raw} IS NOT NULL AND TRIM({raw}) NOT IN ('', '0') "
+                f"WHERE {raw} IS NOT NULL AND TRIM({raw}) <> '' "
                 f"AND ({cast}) IS NULL"
             ).fetchone()[0]
         )
@@ -310,7 +311,7 @@ def write_estabelecimento_canonical_part(
         raise CanonicalValidationError(message, report)
 
     output.parent.mkdir(parents=True, exist_ok=True)
-    partial = output.with_name(f".{output.name}.partial")
+    partial = output.with_name(f".{output.name}.{uuid.uuid4().hex}.partial")
     partial.unlink(missing_ok=True)
     try:
         con.execute(

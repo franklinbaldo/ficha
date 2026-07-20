@@ -99,10 +99,10 @@ def test_writer_emits_atomic_typed_part_and_raw_to_canonical_report(tmp_path):
     assert report.duplicate_key_rows == 0
     assert report.invalid_casts_by_column == {
         "data_situacao_cadastral": 1,
-        "data_inicio_atividade": 0,
+        "data_inicio_atividade": 1,
         "data_situacao_especial": 1,
     }
-    assert report.invalid_casts_total == 2
+    assert report.invalid_casts_total == 3
     assert report.sample_size == 2
     assert len(report.sample_fingerprint) == 64
     assert report.sample_mismatches == 0
@@ -110,7 +110,7 @@ def test_writer_emits_atomic_typed_part_and_raw_to_canonical_report(tmp_path):
     assert report.bytes_written == output.stat().st_size
     assert report.codec == "ZSTD"
     assert report.row_group_size == 200_000
-    assert not output.with_name(f".{output.name}.partial").exists()
+    assert not list(output.parent.glob(f".{output.name}.*.partial"))
 
     assert str(rows[0][1]) == "2026-07-19"
     assert str(rows[0][2]) == "1999-12-31"
@@ -148,7 +148,7 @@ def test_required_key_gate_fails_before_replacing_existing_output(tmp_path):
     assert report.error is not None
     assert "required key failures" in report.error
     assert output.read_bytes() == b"existing-good-output"
-    assert not output.with_name(f".{output.name}.partial").exists()
+    assert not list(output.parent.glob(f".{output.name}.*.partial"))
 
 
 def test_duplicate_full_cnpj_gate_fails_with_excess_count(tmp_path):
