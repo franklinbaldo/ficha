@@ -13,6 +13,7 @@ import collections
 import json
 import logging
 import shutil
+import sys
 import time
 from pathlib import Path
 
@@ -37,7 +38,11 @@ def test_stage_measures_wall_clock_and_rss():
     assert len(recorder.stages) == 1
     m = recorder.stages[0]
     assert m.wall_seconds > 0
-    assert m.rss_peak_mib > 0
+    # Windows has no `resource` module (production is Linux-only); RSS is a
+    # documented 0.0 there rather than a real measurement, so only assert a
+    # real peak on the platforms that actually report one.
+    if sys.platform != "win32":
+        assert m.rss_peak_mib > 0
     assert m.rss_peak_delta_mib >= 0
 
 
@@ -837,7 +842,8 @@ def test_stage_integration_with_duckdb_query():
         m = recorder.stages[-1]
         assert m.rows_written == 1000
         assert m.wall_seconds >= 0
-        assert m.rss_peak_mib > 0
+        if sys.platform != "win32":
+            assert m.rss_peak_mib > 0
         assert m.to_json_dict()["rows_written"] == 1000
     finally:
         con.close()

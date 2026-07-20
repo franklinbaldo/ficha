@@ -10,7 +10,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import resource
 import shutil
 import subprocess
 import sys
@@ -88,7 +87,17 @@ def main() -> None:
             filesystem_peak = max(filesystem_peak, usage.used)
             filesystem_total = usage.total
 
-    child_usage_before = resource.getrusage(resource.RUSAGE_CHILDREN)
+    # resource (RUSAGE_CHILDREN) is POSIX-only -- this wrapper otherwise only
+    # touches subprocess/shutil/os.walk, all cross-platform, so the import is
+    # guarded here rather than at module level, and the CPU/RSS fields are
+    # None on Windows (documented as unavailable) instead of blocking the
+    # whole script from loading. Production/CI are Linux; this only matters
+    # for a dev running the wrapper locally on Windows.
+    has_rusage = sys.platform != "win32"
+    if has_rusage:
+        import resource
+
+        child_usage_before = resource.getrusage(resource.RUSAGE_CHILDREN)
     started = time.monotonic()
     process = subprocess.Popen(command)
     sample()
@@ -97,22 +106,36 @@ def main() -> None:
         sample()
     sample()
     wall_seconds = time.monotonic() - started
-    child_usage_after = resource.getrusage(resource.RUSAGE_CHILDREN)
 
     result = {
         "command": command,
         "exit_code": process.returncode,
         "wall_seconds": wall_seconds,
-        "child_user_cpu_seconds": child_usage_after.ru_utime - child_usage_before.ru_utime,
-        "child_system_cpu_seconds": child_usage_after.ru_stime - child_usage_before.ru_stime,
-        # Linux Actions runner: ru_maxrss is KiB.  This wrapper runs one command,
-        # so RUSAGE_CHILDREN is a useful process-tree peak envelope.
-        "child_rss_peak_mib": child_usage_after.ru_maxrss / 1024,
         "watched_peak_bytes": peaks,
         "watched_final_bytes": final_sizes,
         "filesystem_used_peak_bytes": filesystem_peak,
         "filesystem_total_bytes": filesystem_total,
     }
+    if has_rusage:
+        child_usage_after = resource.getrusage(resource.RUSAGE_CHILDREN)
+        result.update(
+            {
+                "child_user_cpu_seconds": child_usage_after.ru_utime - child_usage_before.ru_utime,
+                "child_system_cpu_seconds": child_usage_after.ru_stime
+                - child_usage_before.ru_stime,
+                # Linux Actions runner: ru_maxrss is KiB. This wrapper runs one
+                # command, so RUSAGE_CHILDREN is a useful process-tree peak envelope.
+                "child_rss_peak_mib": child_usage_after.ru_maxrss / 1024,
+            }
+        )
+    else:
+        result.update(
+            {
+                "child_user_cpu_seconds": None,
+                "child_system_cpu_seconds": None,
+                "child_rss_peak_mib": None,
+            }
+        )
     args.json.parent.mkdir(parents=True, exist_ok=True)
     args.json.write_text(json.dumps(result, indent=2))
     raise SystemExit(process.returncode)

@@ -14,7 +14,6 @@ import argparse
 import csv
 import json
 import random
-import resource
 import shutil
 import statistics
 import subprocess
@@ -102,6 +101,14 @@ def _rss_peak_mib() -> float:
     # Workers run on Linux in Actions. ru_maxrss is KiB there and is cumulative
     # for the lifetime of this worker process; callers must compare against a
     # baseline captured immediately before the measured loader region.
+    #
+    # resource is POSIX-only -- imported here, not at module level, so this
+    # script still loads on a Windows dev machine (0.0 there is a documented
+    # "not measured", not an error).
+    if sys.platform == "win32":
+        return 0.0
+    import resource
+
     return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
 
 
