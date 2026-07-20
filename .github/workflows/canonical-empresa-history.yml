@@ -1,0 +1,295 @@
+name: Canonical Shadow — historical empresa dataset
+
+on:
+  workflow_dispatch:
+    inputs:
+      month:
+        description: Historical IA snapshot (YYYY-MM)
+        required: true
+        default: '2026-04'
+        type: string
+      sample_size:
+        description: Deterministic reversible sample size
+        required: true
+        default: '1000'
+        type: string
+  pull_request:
+    paths:
+      - '.github/workflows/canonical-empresa-history.yml'
+      - 'etl/src/ficha_etl/canonical_history_empresa.py'
+      - 'etl/src/ficha_etl/canonical_shadow.py'
+      - 'etl/src/ficha_etl/canonical_history.py'
+      - 'etl/src/ficha_etl/registry.py'
+      - 'etl/src/ficha_etl/sources.py'
+      - 'etl/tests/test_canonical_history_empresa.py'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: canonical-empresa-history-${{ github.ref }}-${{ inputs.month || 'pr' }}
+  cancel-in-progress: false
+
+jobs:
+  smoke:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: etl
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+      - run: uv python install 3.11
+      - run: uv sync --frozen --extra dev
+
+      - name: Build ten offline empresa fixtures (with a deliberate cross-part duplicate)
+        run: |
+          uv run python - <<'PY'
+          import csv
+          import io
+          import zipfile
+          from pathlib import Path
+
+          from ficha_etl import registry
+
+          root = Path('.canonical-empresa-smoke/fixtures')
+          root.mkdir(parents=True, exist_ok=True)
+
+          def row(**overrides):
+              values = dict.fromkeys(registry.EMPRESA_COLUMNS, '')
+              values.update(
+                  cnpj_basico='00000001',
+                  razao_social='ACME LTDA',
+                  natureza_juridica='2062',
+                  qualificacao_responsavel='49',
+                  capital_social='150000,00',
+                  porte_empresa='03',
+              )
+              values.update(overrides)
+              return values
+
+          def write_zip(path, rows):
+              buffer = io.StringIO(newline='')
+              writer = csv.writer(
+                  buffer, delimiter=';', quotechar='"', quoting=csv.QUOTE_ALL, lineterminator='\n'
+              )
+              for r in rows:
+                  writer.writerow([r[name] for name in registry.EMPRESA_COLUMNS])
+              with zipfile.ZipFile(path, 'w', zipfile.ZIP_DEFLATED) as archive:
+                  archive.writestr(
+                      'K3241.K03200Y0.D60719.EMPRECSV', buffer.getvalue().encode('latin-1')
+                  )
+
+          # Every part gets one unique-keyed row; parts 0 and 6 additionally
+          # share a conflicting cnpj_basico -- the deliberate cross-part
+          # duplicate the writer must collapse to one canonical survivor.
+          for n in range(10):
+              rows = [row(cnpj_basico=f'{n:08d}')]
+              if n == 0:
+                  rows.append(row(cnpj_basico='00000099', razao_social='CONFLICT A'))
+              if n == 6:
+                  rows.append(row(cnpj_basico='00000099', razao_social='CONFLICT B'))
+              write_zip(root / f'Empresas{n}.zip', rows)
+          PY
+
+      - name: Run offline historical empresa dataset smoke
+        run: |
+          ZIP_ARGS=()
+          for n in 0 1 2 3 4 5 6 7 8 9; do
+            ZIP_ARGS+=(--zip "Empresas${n}.zip=.canonical-empresa-smoke/fixtures/Empresas${n}.zip")
+          done
+          uv run python -m ficha_etl.canonical_history_empresa \
+            --month 2026-04 \
+            --root .canonical-empresa-smoke/run \
+            --sample-size 10 \
+            "${ZIP_ARGS[@]}"
+
+      - name: Validate manifest, cross-part collapse and per-row lineage
+        run: |
+          MANIFEST=.canonical-empresa-smoke/run/evidence/empresa.history.json
+          jq -e '
+            .status == "ok" and
+            .table == "empresa" and
+            .month == "2026-04" and
+            (.sources | length) == 10 and
+            (.sources | all(.acquisition == "local-override")) and
+            .quality_summary.rows_raw == 12 and
+            .quality_summary.rows_canonical == 11 and
+            .quality_summary.duplicate_key_count == 1 and
+            .quality_summary.conflicting_key_count == 1 and
+            (.quality_summary.conflicting_sample[0].source_files | sort) == ["Empresas0.zip", "Empresas6.zip"] and
+            .resource_summary.files_read == 10 and
+            .output.sha256 and .quality.sha256 and .metrics.sha256
+          ' "$MANIFEST"
+
+          uv run python - <<'PY'
+          import duckdb
+
+          con = duckdb.connect()
+          rows = con.execute(
+              "SELECT cnpj_basico, _source_file FROM "
+              "read_parquet('.canonical-empresa-smoke/run/canonical/empresa.parquet') "
+              "ORDER BY cnpj_basico"
+          ).fetchall()
+          con.close()
+          assert len(rows) == 11, rows
+          by_key = dict(rows)
+          # Every non-conflicting row's lineage is exactly its own part.
+          for n in range(10):
+              if n in (0, 6):
+                  continue
+              assert by_key[f'{n:08d}'] == f'Empresas{n}.zip', (n, by_key[f'{n:08d}'])
+          # The conflict survivor's lineage is one of the two contributing parts.
+          assert by_key['00000099'] in ('Empresas0.zip', 'Empresas6.zip'), by_key['00000099']
+          print("per-row _source_file lineage OK")
+          PY
+
+      - name: Validate the complete ten-part set is required
+        # Fully offline: an httpx.MockTransport stands in for the network so
+        # this step -- like the rest of the PR smoke job -- never depends on
+        # real network availability. Calls run_historical_empresa_dataset()
+        # directly (not the CLI, which always builds its own real client) so
+        # the mock client can be injected.
+        run: |
+          uv run python - <<'PY'
+          import httpx
+
+          from pathlib import Path
+
+          from ficha_etl import canonical_history_empresa
+
+          def handler(request: httpx.Request) -> httpx.Response:
+              return httpx.Response(503)  # every non-overridden remote "unavailable"
+
+          overrides = {
+              "Empresas0.zip": Path(".canonical-empresa-smoke/fixtures/Empresas0.zip"),
+              "Empresas1.zip": Path(".canonical-empresa-smoke/fixtures/Empresas1.zip"),
+          }
+          with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+              try:
+                  canonical_history_empresa.run_historical_empresa_dataset(
+                      "2026-04",
+                      Path(".canonical-empresa-smoke/run-incomplete"),
+                      sample_size=10,
+                      zip_overrides=overrides,
+                      client=client,
+                  )
+              except RuntimeError as exc:
+                  assert "preflight failed" in str(exc), exc
+                  print(f"confirmed: incomplete source set fails closed ({exc})")
+              else:
+                  raise AssertionError(
+                      "runner accepted an incomplete (2/10) source set -- must fail closed"
+                  )
+          PY
+
+  historical:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    defaults:
+      run:
+        working-directory: etl
+    env:
+      PYTHONIOENCODING: utf-8
+      PYTHONUTF8: '1'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate inputs
+        id: inputs
+        env:
+          INPUT_MONTH: ${{ inputs.month }}
+          INPUT_SAMPLE_SIZE: ${{ inputs.sample_size }}
+        run: |
+          if ! [[ "$INPUT_MONTH" =~ ^[0-9]{4}-(0[1-9]|1[0-2])$ ]]; then
+            echo "::error::Invalid month '$INPUT_MONTH' — expected YYYY-MM"
+            exit 2
+          fi
+          if ! [[ "$INPUT_SAMPLE_SIZE" =~ ^[0-9]+$ ]]; then
+            echo "::error::Invalid sample_size '$INPUT_SAMPLE_SIZE' — expected a non-negative integer"
+            exit 2
+          fi
+          echo "month=$INPUT_MONTH" >> "$GITHUB_OUTPUT"
+          echo "sample_size=$INPUT_SAMPLE_SIZE" >> "$GITHUB_OUTPUT"
+          echo "root=.canonical-empresa-history/$INPUT_MONTH" >> "$GITHUB_OUTPUT"
+
+      - name: Free disk space
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /usr/local/share/powershell /usr/share/swift \
+                      "$AGENT_TOOLSDIRECTORY" || true
+          sudo apt-get clean
+          df -h /
+
+      - uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+      - run: uv python install 3.11
+      - run: uv sync --frozen
+
+      - name: Run historical canonical empresa dataset
+        env:
+          MONTH: ${{ steps.inputs.outputs.month }}
+          SAMPLE_SIZE: ${{ steps.inputs.outputs.sample_size }}
+          ROOT: ${{ steps.inputs.outputs.root }}
+        run: |
+          df -h /
+          uv run python -m ficha_etl.canonical_history_empresa \
+            --month "$MONTH" \
+            --root "$ROOT" \
+            --sample-size "$SAMPLE_SIZE"
+          df -h /
+
+      - name: Write summary
+        if: always()
+        env:
+          ROOT: ${{ steps.inputs.outputs.root }}
+        run: |
+          MANIFEST="$ROOT/evidence/empresa.history.json"
+          FAILURE="$ROOT/evidence/empresa.history.failure.json"
+          {
+            echo "## Historical canonical empresa dataset"
+            echo
+            if [ -f "$MANIFEST" ]; then
+              jq -r '
+                "- Status: `" + .status + "`",
+                "- Snapshot: `" + .month + "` (all ten Empresas0..9.zip parts)",
+                "- Source commit / run: `" + (.source_commit // "n/a") + "` / `" + (.workflow_run_id | tostring) + "`",
+                "- Rows raw / canonical: `" + (.quality_summary.rows_raw|tostring) + "` / `" + (.quality_summary.rows_canonical|tostring) + "`",
+                "- Duplicate keys / excess rows: `" + (.quality_summary.duplicate_key_count|tostring) + "` / `" + (.quality_summary.duplicate_key_rows|tostring) + "`",
+                "- Conflicting keys: `" + (.quality_summary.conflicting_key_count|tostring) + "`",
+                "- Required-key failures: `" + (.quality_summary.required_key_failures|tostring) + "`",
+                "- Schema match: `" + (.quality_summary.schema_matches|tostring) + "`",
+                "- Sample mismatches (n=" + (.quality_summary.sample_size|tostring) + "): `" + (.quality_summary.sample_mismatches|tostring) + "`",
+                "- Output: `" + (.output.bytes|tostring) + " bytes`, sha256 `" + .output.sha256 + "`",
+                "- Canonical writer stage wall time (NOT total job time -- see the job duration in the Actions UI for that): `" + (.resource_summary.wall_seconds|tostring) + "s`",
+                "- RSS peak: `" + (.resource_summary.rss_peak_mib|tostring) + " MiB`, filesystem peak: `" + (.resource_summary.filesystem_used_peak_percent|tostring) + "%`"
+              ' "$MANIFEST"
+            elif [ -f "$FAILURE" ]; then
+              jq -r '
+                "- Status: `" + .status + "`",
+                "- Snapshot: `" + .month + "`",
+                "- Sources processed before failure: `" + (.sources | length | tostring) + "/10`",
+                "- Error: `" + .error + "`"
+              ' "$FAILURE"
+            else
+              echo "- No orchestration manifest was produced."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload canonical dataset and evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: canonical-empresa-history-${{ steps.inputs.outputs.month }}-${{ github.run_id }}
+          path: |
+            etl/${{ steps.inputs.outputs.root }}/canonical/
+            etl/${{ steps.inputs.outputs.root }}/evidence/
+          if-no-files-found: warn
+          retention-days: 30
+          include-hidden-files: true

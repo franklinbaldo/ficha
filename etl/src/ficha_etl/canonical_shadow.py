@@ -1210,6 +1210,75 @@ def run_canonical_shadow_part(
     return report
 
 
+def run_canonical_shadow_dataset(
+    table_name: str,
+    parts: Sequence[tuple[Path, str]],
+    output: Path,
+    *,
+    source_snapshot: str,
+    work_dir: Path,
+    report_path: Path,
+    metrics_path: Path,
+    sample_size: int = 1_000,
+    keep_workdir: bool = False,
+) -> CanonicalPartReport:
+    """Use the production DuckDB profile and persist quality/resource
+    evidence, for a dataset-level (multi-part) canonical write -- the
+    metrics-wrapped, file-backed sibling of :func:`run_canonical_shadow_part`
+    for tables that must go through :func:`write_canonical_dataset` (see its
+    docstring). ``metrics.StageHandle.files_read`` reports ``len(parts)``,
+    not the single-part runner's hardcoded ``1``.
+    """
+    _, spec = _spec(table_name)
+    work_dir.mkdir(parents=True, exist_ok=True)
+    database = work_dir / f"canonical-{table_name}.duckdb"
+    temp = work_dir / "duckdb_tmp"
+    recorder = metrics.MetricsRecorder(
+        month=source_snapshot,
+        schema_version=str(spec.schema_version),
+        filesystem_path=work_dir,
+    )
+    con = _connection(database, temp)
+    recorder.capture_pragmas(con)
+    report: CanonicalPartReport | None = None
+    try:
+        with recorder.stage(
+            f"canonical_{table_name}_dataset", duckdb_tmp_dir=temp, workdir=work_dir
+        ) as handle:
+            try:
+                report = write_canonical_dataset(
+                    con,
+                    table_name,
+                    parts,
+                    output,
+                    source_snapshot=source_snapshot,
+                    sample_size=sample_size,
+                )
+            except CanonicalValidationError as exc:
+                report = exc.report
+                _record(handle, report)
+                handle.files_read = len(parts)
+                raise
+            _record(handle, report)
+            handle.files_read = len(parts)
+    finally:
+        con.close()
+        if report is not None:
+            report.write_json(report_path)
+        recorder.write_json(metrics_path)
+        if not keep_workdir:
+            database.unlink(missing_ok=True)
+            database.with_suffix(".duckdb.wal").unlink(missing_ok=True)
+            shutil.rmtree(temp, ignore_errors=True)
+            try:
+                work_dir.rmdir()
+            except OSError:
+                pass
+    if report is None:  # pragma: no cover
+        raise RuntimeError("shadow writer finished without a report")
+    return report
+
+
 def run_shadow_part(
     csv: Path,
     output: Path,
