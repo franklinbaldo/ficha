@@ -21,31 +21,47 @@ jobs:
       - name: Dispatch decision-grade evidence
         id: dispatch
         run: |
-          gh workflow run etl-evidence.yml \
-            --repo "$GITHUB_REPOSITORY" \
-            --ref "$TARGET_BRANCH" \
-            -f scale=500000 \
-            -f chunks=10 \
-            -f repeats=5 \
-            -f seed=20260719
+          dispatched=false
+          for attempt in $(seq 1 12); do
+            if gh workflow run etl-evidence.yml \
+              --repo "$GITHUB_REPOSITORY" \
+              --ref "$TARGET_BRANCH" \
+              -f scale=500000 \
+              -f chunks=10 \
+              -f repeats=5 \
+              -f seed=20260719; then
+              dispatched=true
+              break
+            fi
+            delay=$((attempt * 5))
+            echo "dispatch attempt $attempt failed; retrying in ${delay}s" >&2
+            sleep "$delay"
+          done
+          if [[ "$dispatched" != true ]]; then
+            echo 'workflow dispatch failed after retries' >&2
+            exit 1
+          fi
 
           run_id=''
-          for _ in $(seq 1 60); do
-            run_id=$(gh run list \
+          for attempt in $(seq 1 60); do
+            if runs=$(gh run list \
               --repo "$GITHUB_REPOSITORY" \
               --workflow etl-evidence.yml \
               --branch "$TARGET_BRANCH" \
               --event workflow_dispatch \
               --limit 20 \
-              --json databaseId,headSha \
-              --jq ".[] | select(.headSha == \"$TARGET_SHA\") | .databaseId" \
-              | head -n 1)
-            if [[ -n "$run_id" ]]; then
-              break
+              --json databaseId,headSha); then
+              run_id=$(jq -r ".[] | select(.headSha == \"$TARGET_SHA\") | .databaseId" \
+                <<< "$runs" | head -n 1)
+              if [[ -n "$run_id" && "$run_id" != null ]]; then
+                break
+              fi
+            else
+              echo "run-list attempt $attempt failed; retrying" >&2
             fi
             sleep 5
           done
-          if [[ -z "$run_id" ]]; then
+          if [[ -z "$run_id" || "$run_id" == null ]]; then
             echo 'could not resolve dispatched evidence run' >&2
             exit 1
           fi
@@ -61,10 +77,18 @@ jobs:
       - name: Download decision evidence
         run: |
           mkdir -p forwarded
-          gh run download "${{ steps.dispatch.outputs.run_id }}" \
-            --repo "$GITHUB_REPOSITORY" \
-            --name "etl-evidence-manual-evidence-${{ steps.dispatch.outputs.run_id }}" \
-            --dir forwarded
+          for attempt in $(seq 1 12); do
+            if gh run download "${{ steps.dispatch.outputs.run_id }}" \
+              --repo "$GITHUB_REPOSITORY" \
+              --name "etl-evidence-manual-evidence-${{ steps.dispatch.outputs.run_id }}" \
+              --dir forwarded; then
+              exit 0
+            fi
+            delay=$((attempt * 5))
+            echo "artifact download attempt $attempt failed; retrying in ${delay}s" >&2
+            sleep "$delay"
+          done
+          exit 1
 
       - name: Forward evidence artifact
         uses: actions/upload-artifact@v4
