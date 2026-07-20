@@ -251,6 +251,18 @@ Cada coluna tipada declara uma das políticas:
 
 Valores inválidos nunca devem desaparecer sem contagem. A política atual de tolerância a encoding deve evoluir de warning genérico para contagem verificável de linhas afetadas sempre que o motor permitir observá-la.
 
+**Status de implementação (Fase 2, slice `estabelecimento`):** a contagem de
+`null-and-count` está implementada e evidenciada (ver
+`docs/canonical-estabelecimento-history.md`) — mas o "respeita limite" ainda
+não tem nenhum limiar codificado em lugar nenhum: `canonical_shadow.py`
+conta `casts_invalid` sem comparar contra threshold algum, então um run com
+100% de casts inválidos numa coluna hoje passaria silenciosamente. `quarantine`
+também está só declarado no tipo (`registry.InvalidValuePolicy`), sem
+nenhuma coluna usando essa política nem writer que a implemente. Ambos são
+lacunas conhecidas, não bugs — a Fase 2 propositalmente ainda não decide layout
+físico nem política operacional final (ver limite deliberado em
+`docs/canonical-estabelecimento-shadow.md`).
+
 ## 9. Arquitetura proposta
 
 ```text
