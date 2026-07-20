@@ -64,10 +64,12 @@ baseline in this large run, so RSS deltas are zero by the documented cumulative
 semantics. This does not mean the loader used no memory; it means setup had
 already established a higher process-lifetime peak.
 
-## Remaining evidence gap
+## Gap at the time of this run — closed 2026-07-20
 
 The historical `verify_roundtrip` change (`ORDER BY random()` plus point lookups
-→ `reservoir REPEATABLE`) was not one of the four tracks in this run. Its old
-21× laptop result remains plausible but is still not a production-profile
-measurement. It must not be cited as settled decision-grade evidence until it is
-rerun under the current harness.
+→ `reservoir REPEATABLE`) was not one of the four tracks in this run, so it was
+correctly left unsettled here. The follow-up
+[`2026-07-20-roundtrip-verifier.md`](2026-07-20-roundtrip-verifier.md) closed that
+gap under the same production profile: the current single-query verifier measured
+0.1492 s median versus 14.8044 s for the normalized historical multi-query shape
+(99.2×), with matching samples and both correctness directions verified.
