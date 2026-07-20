@@ -378,9 +378,18 @@ ESTABELECIMENTO_CANONICAL = ParquetSpec(
         for name in ESTABELECIMENTO_COLUMNS
     ),
     primary_key=("cnpj_basico", "cnpj_ordem", "cnpj_dv"),
-    # Explícito, não só o default: o writer shadow (canonical_shadow.py) já
-    # falha fechado em chave duplicada para esta entidade -- ver PR #88's
-    # "duplicate full-CNPJ excess rows fail closed".
+    # Explícito, não só o default. CUIDADO: "unique" aqui é uma ASSUNÇÃO DE
+    # DESIGN, não um fato verificado em escala real -- o writer shadow
+    # (canonical_shadow.py) falha fechado em chave duplicada, mas só DENTRO
+    # de UMA parte (`EstabelecimentosN.zip`) processada por vez; nada no
+    # pipeline (legado ou shadow) verifica unicidade da chave completa
+    # ACROSS as dez partes de um snapshot. O roundtrip check
+    # (`assert_roundtrip`) também não pegaria isso: uma chave duplicada
+    # entre duas partes infla a contagem de `estabelecimento` e a de
+    # `cnpjs.parquet` igualmente (cada parte é escrita independentemente),
+    # então as contagens ainda batem. Rastreado em issue #100 -- verificar
+    # contra um snapshot real e completo antes de tratar esta declaração
+    # como confirmada.
     source_cardinality="unique",
     duplicate_policy="fail",
 )
@@ -400,12 +409,16 @@ EMPRESA_CANONICAL = ParquetSpec(
         for name in EMPRESA_COLUMNS
     ),
     primary_key=("cnpj_basico",),
-    # Unlike estabelecimento, the raw empresa input is NOT guaranteed unique
-    # by cnpj_basico -- production's `_dedupe_cnpj_basico_table` (transform.py)
-    # already collapses both exact and genuinely conflicting duplicates via a
-    # deterministic full-row-order pick. This declaration makes that existing
-    # behavior visible in the registry instead of pretending the raw input is
-    # already unique; it does not change what the loader does.
+    # Empresa's raw duplicates are confirmed by a real production incident,
+    # unlike estabelecimento's "unique" declaration above (an unverified
+    # design assumption -- see issue #100): PR #71 root-caused a real
+    # +532,104-row mismatch (first observed 2026-07) in the roundtrip-
+    # equivalence check to duplicate `cnpj_basico` values in actual RFB
+    # empresa/simples data fanning out a LEFT JOIN. `_dedupe_cnpj_basico_table`
+    # (transform.py) has collapsed both exact and genuinely conflicting
+    # duplicates ever since. This declaration makes that existing, evidence-
+    # backed behavior visible in the registry instead of pretending the raw
+    # input is already unique; it does not change what the loader does.
     #
     # "deterministic-collapse" is the CURRENT, transitional production policy,
     # not a verified semantic truth -- issue #76 tracks the open decision of
