@@ -1,0 +1,446 @@
+name: Consolidate Canonical Shadow Once
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/consolidate-canonical-shadow-once.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  consolidate:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+      - name: Consolidate on canonical.py
+        working-directory: etl
+        run: |
+          uv python install 3.11
+          uv sync --extra dev
+          uv run python - <<'PY'
+          from pathlib import Path
+
+          path = Path('src/ficha_etl/canonical.py')
+          text = path.read_text()
+          text = text.replace(
+              '_MANIFEST_FORMAT_VERSION = 1\n',
+              '_MANIFEST_FORMAT_VERSION = 1\n_SAMPLE_SEED = 42\n',
+              1,
+          )
+          text = text.replace(
+              'f"{source} IS NOT NULL AND {source} <> \'\' AND {cast} IS NULL) AS {alias}"',
+              'f"{source} IS NOT NULL AND TRIM({source}) NOT IN (\'\', \'0\') "\n'
+              '            f"AND {cast} IS NULL) AS {alias}"',
+              1,
+          )
+
+          start = text.index('def _validate_output(')
+          end = text.index('\n\ndef _reusable_manifest(', start)
+          validation = '''def _sample_keys(
+              con: duckdb.DuckDBPyConnection,
+              *,
+              source_table: str,
+              primary_key: tuple[str, ...],
+              source_rows: int,
+              requested: int,
+          ) -> tuple[int, str]:
+              size = min(requested, source_rows)
+              if size == 0:
+                  return 0, hashlib.sha256(b"[]").hexdigest()
+              keys = ", ".join(registry.quote_identifier(key) for key in primary_key)
+              rows = con.execute(
+                  f"SELECT {keys} FROM {registry.quote_identifier(source_table)} "
+                  f"USING SAMPLE reservoir({size} ROWS) REPEATABLE({_SAMPLE_SEED}) "
+                  f"ORDER BY {keys}"
+              ).fetchall()
+              payload = json.dumps(
+                  rows,
+                  ensure_ascii=False,
+                  default=str,
+                  separators=(",", ":"),
+              ).encode()
+              return len(rows), hashlib.sha256(payload).hexdigest()
+
+
+          def _reversible_sample_mismatches(
+              con: duckdb.DuckDBPyConnection,
+              spec: registry.ParquetSpec,
+              *,
+              source_table: str,
+              output_path: Path,
+              sample_size: int,
+              source_file: str,
+              source_snapshot: str,
+          ) -> int:
+              if sample_size == 0:
+                  return 0
+              key_names = [registry.quote_identifier(key) for key in spec.primary_key]
+              join = " AND ".join(f"can.{key} = raw.{key}" for key in key_names)
+              checks = [f"can.{key_names[0]} IS NULL"]
+              for column in spec.columns:
+                  raw = f"raw.{registry.quote_identifier(column.source)}"
+                  canonical = f"can.{registry.quote_identifier(column.name)}"
+                  if column.duckdb_type == "DATE":
+                      parsed = f"TRY_STRPTIME(TRIM({raw}), '%Y%m%d')::DATE"
+                      checks.append(
+                          "(CASE "
+                          f"WHEN {raw} IS NULL OR TRIM({raw}) IN ('', '0') "
+                          f"THEN {canonical} IS NOT NULL "
+                          f"WHEN {parsed} IS NULL THEN {canonical} IS NOT NULL "
+                          f"ELSE STRFTIME({canonical}, '%Y%m%d') "
+                          f"IS DISTINCT FROM TRIM({raw}) END)"
+                      )
+                  else:
+                      checks.append(f"{raw} IS DISTINCT FROM {canonical}")
+              checks.extend(
+                  (
+                      f'can."_source_file" IS DISTINCT FROM {_sql_literal(source_file)}',
+                      f'can."_source_snapshot" IS DISTINCT FROM '
+                      f'{_sql_literal(source_snapshot)}',
+                  )
+              )
+              return int(
+                  con.execute(
+                      f"""
+                      WITH sampled AS (
+                          SELECT *
+                          FROM {registry.quote_identifier(source_table)}
+                          USING SAMPLE reservoir({sample_size} ROWS)
+                          REPEATABLE({_SAMPLE_SEED})
+                      )
+                      SELECT COUNT(*)
+                      FROM sampled AS raw
+                      LEFT JOIN {_parquet_relation(output_path)} AS can ON {join}
+                      WHERE {" OR ".join(checks)}
+                      """
+                  ).fetchone()[0]
+              )
+
+
+          def _validate_output(
+              con: duckdb.DuckDBPyConnection,
+              spec: registry.ParquetSpec,
+              *,
+              source_table: str,
+              source_rows: int,
+              output_path: Path,
+              source_file: str,
+              source_snapshot: str,
+              sample_size: int,
+          ) -> dict[str, Any]:
+              relation = _parquet_relation(output_path)
+              output_rows = int(con.execute(f"SELECT COUNT(*) FROM {relation}").fetchone()[0])
+              schema = _actual_schema(con, output_path)
+              expected_schema = _expected_schema(spec)
+
+              key_columns = [
+                  next(column for column in spec.columns if column.name == key)
+                  for key in spec.primary_key
+              ]
+              missing_terms: list[str] = []
+              valid_terms: list[str] = []
+              for column in key_columns:
+                  identifier = registry.quote_identifier(column.name)
+                  missing_terms.append(f"{identifier} IS NULL")
+                  valid_terms.append(f"{identifier} IS NOT NULL")
+                  if column.duckdb_type == "VARCHAR":
+                      missing_terms.append(f"{identifier} = ''")
+                      valid_terms.append(f"{identifier} <> ''")
+
+              missing_key_rows = int(
+                  con.execute(
+                      f"SELECT COUNT(*) FROM {relation} WHERE " + " OR ".join(missing_terms)
+                  ).fetchone()[0]
+              )
+              key_sql = ", ".join(
+                  registry.quote_identifier(key) for key in spec.primary_key
+              )
+              duplicate_rows = int(
+                  con.execute(
+                      "SELECT COALESCE(SUM(group_size - 1), 0) FROM ("
+                      f"SELECT COUNT(*) AS group_size FROM {relation} "
+                      f"WHERE {' AND '.join(valid_terms)} GROUP BY {key_sql} "
+                      "HAVING COUNT(*) > 1)"
+                  ).fetchone()[0]
+              )
+              all_columns = [
+                  *(registry.quote_identifier(column.name) for column in spec.columns),
+                  *(registry.quote_identifier(column.name) for column in spec.lineage),
+              ]
+              identical_duplicate_rows = int(
+                  con.execute(
+                      "SELECT COALESCE(SUM(group_size - 1), 0) FROM ("
+                      f"SELECT COUNT(*) AS group_size FROM {relation} "
+                      f"WHERE {' AND '.join(valid_terms)} "
+                      f"GROUP BY {', '.join(all_columns)} HAVING COUNT(*) > 1)"
+                  ).fetchone()[0]
+              )
+              conflicting_duplicate_rows = max(
+                  0, duplicate_rows - identical_duplicate_rows
+              )
+
+              critical_terms: list[str] = []
+              for column in spec.columns:
+                  if not column.publication_critical:
+                      continue
+                  identifier = registry.quote_identifier(column.name)
+                  critical_terms.append(f"{identifier} IS NULL")
+                  if column.duckdb_type == "VARCHAR":
+                      critical_terms.append(f"{identifier} = ''")
+              for column in spec.lineage:
+                  identifier = registry.quote_identifier(column.name)
+                  critical_terms.append(f"{identifier} IS NULL")
+                  if column.duckdb_type == "VARCHAR":
+                      critical_terms.append(f"{identifier} = ''")
+              critical_predicate = " OR ".join(critical_terms) or "FALSE"
+              critical_missing_rows = int(
+                  con.execute(
+                      f"SELECT COUNT(*) FROM {relation} WHERE {critical_predicate}"
+                  ).fetchone()[0]
+              )
+
+              actual_sample_size, sample_fingerprint = _sample_keys(
+                  con,
+                  source_table=source_table,
+                  primary_key=spec.primary_key,
+                  source_rows=source_rows,
+                  requested=sample_size,
+              )
+              sample_mismatches = _reversible_sample_mismatches(
+                  con,
+                  spec,
+                  source_table=source_table,
+                  output_path=output_path,
+                  sample_size=actual_sample_size,
+                  source_file=source_file,
+                  source_snapshot=source_snapshot,
+              )
+              gates = {
+                  "row_count_match": output_rows == source_rows,
+                  "schema_match": schema == expected_schema,
+                  "primary_key_missing_rows": missing_key_rows,
+                  "duplicate_primary_key_rows": duplicate_rows,
+                  "identical_duplicate_rows": identical_duplicate_rows,
+                  "conflicting_duplicate_rows": conflicting_duplicate_rows,
+                  "critical_missing_rows": critical_missing_rows,
+                  "sample_seed": _SAMPLE_SEED,
+                  "sample_size": actual_sample_size,
+                  "sample_fingerprint": sample_fingerprint,
+                  "sample_mismatches": sample_mismatches,
+              }
+              failures: list[str] = []
+              if not gates["row_count_match"]:
+                  failures.append(f"row count {source_rows} -> {output_rows}")
+              if not gates["schema_match"]:
+                  failures.append(f"schema {schema!r} != {expected_schema!r}")
+              if missing_key_rows:
+                  failures.append(f"{missing_key_rows} rows with missing primary key")
+              if duplicate_rows:
+                  failures.append(
+                      f"{duplicate_rows} duplicate primary-key rows "
+                      f"({identical_duplicate_rows} identical, "
+                      f"{conflicting_duplicate_rows} conflicting)"
+                  )
+              if critical_missing_rows:
+                  failures.append(
+                      f"{critical_missing_rows} rows with missing critical values"
+                  )
+              if sample_mismatches:
+                  failures.append(
+                      f"{sample_mismatches} deterministic raw/canonical sample mismatches"
+                  )
+              if failures:
+                  raise CanonicalValidationError("; ".join(failures))
+
+              return {
+                  **gates,
+                  "status": "passed",
+                  "source_rows": source_rows,
+                  "output_rows": output_rows,
+                  "schema": [{"name": name, "type": kind} for name, kind in schema],
+              }
+          '''
+          text = text[:start] + validation + text[end:]
+
+          start = text.index('def _reusable_manifest(')
+          end = text.index('\n\ndef _configure_connection(', start)
+          reusable = '''def _reusable_manifest(
+              output_path: Path,
+              manifest_path: Path,
+              *,
+              source_sha256: str,
+              source_file: str,
+              source_snapshot: str,
+              schema_version: int,
+              codec: str,
+              row_group_size: int,
+              sample_size: int,
+          ) -> dict[str, Any] | None:
+              if not output_path.exists() or not manifest_path.exists():
+                  return None
+              try:
+                  payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+                  matches = (
+                      payload["format_version"] == _MANIFEST_FORMAT_VERSION
+                      and payload["table"] == "estabelecimento"
+                      and payload["source"]["sha256"] == source_sha256
+                      and payload["source"]["file"] == source_file
+                      and payload["source"]["snapshot"] == source_snapshot
+                      and payload["output"]["schema_version"] == schema_version
+                      and payload["output"]["codec"] == codec
+                      and payload["output"]["row_group_size"] == row_group_size
+                      and payload["output"]["path"] == output_path.name
+                      and payload["output"]["bytes"] == output_path.stat().st_size
+                      and payload["output"]["sha256"] == _sha256(output_path)
+                      and payload["validation"]["status"] == "passed"
+                      and payload["validation"]["sample_size"]
+                      == min(sample_size, payload["validation"]["source_rows"])
+                  )
+              except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
+                  return None
+              return payload if matches else None
+          '''
+          text = text[:start] + reusable + text[end:]
+
+          text = text.replace(
+              '    row_group_size: int = 200_000,\n    resume: bool = True,',
+              '    row_group_size: int = 200_000,\n    sample_size: int = 1_000,\n'
+              '    resume: bool = True,',
+              1,
+          )
+          text = text.replace(
+              '    if row_group_size < 1:\n        raise ValueError("row_group_size must be positive")',
+              '    if row_group_size < 1:\n        raise ValueError("row_group_size must be positive")\n'
+              '    if sample_size < 0:\n        raise ValueError("sample_size must not be negative")',
+              1,
+          )
+          text = text.replace(
+              '            row_group_size=row_group_size,\n        )',
+              '            row_group_size=row_group_size,\n            sample_size=sample_size,\n        )',
+              1,
+          )
+          text = text.replace(
+              '                source_rows=source_rows,\n                output_path=temp_output,\n            )',
+              '                source_table="raw_estabelecimento",\n'
+              '                source_rows=source_rows,\n'
+              '                output_path=temp_output,\n'
+              '                source_file=source_file,\n'
+              '                source_snapshot=source_snapshot,\n'
+              '                sample_size=sample_size,\n'
+              '            )',
+              1,
+          )
+          text = text.replace(
+              '                    "input_shape": "one-extracted-csv",\n',
+              '                    "input_shape": "one-extracted-csv",\n'
+              '                    "sample_seed": validation["sample_seed"],\n'
+              '                    "sample_size": validation["sample_size"],\n'
+              '                    "sample_mismatches": validation["sample_mismatches"],\n',
+              1,
+          )
+          path.write_text(text)
+
+          tests = Path('tests/test_canonical_part.py')
+          content = tests.read_text()
+          content = content.replace(
+              '"data_situacao_cadastral": 1,\n        "data_inicio_atividade": 1,',
+              '"data_situacao_cadastral": 0,\n        "data_inicio_atividade": 1,',
+              1,
+          )
+          content = content.replace(
+              'assert manifest["metrics"]["stages"][0]["casts_invalid"] == 2',
+              'assert manifest["metrics"]["stages"][0]["casts_invalid"] == 1',
+              1,
+          )
+          content = content.replace(
+              '    assert manifest["validation"]["duplicate_primary_key_rows"] == 0\n',
+              '    assert manifest["validation"]["duplicate_primary_key_rows"] == 0\n'
+              '    assert manifest["validation"]["sample_seed"] == 42\n'
+              '    assert manifest["validation"]["sample_size"] == 2\n'
+              '    assert len(manifest["validation"]["sample_fingerprint"]) == 64\n'
+              '    assert manifest["validation"]["sample_mismatches"] == 0\n',
+              1,
+          )
+          content += '''
+
+          def test_conflicting_duplicate_is_distinguished_from_identical(tmp_path):
+              csv_path = tmp_path / "duplicate.csv"
+              output_path = tmp_path / "canonical.parquet"
+              _write_csv(
+                  csv_path,
+                  [
+                      _row(nome_fantasia="A"),
+                      _row(nome_fantasia="B"),
+                  ],
+              )
+
+              with pytest.raises(
+                  canonical.CanonicalValidationError,
+                  match=r"1 duplicate primary-key rows \(0 identical, 1 conflicting\)",
+              ):
+                  canonical.write_estabelecimento_part(
+                      csv_path,
+                      output_path,
+                      source_file="Estabelecimentos0.zip",
+                      source_snapshot="2026-07",
+                  )
+
+
+          def test_independent_reversible_sample_rejects_corrupted_projection(
+              tmp_path, monkeypatch
+          ):
+              csv_path = tmp_path / "source.csv"
+              output_path = tmp_path / "canonical.parquet"
+              _write_csv(csv_path, [_row(cep="01001000")])
+              original = canonical.registry.canonical_projection_sql
+
+              def corrupted_projection(spec, *, source_alias="src"):
+                  sql = original(spec, source_alias=source_alias)
+                  return sql.replace(
+                      f'"{source_alias}"."cep" AS "cep"',
+                      'NULL::VARCHAR AS "cep"',
+                  )
+
+              monkeypatch.setattr(
+                  canonical.registry,
+                  "canonical_projection_sql",
+                  corrupted_projection,
+              )
+              with pytest.raises(
+                  canonical.CanonicalValidationError,
+                  match="deterministic raw/canonical sample mismatches",
+              ):
+                  canonical.write_estabelecimento_part(
+                      csv_path,
+                      output_path,
+                      source_file="Estabelecimentos0.zip",
+                      source_snapshot="2026-07",
+                  )
+              assert not output_path.exists()
+          '''
+          tests.write_text(content)
+
+          for redundant in (
+              Path('src/ficha_etl/canonical_shadow.py'),
+              Path('tests/test_canonical_shadow.py'),
+              Path('../.github/workflows/format-canonical-shadow-once.yml'),
+          ):
+              redundant.unlink(missing_ok=True)
+          PY
+          uv run ruff format src/ficha_etl/canonical.py tests/test_canonical_part.py
+          uv run ruff check src/ficha_etl/canonical.py tests/test_canonical_part.py
+      - name: Commit consolidated implementation
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'refactor(etl): consolidate canonical shadow checkpoint'
+          git push origin HEAD:${{ github.head_ref }}
