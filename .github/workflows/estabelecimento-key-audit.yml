@@ -1,0 +1,215 @@
+name: Estabelecimento Key Audit — cross-part uniqueness (issue #100)
+
+on:
+  workflow_dispatch:
+    inputs:
+      month:
+        description: Historical IA snapshot (YYYY-MM)
+        required: true
+        default: '2026-04'
+        type: string
+      force:
+        description: Ignore matching cached part checkpoints and rebuild all ten
+        required: true
+        default: false
+        type: boolean
+  pull_request:
+    paths:
+      - '.github/workflows/estabelecimento-key-audit.yml'
+      - 'etl/src/ficha_etl/estabelecimento_key_audit.py'
+      - 'etl/src/ficha_etl/canonical_history.py'
+      - 'etl/src/ficha_etl/canonical_shadow.py'
+      - 'etl/src/ficha_etl/registry.py'
+      - 'etl/tests/test_estabelecimento_key_audit.py'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: estabelecimento-key-audit-${{ github.ref }}-${{ inputs.month || 'pr' }}
+  cancel-in-progress: false
+
+jobs:
+  smoke:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: etl
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+      - run: uv python install 3.11
+      - run: uv sync --frozen --extra dev
+
+      - name: Build ten tiny offline fixtures, one deliberate cross-part duplicate
+        run: |
+          uv run python - <<'PY'
+          import csv
+          import io
+          import zipfile
+          from pathlib import Path
+
+          from ficha_etl import registry
+
+          root = Path(".key-audit-smoke")
+          root.mkdir(parents=True, exist_ok=True)
+
+          def row(**overrides):
+              base = dict.fromkeys(registry.ESTABELECIMENTO_COLUMNS, "")
+              base.update(
+                  identificador_matriz_filial="1",
+                  situacao_cadastral="02",
+                  data_situacao_cadastral="20260719",
+                  data_inicio_atividade="19991231",
+              )
+              base.update(overrides)
+              return base
+
+          def write_zip(path, rows):
+              buffer = io.StringIO(newline="")
+              writer = csv.writer(
+                  buffer, delimiter=";", quotechar='"',
+                  quoting=csv.QUOTE_ALL, lineterminator="\n",
+              )
+              writer.writerows([[r[name] for name in registry.ESTABELECIMENTO_COLUMNS] for r in rows])
+              with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as archive:
+                  archive.writestr("K3241.K03200Y0.D60719.ESTABELE", buffer.getvalue().encode("latin-1"))
+
+          for part in range(10):
+              # Parts 0 and 5 deliberately share one full key -- proves the
+              # smoke actually exercises the cross-part detection path, not
+              # just "did it run".
+              if part in (0, 5):
+                  rows = [row(cnpj_basico="00000001", cnpj_ordem="0001", cnpj_dv="91")]
+              else:
+                  rows = [row(cnpj_basico=f"{part + 100:08d}", cnpj_ordem="0001", cnpj_dv="91")]
+              write_zip(root / f"Estabelecimentos{part}.zip", rows)
+          PY
+
+      - name: Run offline key audit smoke
+        run: |
+          ZIP_ARGS=()
+          for part in 0 1 2 3 4 5 6 7 8 9; do
+            ZIP_ARGS+=(--zip "$part=.key-audit-smoke/Estabelecimentos$part.zip")
+          done
+          uv run python -m ficha_etl.estabelecimento_key_audit \
+            --month 2026-04 \
+            --root .key-audit-smoke/run \
+            "${ZIP_ARGS[@]}"
+          jq -e '
+            .total_rows_scanned == 10 and
+            .distinct_valid_full_keys == 9 and
+            .duplicate_key_count == 1 and
+            .cross_part_duplicate_key_count == 1 and
+            (.evidence_sample[0].source_files | sort) == ["Estabelecimentos0.zip", "Estabelecimentos5.zip"]
+          ' .key-audit-smoke/run/evidence/global.key-audit.json
+
+  audit:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    defaults:
+      run:
+        working-directory: etl
+    env:
+      PYTHONIOENCODING: utf-8
+      PYTHONUTF8: '1'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate inputs
+        id: inputs
+        env:
+          INPUT_MONTH: ${{ inputs.month }}
+        run: |
+          if ! [[ "$INPUT_MONTH" =~ ^[0-9]{4}-(0[1-9]|1[0-2])$ ]]; then
+            echo "::error::Invalid month '$INPUT_MONTH' — expected YYYY-MM"
+            exit 2
+          fi
+          echo "month=$INPUT_MONTH" >> "$GITHUB_OUTPUT"
+          echo "root=.key-audit/$INPUT_MONTH" >> "$GITHUB_OUTPUT"
+
+      - name: Free disk space
+        # Ten retained ZIPs (~2GB each) plus one extracted CSV live at a time
+        # (~6.5GB peak, per PR #91's real part-0 evidence) -- same headroom
+        # discipline as canonical-shadow-history.yml.
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /usr/local/share/powershell /usr/share/swift \
+                      "$AGENT_TOOLSDIRECTORY" || true
+          sudo apt-get clean
+          df -h /
+
+      - uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+      - run: uv python install 3.11
+      - run: uv sync --frozen
+
+      - name: Restore key-audit checkpoint cache
+        uses: actions/cache@v4
+        with:
+          path: etl/${{ steps.inputs.outputs.root }}
+          key: estabelecimento-key-audit-${{ steps.inputs.outputs.month }}-schema1-${{ hashFiles('etl/src/ficha_etl/estabelecimento_key_audit.py', 'etl/src/ficha_etl/canonical_history.py', 'etl/src/ficha_etl/registry.py', 'etl/uv.lock') }}
+
+      - name: Run cross-part key audit
+        env:
+          MONTH: ${{ steps.inputs.outputs.month }}
+          ROOT: ${{ steps.inputs.outputs.root }}
+          FORCE: ${{ inputs.force }}
+        run: |
+          EXTRA_ARGS=()
+          if [ "$FORCE" = "true" ]; then
+            EXTRA_ARGS+=(--force)
+          fi
+          uv run python -m ficha_etl.estabelecimento_key_audit \
+            --month "$MONTH" \
+            --root "$ROOT" \
+            "${EXTRA_ARGS[@]}"
+
+      - name: Write summary
+        if: always()
+        env:
+          ROOT: ${{ steps.inputs.outputs.root }}
+        run: |
+          REPORT="$ROOT/evidence/global.key-audit.json"
+          {
+            echo "## Estabelecimento key audit (issue #100)"
+            echo
+            if [ -f "$REPORT" ]; then
+              jq -r '
+                "- Snapshot: `" + .snapshot_month + "`",
+                "- Total rows scanned: `" + (.total_rows_scanned|tostring) + "`",
+                "- Distinct valid full keys: `" + (.distinct_valid_full_keys|tostring) + "`",
+                "- Duplicate key count: `" + (.duplicate_key_count|tostring) + "`",
+                "- Excess duplicate rows: `" + (.excess_duplicate_row_count|tostring) + "`",
+                "- **Cross-part duplicate keys: `" + (.cross_part_duplicate_key_count|tostring) + "`**",
+                "- Blank/null key components: `" + (.blank_or_null_counts_by_component|tostring) + "`"
+              ' "$REPORT"
+            else
+              echo "- No global report was produced — check part-level failure evidence below."
+              for f in "$ROOT"/evidence/*.failure.json; do
+                [ -f "$f" ] || continue
+                echo "  - $(jq -r '.source.name + \": \" + .error' "$f")"
+              done
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload key-only checkpoints and evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: estabelecimento-key-audit-${{ steps.inputs.outputs.month }}-${{ github.run_id }}
+          # Key-only Parquets (three VARCHAR columns + lineage, no other
+          # establishment data) retained for inspection only -- not
+          # published to the Internet Archive by this workflow.
+          path: |
+            etl/${{ steps.inputs.outputs.root }}/keys/
+            etl/${{ steps.inputs.outputs.root }}/evidence/
+          if-no-files-found: warn
+          retention-days: 30
+          include-hidden-files: true
