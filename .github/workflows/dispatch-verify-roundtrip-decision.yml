@@ -1,4 +1,4 @@
-name: Dispatch Decision-Grade Roundtrip Evidence
+name: Run Decision-Grade Roundtrip Evidence
 
 on:
   pull_request:
@@ -6,95 +6,80 @@ on:
       - '.github/workflows/dispatch-verify-roundtrip-decision.yml'
 
 permissions:
-  actions: write
   contents: read
 
+concurrency:
+  group: roundtrip-decision-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  dispatch-and-forward:
+  evidence:
     runs-on: ubuntu-latest
     timeout-minutes: 360
     env:
-      GH_TOKEN: ${{ github.token }}
-      TARGET_BRANCH: feat/verify-roundtrip-evidence
-      TARGET_SHA: 3648ca5801ecf4071114fafb24b0a7c08ca8ee27
+      FICHA_THREADS: '1'
+      PYTHONUNBUFFERED: '1'
+    defaults:
+      run:
+        shell: bash
+        working-directory: etl
     steps:
-      - name: Dispatch decision-grade evidence
-        id: dispatch
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/verify-roundtrip-evidence
+
+      - uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install 3.11
+
+      - name: Install dependencies
+        run: uv sync --extra dev
+
+      - name: Record provenance
         run: |
-          dispatched=false
-          for attempt in $(seq 1 12); do
-            if gh workflow run etl-evidence.yml \
-              --repo "$GITHUB_REPOSITORY" \
-              --ref "$TARGET_BRANCH" \
-              -f scale=500000 \
-              -f chunks=10 \
-              -f repeats=5 \
-              -f seed=20260719; then
-              dispatched=true
-              break
-            fi
-            delay=$((attempt * 5))
-            echo "dispatch attempt $attempt failed; retrying in ${delay}s" >&2
-            sleep "$delay"
-          done
-          if [[ "$dispatched" != true ]]; then
-            echo 'workflow dispatch failed after retries' >&2
-            exit 1
-          fi
+          mkdir -p bench/decision-evidence
+          {
+            echo 'profile=roundtrip-decision'
+            echo 'source_branch=feat/verify-roundtrip-evidence'
+            echo 'source_sha=3648ca5801ecf4071114fafb24b0a7c08ca8ee27'
+            echo 'scale=500000'
+            echo 'chunks=10'
+            echo 'repeats=5'
+            echo 'sample_size=1000'
+            echo 'alternation_seed=20260719'
+            uname -a
+            df -h .
+          } | tee bench/decision-evidence/run-metadata.txt
 
-          run_id=''
-          for attempt in $(seq 1 60); do
-            if runs=$(gh run list \
-              --repo "$GITHUB_REPOSITORY" \
-              --workflow etl-evidence.yml \
-              --branch "$TARGET_BRANCH" \
-              --event workflow_dispatch \
-              --limit 20 \
-              --json databaseId,headSha); then
-              run_id=$(jq -r ".[] | select(.headSha == \"$TARGET_SHA\") | .databaseId" \
-                <<< "$runs" | head -n 1)
-              if [[ -n "$run_id" && "$run_id" != null ]]; then
-                break
-              fi
-            else
-              echo "run-list attempt $attempt failed; retrying" >&2
-            fi
-            sleep 5
-          done
-          if [[ -z "$run_id" || "$run_id" == null ]]; then
-            echo 'could not resolve dispatched evidence run' >&2
-            exit 1
-          fi
-          echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
-          echo "Dispatched evidence run $run_id"
-
-      - name: Wait for decision-grade run
+      - name: Generate production-shaped fixture
         run: |
-          gh run watch "${{ steps.dispatch.outputs.run_id }}" \
-            --repo "$GITHUB_REPOSITORY" \
-            --exit-status
+          uv run python - <<'PY' 2>&1 | tee bench/decision-evidence/generate.log
+          import sys
+          from pathlib import Path
 
-      - name: Download decision evidence
+          sys.path.insert(0, 'bench')
+          from benchmark import generate
+
+          generate(500000, 10, Path('bench/.work/data'))
+          PY
+
+      - name: Run historical-vs-current verifier evidence
         run: |
-          mkdir -p forwarded
-          for attempt in $(seq 1 12); do
-            if gh run download "${{ steps.dispatch.outputs.run_id }}" \
-              --repo "$GITHUB_REPOSITORY" \
-              --name "etl-evidence-manual-evidence-${{ steps.dispatch.outputs.run_id }}" \
-              --dir forwarded; then
-              exit 0
-            fi
-            delay=$((attempt * 5))
-            echo "artifact download attempt $attempt failed; retrying in ${delay}s" >&2
-            sleep "$delay"
-          done
-          exit 1
+          uv run python bench/ab_verify_roundtrip.py \
+            --repeats 5 \
+            --seed 20260719 \
+            --sample-size 1000 \
+            --json bench/decision-evidence/verify-roundtrip.json \
+            2>&1 | tee bench/decision-evidence/verify-roundtrip.log
 
-      - name: Forward evidence artifact
+      - name: Upload decision evidence
         uses: actions/upload-artifact@v4
         with:
-          name: forwarded-roundtrip-decision-evidence-${{ steps.dispatch.outputs.run_id }}
-          path: forwarded/
+          name: roundtrip-decision-evidence-${{ github.run_id }}
+          path: etl/bench/decision-evidence/
           if-no-files-found: error
           retention-days: 30
           include-hidden-files: true
