@@ -1,0 +1,76 @@
+name: Dispatch Decision-Grade Roundtrip Evidence
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/dispatch-verify-roundtrip-decision.yml'
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  dispatch-and-forward:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TARGET_BRANCH: feat/verify-roundtrip-evidence
+      TARGET_SHA: 3648ca5801ecf4071114fafb24b0a7c08ca8ee27
+    steps:
+      - name: Dispatch decision-grade evidence
+        id: dispatch
+        run: |
+          gh workflow run etl-evidence.yml \
+            --repo "$GITHUB_REPOSITORY" \
+            --ref "$TARGET_BRANCH" \
+            -f scale=500000 \
+            -f chunks=10 \
+            -f repeats=5 \
+            -f seed=20260719
+
+          run_id=''
+          for _ in $(seq 1 60); do
+            run_id=$(gh run list \
+              --repo "$GITHUB_REPOSITORY" \
+              --workflow etl-evidence.yml \
+              --branch "$TARGET_BRANCH" \
+              --event workflow_dispatch \
+              --limit 20 \
+              --json databaseId,headSha \
+              --jq ".[] | select(.headSha == \"$TARGET_SHA\") | .databaseId" \
+              | head -n 1)
+            if [[ -n "$run_id" ]]; then
+              break
+            fi
+            sleep 5
+          done
+          if [[ -z "$run_id" ]]; then
+            echo 'could not resolve dispatched evidence run' >&2
+            exit 1
+          fi
+          echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+          echo "Dispatched evidence run $run_id"
+
+      - name: Wait for decision-grade run
+        run: |
+          gh run watch "${{ steps.dispatch.outputs.run_id }}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --exit-status
+
+      - name: Download decision evidence
+        run: |
+          mkdir -p forwarded
+          gh run download "${{ steps.dispatch.outputs.run_id }}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --name "etl-evidence-manual-evidence-${{ steps.dispatch.outputs.run_id }}" \
+            --dir forwarded
+
+      - name: Forward evidence artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: forwarded-roundtrip-decision-evidence-${{ steps.dispatch.outputs.run_id }}
+          path: forwarded/
+          if-no-files-found: error
+          retention-days: 30
+          include-hidden-files: true
