@@ -302,7 +302,7 @@ def generate(scale: int, chunks: int, data_dir: Path) -> list[Path]:
                 data_dir / f"lookup_{kind}.csv",
             )
         marker.write_text(f"scale={scale} chunks={chunks} dup_every_n={_DUP_EVERY_N}\n")
-        print(f"  generated synthetic data in {time.monotonic() - t0:.1f}s → {data_dir}")
+        print(f"  generated synthetic data in {time.monotonic() - t0:.1f}s -> {data_dir}")
     finally:
         gen.close()
     return sorted(data_dir.glob("estabelecimento-*.csv"))
