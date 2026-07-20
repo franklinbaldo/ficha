@@ -38,12 +38,57 @@ def test_stage_measures_wall_clock_and_rss():
     assert len(recorder.stages) == 1
     m = recorder.stages[0]
     assert m.wall_seconds > 0
-    # Windows has no `resource` module (production is Linux-only); RSS is a
-    # documented 0.0 there rather than a real measurement, so only assert a
-    # real peak on the platforms that actually report one.
+    # Windows has no `resource` module (production is Linux-only); RSS is
+    # documented `None` there rather than a real measurement, so only
+    # assert a real peak on the platforms that actually report one --
+    # see test_rss_peak_mib_returns_none_when_resource_unavailable below
+    # for a platform-independent test of the None path itself.
     if sys.platform != "win32":
         assert m.rss_peak_mib > 0
-    assert m.rss_peak_delta_mib >= 0
+        assert m.rss_peak_delta_mib >= 0
+    else:
+        assert m.rss_peak_mib is None
+        assert m.rss_peak_delta_mib is None
+
+
+# -----------------------------------------------------------------------------
+# RSS indisponível (ex.: Windows, sem `resource`) -- testado via monkeypatch
+# de metrics.resource = None (o módulo faz `import resource` guardado por
+# try/except no topo, com esse mesmo fallback no except), independente da
+# plataforma real rodando o teste (CI é Linux, mas esse é justamente o ramo
+# que o CI nunca exercitaria sozinho).
+# -----------------------------------------------------------------------------
+
+
+def test_rss_peak_mib_returns_none_when_resource_unavailable(monkeypatch):
+    monkeypatch.setattr(metrics, "resource", None)
+    assert metrics._rss_peak_mib() is None
+
+
+def test_stage_rss_fields_are_null_when_resource_unavailable(monkeypatch):
+    monkeypatch.setattr(metrics, "resource", None)
+    recorder = metrics.MetricsRecorder(month="2026-07", schema_version="1.0.0")
+    with recorder.stage("noop") as handle:
+        handle.rows_written = 1
+
+    m = recorder.stages[0]
+    assert m.rss_peak_mib is None
+    assert m.rss_peak_delta_mib is None
+    d = m.to_json_dict()
+    assert d["rss_peak_mib"] is None
+    assert d["rss_peak_delta_mib"] is None
+
+
+def test_log_stage_shows_na_not_zero_when_resource_unavailable(monkeypatch, caplog):
+    monkeypatch.setattr(metrics, "resource", None)
+    recorder = metrics.MetricsRecorder(month="2026-07", schema_version="1.0.0")
+    with caplog.at_level(logging.INFO, logger="ficha_etl.metrics"):
+        with recorder.stage("noop"):
+            pass
+
+    assert "rss=n/a" in caplog.text
+    # The whole point: an unmeasured peak must never read as a real zero.
+    assert "rss=0MiB" not in caplog.text
 
 
 def test_stage_to_json_dict_has_stable_keys():

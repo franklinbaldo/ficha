@@ -130,6 +130,75 @@ jobs:
           uv run python bench/ab_typed_keys.py --repeats 1
           rm -rf bench/.work
 
+  etl-windows:
+    name: etl/ (Windows compat)
+    runs-on: windows-latest
+    # Guards the promise made in PR #92/#93: ficha_etl (and every bench/
+    # script) must import and run on Windows -- a dev machine, not a
+    # production target. Before #92, `metrics.py` imported `resource`
+    # (POSIX-only) unguarded at module level, which broke `from ficha_etl
+    # import transform` outright on Windows; that was only caught by manual
+    # testing on an actual Windows dev machine, never by CI. `shell: bash`
+    # so this job can reuse the exact same commands as the Linux `etl` job
+    # instead of a parallel PowerShell dialect -- Windows runners ship Git
+    # Bash.
+    defaults:
+      run:
+        working-directory: etl
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Detect changes in etl/
+        id: changes
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            etl:
+              - 'etl/**'
+              - 'ficha-py/**'
+              - '.github/workflows/ci.yml'
+
+      - name: Install uv
+        if: steps.changes.outputs.etl == 'true'
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        if: steps.changes.outputs.etl == 'true'
+        run: uv python install 3.11
+
+      - name: Install
+        if: steps.changes.outputs.etl == 'true'
+        run: uv sync --extra dev
+
+      - name: Import check
+        if: steps.changes.outputs.etl == 'true'
+        # The exact regression this job exists to catch: any unguarded
+        # POSIX-only import (resource, fcntl, ...) anywhere in this list
+        # would break the whole import chain on Windows again.
+        run: |
+          uv run python -c "from ficha_etl import transform, metrics, registry"
+          cd bench
+          uv run python -c "import sys; sys.path.insert(0, '.'); import _profile, benchmark, ab_contatos_cnaes, ab_typed_keys, ab_verify_roundtrip, dedup_evidence, run_with_peaks; print('all bench/ modules import OK on', sys.platform)"
+
+      - name: Test
+        if: steps.changes.outputs.etl == 'true'
+        run: uv run pytest tests -q
+
+      - name: Benchmark harness smoke
+        if: steps.changes.outputs.etl == 'true'
+        # Same scale/scripts as the Linux `etl` job's smoke step -- short on
+        # purpose (this job's point is "does it run on Windows at all", not
+        # a second full benchmark surface).
+        run: |
+          uv run python bench/benchmark.py --scale 500 --chunks 2 --repeats 1 \
+            --json bench/.work/benchmark.json
+          uv run python bench/ab_contatos_cnaes.py --repeats 1
+          uv run python bench/ab_typed_keys.py --repeats 1
+          rm -rf bench/.work
+
   ficha-py:
     name: ficha-py/
     runs-on: ubuntu-latest
