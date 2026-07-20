@@ -25,6 +25,12 @@ dependencies = [
     # Progress bars for `ficha-etl run`/`transform_snapshot` — auto-disabled
     # when stdout isn't a terminal, so CI logs are unaffected.
     "rich>=13.7.0",
+    # cli.py's argument parser — chosen (over argparse) together with rich
+    # Console for their combined effect on Windows: rich detects real
+    # console encoding instead of trusting the OS default, avoiding the
+    # UnicodeEncodeError class of bug that broke this CLI's non-ASCII
+    # output on Windows before.
+    "cyclopts>=4.22.0",
 ]
 
 [tool.uv.sources]

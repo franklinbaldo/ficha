@@ -150,17 +150,6 @@ def _verify(variant: str, con, parquet: Path, sample_size: int) -> None:
         raise ValueError(f"unknown variant: {variant}")
 
 
-def _rss_peak_mib() -> float:
-    # resource is POSIX-only; production/CI are Linux, but importing it at
-    # module level would block even loading this script on Windows dev
-    # machines. 0.0 is a documented "not measured here", not an error.
-    if sys.platform == "win32":
-        return 0.0
-    import resource
-
-    return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
-
-
 def _prepare_fixture() -> dict[str, Any]:
     shutil.rmtree(ROOT, ignore_errors=True)
     ROOT.mkdir(parents=True, exist_ok=True)
@@ -238,7 +227,7 @@ def _worker(variant: str, repetition: int, sample_size: int, output_json: Path) 
     sampler: metrics._DiskPeakSampler | None = None  # noqa: SLF001
     try:
         environment = capture_environment(con, db_path)
-        rss_baseline_mib = _rss_peak_mib()
+        rss_baseline_mib = metrics._rss_peak_mib()  # noqa: SLF001
         database_baseline_bytes = db_path.stat().st_size
         sampler = metrics._DiskPeakSampler(  # noqa: SLF001
             {"duckdb_tmp": state_dir / "duckdb_tmp", "state": state_dir},
@@ -251,7 +240,7 @@ def _worker(variant: str, repetition: int, sample_size: int, output_json: Path) 
         _verify(variant, con, VALID_PARQUET, sample_size)
         wall_seconds = time.monotonic() - wall_start
         cpu_seconds = time.process_time() - cpu_start
-        rss_end_peak_mib = _rss_peak_mib()
+        rss_end_peak_mib = metrics._rss_peak_mib()  # noqa: SLF001
         peaks = sampler.stop()
         sampler = None
 
@@ -273,10 +262,15 @@ def _worker(variant: str, repetition: int, sample_size: int, output_json: Path) 
             "cpu_seconds": cpu_seconds,
             "rss_baseline_mib": rss_baseline_mib,
             "rss_end_peak_mib": rss_end_peak_mib,
-            "rss_delta_mib": max(0.0, rss_end_peak_mib - rss_baseline_mib),
+            "rss_delta_mib": (
+                max(0.0, rss_end_peak_mib - rss_baseline_mib)
+                if rss_baseline_mib is not None and rss_end_peak_mib is not None
+                else None
+            ),
             "rss_measurement_note": (
                 "Linux ru_maxrss is process-lifetime cumulative; delta records only a new "
-                "high-water mark after the copied database was opened."
+                "high-water mark after the copied database was opened. None on platforms "
+                "without `resource` (e.g. Windows) rather than a misleading 0.0."
             ),
             "database_baseline_bytes": database_baseline_bytes,
             "database_bytes": db_path.stat().st_size,

@@ -44,6 +44,11 @@ from pathlib import Path
 
 import duckdb
 
+try:
+    import resource  # POSIX-only; None on Windows (see _rss_peak_mib).
+except ImportError:
+    resource = None
+
 log = logging.getLogger(__name__)
 
 # Tipos aceitos no sub-dict `extra` de StageMetrics -- qualquer coisa que
@@ -122,6 +127,13 @@ class StageMetrics:
     `metrics.json` (RFC 0001 §16) -- não renomeie sem atualizar quem lê o
     arquivo.
 
+    `rss_peak_mib`/`rss_peak_delta_mib`: `None` quando `resource` está
+    indisponível (Windows -- produção/CI são Linux-only, isso só acontece
+    em dev local), nunca `0.0` -- ver `_rss_peak_mib`. Um consumidor de
+    `metrics.json` NUNCA verá `null` aqui vindo de uma execução real de
+    produção; o campo é opcional só pra não inventar um pico falso de zero
+    quando a plataforma simplesmente não tem como medir.
+
     `casts_invalid`/`quarantine_rows`/`duplicate_rows`: RFC 0001 §16 pede
     esses três campos, mas o pipeline ATUAL (reader legado, ver
     `_create_table_from_csvs` em transform.py) não tem esses conceitos --
@@ -141,8 +153,8 @@ class StageMetrics:
 
     name: str
     wall_seconds: float
-    rss_peak_mib: float
-    rss_peak_delta_mib: float
+    rss_peak_mib: float | None
+    rss_peak_delta_mib: float | None
     started_at: str
     finished_at: str
     rows_read: int | None = None
@@ -205,8 +217,10 @@ class StageMetrics:
             "files_read": self.files_read,
             "mb_per_second": self.mb_per_second(),
             "rows_per_second": self.rows_per_second(),
-            "rss_peak_mib": round(self.rss_peak_mib, 1),
-            "rss_peak_delta_mib": round(self.rss_peak_delta_mib, 1),
+            "rss_peak_mib": round(self.rss_peak_mib, 1) if self.rss_peak_mib is not None else None,
+            "rss_peak_delta_mib": (
+                round(self.rss_peak_delta_mib, 1) if self.rss_peak_delta_mib is not None else None
+            ),
             "duckdb_tmp_peak_mib": (
                 round(self.duckdb_tmp_peak_mib, 1) if self.duckdb_tmp_peak_mib is not None else None
             ),
@@ -295,8 +309,8 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
-def _rss_peak_mib() -> float:
-    """Pico de RSS do processo até agora, em MiB.
+def _rss_peak_mib() -> float | None:
+    """Pico de RSS do processo até agora, em MiB -- `None` se indisponível.
 
     `ru_maxrss` é MONOTÔNICO e cumulativo desde o início do processo -- a
     API do SO não devolve "pico só deste período", só "pico corrente". Por
@@ -316,14 +330,17 @@ def _rss_peak_mib() -> float:
     macOS -- por isso o branch em `sys.platform` em vez de assumir KiB.
 
     `resource` não existe no Windows (nem produção nem CI rodam lá -- RFB é
-    Linux-only por ops). O import fica DENTRO desta função, não no topo do
-    módulo, justamente pra isso: um dev em Windows consegue importar
-    `metrics`/`transform` e rodar pytest/bench localmente, só não recebe um
-    número real de RSS (0.0 é um valor claramente-não-medido, não um erro).
+    Linux-only por ops) -- importado no topo do módulo dentro de um
+    `try/except ImportError`, com `resource = None` no except, então um dev
+    em Windows consegue importar `metrics`/`transform` e rodar pytest/bench
+    localmente sem crashar no import. `None` (não `0.0`) quando
+    indisponível -- `0.0` seria indistinguível de uma medição real de
+    "processo não usou memória", e tanto o JSON quanto o log de uma linha
+    (`_log_stage`) precisam conseguir mostrar "não medido" em vez de
+    inventar um pico falso de zero.
     """
-    if sys.platform == "win32":
-        return 0.0
-    import resource
+    if resource is None:
+        return None
 
     peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
     if sys.platform == "darwin":
@@ -791,6 +808,11 @@ class MetricsRecorder:
             wall = time.monotonic() - t0
             peaks = sampler.stop() if sampler is not None else {}
             rss_now = _rss_peak_mib()
+            rss_delta = (
+                max(0.0, rss_now - self._last_rss_mib)
+                if rss_now is not None and self._last_rss_mib is not None
+                else None
+            )
             fs_used = peaks.get("filesystem")
             fs_total = peaks.get("filesystem_total")
             stage_metrics = StageMetrics(
@@ -802,7 +824,7 @@ class MetricsRecorder:
                 bytes_written=handle.bytes_written,
                 files_read=handle.files_read,
                 rss_peak_mib=rss_now,
-                rss_peak_delta_mib=max(0.0, rss_now - self._last_rss_mib),
+                rss_peak_delta_mib=rss_delta,
                 duckdb_tmp_peak_mib=_bytes_to_mib(peaks.get("duckdb_tmp")),
                 workdir_peak_mib=_bytes_to_mib(peaks.get("workdir")),
                 filesystem_used_peak_mib=_bytes_to_mib(fs_used),
@@ -831,7 +853,11 @@ class MetricsRecorder:
         mbps = m.mb_per_second()
         if mbps is not None:
             parts.append(f"{mbps:.1f}MB/s")
-        rss_part = f"rss={m.rss_peak_mib:.0f}MiB(+{m.rss_peak_delta_mib:.0f})"
+        rss_part = (
+            f"rss={m.rss_peak_mib:.0f}MiB(+{m.rss_peak_delta_mib:.0f})"
+            if m.rss_peak_mib is not None and m.rss_peak_delta_mib is not None
+            else "rss=n/a"
+        )
         parts.append(rss_part)
         if m.duckdb_tmp_peak_mib is not None:
             parts.append(f"duckdb_tmp_peak={m.duckdb_tmp_peak_mib:.0f}MiB")

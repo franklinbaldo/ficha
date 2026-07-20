@@ -97,21 +97,6 @@ def _prepare_fixtures() -> dict[str, Any]:
     return manifest
 
 
-def _rss_peak_mib() -> float:
-    # Workers run on Linux in Actions. ru_maxrss is KiB there and is cumulative
-    # for the lifetime of this worker process; callers must compare against a
-    # baseline captured immediately before the measured loader region.
-    #
-    # resource is POSIX-only -- imported here, not at module level, so this
-    # script still loads on a Windows dev machine (0.0 there is a documented
-    # "not measured", not an error).
-    if sys.platform == "win32":
-        return 0.0
-    import resource
-
-    return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
-
-
 def _worker(mode: str, repetition: int, output_json: Path) -> None:
     manifest = json.loads((FIXTURES / "manifest.json").read_text())
     expected_duplicates = manifest["modes"][mode]["expected_duplicate_rows"]
@@ -150,7 +135,7 @@ def _worker(mode: str, repetition: int, output_json: Path) -> None:
             ),
         ]
         environment = capture_environment(con, db_path)
-        rss_baseline_mib = _rss_peak_mib()
+        rss_baseline_mib = metrics._rss_peak_mib()  # noqa: SLF001
         sampler = metrics._DiskPeakSampler(  # noqa: SLF001 -- benchmark reuses production sampler
             {"duckdb_tmp": state_dir / "duckdb_tmp", "state": state_dir},
             interval=0.1,
@@ -163,7 +148,7 @@ def _worker(mode: str, repetition: int, output_json: Path) -> None:
         duplicate_rows = transform.load_main_tables_into_duckdb(con, files)
         wall_seconds = time.monotonic() - wall_start
         cpu_seconds = time.process_time() - cpu_start
-        rss_loader_end_peak_mib = _rss_peak_mib()
+        rss_loader_end_peak_mib = metrics._rss_peak_mib()  # noqa: SLF001
 
         if duplicate_rows != expected_duplicates:
             raise AssertionError(
@@ -185,7 +170,10 @@ def _worker(mode: str, repetition: int, output_json: Path) -> None:
         database_bytes = db_path.stat().st_size
         peaks = sampler.stop()
         sampler = None
-        rss_post_close_peak_mib = _rss_peak_mib()
+        rss_post_close_peak_mib = metrics._rss_peak_mib()  # noqa: SLF001
+
+        def _delta(peak: float | None, baseline: float | None) -> float | None:
+            return max(0.0, peak - baseline) if peak is not None and baseline is not None else None
 
         result = {
             "mode": mode,
@@ -195,13 +183,14 @@ def _worker(mode: str, repetition: int, output_json: Path) -> None:
             "cpu_seconds": cpu_seconds,
             "rss_baseline_mib": rss_baseline_mib,
             "rss_loader_end_peak_mib": rss_loader_end_peak_mib,
-            "rss_loader_delta_mib": max(0.0, rss_loader_end_peak_mib - rss_baseline_mib),
+            "rss_loader_delta_mib": _delta(rss_loader_end_peak_mib, rss_baseline_mib),
             "rss_post_close_peak_mib": rss_post_close_peak_mib,
-            "rss_post_close_delta_mib": max(0.0, rss_post_close_peak_mib - rss_baseline_mib),
+            "rss_post_close_delta_mib": _delta(rss_post_close_peak_mib, rss_baseline_mib),
             "rss_measurement_note": (
                 "Linux ru_maxrss is process-lifetime cumulative. Baseline is captured after "
                 "lookup setup and immediately before the timed loader; deltas show only new "
-                "high-water marks after that baseline."
+                "high-water marks after that baseline. None on platforms without `resource` "
+                "(e.g. Windows) rather than a misleading 0.0."
             ),
             "disk_sampling_window": "loader start through CHECKPOINT and connection close",
             "duplicate_rows": duplicate_rows,

@@ -1,5 +1,6 @@
 import json
 import logging
+import sys
 import time
 import zipfile
 from pathlib import Path
@@ -1900,8 +1901,11 @@ def test_write_cnpjs_parquet_chunked_reports_failed_chunk_and_reraises(tmp_path,
         assert recorded[0].csv_name == csv_a.name
         assert recorded[0].index == 0
         # rss_peak_mib é sempre barato (chamada direta, sem thread) -- deve
-        # vir preenchido mesmo no chunk que teve sucesso.
-        assert recorded[0].rss_peak_mib is not None
+        # vir preenchido mesmo no chunk que teve sucesso, em qualquer
+        # plataforma com `resource` (Windows não tem -- vira None lá por
+        # design, ver metrics._rss_peak_mib).
+        if sys.platform != "win32":
+            assert recorded[0].rss_peak_mib is not None
 
         assert recorded[1].status == "failed"
         assert recorded[1].csv_name == csv_b.name
@@ -1911,10 +1915,10 @@ def test_write_cnpjs_parquet_chunked_reports_failed_chunk_and_reraises(tmp_path,
         assert "falha simulada no chunk B" in recorded[1].error
         assert recorded[1].wall_seconds >= 0
         # Finding F: o chunk que falhou ainda registra o que foi possível
-        # medir até ali -- rss sempre disponível, e o pico de workdir do
-        # sampler compartilhado (mesmo que 0.0, o campo não pode ser
-        # ausente/levantar exceção tentando computá-lo).
-        assert recorded[1].rss_peak_mib is not None
+        # medir até ali -- o pico de workdir do sampler compartilhado (mesmo
+        # que 0.0) não pode ser ausente/levantar exceção tentando computá-lo.
+        if sys.platform != "win32":
+            assert recorded[1].rss_peak_mib is not None
         assert recorded[1].workdir_peak_mib is not None
     finally:
         con.close()
@@ -1996,9 +2000,10 @@ def test_write_cnpjs_parquet_chunked_records_disk_peaks_via_shared_sampler(tmp_p
             sampler.stop()
 
         assert len(recorded) == 2
-        assert recorded[0].rss_peak_mib is not None
+        if sys.platform != "win32":
+            assert recorded[0].rss_peak_mib is not None
+            assert recorded[1].rss_peak_mib is not None
         assert (recorded[0].workdir_peak_mib or 0) < 1.0  # ainda não cresceu
-        assert recorded[1].rss_peak_mib is not None
         assert recorded[1].workdir_peak_mib is not None
         assert recorded[1].workdir_peak_mib >= 1.9  # já viu o arquivo de ~2 MiB
     finally:

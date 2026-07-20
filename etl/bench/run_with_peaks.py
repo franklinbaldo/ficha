@@ -16,6 +16,11 @@ import sys
 import time
 from pathlib import Path
 
+try:
+    import resource  # POSIX-only (RUSAGE_CHILDREN); None on Windows.
+except ImportError:
+    resource = None
+
 
 def _size_bytes(path: Path) -> int:
     try:
@@ -87,16 +92,11 @@ def main() -> None:
             filesystem_peak = max(filesystem_peak, usage.used)
             filesystem_total = usage.total
 
-    # resource (RUSAGE_CHILDREN) is POSIX-only -- this wrapper otherwise only
-    # touches subprocess/shutil/os.walk, all cross-platform, so the import is
-    # guarded here rather than at module level, and the CPU/RSS fields are
-    # None on Windows (documented as unavailable) instead of blocking the
-    # whole script from loading. Production/CI are Linux; this only matters
-    # for a dev running the wrapper locally on Windows.
-    has_rusage = sys.platform != "win32"
-    if has_rusage:
-        import resource
-
+    # RUSAGE_CHILDREN is unavailable wherever `resource` is (e.g. Windows --
+    # guarded at module level, see top of file). CPU/RSS fields are None
+    # there (documented as unmeasured) rather than blocking this otherwise
+    # cross-platform wrapper (subprocess/shutil/os.walk) from running at all.
+    if resource is not None:
         child_usage_before = resource.getrusage(resource.RUSAGE_CHILDREN)
     started = time.monotonic()
     process = subprocess.Popen(command)
@@ -116,16 +116,20 @@ def main() -> None:
         "filesystem_used_peak_bytes": filesystem_peak,
         "filesystem_total_bytes": filesystem_total,
     }
-    if has_rusage:
+    if resource is not None:
         child_usage_after = resource.getrusage(resource.RUSAGE_CHILDREN)
+        # ru_maxrss unit varies by platform: KiB on Linux (the Actions
+        # runner), bytes on macOS/BSD -- same distinction ficha_etl.metrics
+        # makes for RUSAGE_SELF.
+        rss_divisor = 1024 * 1024 if sys.platform == "darwin" else 1024
         result.update(
             {
                 "child_user_cpu_seconds": child_usage_after.ru_utime - child_usage_before.ru_utime,
                 "child_system_cpu_seconds": child_usage_after.ru_stime
                 - child_usage_before.ru_stime,
-                # Linux Actions runner: ru_maxrss is KiB. This wrapper runs one
-                # command, so RUSAGE_CHILDREN is a useful process-tree peak envelope.
-                "child_rss_peak_mib": child_usage_after.ru_maxrss / 1024,
+                # This wrapper runs one command, so RUSAGE_CHILDREN is a
+                # useful process-tree peak envelope.
+                "child_rss_peak_mib": child_usage_after.ru_maxrss / rss_divisor,
             }
         )
     else:
