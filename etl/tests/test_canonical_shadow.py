@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import copy
 import csv
+import hashlib
 import json
 from pathlib import Path
 
@@ -506,6 +507,16 @@ def test_empresa_conflicting_duplicates_across_parts_collapse_deterministically(
 
 
 def test_empresa_dataset_order_independent_across_parts_and_rows(tmp_path):
+    """Not just the same SET of records after sorting in the test query --
+    the writer itself must emit the same physical row SEQUENCE (RFC 0001
+    requires the same records, ordering and deduplication decisions), so
+    this reads the Parquet with no ORDER BY at all and compares the raw
+    fetch order. Byte-identical Parquet files are not claimed or compared
+    (Parquet writer metadata, e.g. timestamps, can differ) -- instead a
+    SHA256 digest of the logical row sequence is compared, which is exactly
+    what would catch a silent reordering without over-claiming file-level
+    identity.
+    """
     exact_row = _empresa_row(cnpj_basico="00000002")
     conflict_a = _empresa_row(cnpj_basico="00000003", razao_social="CONFLICT A")
     conflict_b = _empresa_row(cnpj_basico="00000003", razao_social="CONFLICT B")
@@ -526,9 +537,10 @@ def test_empresa_dataset_order_independent_across_parts_and_rows(tmp_path):
             report = canonical_shadow.write_canonical_dataset(
                 con, "empresa", parts, output, source_snapshot="2026-07", sample_size=10
             )
+            # No ORDER BY here on purpose -- this must reflect the order the
+            # writer itself emitted, not an order imposed by the test query.
             rows = con.execute(
-                "SELECT cnpj_basico, razao_social, _source_file FROM read_parquet(?) "
-                "ORDER BY cnpj_basico",
+                "SELECT cnpj_basico, razao_social, _source_file FROM read_parquet(?)",
                 [str(output)],
             ).fetchall()
         finally:
@@ -538,10 +550,63 @@ def test_empresa_dataset_order_independent_across_parts_and_rows(tmp_path):
     report_fwd, rows_fwd = run("fwd", reverse_parts=False, reverse_rows=False)
     report_rev, rows_rev = run("rev", reverse_parts=True, reverse_rows=True)
 
+    # Emitted physical row sequence is identical, not just the same set.
     assert rows_fwd == rows_rev
+    # cnpj_basico is the primary key, so ordering by it is the writer's
+    # documented explicit contract -- pin it directly, not just "whatever
+    # order came out of both runs happened to match".
+    assert [row[0] for row in rows_fwd] == sorted(row[0] for row in rows_fwd)
+
+    digest_fwd = hashlib.sha256(
+        json.dumps(rows_fwd, default=str, separators=(",", ":")).encode()
+    ).hexdigest()
+    digest_rev = hashlib.sha256(
+        json.dumps(rows_rev, default=str, separators=(",", ":")).encode()
+    ).hexdigest()
+    assert digest_fwd == digest_rev
+
     assert report_fwd.conflicting_sample == report_rev.conflicting_sample
     assert report_fwd.duplicate_key_count == report_rev.duplicate_key_count == 2
     assert report_fwd.duplicate_key_rows == report_rev.duplicate_key_rows == 2
+    assert report_fwd.sample_fingerprint == report_rev.sample_fingerprint
+
+
+def test_empresa_dataset_sample_fingerprint_independent_of_scan_order(tmp_path):
+    """_sample()'s selection must be a function of key VALUES, not scan
+    order -- with more canonical rows than sample_size, reservoir sampling
+    (even with a repeatable seed) could select a different subset of rows
+    depending on part/row order, silently changing sample_fingerprint for
+    logically identical input. Six distinct keys, sample_size=3, forces real
+    sub-selection (not "sample_size >= available rows, so everything is
+    selected regardless of algorithm", which the order-independence test
+    above doesn't exercise since it only has 3 canonical rows)."""
+    rows_by_part = {
+        "Empresas0.zip": [_empresa_row(cnpj_basico=f"{n:08d}") for n in range(1, 4)],
+        "Empresas5.zip": [_empresa_row(cnpj_basico=f"{n:08d}") for n in range(4, 7)],
+    }
+
+    def run(tag: str, *, reverse_parts: bool, reverse_rows: bool):
+        parts_rows = rows_by_part
+        if reverse_rows:
+            parts_rows = {name: list(reversed(rows)) for name, rows in parts_rows.items()}
+        parts = _write_empresa_dataset(tmp_path / f"dataset-{tag}", parts_rows)
+        if reverse_parts:
+            parts = list(reversed(parts))
+        output = tmp_path / f"part-{tag}.parquet"
+        con = duckdb.connect()
+        try:
+            report = canonical_shadow.write_canonical_dataset(
+                con, "empresa", parts, output, source_snapshot="2026-07", sample_size=3
+            )
+        finally:
+            con.close()
+        return report
+
+    report_fwd = run("fwd", reverse_parts=False, reverse_rows=False)
+    report_rev = run("rev", reverse_parts=True, reverse_rows=True)
+
+    assert report_fwd.rows_canonical == 6
+    assert report_fwd.sample_size == 3  # genuine sub-selection, not "everything"
     assert report_fwd.sample_fingerprint == report_rev.sample_fingerprint
 
 

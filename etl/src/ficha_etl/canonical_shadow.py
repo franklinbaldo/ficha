@@ -6,29 +6,44 @@ be written through the same path. Entity-specific behavior comes only from
 the registry contract (``duplicate_policy``, column casts, primary key) --
 there is no parallel per-entity orchestration function.
 
-Two entry points, chosen by physical layout, not by entity name:
+Two entry points, chosen by physical layout AND by what the declared
+``duplicate_policy`` actually needs, not by entity name:
 
 - :func:`write_canonical_part` -- one physical source CSV in, one canonical
-  Parquet part out. Correct whenever duplicate validation is legitimately
-  part-local: ``estabelecimento`` (``duplicate_policy="fail"`` -- any
-  duplicate full key fails the part closed, so there is nothing to combine
-  across parts) and, in general, any table whose ``sources.py`` inventory
-  has exactly one physical file for its kind.
+  Parquet part out. Any single part it writes has no duplicate/blank full
+  key WITHIN that part -- that is all it checks or guarantees.
+  ``estabelecimento`` (``duplicate_policy="fail"``) uses this entry point
+  even though RFB publishes it as ten physical ``EstabelecimentosN.zip``
+  parts: a "fail" policy only means a duplicate found INSIDE one part fails
+  that part closed, NOT that the same key is proven absent from every other
+  part -- each single-part run only ever sees its own CSV, so a key
+  duplicated *across* two different parts is invisible to both runs and
+  neither one can detect it. This writer therefore does not, by itself,
+  guarantee complete-snapshot key uniqueness for a multi-part "fail" table;
+  that is a separate, explicit, whole-snapshot gate --
+  ``estabelecimento_key_audit.py`` -- run once for the 2026-04 snapshot (see
+  issue #100 / PR #102 / ``docs/canonical-estabelecimento-history.md``) but
+  NOT re-run or enforced automatically for every future snapshot this writer
+  processes.
 - :func:`write_canonical_dataset` -- ALL physical parts of a multi-file
   table in, one canonical Parquet out. Required for a table with more than
   one physical source file AND ``duplicate_policy="deterministic-collapse"``
   (``empresa`` today; ``socio`` once a later slice extends canonical
-  coverage to it): a primary key repeated across two different physical
-  ZIPs (e.g. ``Empresas0.zip`` and ``Empresas7.zip``) can only be collapsed
-  to one surviving row if both parts are in the SAME deduplication scope.
-  Feeding one such part at a time into :func:`write_canonical_part` would
-  let that key survive once in EACH part's output, silently violating the
-  contract's own primary-key uniqueness guarantee -- the same class of
-  cross-part blind spot issue #100 found for estabelecimento's read-only
-  uniqueness audit, except here it would corrupt the WRITTEN canonical
-  data rather than just an evidence report. ``write_canonical_part`` refuses
-  to run against such a table (see the guard near its top) rather than
-  silently producing an apparently-valid-but-incomplete part.
+  coverage to it): unlike a "fail" table, where cross-part uniqueness is an
+  external fact the writer can defer verifying, a "deterministic-collapse"
+  table's contract is to actually MERGE every occurrence of a key into one
+  row -- that merge is simply wrong if it cannot see every part at once. A
+  primary key repeated across two different physical ZIPs (e.g.
+  ``Empresas0.zip`` and ``Empresas7.zip``) can only be collapsed to one
+  surviving row if both parts are in the SAME deduplication scope. Feeding
+  one such part at a time into :func:`write_canonical_part` would let that
+  key survive once in EACH part's output, silently violating the contract's
+  own primary-key uniqueness guarantee -- the same class of cross-part blind
+  spot issue #100 found for estabelecimento, except here it would corrupt
+  the WRITTEN canonical data rather than leave an unverified assumption.
+  ``write_canonical_part`` refuses to run against such a table (see the
+  guard near its top) rather than silently producing an
+  apparently-valid-but-incomplete part.
 
 :func:`write_estabelecimento_canonical_part` is a thin backward-compatible
 wrapper over ``write_canonical_part`` kept for existing callers
@@ -59,6 +74,13 @@ import duckdb
 from . import metrics, registry, sources, transform
 
 _SAMPLE_SEED = 42
+# _sample()'s selection algorithm (which keys the seed picks, not just the
+# hash function itself) is part of the writer's evidence contract -- see
+# _sample()'s docstring. It is not separately versioned: canonical_history.py's
+# _code_fingerprints() already hashes this file's own source, so any change
+# to the algorithm changes that fingerprint and forces a real historical run
+# to rebuild rather than silently reuse a checkpoint computed under a
+# different (possibly order-dependent) selection.
 # Experimental physical profile for the shadow slice; ParquetSpec keeps these
 # choices open until real-run evidence exists.
 _CODEC = "ZSTD"
@@ -369,32 +391,75 @@ def _sample(
     requested: int,
     rows_available: int,
 ) -> tuple[int, str]:
+    """Select up to ``requested`` primary keys and return (count, a SHA256
+    fingerprint of the selected keys).
+
+    Selection is a deterministic function of each row's primary-key VALUES,
+    not of scan order: every candidate key is ranked by ``hash()`` (a pure
+    function of the key text, independent of which physical row/part it came
+    from) salted with the fixed sample seed, and the top ``requested`` keys
+    by that rank are kept. This is NOT ``USING SAMPLE reservoir(...)`` --
+    reservoir sampling's selection depends on the order rows are fed to the
+    sampling operator, so even with ``REPEATABLE(seed)`` a different input
+    part/row order (or scan strategy) could select a different subset of
+    rows once the sample is smaller than the dataset, silently changing
+    ``sample_fingerprint`` for identical logical input. The final fingerprint
+    is computed over the selected keys re-sorted by primary-key value (not
+    by hash rank), matching the pre-existing fingerprint contract's ordering.
+    """
     size = min(max(0, requested), rows_available)
     if not size:
         return 0, hashlib.sha256(b"[]").hexdigest()
-    keys = ", ".join(registry.quote_identifier(name) for name in spec.primary_key)
+    keys = [registry.quote_identifier(name) for name in spec.primary_key]
+    key_list = ", ".join(keys)
+    key_text = " || '|' || ".join(f"CAST({key} AS VARCHAR)" for key in keys)
+    rank_expr = f"hash(({key_text}) || '|{_SAMPLE_SEED}')"
     rows = con.execute(
-        f"SELECT {keys} FROM {raw_table} "
-        f"USING SAMPLE reservoir({size} ROWS) REPEATABLE({_SAMPLE_SEED}) "
-        f"ORDER BY {keys}"
+        f"""
+        WITH ranked AS (
+            SELECT {key_list}, {rank_expr} AS _sample_rank FROM {raw_table}
+        ),
+        selected AS (
+            SELECT {key_list} FROM ranked ORDER BY _sample_rank, {key_list} LIMIT {size}
+        )
+        SELECT {key_list} FROM selected ORDER BY {key_list}
+        """
     ).fetchall()
     encoded = json.dumps(rows, default=str, separators=(",", ":")).encode()
     return len(rows), hashlib.sha256(encoded).hexdigest()
 
 
 def _select_sql(
-    raw_table: str, spec: registry.ParquetSpec, source_file_sql: str, snapshot: str
+    raw_table: str,
+    spec: registry.ParquetSpec,
+    source_file_sql: str,
+    snapshot: str,
+    *,
+    order_by_primary_key: bool = False,
 ) -> str:
     """``source_file_sql`` is a SQL expression (over the ``src`` alias),
     evaluated per row -- a quoted literal for a single-part write, or the
     per-row source-file tag column for a dataset-level (multi-part) write.
+
+    ``order_by_primary_key`` makes the emitted row sequence an explicit
+    function of the (already-unique, already-non-blank) primary key rather
+    than an implicit consequence of table materialization/``UNION ALL``/
+    window-function order -- required for :func:`write_canonical_dataset`
+    (RFC 0001 requires the same records AND ordering for the same input).
+    Left off by default so :func:`write_canonical_part`'s single-part output
+    -- in particular estabelecimento's pinned evidence contract -- does not
+    change row order as a side effect of this.
     """
     projection = registry.canonical_projection_sql(spec, source_alias="src")
+    order_clause = ""
+    if order_by_primary_key:
+        keys = ", ".join(f"src.{registry.quote_identifier(name)}" for name in spec.primary_key)
+        order_clause = f"\nORDER BY {keys}"
     return (
         f"SELECT\n{projection},\n"
         f'    {source_file_sql} AS "_source_file",\n'
         f'    {_literal(snapshot)} AS "_source_snapshot"\n'
-        f"FROM {raw_table} AS src"
+        f"FROM {raw_table} AS src{order_clause}"
     )
 
 
@@ -530,8 +595,13 @@ def write_canonical_part(
     Duplicate handling branches ONLY on the table's declared
     ``duplicate_policy`` -- there is no per-entity orchestration function:
 
-    - ``"fail"`` (estabelecimento): any duplicate full-key fails the part
-      closed, exactly as before this table-driven generalization.
+    - ``"fail"`` (estabelecimento): any duplicate full-key WITHIN this part
+      fails the part closed, exactly as before this table-driven
+      generalization. This is a per-part guarantee only -- it says nothing
+      about whether the same key also exists in a different physical part;
+      see this module's docstring for why a multi-part "fail" table's
+      complete-snapshot key uniqueness is a separate, external gate, not
+      something this function checks or claims.
     - ``"deterministic-collapse"`` on a table with exactly one physical
       source file: duplicates -- exact or genuinely conflicting alike --
       are collapsed to one row per key via the same deterministic full-row
@@ -894,7 +964,7 @@ def write_canonical_dataset(
     partial.unlink(missing_ok=True)
     try:
         con.execute(
-            f"COPY ({_select_sql(raw_table, spec, source_file_sql, source_snapshot)}) "
+            f"COPY ({_select_sql(raw_table, spec, source_file_sql, source_snapshot, order_by_primary_key=True)}) "
             f"TO {_literal(str(partial))} (FORMAT PARQUET, COMPRESSION {_CODEC}, "
             f"ROW_GROUP_SIZE {_ROW_GROUP_SIZE})"
         )
