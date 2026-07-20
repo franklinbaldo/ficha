@@ -1,13 +1,14 @@
-"""Schema registry — fonte central de metadados das tabelas RFB (Fase 1, RFC 0001).
+"""Schema registry — fonte central de metadados das tabelas RFB (RFC 0001).
 
-Este módulo só descreve *o quê* (layout de colunas, opções de leitura CSV) e
-*como montar o SQL* correspondente — funções puras, sem I/O e sem side effects.
-A orquestração (loop de tentativas de encoding, filtragem de arquivos vazios,
-criação de tabela vazia, logging) continua em `transform.py`.
+O registry separa dois contratos:
 
-Requisito central (RFC 0001 §8.1): o SQL gerado aqui deve produzir leitura CSV
-semanticamente idêntica ao reader legado — nenhuma mudança de comportamento
-nesta fase.
+- ``CsvSpec`` descreve a leitura raw, que precisa permanecer semanticamente
+  idêntica ao reader legado;
+- ``ParquetSpec`` descreve o schema canônico interno, com tipos, casts,
+  políticas de valor inválido, chaves, linhagem e versão.
+
+A orquestração (I/O, tentativas de encoding, escrita e métricas) continua fora
+deste módulo. As funções daqui são puras e determinísticas.
 """
 
 from __future__ import annotations
@@ -15,8 +16,15 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 from .sources import FileKind
+
+
+InvalidValuePolicy = Literal["fail", "null-and-count", "preserve-as-string", "quarantine"]
+_ALLOWED_INVALID_VALUE_POLICIES = frozenset(
+    {"fail", "null-and-count", "preserve-as-string", "quarantine"}
+)
 
 
 @dataclass(frozen=True)
@@ -24,22 +32,14 @@ class CsvSpec:
     """Opções de leitura CSV para uma tabela RFB — layout fixo, sem header.
 
     Os defaults capturam decisões load-bearing do reader legado (ver
-    `_create_table_from_csvs` em transform.py), não meras conveniências:
+    ``_create_table_from_csvs`` em transform.py), não meras conveniências:
 
-    - `parallel=False`: o scanner paralelo do DuckDB fatia um único arquivo
-      grande por offset de bytes; com `null_padding=True` ele não recupera
-      linhas ragged cujo campo tem newline entre aspas atravessando um
-      corte, e aborta ("parallel scanner does not support null_padding in
-      conjunction with quoted new lines"). Isso é dependente da posição dos
-      dados, então threads=1 (já a norma aqui) não custa nada e torna a
-      carga determinística.
-    - `max_line_size=16MiB`: alguns campos (razao_social, nome_fantasia)
-      podem ser grandes o bastante pra estourar o default do DuckDB.
-    - `null_padding=True`: linhas RFB "ragged" (menos campos que o schema)
-      são preenchidas com NULL em vez de falhar o parse inteiro.
-    - `strict_mode=False`: RFB não segue estritamente RFC 4180 em todas as
-      partições; strict_mode=true rejeitaria linhas que null_padding
-      deveria tolerar.
+    - ``parallel=False``: o scanner paralelo do DuckDB fatia um único arquivo
+      grande por offset de bytes; com ``null_padding=True`` ele não recupera
+      linhas ragged cujo campo tem newline entre aspas atravessando um corte.
+    - ``max_line_size=16MiB``: alguns campos podem estourar o default.
+    - ``null_padding=True``: linhas RFB ragged são preenchidas com NULL.
+    - ``strict_mode=False``: a fonte não segue estritamente RFC 4180.
     """
 
     columns: tuple[str, ...]
@@ -53,16 +53,146 @@ class CsvSpec:
 
 
 @dataclass(frozen=True)
+class CanonicalColumn:
+    """Uma coluna derivada do CSV raw para o Parquet canônico.
+
+    ``cast_sql`` é um template SQL opcional com exatamente um placeholder
+    ``{source}``. Quando ausente, a coluna raw é projetada sem transformação.
+    ``invalid_policy`` documenta o que o futuro writer deve fazer quando um
+    cast ou regra semântica falhar.
+    """
+
+    name: str
+    duckdb_type: str
+    source: str
+    nullable: bool = True
+    invalid_policy: InvalidValuePolicy = "preserve-as-string"
+    cast_sql: str | None = None
+    publication_critical: bool = False
+
+    def __post_init__(self) -> None:
+        if not self.name:
+            raise ValueError("CanonicalColumn.name não pode ser vazio")
+        if not self.duckdb_type:
+            raise ValueError(f"{self.name}: duckdb_type não pode ser vazio")
+        if not self.source:
+            raise ValueError(f"{self.name}: source não pode ser vazio")
+        if self.invalid_policy not in _ALLOWED_INVALID_VALUE_POLICIES:
+            raise ValueError(f"{self.name}: invalid_policy inválida: {self.invalid_policy!r}")
+        if self.cast_sql is not None and self.cast_sql.count("{source}") != 1:
+            raise ValueError(
+                f"{self.name}: cast_sql deve conter exatamente um placeholder {{source}}"
+            )
+        if self.cast_sql is None and self.duckdb_type != "VARCHAR":
+            raise ValueError(f"{self.name}: coluna {self.duckdb_type} exige cast_sql explícito")
+        if self.invalid_policy == "preserve-as-string" and self.duckdb_type != "VARCHAR":
+            raise ValueError(f"{self.name}: preserve-as-string só é válida para VARCHAR")
+
+
+@dataclass(frozen=True)
+class LineageColumn:
+    """Coluna adicionada pelo estágio de ingestão, sem origem no CSV."""
+
+    name: str
+    duckdb_type: str = "VARCHAR"
+    nullable: bool = False
+
+    def __post_init__(self) -> None:
+        if not self.name.startswith("_source_"):
+            raise ValueError(f"coluna de linhagem deve começar com _source_: {self.name!r}")
+        if not self.duckdb_type:
+            raise ValueError(f"{self.name}: duckdb_type não pode ser vazio")
+
+
+@dataclass(frozen=True)
+class ParquetSpec:
+    """Contrato lógico do Parquet canônico de uma entidade RFB."""
+
+    schema_version: int
+    columns: tuple[CanonicalColumn, ...]
+    primary_key: tuple[str, ...]
+    lineage: tuple[LineageColumn, ...] = (
+        LineageColumn("_source_file"),
+        LineageColumn("_source_snapshot"),
+    )
+    bucket_key: str | None = None
+    codec: str | None = None
+    row_group_size: int | None = None
+
+    def __post_init__(self) -> None:
+        if self.schema_version < 1:
+            raise ValueError("schema_version deve ser >= 1")
+        if not self.columns:
+            raise ValueError("ParquetSpec.columns não pode ser vazio")
+
+        names = [column.name for column in self.columns]
+        duplicates = sorted({name for name in names if names.count(name) > 1})
+        if duplicates:
+            raise ValueError(f"colunas canônicas duplicadas: {duplicates}")
+
+        lineage_names = [column.name for column in self.lineage]
+        duplicate_lineage = sorted(
+            {name for name in lineage_names if lineage_names.count(name) > 1}
+        )
+        if duplicate_lineage:
+            raise ValueError(f"colunas de linhagem duplicadas: {duplicate_lineage}")
+
+        overlap = sorted(set(names) & set(lineage_names))
+        if overlap:
+            raise ValueError(f"colunas canônicas e de linhagem colidem: {overlap}")
+
+        missing_key = [name for name in self.primary_key if name not in names]
+        if missing_key:
+            raise ValueError(f"primary_key referencia colunas inexistentes: {missing_key}")
+        key_columns = [column for column in self.columns if column.name in self.primary_key]
+        nullable_key = [column.name for column in key_columns if column.nullable]
+        if nullable_key:
+            raise ValueError(f"primary_key não pode conter colunas nullable: {nullable_key}")
+        non_failing_key = [column.name for column in key_columns if column.invalid_policy != "fail"]
+        if non_failing_key:
+            raise ValueError(f"primary_key deve usar invalid_policy='fail': {non_failing_key}")
+        non_critical_key = [
+            column.name for column in key_columns if not column.publication_critical
+        ]
+        if non_critical_key:
+            raise ValueError(f"primary_key deve ser publication_critical: {non_critical_key}")
+
+        if self.bucket_key is not None and self.bucket_key not in names:
+            raise ValueError(f"bucket_key inexistente: {self.bucket_key!r}")
+        if self.row_group_size is not None and self.row_group_size < 1:
+            raise ValueError("row_group_size deve ser positivo")
+
+
+@dataclass(frozen=True)
 class TableSpec:
-    """Uma tabela RFB carregável no DuckDB: nome da tabela + FileKind + CsvSpec."""
+    """Uma tabela RFB: contrato raw e, quando definido, contrato canônico."""
 
     name: str
     kind: FileKind
     source: CsvSpec
+    canonical: ParquetSpec | None = None
+
+    def __post_init__(self) -> None:
+        if self.canonical is None:
+            return
+
+        source_columns = set(self.source.columns)
+        unknown_sources = sorted(
+            {
+                column.source
+                for column in self.canonical.columns
+                if column.source not in source_columns
+            }
+        )
+        if unknown_sources:
+            raise ValueError(
+                f"{self.name}: colunas canônicas referenciam fontes desconhecidas: "
+                f"{unknown_sources}"
+            )
 
 
 # Layout RFB CNPJ — colunas em ordem (sem header no CSV). Tipos: tudo VARCHAR
-# pra evitar surpresas; conversões acontecem nas SELECTs finais.
+# para evitar inferência silenciosa; conversões acontecem na fronteira canônica.
 EMPRESA_COLUMNS: tuple[str, ...] = (
     "cnpj_basico",
     "razao_social",
@@ -128,13 +258,67 @@ SIMPLES_COLUMNS: tuple[str, ...] = (
 )
 
 
-# Ordem espelha o loop de `load_main_tables_into_duckdb` em transform.py.
+def _string_column(
+    name: str,
+    *,
+    required: bool = False,
+    publication_critical: bool = False,
+) -> CanonicalColumn:
+    return CanonicalColumn(
+        name=name,
+        duckdb_type="VARCHAR",
+        source=name,
+        nullable=not required,
+        invalid_policy="fail" if required else "preserve-as-string",
+        publication_critical=publication_critical,
+    )
+
+
+def _date_column(name: str) -> CanonicalColumn:
+    return CanonicalColumn(
+        name=name,
+        duckdb_type="DATE",
+        source=name,
+        nullable=True,
+        invalid_policy="null-and-count",
+        cast_sql="try_strptime(nullif({source}, ''), '%Y%m%d')::DATE",
+    )
+
+
+_ESTABELECIMENTO_DATE_COLUMNS = frozenset(
+    {
+        "data_situacao_cadastral",
+        "data_inicio_atividade",
+        "data_situacao_especial",
+    }
+)
+_ESTABELECIMENTO_REQUIRED_COLUMNS = frozenset({"cnpj_basico", "cnpj_ordem", "cnpj_dv"})
+
+ESTABELECIMENTO_CANONICAL = ParquetSpec(
+    schema_version=1,
+    columns=tuple(
+        _date_column(name)
+        if name in _ESTABELECIMENTO_DATE_COLUMNS
+        else _string_column(
+            name,
+            required=name in _ESTABELECIMENTO_REQUIRED_COLUMNS,
+            publication_critical=name in _ESTABELECIMENTO_REQUIRED_COLUMNS,
+        )
+        for name in ESTABELECIMENTO_COLUMNS
+    ),
+    primary_key=("cnpj_basico", "cnpj_ordem", "cnpj_dv"),
+)
+
+
+# A ordem declarativa documenta o schema; a estratégia física de carga pode
+# usar uma ordem própria em transform.py.
 MAIN_TABLES: tuple[TableSpec, ...] = (
     TableSpec(name="empresa", kind="empresas", source=CsvSpec(columns=EMPRESA_COLUMNS)),
     TableSpec(
         name="estabelecimento",
         kind="estabelecimentos",
         source=CsvSpec(columns=ESTABELECIMENTO_COLUMNS),
+        canonical=ESTABELECIMENTO_CANONICAL,
     ),
     TableSpec(name="simples", kind="simples", source=CsvSpec(columns=SIMPLES_COLUMNS)),
     TableSpec(name="socio", kind="socios", source=CsvSpec(columns=SOCIO_COLUMNS)),
@@ -142,35 +326,44 @@ MAIN_TABLES: tuple[TableSpec, ...] = (
 
 
 def main_table(name: str) -> TableSpec:
-    """Busca um `TableSpec` em `MAIN_TABLES` pelo nome da tabela.
-
-    Acesso canônico pra quem precisa do CsvSpec de uma tabela principal
-    (ex.: reload de estabelecimento no writer chunked / roundtrip) sem
-    reimportar a tupla de colunas crua. `name` errado é erro de programação
-    (typo, tabela removida do registry), não fluxo de negócio — falha loud
-    com ValueError em vez de devolver None (guard clause, sem exceção como
-    controle de fluxo esperado).
-    """
+    """Busca um ``TableSpec`` em ``MAIN_TABLES`` pelo nome da tabela."""
     for spec in MAIN_TABLES:
         if spec.name == name:
             return spec
     raise ValueError(f"main_table: nenhuma TableSpec com name={name!r} em MAIN_TABLES")
 
 
+def quote_identifier(identifier: str) -> str:
+    """Escapa um identificador DuckDB com aspas duplas."""
+    return '"' + identifier.replace('"', '""') + '"'
+
+
+def canonical_expression_sql(column: CanonicalColumn, *, source_alias: str = "src") -> str:
+    """Compila a expressão de uma coluna canônica contra um alias raw."""
+    source = f"{quote_identifier(source_alias)}.{quote_identifier(column.source)}"
+    if column.cast_sql is None:
+        return source
+    return column.cast_sql.format(source=source)
+
+
+def canonical_projection_sql(spec: ParquetSpec, *, source_alias: str = "src") -> str:
+    """Gera a lista ``expr AS coluna`` da projeção canônica, sem linhagem."""
+    return ",\n".join(
+        f"    {canonical_expression_sql(column, source_alias=source_alias)} "
+        f"AS {quote_identifier(column.name)}"
+        for column in spec.columns
+    )
+
+
 def csv_columns_clause(columns: tuple[str, ...]) -> str:
-    """`{'c1': 'VARCHAR', 'c2': 'VARCHAR'}` para read_csv `columns` arg."""
-    pairs = ", ".join(f"'{c}': 'VARCHAR'" for c in columns)
+    """``{'c1': 'VARCHAR', 'c2': 'VARCHAR'}`` para ``read_csv(columns=...)``."""
+    pairs = ", ".join(f"'{column}': 'VARCHAR'" for column in columns)
     return "{" + pairs + "}"
 
 
 def paths_literal(paths: Sequence[Path]) -> str:
-    """Lista SQL inline `['a', 'b']` pros paths de CSV.
-
-    Inline em vez de parameter binding — array binding é instável no driver
-    DuckDB pra esse caso. Aspas simples no path são escapadas dobrando-as
-    (padrão SQL).
-    """
-    quoted = ", ".join(f"'{str(p).replace(chr(39), chr(39) * 2)}'" for p in paths)
+    """Lista SQL inline para paths de CSV, com apóstrofos escapados."""
+    quoted = ", ".join(f"'{str(path).replace(chr(39), chr(39) * 2)}'" for path in paths)
     return "[" + quoted + "]"
 
 
@@ -181,13 +374,7 @@ def read_csv_select_sql(
     encoding: str,
     ignore_errors: bool,
 ) -> str:
-    """Gera o `SELECT * FROM read_csv(...)` pra ler `paths` com as opções de `spec`.
-
-    Mesmas opções e mesma ordem do reader legado em `_create_table_from_csvs`
-    — este SQL deve ser semanticamente idêntico ao anterior (RFC 0001 §8.1).
-    `encoding` e `ignore_errors` variam por tentativa (ver `encoding_attempts`)
-    e por isso não fazem parte de `CsvSpec`.
-    """
+    """Gera o ``SELECT * FROM read_csv(...)`` semanticamente equivalente ao legado."""
     literal = paths_literal(paths)
     cols_clause = csv_columns_clause(spec.columns)
     header = "true" if spec.header else "false"
@@ -213,21 +400,7 @@ def read_csv_select_sql(
 
 
 def encoding_attempts(sample: bytes) -> tuple[tuple[str, bool], ...]:
-    """Determina a ordem de tentativas (encoding, ignore_errors) a partir de uma amostra.
-
-    RFB occasionally emits rows that are neither valid latin-1 nor utf-8
-    (mixed-encoding garbage from legacy systems). DuckDB's latin-1 mode
-    pre-flight-rejects the whole file ("File is not latin-1 encoded"), so
-    `ignore_errors` doesn't help that branch. utf-8 mode accepts any bytes
-    at parse time and only fails per-row, so `ignore_errors=True` there
-    drops the bad rows.
-
-    Se a amostra decodifica em utf-8 estrito, usamos utf-8 direto (com
-    ignore_errors=True, pois bytes ruins podem existir no meio do arquivo
-    mesmo que a amostra inicial seja válida). Caso contrário, tentamos
-    latin-1 primeiro (encoding histórico da RFB, sem ignore_errors — não
-    ajudaria de qualquer forma), com utf-8+ignore_errors como safety net.
-    """
+    """Determina tentativas ``(encoding, ignore_errors)`` a partir da amostra."""
     try:
         sample.decode("utf-8", errors="strict")
         return (("utf-8", True),)
