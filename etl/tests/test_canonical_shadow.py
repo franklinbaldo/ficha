@@ -13,9 +13,7 @@ from ficha_etl import canonical_shadow, registry
 
 
 def _row(**overrides: str | None) -> dict[str, str | None]:
-    values: dict[str, str | None] = {
-        name: "" for name in registry.ESTABELECIMENTO_COLUMNS
-    }
+    values: dict[str, str | None] = {name: "" for name in registry.ESTABELECIMENTO_COLUMNS}
     values.update(
         {
             "cnpj_basico": "00000001",

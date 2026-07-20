@@ -115,9 +115,7 @@ def _key_diagnostics(
     return failures, duplicate_rows
 
 
-def _invalid_casts(
-    con: duckdb.DuckDBPyConnection, spec: registry.ParquetSpec
-) -> dict[str, int]:
+def _invalid_casts(con: duckdb.DuckDBPyConnection, spec: registry.ParquetSpec) -> dict[str, int]:
     result: dict[str, int] = {}
     for column in spec.columns:
         if column.duckdb_type != "DATE" or column.invalid_policy != "null-and-count":
@@ -321,9 +319,9 @@ def write_estabelecimento_canonical_part(
             f"ROW_GROUP_SIZE {_ROW_GROUP_SIZE})"
         )
         rows_canonical = int(
-            con.execute(
-                f"SELECT COUNT(*) FROM read_parquet({_literal(str(partial))})"
-            ).fetchone()[0]
+            con.execute(f"SELECT COUNT(*) FROM read_parquet({_literal(str(partial))})").fetchone()[
+                0
+            ]
         )
         actual_schema = [
             (str(row[0]), str(row[1]))
@@ -342,9 +340,7 @@ def write_estabelecimento_canonical_part(
         )
         errors = []
         if rows_canonical != rows_raw:
-            errors.append(
-                f"row-count mismatch: raw={rows_raw}, canonical={rows_canonical}"
-            )
+            errors.append(f"row-count mismatch: raw={rows_raw}, canonical={rows_canonical}")
         if not schema_matches:
             errors.append(
                 f"schema mismatch: expected={_expected_schema(spec)!r}, actual={actual_schema!r}"
@@ -499,17 +495,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--keep-workdir", action="store_true")
     args = parser.parse_args(argv)
     if not sources.is_valid_month(args.snapshot):
-        print(
-            f"error: snapshot must be YYYY-MM, got {args.snapshot!r}", file=sys.stderr
-        )
+        print(f"error: snapshot must be YYYY-MM, got {args.snapshot!r}", file=sys.stderr)
         return 2
 
     work = args.work_dir or args.output.parent / ".canonical-shadow" / args.output.stem
     quality = args.report or args.output.with_suffix(".quality.json")
     resource_metrics = args.metrics or args.output.with_suffix(".metrics.json")
-    logging.basicConfig(
-        level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s"
-    )
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     try:
         report = run_shadow_part(
             args.csv,
