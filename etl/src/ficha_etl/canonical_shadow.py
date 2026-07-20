@@ -1,4 +1,14 @@
-"""Write one shadow canonical ``estabelecimento`` Parquet part (RFC 0001 Phase 2).
+"""Write one shadow canonical Parquet part for a registry-declared main table
+(RFC 0001 Phase 2/3).
+
+Table-driven: any ``TableSpec`` with a canonical ``ParquetSpec`` contract can
+be written through the same path. Entity-specific behavior comes only from
+the registry contract (``duplicate_policy``, column casts, primary key) --
+there is no parallel per-entity orchestration function. ``estabelecimento``
+(``duplicate_policy="fail"``) and ``empresa`` (``duplicate_policy=
+"deterministic-collapse"``) both go through :func:`write_canonical_part`;
+:func:`write_estabelecimento_canonical_part` is a thin backward-compatible
+wrapper kept for existing callers (``canonical_history.py``, tests).
 
 The command consumes an already-extracted RFB CSV. It deliberately does not
 fetch, publish, or feed the monthly product pipeline.
@@ -13,7 +23,7 @@ import logging
 import shutil
 import sys
 import uuid
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Literal
 
@@ -21,12 +31,17 @@ import duckdb
 
 from . import metrics, registry, sources, transform
 
-_RAW_TABLE = "_raw_estabelecimento_shadow"
 _SAMPLE_SEED = 42
 # Experimental physical profile for the shadow slice; ParquetSpec keeps these
 # choices open until real-run evidence exists.
 _CODEC = "ZSTD"
 _ROW_GROUP_SIZE = 200_000
+_DEFAULT_TABLE = "estabelecimento"
+_CONFLICT_SAMPLE_LIMIT = 5
+
+
+def _raw_table_name(table_name: str) -> str:
+    return f"_raw_{table_name}_shadow"
 
 
 @dataclass(frozen=True)
@@ -52,6 +67,22 @@ class CanonicalPartReport:
     codec: str = _CODEC
     row_group_size: int = _ROW_GROUP_SIZE
     error: str | None = None
+    # Distinct duplicate-KEY count, separate from duplicate_key_rows (excess
+    # ROWS beyond 1 per key) -- added for #97 slice 2 (empresa). Always 0 on
+    # an "ok" report for duplicate_policy="fail" tables (any duplicate there
+    # fails the part before an "ok" report is ever built); meaningful for
+    # duplicate_policy="deterministic-collapse" tables whether the collapse
+    # found 0 or more duplicate keys.
+    duplicate_key_count: int = 0
+    # Among duplicate keys, how many have genuinely CONFLICTING payloads
+    # (different field values for the same key, not just a repeated row) --
+    # same distinction transform._dedupe_cnpj_basico_table makes for the
+    # production empresa/simples path (see issue #76: the deterministic
+    # collapse applied to these is transitional, not a verified semantic
+    # truth). Only ever nonzero for duplicate_policy="deterministic-collapse"
+    # tables.
+    conflicting_key_count: int = 0
+    conflicting_sample: list[dict[str, str]] = field(default_factory=list)
 
     @property
     def invalid_casts_total(self) -> int:
@@ -77,20 +108,31 @@ def _literal(value: str) -> str:
     return "'" + value.replace("'", "''") + "'"
 
 
-def _spec() -> tuple[registry.TableSpec, registry.ParquetSpec]:
-    table = registry.main_table("estabelecimento")
-    if table.canonical is None:  # pragma: no cover
-        raise RuntimeError("estabelecimento has no canonical contract")
+def _spec(table_name: str) -> tuple[registry.TableSpec, registry.ParquetSpec]:
+    table = registry.main_table(table_name)
+    if table.canonical is None:
+        raise RuntimeError(f"{table_name}: no canonical contract in the registry")
     return table, table.canonical
 
 
 def _key_diagnostics(
-    con: duckdb.DuckDBPyConnection, spec: registry.ParquetSpec
-) -> tuple[dict[str, int], int]:
+    con: duckdb.DuckDBPyConnection, raw_table: str, spec: registry.ParquetSpec
+) -> tuple[dict[str, int], int, int]:
+    """(required-key failures per component, distinct duplicate-key count,
+    excess-row count).
+
+    Required-key failures are counted over EVERY row regardless of key
+    validity -- a blank/null key component is itself the failure. Duplicate/
+    excess counts are computed only over rows where every key component is
+    present: a blank/null key is a key-integrity failure, never an ordinary
+    duplicate -- it never matches another row via SQL `=`, and grouping every
+    NULL together would misreport genuinely distinct null-keyed rows as
+    "duplicates" of each other.
+    """
     failures = {
         name: int(
             con.execute(
-                f"SELECT COUNT(*) FROM {_RAW_TABLE} WHERE "
+                f"SELECT COUNT(*) FROM {raw_table} WHERE "
                 f"{registry.quote_identifier(name)} IS NULL OR "
                 f"TRIM({registry.quote_identifier(name)}) = ''"
             ).fetchone()[0]
@@ -99,33 +141,131 @@ def _key_diagnostics(
     }
     keys = [registry.quote_identifier(name) for name in spec.primary_key]
     valid = " AND ".join(f"{key} IS NOT NULL AND TRIM({key}) <> ''" for key in keys)
-    duplicate_rows = int(
-        con.execute(
-            f"""
-            SELECT COALESCE(SUM(n - 1), 0)::BIGINT
-            FROM (
-                SELECT COUNT(*)::BIGINT AS n
-                FROM {_RAW_TABLE}
-                WHERE {valid}
-                GROUP BY {", ".join(keys)}
-                HAVING COUNT(*) > 1
-            )
-            """
-        ).fetchone()[0]
+    row = con.execute(
+        f"""
+        SELECT
+            COUNT(*)::BIGINT AS duplicate_keys,
+            COALESCE(SUM(n - 1), 0)::BIGINT AS excess_rows
+        FROM (
+            SELECT COUNT(*)::BIGINT AS n
+            FROM {raw_table}
+            WHERE {valid}
+            GROUP BY {", ".join(keys)}
+            HAVING COUNT(*) > 1
+        )
+        """
+    ).fetchone()
+    return failures, int(row[0]), int(row[1])
+
+
+def _conflict_diagnostics(
+    con: duckdb.DuckDBPyConnection,
+    raw_table: str,
+    spec: registry.ParquetSpec,
+    source_columns: tuple[str, ...],
+    *,
+    sample_limit: int = _CONFLICT_SAMPLE_LIMIT,
+) -> tuple[int, list[dict[str, str]]]:
+    """(conflicting-key count, bounded sample) among duplicate keys.
+
+    Same algorithm as ``transform._dedupe_cnpj_basico_table``'s struct-based
+    distinctness check, generalized to any registry ``primary_key``: a
+    duplicate key whose rows all pack into the SAME struct-of-every-source-
+    column is an exact (parsed-value-identical) duplicate; a key with more
+    than one distinct struct has rows that genuinely disagree on some field.
+    Only called for tables whose declared ``duplicate_policy`` is
+    ``"deterministic-collapse"`` -- ``"fail"`` tables never reach this (any
+    duplicate there fails the part before collapse is even considered).
+    """
+    keys = [registry.quote_identifier(name) for name in spec.primary_key]
+    key_list = ", ".join(keys)
+    t_keys = ", ".join(f"t.{key}" for key in keys)
+    valid = " AND ".join(f"{key} IS NOT NULL AND TRIM({key}) <> ''" for key in keys)
+    join_on = " AND ".join(f"t.{key} = dk.{key}" for key in keys)
+    cols = [registry.quote_identifier(name) for name in source_columns]
+    struct_expr = "{" + ", ".join(f"'{c}': t.{c}" for c in cols) + "}"
+    key_struct = (
+        "{"
+        + ", ".join(f"'{name}': c.{registry.quote_identifier(name)}" for name in spec.primary_key)
+        + "}"
     )
-    return failures, duplicate_rows
+
+    row = con.execute(
+        f"""
+        WITH dupe_keys AS (
+            SELECT {key_list} FROM {raw_table}
+            WHERE {valid}
+            GROUP BY {key_list} HAVING COUNT(*) > 1
+        ),
+        conflicting_keys AS (
+            SELECT {t_keys}
+            FROM {raw_table} t
+            JOIN dupe_keys dk ON {join_on}
+            GROUP BY {t_keys}
+            HAVING COUNT(DISTINCT {struct_expr}) > 1
+        )
+        SELECT COUNT(*), list({key_struct} ORDER BY {key_list})[1:{int(sample_limit)}]
+        FROM conflicting_keys c
+        """
+    ).fetchone()
+    total = int(row[0])
+    sample = [dict(entry) for entry in (row[1] or [])]
+    return total, sample
 
 
-def _invalid_casts(con: duckdb.DuckDBPyConnection, spec: registry.ParquetSpec) -> dict[str, int]:
+def _collapse_deterministic(
+    con: duckdb.DuckDBPyConnection,
+    raw_table: str,
+    spec: registry.ParquetSpec,
+    source_columns: tuple[str, ...],
+) -> None:
+    """Collapse ``raw_table`` to 1 row per valid (non-blank) primary-key value.
+
+    Same algorithm as ``transform._dedupe_cnpj_basico_table``: deterministic
+    full-row tiebreak (``ORDER BY`` every source column, not just the key --
+    a key-only order wouldn't break ties between duplicate rows at all), so
+    the survivor depends only on row VALUES, never on input file/row order
+    (a rerun with the same rows in a different file order collapses to the
+    identical output). Rows with any blank/null key component are left
+    untouched -- see ``_key_diagnostics``'s docstring for why grouping every
+    NULL together would be unsafe.
+    """
+    keys = [registry.quote_identifier(name) for name in spec.primary_key]
+    key_list = ", ".join(keys)
+    valid = " AND ".join(f"{key} IS NOT NULL AND TRIM({key}) <> ''" for key in keys)
+    invalid = " OR ".join(f"{key} IS NULL OR TRIM({key}) = ''" for key in keys)
+    tiebreak_cols = ", ".join(registry.quote_identifier(name) for name in source_columns)
+    con.execute(
+        f"""
+        CREATE OR REPLACE TABLE {raw_table} AS
+        SELECT * FROM {raw_table} WHERE {invalid}
+        UNION ALL
+        SELECT * FROM {raw_table} WHERE {valid}
+        QUALIFY row_number() OVER (PARTITION BY {key_list} ORDER BY {tiebreak_cols}) = 1
+        """
+    )
+
+
+def _invalid_casts(
+    con: duckdb.DuckDBPyConnection, raw_table: str, spec: registry.ParquetSpec
+) -> dict[str, int]:
+    """Count, per column, nonblank raw values whose cast produced NULL.
+
+    Any typed column declared ``invalid_policy="null-and-count"`` -- not
+    just ``DATE`` columns. The original estabelecimento-only slice only ever
+    had DATE columns using this policy; empresa's ``capital_social``
+    (DECIMAL) is the first non-DATE user, so the DATE-only filter that used
+    to gate this loop would have silently reported an empty dict for it.
+    """
     result: dict[str, int] = {}
     for column in spec.columns:
-        if column.duckdb_type != "DATE" or column.invalid_policy != "null-and-count":
+        if column.invalid_policy != "null-and-count":
             continue
         raw = f"src.{registry.quote_identifier(column.source)}"
         cast = registry.canonical_expression_sql(column, source_alias="src")
         result[column.name] = int(
             con.execute(
-                f"SELECT COUNT(*) FROM {_RAW_TABLE} AS src "
+                f"SELECT COUNT(*) FROM {raw_table} AS src "
                 f"WHERE {raw} IS NOT NULL AND TRIM({raw}) <> '' "
                 f"AND ({cast}) IS NULL"
             ).fetchone()[0]
@@ -135,16 +275,17 @@ def _invalid_casts(con: duckdb.DuckDBPyConnection, spec: registry.ParquetSpec) -
 
 def _sample(
     con: duckdb.DuckDBPyConnection,
+    raw_table: str,
     spec: registry.ParquetSpec,
     requested: int,
-    rows_raw: int,
+    rows_available: int,
 ) -> tuple[int, str]:
-    size = min(max(0, requested), rows_raw)
+    size = min(max(0, requested), rows_available)
     if not size:
         return 0, hashlib.sha256(b"[]").hexdigest()
     keys = ", ".join(registry.quote_identifier(name) for name in spec.primary_key)
     rows = con.execute(
-        f"SELECT {keys} FROM {_RAW_TABLE} "
+        f"SELECT {keys} FROM {raw_table} "
         f"USING SAMPLE reservoir({size} ROWS) REPEATABLE({_SAMPLE_SEED}) "
         f"ORDER BY {keys}"
     ).fetchall()
@@ -152,13 +293,13 @@ def _sample(
     return len(rows), hashlib.sha256(encoded).hexdigest()
 
 
-def _select_sql(spec: registry.ParquetSpec, source_file: str, snapshot: str) -> str:
+def _select_sql(raw_table: str, spec: registry.ParquetSpec, source_file: str, snapshot: str) -> str:
     projection = registry.canonical_projection_sql(spec, source_alias="src")
     return (
         f"SELECT\n{projection},\n"
         f'    {_literal(source_file)} AS "_source_file",\n'
         f'    {_literal(snapshot)} AS "_source_snapshot"\n'
-        f"FROM {_RAW_TABLE} AS src"
+        f"FROM {raw_table} AS src"
     )
 
 
@@ -171,6 +312,7 @@ def _expected_schema(spec: registry.ParquetSpec) -> list[tuple[str, str]]:
 
 def _sample_mismatches(
     con: duckdb.DuckDBPyConnection,
+    raw_table: str,
     spec: registry.ParquetSpec,
     parquet: Path,
     size: int,
@@ -193,6 +335,14 @@ def _sample_mismatches(
                 f"WHEN {parsed} IS NULL THEN {canonical} IS NOT NULL "
                 f"ELSE STRFTIME({canonical}, '%Y%m%d') IS DISTINCT FROM TRIM({raw}) END)"
             )
+        elif column.cast_sql is not None:
+            # Generic typed column (e.g. empresa's DECIMAL capital_social):
+            # recompute the SAME cast the canonical projection used, rather
+            # than comparing the raw string against the typed value directly
+            # (which would almost always read as "distinct" -- "150000,00"
+            # is never equal to the DECIMAL 150000.00 by naive comparison).
+            expected = registry.canonical_expression_sql(column, source_alias="src")
+            checks.append(f"({expected}) IS DISTINCT FROM {canonical}")
         else:
             checks.append(f"{raw} IS DISTINCT FROM {canonical}")
     checks += [
@@ -203,7 +353,7 @@ def _sample_mismatches(
         con.execute(
             f"""
             WITH sampled AS (
-                SELECT * FROM {_RAW_TABLE}
+                SELECT * FROM {raw_table}
                 USING SAMPLE reservoir({size} ROWS) REPEATABLE({_SAMPLE_SEED})
             )
             SELECT COUNT(*)
@@ -227,6 +377,9 @@ def _make_report(
     rows_canonical: int | None,
     key_failures: dict[str, int],
     duplicate_rows: int,
+    duplicate_key_count: int,
+    conflicting_key_count: int,
+    conflicting_sample: list[dict[str, str]],
     invalid_casts: dict[str, int],
     sample_size: int,
     fingerprint: str,
@@ -247,6 +400,9 @@ def _make_report(
         bytes_written=output.stat().st_size if status == "ok" else None,
         required_key_failures=key_failures,
         duplicate_key_rows=duplicate_rows,
+        duplicate_key_count=duplicate_key_count,
+        conflicting_key_count=conflicting_key_count,
+        conflicting_sample=conflicting_sample,
         invalid_casts_by_column=invalid_casts,
         sample_seed=_SAMPLE_SEED,
         sample_size=sample_size,
@@ -257,8 +413,9 @@ def _make_report(
     )
 
 
-def write_estabelecimento_canonical_part(
+def write_canonical_part(
     con: duckdb.DuckDBPyConnection,
+    table_name: str,
     csv: Path,
     output: Path,
     *,
@@ -266,7 +423,30 @@ def write_estabelecimento_canonical_part(
     source_snapshot: str,
     sample_size: int = 1_000,
 ) -> CanonicalPartReport:
-    """Read one CSV with the production reader and atomically write one part."""
+    """Read one CSV with the production reader and atomically write one
+    canonical Parquet part, for any main table with a registry canonical
+    contract.
+
+    Duplicate handling branches ONLY on the table's declared
+    ``duplicate_policy`` -- there is no per-entity orchestration function:
+
+    - ``"fail"`` (estabelecimento): any duplicate full-key fails the part
+      closed, exactly as before this table-driven generalization.
+    - ``"deterministic-collapse"`` (empresa): duplicates -- exact or
+      genuinely conflicting alike -- are collapsed to one row per key via
+      the same deterministic full-row tiebreak
+      ``transform._dedupe_cnpj_basico_table`` uses in production, and
+      conflicting keys are recorded as bounded evidence rather than failing
+      the part. This is the current, transitional production policy (see
+      issue #76) -- this writer does not add fail-on-conflict or quarantine
+      behavior beyond what the registry already declares.
+
+    A registry ``duplicate_policy`` value this function doesn't recognize
+    fails closed with a ``RuntimeError`` rather than silently defaulting to
+    either branch -- ``ParquetSpec.__post_init__`` already restricts the
+    value to these two, so this should be unreachable in practice, but a
+    silent fallback would be worse than a loud one if that ever changes.
+    """
     if not csv.exists():
         raise FileNotFoundError(csv)
     if not source_file:
@@ -276,18 +456,33 @@ def write_estabelecimento_canonical_part(
     if sample_size < 0:
         raise ValueError("sample_size cannot be negative")
 
-    table, spec = _spec()
-    transform._create_table_from_csvs(con, _RAW_TABLE, [csv], table.source)  # noqa: SLF001
-    rows_raw = int(con.execute(f"SELECT COUNT(*) FROM {_RAW_TABLE}").fetchone()[0])
-    key_failures, duplicate_rows = _key_diagnostics(con, spec)
-    invalid_casts = _invalid_casts(con, spec)
-    actual_sample, fingerprint = _sample(con, spec, sample_size, rows_raw)
+    table, spec = _spec(table_name)
+    raw_table = _raw_table_name(table_name)
+    transform._create_table_from_csvs(con, raw_table, [csv], table.source)  # noqa: SLF001
+    rows_raw = int(con.execute(f"SELECT COUNT(*) FROM {raw_table}").fetchone()[0])
+    key_failures, duplicate_keys, excess_rows = _key_diagnostics(con, raw_table, spec)
 
-    errors = []
+    conflicting_count = 0
+    conflicting_sample: list[dict[str, str]] = []
+    will_collapse = False
+    if duplicate_keys:
+        if spec.duplicate_policy == "fail":
+            pass  # handled by the error check below
+        elif spec.duplicate_policy == "deterministic-collapse":
+            will_collapse = True
+            conflicting_count, conflicting_sample = _conflict_diagnostics(
+                con, raw_table, spec, table.source.columns
+            )
+        else:  # pragma: no cover - registry already restricts the Literal
+            raise RuntimeError(
+                f"{table_name}: unsupported duplicate_policy {spec.duplicate_policy!r}"
+            )
+
+    errors: list[str] = []
     if any(key_failures.values()):
         errors.append(f"required key failures: {key_failures}")
-    if duplicate_rows:
-        errors.append(f"duplicate full-CNPJ excess rows: {duplicate_rows}")
+    if duplicate_keys and spec.duplicate_policy == "fail":
+        errors.append(f"duplicate full-CNPJ excess rows: {excess_rows}")
     if errors:
         message = "; ".join(errors)
         report = _make_report(
@@ -300,22 +495,33 @@ def write_estabelecimento_canonical_part(
             rows_raw=rows_raw,
             rows_canonical=None,
             key_failures=key_failures,
-            duplicate_rows=duplicate_rows,
-            invalid_casts=invalid_casts,
-            sample_size=actual_sample,
-            fingerprint=fingerprint,
+            duplicate_rows=excess_rows,
+            duplicate_key_count=duplicate_keys,
+            conflicting_key_count=conflicting_count,
+            conflicting_sample=conflicting_sample,
+            invalid_casts={},
+            sample_size=0,
+            fingerprint=hashlib.sha256(b"[]").hexdigest(),
             mismatches=None,
             schema_matches=None,
             error=message,
         )
         raise CanonicalValidationError(message, report)
 
+    rows_expected = rows_raw
+    if will_collapse:
+        _collapse_deterministic(con, raw_table, spec, table.source.columns)
+        rows_expected = rows_raw - excess_rows
+
+    invalid_casts = _invalid_casts(con, raw_table, spec)
+    actual_sample, fingerprint = _sample(con, raw_table, spec, sample_size, rows_expected)
+
     output.parent.mkdir(parents=True, exist_ok=True)
     partial = output.with_name(f".{output.name}.{uuid.uuid4().hex}.partial")
     partial.unlink(missing_ok=True)
     try:
         con.execute(
-            f"COPY ({_select_sql(spec, source_file, source_snapshot)}) "
+            f"COPY ({_select_sql(raw_table, spec, source_file, source_snapshot)}) "
             f"TO {_literal(str(partial))} (FORMAT PARQUET, COMPRESSION {_CODEC}, "
             f"ROW_GROUP_SIZE {_ROW_GROUP_SIZE})"
         )
@@ -333,6 +539,7 @@ def write_estabelecimento_canonical_part(
         schema_matches = actual_schema == _expected_schema(spec)
         mismatches = _sample_mismatches(
             con,
+            raw_table,
             spec,
             partial,
             actual_sample,
@@ -340,8 +547,10 @@ def write_estabelecimento_canonical_part(
             source_snapshot,
         )
         errors = []
-        if rows_canonical != rows_raw:
-            errors.append(f"row-count mismatch: raw={rows_raw}, canonical={rows_canonical}")
+        if rows_canonical != rows_expected:
+            errors.append(
+                f"row-count mismatch: expected={rows_expected}, canonical={rows_canonical}"
+            )
         if not schema_matches:
             errors.append(
                 f"schema mismatch: expected={_expected_schema(spec)!r}, actual={actual_schema!r}"
@@ -360,7 +569,10 @@ def write_estabelecimento_canonical_part(
                 rows_raw=rows_raw,
                 rows_canonical=rows_canonical,
                 key_failures=key_failures,
-                duplicate_rows=duplicate_rows,
+                duplicate_rows=excess_rows,
+                duplicate_key_count=duplicate_keys,
+                conflicting_key_count=conflicting_count,
+                conflicting_sample=conflicting_sample,
                 invalid_casts=invalid_casts,
                 sample_size=actual_sample,
                 fingerprint=fingerprint,
@@ -384,12 +596,38 @@ def write_estabelecimento_canonical_part(
         rows_raw=rows_raw,
         rows_canonical=rows_canonical,
         key_failures=key_failures,
-        duplicate_rows=duplicate_rows,
+        duplicate_rows=excess_rows,
+        duplicate_key_count=duplicate_keys,
+        conflicting_key_count=conflicting_count,
+        conflicting_sample=conflicting_sample,
         invalid_casts=invalid_casts,
         sample_size=actual_sample,
         fingerprint=fingerprint,
         mismatches=mismatches,
         schema_matches=schema_matches,
+    )
+
+
+def write_estabelecimento_canonical_part(
+    con: duckdb.DuckDBPyConnection,
+    csv: Path,
+    output: Path,
+    *,
+    source_file: str,
+    source_snapshot: str,
+    sample_size: int = 1_000,
+) -> CanonicalPartReport:
+    """Backward-compatible wrapper -- estabelecimento only. New code should
+    call :func:`write_canonical_part` directly with an explicit table name.
+    """
+    return write_canonical_part(
+        con,
+        _DEFAULT_TABLE,
+        csv,
+        output,
+        source_file=source_file,
+        source_snapshot=source_snapshot,
+        sample_size=sample_size,
     )
 
 
@@ -420,10 +658,13 @@ def _record(handle: metrics.StageHandle, report: CanonicalPartReport) -> None:
         sample_mismatches=report.sample_mismatches or 0,
         codec=report.codec,
         row_group_size=report.row_group_size,
+        duplicate_key_count=report.duplicate_key_count,
+        conflicting_key_count=report.conflicting_key_count,
     )
 
 
-def run_shadow_part(
+def run_canonical_shadow_part(
+    table_name: str,
     csv: Path,
     output: Path,
     *,
@@ -435,13 +676,15 @@ def run_shadow_part(
     sample_size: int = 1_000,
     keep_workdir: bool = False,
 ) -> CanonicalPartReport:
-    """Use the production DuckDB profile and persist quality/resource evidence."""
+    """Use the production DuckDB profile and persist quality/resource
+    evidence, for any main table with a registry canonical contract."""
+    _, spec = _spec(table_name)
     work_dir.mkdir(parents=True, exist_ok=True)
-    database = work_dir / "canonical-estabelecimento.duckdb"
+    database = work_dir / f"canonical-{table_name}.duckdb"
     temp = work_dir / "duckdb_tmp"
     recorder = metrics.MetricsRecorder(
         month=source_snapshot,
-        schema_version=str(registry.ESTABELECIMENTO_CANONICAL.schema_version),
+        schema_version=str(spec.schema_version),
         filesystem_path=work_dir,
     )
     con = _connection(database, temp)
@@ -449,11 +692,12 @@ def run_shadow_part(
     report: CanonicalPartReport | None = None
     try:
         with recorder.stage(
-            "canonical_estabelecimento_part", duckdb_tmp_dir=temp, workdir=work_dir
+            f"canonical_{table_name}_part", duckdb_tmp_dir=temp, workdir=work_dir
         ) as handle:
             try:
-                report = write_estabelecimento_canonical_part(
+                report = write_canonical_part(
                     con,
+                    table_name,
                     csv,
                     output,
                     source_file=source_file,
@@ -483,8 +727,43 @@ def run_shadow_part(
     return report
 
 
+def run_shadow_part(
+    csv: Path,
+    output: Path,
+    *,
+    source_file: str,
+    source_snapshot: str,
+    work_dir: Path,
+    report_path: Path,
+    metrics_path: Path,
+    sample_size: int = 1_000,
+    keep_workdir: bool = False,
+) -> CanonicalPartReport:
+    """Backward-compatible wrapper -- estabelecimento only. New code should
+    call :func:`run_canonical_shadow_part` directly with an explicit table
+    name. ``canonical_history.py`` still calls this exact entry point.
+    """
+    return run_canonical_shadow_part(
+        _DEFAULT_TABLE,
+        csv,
+        output,
+        source_file=source_file,
+        source_snapshot=source_snapshot,
+        work_dir=work_dir,
+        report_path=report_path,
+        metrics_path=metrics_path,
+        sample_size=sample_size,
+        keep_workdir=keep_workdir,
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--table",
+        default=_DEFAULT_TABLE,
+        help=f"main table to write a canonical part for (default: {_DEFAULT_TABLE})",
+    )
     parser.add_argument("--csv", type=Path, required=True)
     parser.add_argument("--source-file", required=True)
     parser.add_argument("--snapshot", required=True)
@@ -504,7 +783,8 @@ def main(argv: list[str] | None = None) -> int:
     resource_metrics = args.metrics or args.output.with_suffix(".metrics.json")
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     try:
-        report = run_shadow_part(
+        report = run_canonical_shadow_part(
+            args.table,
             args.csv,
             args.output,
             source_file=args.source_file,
@@ -519,13 +799,14 @@ def main(argv: list[str] | None = None) -> int:
         CanonicalValidationError,
         FileNotFoundError,
         OSError,
+        RuntimeError,
         ValueError,
         duckdb.Error,
     ) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
     print(
-        f"canonical shadow OK — {report.rows_canonical:,} rows, "
+        f"canonical shadow OK ({args.table}) — {report.rows_canonical:,} rows, "
         f"{report.invalid_casts_total} invalid cast(s), output={args.output}"
     )
     print(f"quality report: {quality}")
