@@ -362,8 +362,15 @@ def csv_columns_clause(columns: tuple[str, ...]) -> str:
 
 
 def paths_literal(paths: Sequence[Path]) -> str:
-    """Lista SQL inline para paths de CSV, com apóstrofos escapados."""
-    quoted = ", ".join(f"'{str(path).replace(chr(39), chr(39) * 2)}'" for path in paths)
+    """Lista SQL inline `['a', 'b']` pros paths de CSV.
+
+    Inline em vez de parameter binding — array binding é instável no driver
+    DuckDB pra esse caso. Aspas simples no path são escapadas dobrando-as
+    (padrão SQL). `as_posix()`, não `str()`: DuckDB aceita `/` em qualquer
+    plataforma, e `str(Path(...))` usa separador nativo no Windows -- sem
+    isso o SQL gerado varia com o SO de quem rodou, não só com o path em si.
+    """
+    quoted = ", ".join(f"'{p.as_posix().replace(chr(39), chr(39) * 2)}'" for p in paths)
     return "[" + quoted + "]"
 
 

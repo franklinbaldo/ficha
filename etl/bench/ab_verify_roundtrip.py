@@ -21,7 +21,6 @@ import argparse
 import hashlib
 import json
 import random
-import resource
 import shutil
 import statistics
 import subprocess
@@ -152,6 +151,13 @@ def _verify(variant: str, con, parquet: Path, sample_size: int) -> None:
 
 
 def _rss_peak_mib() -> float:
+    # resource is POSIX-only; production/CI are Linux, but importing it at
+    # module level would block even loading this script on Windows dev
+    # machines. 0.0 is a documented "not measured here", not an error.
+    if sys.platform == "win32":
+        return 0.0
+    import resource
+
     return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
 
 

@@ -32,7 +32,6 @@ import contextlib
 import json
 import logging
 import os
-import resource
 import shutil
 import subprocess
 import sys
@@ -315,7 +314,17 @@ def _rss_peak_mib() -> float:
     Unidade de `ru_maxrss` varia por plataforma: KiB no Linux, bytes no
     macOS/BSD. Produção roda em Linux, mas dev/testes locais podem rodar em
     macOS -- por isso o branch em `sys.platform` em vez de assumir KiB.
+
+    `resource` não existe no Windows (nem produção nem CI rodam lá -- RFB é
+    Linux-only por ops). O import fica DENTRO desta função, não no topo do
+    módulo, justamente pra isso: um dev em Windows consegue importar
+    `metrics`/`transform` e rodar pytest/bench localmente, só não recebe um
+    número real de RSS (0.0 é um valor claramente-não-medido, não um erro).
     """
+    if sys.platform == "win32":
+        return 0.0
+    import resource
+
     peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
     if sys.platform == "darwin":
         return peak / (1024 * 1024)
