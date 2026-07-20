@@ -1,12 +1,17 @@
 """Phase 2/3 shadow canonical writer tests -- table-driven (#97 slice 2).
 
-`canonical_shadow.write_canonical_part`/`run_canonical_shadow_part` serve
-any main table with a registry canonical contract; entity-specific behavior
-comes only from the table's declared `duplicate_policy`. Estabelecimento
-tests below exercise the `write_estabelecimento_canonical_part`/
-`run_shadow_part` backward-compat wrappers unchanged (they must keep passing
-exactly as before this generalization); empresa tests exercise the generic
-entry points directly.
+Two entry points, chosen by physical layout (see canonical_shadow.py's
+module docstring): `write_canonical_part`/`run_canonical_shadow_part` for
+single-physical-file validation (estabelecimento, via the
+`write_estabelecimento_canonical_part`/`run_shadow_part` backward-compat
+wrappers exercised unchanged below), and `write_canonical_dataset` for a
+table with more than one physical source file and
+`duplicate_policy="deterministic-collapse"` -- empresa, which RFB publishes
+as ten `EmpresasN.zip` parts (`sources.py`'s `_BIG_TABLES`), not one CSV.
+`write_canonical_part` refuses to run against such a table (a key duplicated
+*across* two different physical ZIPs would never be visible to two separate
+single-part calls); the empresa tests below exercise `write_canonical_dataset`
+with the complete ten-part set.
 """
 
 from __future__ import annotations
@@ -69,6 +74,25 @@ def _write_empresa_csv(path: Path, rows: list[dict[str, str]]) -> None:
         writer = csv.writer(stream, delimiter=";", quotechar='"', lineterminator="\n")
         for row in rows:
             writer.writerow([row[name] for name in registry.EMPRESA_COLUMNS])
+
+
+_EMPRESA_PARTS = tuple(f"Empresas{n}.zip" for n in range(10))
+
+
+def _write_empresa_dataset(
+    root: Path, rows_by_part: dict[str, list[dict[str, str]]]
+) -> list[tuple[Path, str]]:
+    """Build the complete ten-part physical empresa fixture set (per
+    `sources.canonical_inventory()`): every `EmpresasN.zip` name gets a CSV,
+    empty unless `rows_by_part` supplies rows for it. Returns the
+    `(csv_path, source_file)` list `write_canonical_dataset` expects."""
+    root.mkdir(parents=True, exist_ok=True)
+    parts: list[tuple[Path, str]] = []
+    for name in _EMPRESA_PARTS:
+        csv_path = root / f"{name}.csv"
+        _write_empresa_csv(csv_path, rows_by_part.get(name, []))
+        parts.append((csv_path, name))
+    return parts
 
 
 def test_writer_emits_atomic_typed_part_and_raw_to_canonical_report(tmp_path):
@@ -292,34 +316,72 @@ def test_cli_rejects_invalid_snapshot_before_opening_duckdb(tmp_path, capsys):
 
 
 # -----------------------------------------------------------------------------
-# empresa (#97 slice 2) -- exercises write_canonical_part directly, the
-# generic table-driven entry point. duplicate_policy="deterministic-collapse"
-# (registry.EMPRESA_CANONICAL), unlike estabelecimento's "fail" above.
+# empresa (#97 slice 2) -- ten physical parts (Empresas0.zip..Empresas9.zip
+# per sources.canonical_inventory()), duplicate_policy="deterministic-collapse"
+# (registry.EMPRESA_CANONICAL). Exercises write_canonical_dataset, the entry
+# point required for any multi-part deterministic-collapse table -- see
+# canonical_shadow.py's module docstring for why write_canonical_part (single
+# CSV) cannot be used here.
 # -----------------------------------------------------------------------------
 
 
-def test_empresa_projection_casts_capital_social_decimal_comma(tmp_path):
+def test_empresa_via_write_canonical_part_fails_closed_single_zip(tmp_path):
+    """A call attempting canonical empresa from only one physical ZIP must
+    fail closed rather than silently producing an apparently-valid but
+    globally-incomplete part."""
     csv_path = tmp_path / "empresa.csv"
     output = tmp_path / "part-0.parquet"
-    _write_empresa_csv(
-        csv_path,
-        [
-            _empresa_row(cnpj_basico="00000001", capital_social="150000,50"),
-            _empresa_row(cnpj_basico="00000002", capital_social=""),
-            _empresa_row(cnpj_basico="00000003", capital_social="não-é-decimal"),
-        ],
-    )
+    _write_empresa_csv(csv_path, [_empresa_row()])
 
     con = duckdb.connect()
     try:
-        report = canonical_shadow.write_canonical_part(
-            con,
-            "empresa",
-            csv_path,
-            output,
-            source_file="Empresas0.zip",
-            source_snapshot="2026-07",
-            sample_size=10,
+        with pytest.raises(ValueError, match="write_canonical_dataset"):
+            canonical_shadow.write_canonical_part(
+                con,
+                "empresa",
+                csv_path,
+                output,
+                source_file="Empresas0.zip",
+                source_snapshot="2026-07",
+            )
+    finally:
+        con.close()
+    assert not output.exists()
+
+
+def test_empresa_dataset_missing_expected_part_fails_closed(tmp_path):
+    parts = _write_empresa_dataset(tmp_path / "dataset", {"Empresas0.zip": [_empresa_row()]})
+    incomplete = parts[:-1]  # drop Empresas9.zip
+    output = tmp_path / "part.parquet"
+
+    con = duckdb.connect()
+    try:
+        with pytest.raises(ValueError, match="incomplete physical part set"):
+            canonical_shadow.write_canonical_dataset(
+                con, "empresa", incomplete, output, source_snapshot="2026-07"
+            )
+    finally:
+        con.close()
+    assert not output.exists()
+
+
+def test_empresa_projection_casts_capital_social_decimal_comma(tmp_path):
+    parts = _write_empresa_dataset(
+        tmp_path / "dataset",
+        {
+            "Empresas0.zip": [
+                _empresa_row(cnpj_basico="00000001", capital_social="150000,50"),
+                _empresa_row(cnpj_basico="00000002", capital_social=""),
+                _empresa_row(cnpj_basico="00000003", capital_social="não-é-decimal"),
+            ]
+        },
+    )
+    output = tmp_path / "part-0.parquet"
+
+    con = duckdb.connect()
+    try:
+        report = canonical_shadow.write_canonical_dataset(
+            con, "empresa", parts, output, source_snapshot="2026-07", sample_size=10
         )
         rows = con.execute(
             "SELECT cnpj_basico, capital_social FROM read_parquet(?) ORDER BY cnpj_basico",
@@ -351,20 +413,17 @@ def test_empresa_projection_casts_capital_social_decimal_comma(tmp_path):
     assert rows[2] == ("00000003", None)  # malformed nonblank
 
 
-def test_empresa_exact_duplicates_collapse_to_one_row(tmp_path):
-    csv_path = tmp_path / "empresa.csv"
+def test_empresa_duplicate_key_entirely_inside_one_part_still_works(tmp_path):
+    parts = _write_empresa_dataset(
+        tmp_path / "dataset",
+        {"Empresas0.zip": [_empresa_row(), _empresa_row(), _empresa_row()]},
+    )
     output = tmp_path / "part-0.parquet"
-    _write_empresa_csv(csv_path, [_empresa_row(), _empresa_row(), _empresa_row()])
 
     con = duckdb.connect()
     try:
-        report = canonical_shadow.write_canonical_part(
-            con,
-            "empresa",
-            csv_path,
-            output,
-            source_file="Empresas0.zip",
-            source_snapshot="2026-07",
+        report = canonical_shadow.write_canonical_dataset(
+            con, "empresa", parts, output, source_snapshot="2026-07"
         )
         row_count = con.execute(f"SELECT COUNT(*) FROM read_parquet('{output}')").fetchone()[0]
     finally:
@@ -380,28 +439,53 @@ def test_empresa_exact_duplicates_collapse_to_one_row(tmp_path):
     assert row_count == 1
 
 
-def test_empresa_conflicting_duplicates_collapse_deterministically(tmp_path):
-    csv_path = tmp_path / "empresa.csv"
-    output = tmp_path / "part-0.parquet"
-    _write_empresa_csv(
-        csv_path,
-        [
-            _empresa_row(razao_social="CONFLICT A"),
-            _empresa_row(razao_social="CONFLICT B"),
-        ],
+def test_empresa_exact_duplicate_across_two_parts_collapses_globally(tmp_path):
+    """The same exact empresa row published in two different physical ZIPs
+    (e.g. republished across releases) must collapse to one row, not survive
+    once per part -- the core bug this fix addresses."""
+    row = _empresa_row()
+    parts = _write_empresa_dataset(
+        tmp_path / "dataset",
+        {"Empresas0.zip": [row], "Empresas5.zip": [row]},
     )
+    output = tmp_path / "part.parquet"
 
     con = duckdb.connect()
     try:
-        report = canonical_shadow.write_canonical_part(
-            con,
-            "empresa",
-            csv_path,
-            output,
-            source_file="Empresas0.zip",
-            source_snapshot="2026-07",
+        report = canonical_shadow.write_canonical_dataset(
+            con, "empresa", parts, output, source_snapshot="2026-07"
         )
-        survivor = con.execute(f"SELECT razao_social FROM read_parquet('{output}')").fetchone()[0]
+        row_count = con.execute(f"SELECT COUNT(*) FROM read_parquet('{output}')").fetchone()[0]
+    finally:
+        con.close()
+
+    assert report.status == "ok"
+    assert report.rows_raw == 2
+    assert report.rows_canonical == 1
+    assert row_count == 1
+    assert report.duplicate_key_count == 1
+    assert report.duplicate_key_rows == 1  # one excess row, counted across parts
+    assert report.conflicting_key_count == 0  # identical payload, not a conflict
+
+
+def test_empresa_conflicting_duplicates_across_parts_collapse_deterministically(tmp_path):
+    parts = _write_empresa_dataset(
+        tmp_path / "dataset",
+        {
+            "Empresas0.zip": [_empresa_row(razao_social="CONFLICT A")],
+            "Empresas5.zip": [_empresa_row(razao_social="CONFLICT B")],
+        },
+    )
+    output = tmp_path / "part.parquet"
+
+    con = duckdb.connect()
+    try:
+        report = canonical_shadow.write_canonical_dataset(
+            con, "empresa", parts, output, source_snapshot="2026-07"
+        )
+        survivor_razao_social, survivor_source_file = con.execute(
+            f"SELECT razao_social, _source_file FROM read_parquet('{output}')"
+        ).fetchone()
     finally:
         con.close()
 
@@ -409,75 +493,102 @@ def test_empresa_conflicting_duplicates_collapse_deterministically(tmp_path):
     assert report.rows_canonical == 1
     assert report.duplicate_key_count == 1
     assert report.conflicting_key_count == 1
-    assert report.conflicting_sample == [{"cnpj_basico": "00000001"}]
+    assert len(report.conflicting_sample) == 1
+    sample = report.conflicting_sample[0]
+    assert sample["cnpj_basico"] == "00000001"
+    # Conflict evidence identifies not just the key but which physical parts
+    # contributed to it.
+    assert sample["source_files"] == ["Empresas0.zip", "Empresas5.zip"]
     # Deterministic full-row tiebreak: lexicographically smaller row survives
     # ("CONFLICT A" < "CONFLICT B") -- reproducible, not "whatever DuckDB kept".
-    assert survivor == "CONFLICT A"
+    assert survivor_razao_social == "CONFLICT A"
+    assert survivor_source_file == "Empresas0.zip"
 
 
-def test_empresa_output_independent_of_input_row_order(tmp_path):
-    rows = [
-        _empresa_row(),
-        _empresa_row(),
-        _empresa_row(cnpj_basico="00000002", razao_social="CONFLICT A"),
-        _empresa_row(cnpj_basico="00000002", razao_social="CONFLICT B"),
-        _empresa_row(cnpj_basico="00000003", capital_social="999999,99"),
-    ]
+def test_empresa_dataset_order_independent_across_parts_and_rows(tmp_path):
+    exact_row = _empresa_row(cnpj_basico="00000002")
+    conflict_a = _empresa_row(cnpj_basico="00000003", razao_social="CONFLICT A")
+    conflict_b = _empresa_row(cnpj_basico="00000003", razao_social="CONFLICT B")
 
-    def run(
-        order: list[dict[str, str]], tag: str
-    ) -> tuple[canonical_shadow.CanonicalPartReport, list]:
-        csv_path = tmp_path / f"empresa-{tag}.csv"
+    def run(tag: str, *, reverse_parts: bool, reverse_rows: bool):
+        rows_by_part = {
+            "Empresas0.zip": [_empresa_row(cnpj_basico="00000001"), exact_row, conflict_a],
+            "Empresas5.zip": [exact_row, conflict_b],
+        }
+        if reverse_rows:
+            rows_by_part = {name: list(reversed(rows)) for name, rows in rows_by_part.items()}
+        parts = _write_empresa_dataset(tmp_path / f"dataset-{tag}", rows_by_part)
+        if reverse_parts:
+            parts = list(reversed(parts))
         output = tmp_path / f"part-{tag}.parquet"
-        _write_empresa_csv(csv_path, order)
         con = duckdb.connect()
         try:
-            report = canonical_shadow.write_canonical_part(
-                con,
-                "empresa",
-                csv_path,
-                output,
-                source_file="Empresas0.zip",
-                source_snapshot="2026-07",
-                sample_size=10,
+            report = canonical_shadow.write_canonical_dataset(
+                con, "empresa", parts, output, source_snapshot="2026-07", sample_size=10
             )
-            out_rows = con.execute(
-                "SELECT cnpj_basico, razao_social, capital_social "
-                f"FROM read_parquet('{output}') ORDER BY cnpj_basico"
+            rows = con.execute(
+                "SELECT cnpj_basico, razao_social, _source_file FROM read_parquet(?) "
+                "ORDER BY cnpj_basico",
+                [str(output)],
             ).fetchall()
         finally:
             con.close()
-        return report, out_rows
+        return report, rows
 
-    report_forward, rows_forward = run(rows, "forward")
-    report_reversed, rows_reversed = run(list(reversed(rows)), "reversed")
+    report_fwd, rows_fwd = run("fwd", reverse_parts=False, reverse_rows=False)
+    report_rev, rows_rev = run("rev", reverse_parts=True, reverse_rows=True)
 
-    assert rows_forward == rows_reversed
-    assert report_forward.conflicting_sample == report_reversed.conflicting_sample
-    assert report_forward.duplicate_key_count == report_reversed.duplicate_key_count
-    assert report_forward.sample_fingerprint == report_reversed.sample_fingerprint
+    assert rows_fwd == rows_rev
+    assert report_fwd.conflicting_sample == report_rev.conflicting_sample
+    assert report_fwd.duplicate_key_count == report_rev.duplicate_key_count == 2
+    assert report_fwd.duplicate_key_rows == report_rev.duplicate_key_rows == 2
+    assert report_fwd.sample_fingerprint == report_rev.sample_fingerprint
+
+
+def test_empresa_dataset_counts_include_cross_part_occurrences(tmp_path):
+    """duplicate_key_count/duplicate_key_rows must reflect the FULL logical
+    dataset, not just within-part duplicates -- a key repeated across three
+    different parts is still one duplicate key with two excess rows."""
+    row = _empresa_row()
+    parts = _write_empresa_dataset(
+        tmp_path / "dataset",
+        {"Empresas0.zip": [row], "Empresas3.zip": [row], "Empresas7.zip": [row]},
+    )
+    output = tmp_path / "part.parquet"
+
+    con = duckdb.connect()
+    try:
+        report = canonical_shadow.write_canonical_dataset(
+            con, "empresa", parts, output, source_snapshot="2026-07"
+        )
+    finally:
+        con.close()
+
+    assert report.status == "ok"
+    assert report.rows_raw == 3
+    assert report.rows_canonical == 1
+    assert report.duplicate_key_count == 1
+    assert report.duplicate_key_rows == 2  # 3 occurrences - 1 survivor
 
 
 def test_empresa_null_blank_key_fails_separately_from_duplicates(tmp_path):
-    csv_path = tmp_path / "empresa.csv"
-    output = tmp_path / "part-0.parquet"
-    # A genuine duplicate (cnpj_basico repeated) AND a blank-keyed row in the
-    # same fixture -- the blank-key failure must fire, not the duplicate path.
-    _write_empresa_csv(
-        csv_path,
-        [_empresa_row(), _empresa_row(), _empresa_row(cnpj_basico="")],
+    # A genuine duplicate (cnpj_basico repeated, across two parts) AND a
+    # blank-keyed row -- the blank-key failure must fire, not the duplicate
+    # path.
+    parts = _write_empresa_dataset(
+        tmp_path / "dataset",
+        {
+            "Empresas0.zip": [_empresa_row(), _empresa_row(cnpj_basico="")],
+            "Empresas5.zip": [_empresa_row()],
+        },
     )
+    output = tmp_path / "part.parquet"
 
     con = duckdb.connect()
     try:
         with pytest.raises(canonical_shadow.CanonicalValidationError) as caught:
-            canonical_shadow.write_canonical_part(
-                con,
-                "empresa",
-                csv_path,
-                output,
-                source_file="Empresas0.zip",
-                source_snapshot="2026-07",
+            canonical_shadow.write_canonical_dataset(
+                con, "empresa", parts, output, source_snapshot="2026-07"
             )
     finally:
         con.close()
@@ -487,6 +598,91 @@ def test_empresa_null_blank_key_fails_separately_from_duplicates(tmp_path):
     assert report.required_key_failures["cnpj_basico"] == 1
     assert "required key failures" in report.error
     assert not output.exists()
+
+
+def test_empresa_discarded_duplicate_malformed_capital_social_still_counted(tmp_path):
+    """_invalid_casts must run BEFORE the deterministic collapse -- a
+    malformed value on the row that LOSES the tiebreak (and is discarded)
+    must still be counted, not silently lost along with the row."""
+    survivor = _empresa_row(capital_social="100000,00")  # sorts first, survives
+    discarded = _empresa_row(capital_social="not-a-decimal")  # sorts after, discarded
+    parts = _write_empresa_dataset(tmp_path / "dataset", {"Empresas0.zip": [survivor, discarded]})
+    output = tmp_path / "part.parquet"
+
+    con = duckdb.connect()
+    try:
+        report = canonical_shadow.write_canonical_dataset(
+            con, "empresa", parts, output, source_snapshot="2026-07"
+        )
+        remaining = con.execute(f"SELECT capital_social FROM read_parquet('{output}')").fetchone()[
+            0
+        ]
+    finally:
+        con.close()
+
+    assert report.status == "ok"
+    assert report.rows_canonical == 1
+    from decimal import Decimal
+
+    assert remaining == Decimal("100000.00")  # the well-formed row survived
+    # ...but the malformed value on the DISCARDED row is still in the raw
+    # invalid-cast evidence.
+    assert report.invalid_casts_by_column.get("capital_social") == 1
+
+
+def test_policy_validation_fires_before_data_inspection_on_unique_input(tmp_path, monkeypatch):
+    """An unsupported/inconsistent duplicate_policy must fail even when the
+    input contains zero duplicate keys -- the old code only checked policy
+    validity inside an `if duplicate_keys:` gate, so a unique-only input
+    would have silently proceeded despite a tampered/unsupported policy."""
+    csv_path = tmp_path / "estabelecimentos.csv"
+    output = tmp_path / "part-0.parquet"
+    _write_csv(csv_path, [_row()])  # single row, no duplicates at all
+
+    tampered = copy.deepcopy(registry.ESTABELECIMENTO_CANONICAL)
+    object.__setattr__(tampered, "duplicate_policy", "quarantine")
+    table = registry.main_table("estabelecimento")
+    monkeypatch.setattr(canonical_shadow, "_spec", lambda table_name: (table, tampered))
+
+    con = duckdb.connect()
+    try:
+        with pytest.raises(RuntimeError, match="unsupported duplicate_policy"):
+            canonical_shadow.write_canonical_part(
+                con,
+                "estabelecimento",
+                csv_path,
+                output,
+                source_file="Estabelecimentos0.zip",
+                source_snapshot="2026-07",
+            )
+    finally:
+        con.close()
+    assert not output.exists()
+
+
+def test_estabelecimento_single_part_wrapper_unaffected_by_multi_part_guard(tmp_path):
+    """estabelecimento has ten physical parts too (sources.py's
+    _BIG_TABLES), but duplicate_policy="fail" -- the write_canonical_part
+    multi-part guard must only block deterministic-collapse tables, not
+    every multi-part table."""
+    csv_path = tmp_path / "estabelecimentos.csv"
+    output = tmp_path / "part-0.parquet"
+    _write_csv(csv_path, [_row()])
+
+    con = duckdb.connect()
+    try:
+        report = canonical_shadow.write_estabelecimento_canonical_part(
+            con,
+            csv_path,
+            output,
+            source_file="Estabelecimentos0.zip",
+            source_snapshot="2026-07",
+        )
+    finally:
+        con.close()
+
+    assert report.status == "ok"
+    assert output.exists()
 
 
 def test_writer_fails_closed_on_unsupported_duplicate_policy(tmp_path, monkeypatch):
@@ -544,35 +740,25 @@ def test_table_driven_invocation_rejects_table_without_canonical_contract(tmp_pa
         con.close()
 
 
-def test_empresa_file_backed_run_uses_table_specific_stage_and_database_names(tmp_path):
+def test_empresa_single_part_file_backed_run_fails_closed(tmp_path):
+    """run_canonical_shadow_part (the metrics-wrapped single-part run) must
+    refuse empresa too -- it calls write_canonical_part internally, so the
+    same multi-part guard applies. The metrics-wrapped dataset-level run is
+    deferred to the slice that actually needs it (#97 slice 3)."""
     csv_path = tmp_path / "empresa.csv"
     output = tmp_path / "canonical" / "part-0.parquet"
-    report_path = tmp_path / "evidence" / "quality.json"
-    metrics_path = tmp_path / "evidence" / "metrics.json"
-    work_dir = tmp_path / "work"
-    _write_empresa_csv(csv_path, [_empresa_row(), _empresa_row()])  # exact dup, collapses
+    _write_empresa_csv(csv_path, [_empresa_row()])
 
-    report = canonical_shadow.run_canonical_shadow_part(
-        "empresa",
-        csv_path,
-        output,
-        source_file="Empresas0.zip",
-        source_snapshot="2026-07",
-        work_dir=work_dir,
-        report_path=report_path,
-        metrics_path=metrics_path,
-        sample_size=10,
-    )
-
-    envelope = json.loads(metrics_path.read_text())
-    stage = envelope["stages"][0]
-
-    assert report.status == "ok"
-    assert report.rows_raw == 2
-    assert report.rows_canonical == 1
-    assert stage["stage"] == "canonical_empresa_part"
-    assert stage["duplicate_rows"] == 1
-    assert stage["extra"]["duplicate_key_count"] == 1
-    assert stage["extra"]["conflicting_key_count"] == 0
-    assert not (work_dir / "canonical-empresa.duckdb").exists()
-    assert output.exists()
+    with pytest.raises(ValueError, match="write_canonical_dataset"):
+        canonical_shadow.run_canonical_shadow_part(
+            "empresa",
+            csv_path,
+            output,
+            source_file="Empresas0.zip",
+            source_snapshot="2026-07",
+            work_dir=tmp_path / "work",
+            report_path=tmp_path / "evidence" / "quality.json",
+            metrics_path=tmp_path / "evidence" / "metrics.json",
+            sample_size=10,
+        )
+    assert not output.exists()
