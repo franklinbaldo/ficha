@@ -26,6 +26,34 @@ _ALLOWED_INVALID_VALUE_POLICIES = frozenset(
     {"fail", "null-and-count", "preserve-as-string", "quarantine"}
 )
 
+# `source_cardinality` describes what's known about the RAW input relative to
+# `primary_key`, before any collapsing -- not the canonical output (a declared
+# `primary_key` always implies "one row per key" *after* processing; these two
+# values are about how that's reached:
+#
+# - "unique": the raw source is expected to already be unique by primary_key.
+#   A duplicate found there is a genuine data-integrity failure, not something
+#   the writer resolves.
+# - "duplicates-expected": the raw source is known NOT to be unique by
+#   primary_key. `duplicate_policy` says what the writer does about it.
+SourceCardinality = Literal["unique", "duplicates-expected"]
+_ALLOWED_SOURCE_CARDINALITIES = frozenset({"unique", "duplicates-expected"})
+
+DuplicatePolicy = Literal["fail", "deterministic-collapse"]
+_ALLOWED_DUPLICATE_POLICIES = frozenset({"fail", "deterministic-collapse"})
+
+# Only these two pairings are coherent: "unique" input has nothing to collapse
+# (any duplicate is a failure), and "duplicates-expected" input is exactly the
+# case `deterministic-collapse` exists for. Declaring "unique" with a collapse
+# policy, or "duplicates-expected" with a fail policy, would silently misstate
+# either what's known about the source or what the writer actually does.
+_VALID_CARDINALITY_POLICY_PAIRS = frozenset(
+    {
+        ("unique", "fail"),
+        ("duplicates-expected", "deterministic-collapse"),
+    }
+)
+
 
 @dataclass(frozen=True)
 class CsvSpec:
@@ -106,7 +134,14 @@ class LineageColumn:
 
 @dataclass(frozen=True)
 class ParquetSpec:
-    """Contrato lógico do Parquet canônico de uma entidade RFB."""
+    """Contrato lógico do Parquet canônico de uma entidade RFB.
+
+    ``source_cardinality``/``duplicate_policy`` declaram o que se sabe sobre
+    a unicidade do RAW por ``primary_key`` e o que o writer faz a respeito --
+    ver os comentários nos ``Literal`` correspondentes. Um `primary_key`
+    declarado já implica "uma linha por chave" no CANÔNICO; esses dois campos
+    são sobre como isso é alcançado a partir de um raw que pode não ser único.
+    """
 
     schema_version: int
     columns: tuple[CanonicalColumn, ...]
@@ -118,6 +153,11 @@ class ParquetSpec:
     bucket_key: str | None = None
     codec: str | None = None
     row_group_size: int | None = None
+    # Default matches estabelecimento's existing fail-on-duplicate shadow
+    # writer behavior -- entities that don't override these two fields keep
+    # today's semantics with no code change required.
+    source_cardinality: SourceCardinality = "unique"
+    duplicate_policy: DuplicatePolicy = "fail"
 
     def __post_init__(self) -> None:
         if self.schema_version < 1:
@@ -161,6 +201,18 @@ class ParquetSpec:
             raise ValueError(f"bucket_key inexistente: {self.bucket_key!r}")
         if self.row_group_size is not None and self.row_group_size < 1:
             raise ValueError("row_group_size deve ser positivo")
+
+        if self.source_cardinality not in _ALLOWED_SOURCE_CARDINALITIES:
+            raise ValueError(f"source_cardinality inválida: {self.source_cardinality!r}")
+        if self.duplicate_policy not in _ALLOWED_DUPLICATE_POLICIES:
+            raise ValueError(f"duplicate_policy inválida: {self.duplicate_policy!r}")
+        pair = (self.source_cardinality, self.duplicate_policy)
+        if pair not in _VALID_CARDINALITY_POLICY_PAIRS:
+            raise ValueError(
+                f"combinação inconsistente de source_cardinality={self.source_cardinality!r} "
+                f"com duplicate_policy={self.duplicate_policy!r} -- pares válidos: "
+                f"{sorted(_VALID_CARDINALITY_POLICY_PAIRS)}"
+            )
 
 
 @dataclass(frozen=True)
@@ -285,6 +337,25 @@ def _date_column(name: str) -> CanonicalColumn:
     )
 
 
+def _decimal_column(name: str) -> CanonicalColumn:
+    """DECIMAL(18,2) via TRY_CAST, mesmo padrão comprovado em produção para
+    ``capital_social`` (ver ``transform._CAPITAL_SOCIAL_EXPR``, hoje DOUBLE em
+    vez de DECIMAL) -- troca só a vírgula decimal do formato RFB pelo ponto
+    que o parser DuckDB espera. Branco ou malformado (não-branco que não
+    parseia) viram ``NULL`` via ``TRY_CAST`` sem levantar erro; nenhum
+    ``NULLIF`` extra é necessário -- confirmado que ``TRY_CAST('' AS
+    DECIMAL(18,2))`` já retorna ``NULL``, igual ao comportamento DOUBLE atual.
+    """
+    return CanonicalColumn(
+        name=name,
+        duckdb_type="DECIMAL(18,2)",
+        source=name,
+        nullable=True,
+        invalid_policy="null-and-count",
+        cast_sql="TRY_CAST(REPLACE({source}, ',', '.') AS DECIMAL(18,2))",
+    )
+
+
 _ESTABELECIMENTO_DATE_COLUMNS = frozenset(
     {
         "data_situacao_cadastral",
@@ -307,13 +378,55 @@ ESTABELECIMENTO_CANONICAL = ParquetSpec(
         for name in ESTABELECIMENTO_COLUMNS
     ),
     primary_key=("cnpj_basico", "cnpj_ordem", "cnpj_dv"),
+    # Explícito, não só o default: o writer shadow (canonical_shadow.py) já
+    # falha fechado em chave duplicada para esta entidade -- ver PR #88's
+    # "duplicate full-CNPJ excess rows fail closed".
+    source_cardinality="unique",
+    duplicate_policy="fail",
+)
+
+_EMPRESA_REQUIRED_COLUMNS = frozenset({"cnpj_basico"})
+
+EMPRESA_CANONICAL = ParquetSpec(
+    schema_version=1,
+    columns=tuple(
+        _decimal_column(name)
+        if name == "capital_social"
+        else _string_column(
+            name,
+            required=name in _EMPRESA_REQUIRED_COLUMNS,
+            publication_critical=name in _EMPRESA_REQUIRED_COLUMNS,
+        )
+        for name in EMPRESA_COLUMNS
+    ),
+    primary_key=("cnpj_basico",),
+    # Unlike estabelecimento, the raw empresa input is NOT guaranteed unique
+    # by cnpj_basico -- production's `_dedupe_cnpj_basico_table` (transform.py)
+    # already collapses both exact and genuinely conflicting duplicates via a
+    # deterministic full-row-order pick. This declaration makes that existing
+    # behavior visible in the registry instead of pretending the raw input is
+    # already unique; it does not change what the loader does.
+    #
+    # "deterministic-collapse" is the CURRENT, transitional production policy,
+    # not a verified semantic truth -- issue #76 tracks the open decision of
+    # whether genuinely conflicting duplicates (different payload, same key)
+    # should instead fail or be quarantined. Nothing here resolves #76: no
+    # fail-on-conflict behavior, no quarantine writer, no change to
+    # `_dedupe_cnpj_basico_table` or the monthly ETL.
+    source_cardinality="duplicates-expected",
+    duplicate_policy="deterministic-collapse",
 )
 
 
 # A ordem declarativa documenta o schema; a estratégia física de carga pode
 # usar uma ordem própria em transform.py.
 MAIN_TABLES: tuple[TableSpec, ...] = (
-    TableSpec(name="empresa", kind="empresas", source=CsvSpec(columns=EMPRESA_COLUMNS)),
+    TableSpec(
+        name="empresa",
+        kind="empresas",
+        source=CsvSpec(columns=EMPRESA_COLUMNS),
+        canonical=EMPRESA_CANONICAL,
+    ),
     TableSpec(
         name="estabelecimento",
         kind="estabelecimentos",

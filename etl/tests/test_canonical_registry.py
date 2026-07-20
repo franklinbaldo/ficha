@@ -1,7 +1,8 @@
-"""Contrato canônico do estabelecimento (RFC 0001, Fases 1→2).
+"""Contrato canônico de estabelecimento (Fase 2) e empresa (Fase 3, issue #97).
 
 Esta suíte não escreve Parquet nem altera o pipeline mensal. Ela fixa o
-contrato que o próximo PR de shadow ingestion consumirá.
+contrato que os PRs de shadow ingestion consomem -- para empresa, essa é a
+PRIMEIRA fatia de #97 (só o contrato do registry, sem writer/run real ainda).
 """
 
 from __future__ import annotations
@@ -20,11 +21,11 @@ from ficha_etl.registry import (
 )
 
 
-def test_only_estabelecimento_has_canonical_contract_in_first_slice():
+def test_estabelecimento_and_empresa_have_canonical_contracts_simples_socio_dont():
     by_name = {table.name: table for table in registry.MAIN_TABLES}
 
     assert by_name["estabelecimento"].canonical is registry.ESTABELECIMENTO_CANONICAL
-    assert by_name["empresa"].canonical is None
+    assert by_name["empresa"].canonical is registry.EMPRESA_CANONICAL
     assert by_name["simples"].canonical is None
     assert by_name["socio"].canonical is None
 
@@ -248,3 +249,184 @@ def test_table_spec_rejects_unknown_raw_source_reference():
             source=CsvSpec(columns=("id",)),
             canonical=canonical,
         )
+
+
+# -----------------------------------------------------------------------------
+# EMPRESA_CANONICAL -- primeira fatia de #97 (RFC 0001 Fase 3)
+# -----------------------------------------------------------------------------
+
+
+def test_empresa_canonical_preserves_every_raw_column_once_in_source_order():
+    spec = registry.EMPRESA_CANONICAL
+    mapped_sources = [column.source for column in spec.columns]
+
+    assert mapped_sources == list(registry.EMPRESA_COLUMNS)
+    assert len(mapped_sources) == len(set(mapped_sources))
+
+
+def test_empresa_primary_key_is_required_failing_and_critical():
+    spec = registry.EMPRESA_CANONICAL
+    by_name = {column.name: column for column in spec.columns}
+
+    assert spec.schema_version == 1
+    assert spec.primary_key == ("cnpj_basico",)
+    key_column = by_name["cnpj_basico"]
+    assert key_column.duckdb_type == "VARCHAR"
+    assert key_column.nullable is False
+    assert key_column.invalid_policy == "fail"
+    assert key_column.publication_critical is True
+
+
+def test_empresa_capital_social_is_decimal_with_null_and_count_policy():
+    spec = registry.EMPRESA_CANONICAL
+    by_name = {column.name: column for column in spec.columns}
+
+    capital = by_name["capital_social"]
+    assert capital.duckdb_type == "DECIMAL(18,2)"
+    assert capital.nullable is True
+    assert capital.invalid_policy == "null-and-count"
+    assert capital.cast_sql == "TRY_CAST(REPLACE({source}, ',', '.') AS DECIMAL(18,2))"
+
+
+def test_empresa_other_fields_stay_varchar_and_optional():
+    spec = registry.EMPRESA_CANONICAL
+    by_name = {column.name: column for column in spec.columns}
+    other_fields = {
+        "razao_social",
+        "natureza_juridica",
+        "qualificacao_responsavel",
+        "porte_empresa",
+        "ente_federativo_responsavel",
+    }
+
+    assert other_fields == set(registry.EMPRESA_COLUMNS) - {"cnpj_basico", "capital_social"}
+    for name in other_fields:
+        column = by_name[name]
+        assert column.duckdb_type == "VARCHAR"
+        assert column.nullable is True
+        assert column.invalid_policy == "preserve-as-string"
+        assert column.publication_critical is False
+
+
+def test_empresa_lineage_and_physical_layout_match_estabelecimento_pattern():
+    spec = registry.EMPRESA_CANONICAL
+
+    assert spec.lineage == registry.ESTABELECIMENTO_CANONICAL.lineage
+    assert spec.bucket_key is None
+    assert spec.codec is None
+    assert spec.row_group_size is None
+
+
+def test_empresa_duplicate_semantics_are_declared_not_estabelecimento_defaults():
+    """Empresa's raw input is known NOT to be unique by cnpj_basico --
+    `_dedupe_cnpj_basico_table` (transform.py) already collapses both exact
+    and conflicting duplicates deterministically. This pins that the
+    registry declares the ACTUAL current behavior instead of defaulting to
+    estabelecimento's "unique" assumption, which would misrepresent it.
+    """
+    assert registry.EMPRESA_CANONICAL.source_cardinality == "duplicates-expected"
+    assert registry.EMPRESA_CANONICAL.duplicate_policy == "deterministic-collapse"
+
+
+def test_estabelecimento_duplicate_semantics_are_explicit_unique_fail():
+    assert registry.ESTABELECIMENTO_CANONICAL.source_cardinality == "unique"
+    assert registry.ESTABELECIMENTO_CANONICAL.duplicate_policy == "fail"
+
+
+def test_cardinality_duplicate_policy_rejects_inconsistent_pairs():
+    base_column = CanonicalColumn(
+        name="id",
+        duckdb_type="VARCHAR",
+        source="id",
+        nullable=False,
+        invalid_policy="fail",
+        publication_critical=True,
+    )
+
+    with pytest.raises(ValueError, match="combinação inconsistente"):
+        ParquetSpec(
+            schema_version=1,
+            columns=(base_column,),
+            primary_key=("id",),
+            source_cardinality="unique",
+            duplicate_policy="deterministic-collapse",
+        )
+
+    with pytest.raises(ValueError, match="combinação inconsistente"):
+        ParquetSpec(
+            schema_version=1,
+            columns=(base_column,),
+            primary_key=("id",),
+            source_cardinality="duplicates-expected",
+            duplicate_policy="fail",
+        )
+
+
+def test_cardinality_and_duplicate_policy_reject_unknown_values():
+    base_column = CanonicalColumn(
+        name="id",
+        duckdb_type="VARCHAR",
+        source="id",
+        nullable=False,
+        invalid_policy="fail",
+        publication_critical=True,
+    )
+
+    with pytest.raises(ValueError, match="source_cardinality inválida"):
+        ParquetSpec(
+            schema_version=1,
+            columns=(base_column,),
+            primary_key=("id",),
+            source_cardinality="mostly-unique",  # type: ignore[arg-type]
+            duplicate_policy="fail",
+        )
+
+    with pytest.raises(ValueError, match="duplicate_policy inválida"):
+        ParquetSpec(
+            schema_version=1,
+            columns=(base_column,),
+            primary_key=("id",),
+            source_cardinality="unique",
+            duplicate_policy="quarantine",  # type: ignore[arg-type]
+        )
+
+
+def test_empresa_canonical_projection_casts_capital_social_correctly():
+    source_columns = registry.EMPRESA_COLUMNS
+    con = duckdb.connect()
+    try:
+        definitions = ", ".join(
+            f"{registry.quote_identifier(name)} VARCHAR" for name in source_columns
+        )
+        con.execute(f"CREATE TABLE raw_emp ({definitions})")
+
+        base = dict.fromkeys(source_columns, "")
+        valid = {**base, "cnpj_basico": "00000001", "capital_social": "150000,50"}
+        blank = {**base, "cnpj_basico": "00000002", "capital_social": ""}
+        malformed = {**base, "cnpj_basico": "00000003", "capital_social": "não-é-decimal"}
+
+        placeholders = ", ".join("?" for _ in source_columns)
+        con.executemany(
+            f"INSERT INTO raw_emp VALUES ({placeholders})",
+            [[row[name] for name in source_columns] for row in (valid, blank, malformed)],
+        )
+
+        projection = registry.canonical_projection_sql(
+            registry.EMPRESA_CANONICAL, source_alias="raw_emp"
+        )
+        rows = con.execute(
+            f"SELECT {projection} FROM raw_emp AS raw_emp ORDER BY cnpj_basico"
+        ).fetchall()
+        described = con.execute(f"DESCRIBE SELECT {projection} FROM raw_emp AS raw_emp").fetchall()
+    finally:
+        con.close()
+
+    positions = {name: index for index, name in enumerate(source_columns)}
+    capital_idx = positions["capital_social"]
+    assert rows[0][capital_idx] == pytest.approx(150000.50)
+    assert rows[1][capital_idx] is None  # blank
+    assert rows[2][capital_idx] is None  # malformed nonblank
+
+    types = {name: duckdb_type for name, duckdb_type, *_ in described}
+    assert types["cnpj_basico"] == "VARCHAR"
+    assert types["capital_social"] == "DECIMAL(18,2)"
