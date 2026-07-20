@@ -465,50 +465,66 @@ def run_global_key_audit(
         for name in _KEY_COLUMNS
     }
 
-    agg = con.execute(
+    # Materialized ONCE, reused for both the headline counts and the sample
+    # below -- at real-snapshot scale (~70M distinct keys) this GROUP BY is
+    # already the expensive part. Computing a `list(DISTINCT "_source_file")`
+    # aggregate state for every one of those ~70M groups (only to discard
+    # non-duplicates via HAVING afterwards) is what actually OOM'd the first
+    # real run: `COUNT`/`COUNT(DISTINCT)` are cheap running counters per
+    # group, but a LIST aggregate accumulates real memory per group. Only the
+    # tiny number of ACTUAL duplicates (n > 1) ever need their source files
+    # listed, so that's deferred to a second, targeted query below.
+    con.execute(
         f"""
-        WITH keyed AS (
-            SELECT {keys_sql}, "_source_file"
-            FROM read_parquet({paths_sql})
-            WHERE {valid}
-        ),
-        grouped AS (
-            SELECT {keys_sql},
-                   COUNT(*)::BIGINT AS n,
-                   COUNT(DISTINCT "_source_file")::BIGINT AS n_parts
-            FROM keyed
-            GROUP BY {keys_sql}
-        )
+        CREATE OR REPLACE TEMP TABLE _grouped_keys AS
+        SELECT {keys_sql},
+               COUNT(*)::BIGINT AS n,
+               COUNT(DISTINCT "_source_file")::BIGINT AS n_parts
+        FROM read_parquet({paths_sql})
+        WHERE {valid}
+        GROUP BY {keys_sql}
+        """
+    )
+    agg = con.execute(
+        """
         SELECT
             COUNT(*)::BIGINT AS distinct_valid_keys,
             COALESCE(SUM(CASE WHEN n > 1 THEN 1 ELSE 0 END), 0)::BIGINT AS duplicate_key_count,
             COALESCE(SUM(CASE WHEN n > 1 THEN n - 1 ELSE 0 END), 0)::BIGINT AS excess_rows,
             COALESCE(SUM(CASE WHEN n_parts > 1 THEN 1 ELSE 0 END), 0)::BIGINT AS cross_part_keys
-        FROM grouped
+        FROM _grouped_keys
         """
     ).fetchone()
 
+    # Only the (at most `evidence_sample_limit`) duplicate keys selected here
+    # ever get their source-file list computed -- the join probes the full
+    # key parquets, but the list aggregate itself only accumulates state for
+    # this small, already-bounded set of groups.
+    top_keys_sql = ", ".join(f"top.{key}" for key in quoted_keys)
+    join_on = " AND ".join(f"top.{key} = full_scan.{key}" for key in quoted_keys)
     sample_rows = con.execute(
         f"""
-        WITH keyed AS (
+        WITH top AS (
+            SELECT {keys_sql}, n
+            FROM _grouped_keys
+            WHERE n > 1
+            ORDER BY n DESC, {keys_sql}
+            LIMIT {int(evidence_sample_limit)}
+        )
+        SELECT {top_keys_sql}, top.n,
+               list(DISTINCT full_scan."_source_file") AS source_files
+        FROM top
+        JOIN (
             SELECT {keys_sql}, "_source_file"
             FROM read_parquet({paths_sql})
             WHERE {valid}
-        ),
-        grouped AS (
-            SELECT {keys_sql},
-                   COUNT(*)::BIGINT AS n,
-                   list(DISTINCT "_source_file") AS source_files
-            FROM keyed
-            GROUP BY {keys_sql}
-            HAVING COUNT(*) > 1
-        )
-        SELECT {keys_sql}, n, source_files
-        FROM grouped
-        ORDER BY n DESC, {keys_sql}
-        LIMIT {int(evidence_sample_limit)}
+        ) AS full_scan
+        ON {join_on}
+        GROUP BY {top_keys_sql}, top.n
+        ORDER BY top.n DESC, {top_keys_sql}
         """
     ).fetchall()
+    con.execute("DROP TABLE _grouped_keys")
 
     evidence_sample = [
         {
