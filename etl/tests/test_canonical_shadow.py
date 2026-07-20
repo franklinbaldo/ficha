@@ -77,6 +77,30 @@ def _write_empresa_csv(path: Path, rows: list[dict[str, str]]) -> None:
             writer.writerow([row[name] for name in registry.EMPRESA_COLUMNS])
 
 
+def _simples_row(**overrides: str) -> dict[str, str]:
+    values: dict[str, str] = dict.fromkeys(registry.SIMPLES_COLUMNS, "")
+    values.update(
+        {
+            "cnpj_basico": "00000001",
+            "opcao_simples": "S",
+            "data_opcao_simples": "20200115",
+            "data_exclusao_simples": "",
+            "opcao_mei": "N",
+            "data_opcao_mei": "",
+            "data_exclusao_mei": "",
+        }
+    )
+    values.update(overrides)
+    return values
+
+
+def _write_simples_csv(path: Path, rows: list[dict[str, str]]) -> None:
+    with path.open("w", encoding="utf-8", newline="") as stream:
+        writer = csv.writer(stream, delimiter=";", quotechar='"', lineterminator="\n")
+        for row in rows:
+            writer.writerow([row[name] for name in registry.SIMPLES_COLUMNS])
+
+
 _EMPRESA_PARTS = tuple(f"Empresas{n}.zip" for n in range(10))
 
 
@@ -785,6 +809,300 @@ def test_empresa_discarded_duplicate_malformed_capital_social_still_counted(tmp_
     assert report.invalid_casts_by_column.get("capital_social") == 1
 
 
+# -----------------------------------------------------------------------------
+# simples (#97 slice 4) -- a single physical file (`Simples.zip`, unlike
+# empresa's ten parts), so it goes through the single-part
+# write_canonical_part/run_canonical_shadow_part entry points -- NOT
+# write_canonical_dataset, and NOT a second deduplication implementation.
+# duplicate_policy="deterministic-collapse" (registry.SIMPLES_CANONICAL), same
+# as empresa; the only new writer behavior this policy needed for a
+# single-file table was explicit primary-key output ordering (see
+# write_canonical_part's order_by_primary_key gating, keyed off
+# duplicate_policy, not off entity name).
+# -----------------------------------------------------------------------------
+
+
+def test_simples_exact_duplicates_collapse_to_one_row(tmp_path):
+    csv_path = tmp_path / "simples.csv"
+    output = tmp_path / "part-0.parquet"
+    _write_simples_csv(csv_path, [_simples_row(), _simples_row(), _simples_row()])
+
+    con = duckdb.connect()
+    try:
+        report = canonical_shadow.write_canonical_part(
+            con,
+            "simples",
+            csv_path,
+            output,
+            source_file="Simples.zip",
+            source_snapshot="2026-07",
+        )
+        row_count = con.execute(f"SELECT COUNT(*) FROM read_parquet('{output}')").fetchone()[0]
+    finally:
+        con.close()
+
+    assert report.status == "ok"
+    assert report.rows_raw == 3
+    assert report.rows_canonical == 1
+    assert report.duplicate_key_rows == 2  # excess rows
+    assert report.duplicate_key_count == 1  # one distinct key duplicated
+    assert report.conflicting_key_count == 0  # exact duplicates, no conflict
+    assert report.conflicting_sample == []
+    assert row_count == 1
+
+
+def test_simples_conflicting_duplicates_collapse_deterministically(tmp_path):
+    csv_path = tmp_path / "simples.csv"
+    output = tmp_path / "part-0.parquet"
+    _write_simples_csv(
+        csv_path,
+        [
+            _simples_row(opcao_simples="CONFLICT_A"),
+            _simples_row(opcao_simples="CONFLICT_B"),
+        ],
+    )
+
+    con = duckdb.connect()
+    try:
+        report = canonical_shadow.write_canonical_part(
+            con,
+            "simples",
+            csv_path,
+            output,
+            source_file="Simples.zip",
+            source_snapshot="2026-07",
+        )
+        survivor = con.execute(f"SELECT opcao_simples FROM read_parquet('{output}')").fetchone()[0]
+    finally:
+        con.close()
+
+    assert report.status == "ok"
+    assert report.rows_canonical == 1
+    assert report.duplicate_key_count == 1
+    assert report.conflicting_key_count == 1
+    assert report.conflicting_sample == [{"cnpj_basico": "00000001"}]
+    # Deterministic full-row tiebreak: lexicographically smaller row survives
+    # ("CONFLICT_A" < "CONFLICT_B") -- reproducible, not "whatever DuckDB kept".
+    assert survivor == "CONFLICT_A"
+
+
+def test_simples_output_independent_of_row_order(tmp_path):
+    """Reversing raw row order must give an identical survivor, emitted row
+    SEQUENCE (no ORDER BY in the query below -- reads the writer's own
+    output order), lineage, evidence and sample fingerprint."""
+    rows = [
+        _simples_row(),
+        _simples_row(),
+        _simples_row(cnpj_basico="00000002", opcao_simples="CONFLICT_A"),
+        _simples_row(cnpj_basico="00000002", opcao_simples="CONFLICT_B"),
+        _simples_row(cnpj_basico="00000003", data_opcao_simples="20210301"),
+    ]
+
+    def run(order: list[dict[str, str]], tag: str):
+        csv_path = tmp_path / f"simples-{tag}.csv"
+        output = tmp_path / f"part-{tag}.parquet"
+        _write_simples_csv(csv_path, order)
+        con = duckdb.connect()
+        try:
+            report = canonical_shadow.write_canonical_part(
+                con,
+                "simples",
+                csv_path,
+                output,
+                source_file="Simples.zip",
+                source_snapshot="2026-07",
+                sample_size=10,
+            )
+            out_rows = con.execute(
+                f"SELECT cnpj_basico, opcao_simples, _source_file FROM read_parquet('{output}')"
+            ).fetchall()
+        finally:
+            con.close()
+        return report, out_rows
+
+    report_forward, rows_forward = run(rows, "forward")
+    report_reversed, rows_reversed = run(list(reversed(rows)), "reversed")
+
+    assert rows_forward == rows_reversed
+    assert [row[0] for row in rows_forward] == sorted(row[0] for row in rows_forward)
+    assert report_forward.conflicting_sample == report_reversed.conflicting_sample
+    assert report_forward.duplicate_key_count == report_reversed.duplicate_key_count
+    assert report_forward.sample_fingerprint == report_reversed.sample_fingerprint
+
+
+def test_simples_duplicate_key_count_and_excess_rows_stay_separate(tmp_path):
+    csv_path = tmp_path / "simples.csv"
+    output = tmp_path / "part-0.parquet"
+    _write_simples_csv(
+        csv_path,
+        [
+            _simples_row(cnpj_basico="00000001"),
+            _simples_row(cnpj_basico="00000001"),
+            _simples_row(cnpj_basico="00000001"),  # key 1: 3 occurrences, excess 2
+            _simples_row(cnpj_basico="00000002"),  # key 2: unique, no excess
+        ],
+    )
+
+    con = duckdb.connect()
+    try:
+        report = canonical_shadow.write_canonical_part(
+            con,
+            "simples",
+            csv_path,
+            output,
+            source_file="Simples.zip",
+            source_snapshot="2026-07",
+        )
+    finally:
+        con.close()
+
+    assert report.status == "ok"
+    assert report.rows_raw == 4
+    assert report.rows_canonical == 2
+    assert report.duplicate_key_count == 1  # ONE distinct key is duplicated
+    assert report.duplicate_key_rows == 2  # TWO excess rows (3 occurrences - 1)
+
+
+def test_simples_null_blank_key_fails_separately_from_duplicates(tmp_path):
+    csv_path = tmp_path / "simples.csv"
+    output = tmp_path / "part-0.parquet"
+    # A genuine duplicate (cnpj_basico repeated) AND a blank-keyed row in the
+    # same fixture -- the blank-key failure must fire, not the duplicate path.
+    _write_simples_csv(
+        csv_path,
+        [_simples_row(), _simples_row(), _simples_row(cnpj_basico="")],
+    )
+
+    con = duckdb.connect()
+    try:
+        with pytest.raises(canonical_shadow.CanonicalValidationError) as caught:
+            canonical_shadow.write_canonical_part(
+                con,
+                "simples",
+                csv_path,
+                output,
+                source_file="Simples.zip",
+                source_snapshot="2026-07",
+            )
+    finally:
+        con.close()
+
+    report = caught.value.report
+    assert report.status == "failed"
+    assert report.required_key_failures["cnpj_basico"] == 1
+    assert "required key failures" in report.error
+    assert not output.exists()
+
+
+def test_simples_discarded_duplicate_malformed_date_still_counted(tmp_path):
+    """_invalid_casts must run BEFORE the deterministic collapse -- a
+    malformed date on the row that LOSES the tiebreak (and is discarded)
+    must still be counted, not silently lost along with the row."""
+    survivor = _simples_row(data_opcao_simples="20200101")  # sorts first, survives
+    discarded = _simples_row(data_opcao_simples="not-a-date")  # sorts after, discarded
+    csv_path = tmp_path / "simples.csv"
+    output = tmp_path / "part-0.parquet"
+    _write_simples_csv(csv_path, [survivor, discarded])
+
+    con = duckdb.connect()
+    try:
+        report = canonical_shadow.write_canonical_part(
+            con,
+            "simples",
+            csv_path,
+            output,
+            source_file="Simples.zip",
+            source_snapshot="2026-07",
+        )
+        remaining = con.execute(
+            f"SELECT data_opcao_simples FROM read_parquet('{output}')"
+        ).fetchone()[0]
+    finally:
+        con.close()
+
+    from datetime import date
+
+    assert report.status == "ok"
+    assert report.rows_canonical == 1
+    assert remaining == date(2020, 1, 1)  # the well-formed row survived
+    # ...but the malformed value on the DISCARDED row is still in the raw
+    # invalid-cast evidence.
+    assert report.invalid_casts_by_column.get("data_opcao_simples") == 1
+
+
+def test_simples_output_explicitly_ordered_by_primary_key(tmp_path):
+    """Unlike estabelecimento's pinned "fail"-policy output (no ORDER BY),
+    a single-file deterministic-collapse table must still emit rows in
+    explicit primary-key order -- same requirement as write_canonical_dataset,
+    just via write_canonical_part's order_by_primary_key gating."""
+    csv_path = tmp_path / "simples.csv"
+    output = tmp_path / "part-0.parquet"
+    # Deliberately NOT already sorted by cnpj_basico in the source CSV.
+    _write_simples_csv(
+        csv_path,
+        [
+            _simples_row(cnpj_basico="00000005"),
+            _simples_row(cnpj_basico="00000001"),
+            _simples_row(cnpj_basico="00000003"),
+        ],
+    )
+
+    con = duckdb.connect()
+    try:
+        report = canonical_shadow.write_canonical_part(
+            con,
+            "simples",
+            csv_path,
+            output,
+            source_file="Simples.zip",
+            source_snapshot="2026-07",
+        )
+        # No ORDER BY here on purpose -- must reflect the writer's own order.
+        keys = [
+            row[0]
+            for row in con.execute(f"SELECT cnpj_basico FROM read_parquet('{output}')").fetchall()
+        ]
+    finally:
+        con.close()
+
+    assert report.status == "ok"
+    assert keys == ["00000001", "00000003", "00000005"]
+
+
+def test_simples_single_part_file_backed_run_writes_typed_evidence(tmp_path):
+    csv_path = tmp_path / "simples.csv"
+    output = tmp_path / "canonical" / "part-0.parquet"
+    report_path = tmp_path / "evidence" / "quality.json"
+    metrics_path = tmp_path / "evidence" / "metrics.json"
+    work_dir = tmp_path / "work"
+    _write_simples_csv(csv_path, [_simples_row(), _simples_row()])  # exact dup, collapses
+
+    report = canonical_shadow.run_canonical_shadow_part(
+        "simples",
+        csv_path,
+        output,
+        source_file="Simples.zip",
+        source_snapshot="2026-07",
+        work_dir=work_dir,
+        report_path=report_path,
+        metrics_path=metrics_path,
+        sample_size=10,
+    )
+
+    envelope = json.loads(metrics_path.read_text())
+    stage = envelope["stages"][0]
+
+    assert report.status == "ok"
+    assert report.rows_raw == 2
+    assert report.rows_canonical == 1
+    assert stage["stage"] == "canonical_simples_part"
+    assert stage["duplicate_rows"] == 1
+    assert stage["extra"]["duplicate_key_count"] == 1
+    assert stage["extra"]["conflicting_key_count"] == 0
+    assert not (work_dir / "canonical-simples.duckdb").exists()
+    assert output.exists()
+
+
 def test_policy_validation_fires_before_data_inspection_on_unique_input(tmp_path, monkeypatch):
     """An unsupported/inconsistent duplicate_policy must fail even when the
     input contains zero duplicate keys -- the old code only checked policy
@@ -876,7 +1194,10 @@ def test_writer_fails_closed_on_unsupported_duplicate_policy(tmp_path, monkeypat
 
 
 def test_table_driven_invocation_rejects_table_without_canonical_contract(tmp_path):
-    csv_path = tmp_path / "simples.csv"
+    # socio has no canonical contract yet (#97 slice 5, pending a key/
+    # cardinality investigation) -- simples gained one in #97 slice 4, so it
+    # no longer serves as a "no canonical contract" example here.
+    csv_path = tmp_path / "socio.csv"
     csv_path.write_text("", encoding="utf-8")
     output = tmp_path / "part-0.parquet"
 
@@ -885,10 +1206,10 @@ def test_table_driven_invocation_rejects_table_without_canonical_contract(tmp_pa
         with pytest.raises(RuntimeError, match="no canonical contract"):
             canonical_shadow.write_canonical_part(
                 con,
-                "simples",
+                "socio",
                 csv_path,
                 output,
-                source_file="Simples.zip",
+                source_file="Socios0.zip",
                 source_snapshot="2026-07",
             )
     finally:

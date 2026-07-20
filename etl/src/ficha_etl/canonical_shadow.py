@@ -746,9 +746,24 @@ def write_canonical_part(
     output.parent.mkdir(parents=True, exist_ok=True)
     partial = output.with_name(f".{output.name}.{uuid.uuid4().hex}.partial")
     partial.unlink(missing_ok=True)
+    # Explicit primary-key ordering matters wherever a collapse can pick a
+    # survivor -- single-file "deterministic-collapse" tables (simples) need
+    # the same explicit ORDER BY write_canonical_dataset already gives
+    # empresa, for the same RFC 0001 reason (same records AND ordering for
+    # the same input, not an accident of table materialization order).
+    # estabelecimento's "fail" policy never collapses, so leaving it off
+    # there is a no-op for correctness but keeps its pinned evidence
+    # contract byte-for-byte unchanged.
+    select_sql = _select_sql(
+        raw_table,
+        spec,
+        _literal(source_file),
+        source_snapshot,
+        order_by_primary_key=spec.duplicate_policy == "deterministic-collapse",
+    )
     try:
         con.execute(
-            f"COPY ({_select_sql(raw_table, spec, _literal(source_file), source_snapshot)}) "
+            f"COPY ({select_sql}) "
             f"TO {_literal(str(partial))} (FORMAT PARQUET, COMPRESSION {_CODEC}, "
             f"ROW_GROUP_SIZE {_ROW_GROUP_SIZE})"
         )
