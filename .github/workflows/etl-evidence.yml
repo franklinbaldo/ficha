@@ -1,8 +1,8 @@
 name: ETL Evidence Reruns
 
-# Evidence-only workflow for RFC 0001 decisions.  Pull requests run a tiny
+# Evidence-only workflow for RFC 0001 decisions. Pull requests run a tiny
 # smoke profile; workflow_dispatch defaults to the real five-repeat evidence
-# profile.  This workflow records data and never changes production behavior or
+# profile. This workflow records data and never changes production behavior or
 # declares a performance winner automatically.
 
 on:
@@ -104,8 +104,16 @@ jobs:
 
       - name: Validate evidence tooling
         run: |
-          uv run ruff check bench/ab_codecs.py bench/dedup_evidence.py bench/run_with_peaks.py
-          uv run ruff format --check bench/ab_codecs.py bench/dedup_evidence.py bench/run_with_peaks.py
+          uv run ruff check \
+            bench/ab_codecs.py \
+            bench/ab_verify_roundtrip.py \
+            bench/dedup_evidence.py \
+            bench/run_with_peaks.py
+          uv run ruff format --check \
+            bench/ab_codecs.py \
+            bench/ab_verify_roundtrip.py \
+            bench/dedup_evidence.py \
+            bench/run_with_peaks.py
           uv run python - <<'PY'
           import yaml
           from pathlib import Path
@@ -210,6 +218,15 @@ jobs:
             --seed "${{ steps.parameters.outputs.seed }}" \
             --json bench/.evidence/dedup.json \
             2>&1 | tee bench/.evidence/dedup.log
+
+      - name: Historical-vs-current roundtrip verifier
+        run: |
+          uv run python bench/ab_verify_roundtrip.py \
+            --repeats "${{ steps.parameters.outputs.repeats }}" \
+            --seed "${{ steps.parameters.outputs.seed }}" \
+            --sample-size 1000 \
+            --json bench/.evidence/verify-roundtrip.json \
+            2>&1 | tee bench/.evidence/verify-roundtrip.log
 
       - name: Write evidence index
         if: always()
