@@ -1,0 +1,70 @@
+name: Roundtrip Evidence Validation Debug
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/roundtrip-validation-debug.yml'
+      - '.github/workflows/etl-evidence.yml'
+      - 'etl/bench/ab_verify_roundtrip.py'
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+        working-directory: etl
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+      - run: uv python install 3.11
+      - run: uv sync --extra dev
+      - name: Capture exact validation results
+        id: validation
+        continue-on-error: true
+        run: |
+          mkdir -p bench/validation-debug
+          set +e
+          uv run ruff check \
+            bench/ab_codecs.py \
+            bench/ab_verify_roundtrip.py \
+            bench/dedup_evidence.py \
+            bench/run_with_peaks.py \
+            > bench/validation-debug/ruff-check.log 2>&1
+          check_status=$?
+          uv run ruff format --check \
+            bench/ab_codecs.py \
+            bench/ab_verify_roundtrip.py \
+            bench/dedup_evidence.py \
+            bench/run_with_peaks.py \
+            > bench/validation-debug/ruff-format.log 2>&1
+          format_status=$?
+          uv run python - <<'PY' \
+            > bench/validation-debug/yaml.log 2>&1
+          import yaml
+          from pathlib import Path
+          yaml.safe_load(Path('../.github/workflows/etl-evidence.yml').read_text())
+          print('yaml ok')
+          PY
+          yaml_status=$?
+          printf 'ruff_check=%s\nruff_format=%s\nyaml=%s\n' \
+            "$check_status" "$format_status" "$yaml_status" \
+            | tee bench/validation-debug/status.txt
+          if (( check_status != 0 || format_status != 0 || yaml_status != 0 )); then
+            exit 1
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: roundtrip-validation-debug-${{ github.run_id }}
+          path: etl/bench/validation-debug/
+          if-no-files-found: error
+          retention-days: 1
+      - name: Preserve validation failure
+        if: steps.validation.outcome != 'success'
+        run: exit 1
