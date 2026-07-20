@@ -378,18 +378,17 @@ ESTABELECIMENTO_CANONICAL = ParquetSpec(
         for name in ESTABELECIMENTO_COLUMNS
     ),
     primary_key=("cnpj_basico", "cnpj_ordem", "cnpj_dv"),
-    # Explícito, não só o default. CUIDADO: "unique" aqui é uma ASSUNÇÃO DE
-    # DESIGN, não um fato verificado em escala real -- o writer shadow
-    # (canonical_shadow.py) falha fechado em chave duplicada, mas só DENTRO
-    # de UMA parte (`EstabelecimentosN.zip`) processada por vez; nada no
-    # pipeline (legado ou shadow) verifica unicidade da chave completa
-    # ACROSS as dez partes de um snapshot. O roundtrip check
-    # (`assert_roundtrip`) também não pegaria isso: uma chave duplicada
-    # entre duas partes infla a contagem de `estabelecimento` e a de
-    # `cnpjs.parquet` igualmente (cada parte é escrita independentemente),
-    # então as contagens ainda batem. Rastreado em issue #100 -- verificar
-    # contra um snapshot real e completo antes de tratar esta declaração
-    # como confirmada.
+    # Explícito, não só o default. Confirmado -- não mais apenas assumido --
+    # por issue #100: `estabelecimento_key_audit.py`, rodado contra o
+    # snapshot 2026-04 completo (dez partes reais, 70.509.602 linhas), achou
+    # ZERO chaves completas duplicadas -- nem dentro de uma parte, nem entre
+    # partes diferentes. Nenhum outro caminho do pipeline verifica isso: o
+    # writer shadow (canonical_shadow.py) só vê uma parte por vez, o loader
+    # legado nunca consulta a tabela combinada por duplicata, e o roundtrip
+    # check (`assert_roundtrip`) não pegaria uma chave duplicada entre partes
+    # (infla os dois lados igualmente). Evidência durável em
+    # docs/canonical-estabelecimento-history.md (run
+    # 29759985170, commit 33b5a4e3).
     source_cardinality="unique",
     duplicate_policy="fail",
 )
