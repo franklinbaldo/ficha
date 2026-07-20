@@ -1,0 +1,84 @@
+name: Finalize Canonical Shadow Once
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/finalize-canonical-shadow-once.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  finalize:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+      - name: Apply final reviewed changes
+        working-directory: etl
+        run: |
+          uv python install 3.11
+          uv sync --extra dev
+          uv run python - <<'PY'
+          from pathlib import Path
+
+          module = Path('src/ficha_etl/canonical_shadow.py')
+          text = module.read_text()
+          changes = (
+              ('import sys\n', 'import sys\nimport uuid\n'),
+              ("f\"WHERE {raw} IS NOT NULL AND TRIM({raw}) NOT IN ('', '0') \"",
+               "f\"WHERE {raw} IS NOT NULL AND TRIM({raw}) <> '' \""),
+              ('partial = output.with_name(f".{output.name}.partial")',
+               'partial = output.with_name(f".{output.name}.{uuid.uuid4().hex}.partial")'),
+          )
+          for old, new in changes:
+              count = text.count(old)
+              if count == 1:
+                  text = text.replace(old, new)
+              elif count != 0 or new not in text:
+                  raise SystemExit(f'unexpected module state for {old!r}: {count}')
+          module.write_text(text)
+
+          tests = Path('tests/test_canonical_shadow.py')
+          text = tests.read_text()
+          changes = (
+              ('"data_inicio_atividade": 0,', '"data_inicio_atividade": 1,'),
+              ('assert report.invalid_casts_total == 2', 'assert report.invalid_casts_total == 3'),
+          )
+          for old, new in changes:
+              count = text.count(old)
+              if count == 1:
+                  text = text.replace(old, new)
+              elif count != 0 or new not in text:
+                  raise SystemExit(f'unexpected test state for {old!r}: {count}')
+          old = 'assert not output.with_name(f".{output.name}.partial").exists()'
+          new = 'assert not list(output.parent.glob(f".{output.name}.*.partial"))'
+          count = text.count(old)
+          if count:
+              text = text.replace(old, new)
+          elif text.count(new) != 2:
+              raise SystemExit(f'unexpected partial assertions: old={count}, new={text.count(new)}')
+          tests.write_text(text)
+          PY
+          uv run ruff format src/ficha_etl/canonical_shadow.py tests/test_canonical_shadow.py
+          uv run ruff check src/ficha_etl/canonical_shadow.py tests/test_canonical_shadow.py
+          uv run pytest -q tests/test_canonical_shadow.py tests/test_canonical_registry.py
+      - name: Remove temporary automation and commit
+        run: |
+          rm -f \
+            .github/workflows/fix-canonical-shadow-once.yml \
+            .github/workflows/consolidate-canonical-shadow-once.yml \
+            .github/workflows/debug-canonical-consolidation-once.yml \
+            .github/workflows/finalize-canonical-shadow-once.yml \
+            etl/consolidation-status.txt
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'fix(etl): align shadow cast counts and isolate partials'
+          git push origin HEAD:${{ github.head_ref }}
