@@ -1,0 +1,104 @@
+name: Run First Historical Canonical Shadow Once
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/run-canonical-history-once.yml'
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  dispatch-and-forward:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TARGET_SHA: c45f9a35ce7f7115ffeafc435e0ac5294def6481
+    steps:
+      - name: Dispatch real historical workflow
+        id: dispatch
+        run: |
+          started=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          dispatched=false
+          for attempt in $(seq 1 12); do
+            if gh workflow run canonical-shadow-history.yml \
+              --repo "$GITHUB_REPOSITORY" \
+              --ref main \
+              -f month=2026-04 \
+              -f part=0 \
+              -f sample_size=1000 \
+              -f force=false; then
+              dispatched=true
+              break
+            fi
+            delay=$((attempt * 5))
+            echo "dispatch attempt $attempt failed; retrying in ${delay}s" >&2
+            sleep "$delay"
+          done
+          if [ "$dispatched" != true ]; then
+            echo "workflow dispatch failed after retries" >&2
+            exit 1
+          fi
+
+          run_id=''
+          for attempt in $(seq 1 60); do
+            if runs=$(gh run list \
+              --repo "$GITHUB_REPOSITORY" \
+              --workflow canonical-shadow-history.yml \
+              --branch main \
+              --event workflow_dispatch \
+              --limit 20 \
+              --json databaseId,createdAt,headSha); then
+              run_id=$(jq -r \
+                --arg started "$started" \
+                --arg sha "$TARGET_SHA" \
+                '.[] | select(.headSha == $sha and .createdAt >= $started) | .databaseId' \
+                <<< "$runs" | head -n 1)
+              if [ -n "$run_id" ] && [ "$run_id" != null ]; then
+                break
+              fi
+            fi
+            echo "waiting for dispatched run (attempt $attempt)" >&2
+            sleep 5
+          done
+          if [ -z "$run_id" ] || [ "$run_id" = null ]; then
+            echo "could not resolve dispatched historical run" >&2
+            exit 1
+          fi
+          echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+          echo "Dispatched historical run $run_id"
+
+      - name: Wait for historical run
+        run: |
+          gh run watch "${{ steps.dispatch.outputs.run_id }}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --exit-status
+
+      - name: Download historical artifact
+        run: |
+          mkdir -p forwarded
+          run_id="${{ steps.dispatch.outputs.run_id }}"
+          name="canonical-shadow-2026-04-estabelecimento-0-$run_id"
+          for attempt in $(seq 1 12); do
+            if gh run download "$run_id" \
+              --repo "$GITHUB_REPOSITORY" \
+              --name "$name" \
+              --dir forwarded; then
+              exit 0
+            fi
+            delay=$((attempt * 5))
+            echo "artifact download attempt $attempt failed; retrying in ${delay}s" >&2
+            sleep "$delay"
+          done
+          exit 1
+
+      - name: Forward historical artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: forwarded-canonical-shadow-2026-04-estabelecimento-0-${{ steps.dispatch.outputs.run_id }}
+          path: forwarded/
+          if-no-files-found: error
+          retention-days: 30
+          include-hidden-files: true
