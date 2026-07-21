@@ -25,8 +25,13 @@ uniformly across all rows:
   middle six digits (e.g. `"***816343**"`) and is NOT a reliable individual
   identifier alone: two genuinely different people can share the same
   masked value. The identity tested is masked CPF + normalized partner
-  name, with `faixa_etaria` (age bracket) measured as an additional
-  disambiguator on top.
+  name. `faixa_etaria` (age bracket) is measured at both the identity level
+  (`pf:cpf_nome_faixa`) and the relationship level
+  (`pf:relationship_with_faixa`) for comparison, but is deliberately NOT
+  part of the recommended identity: it is a temporally unstable attribute
+  (a real person's age bracket changes as they age across snapshots) and
+  is not the kind of fact `qualificacao_socio`/`data_entrada_sociedade`
+  are -- those are fixed at the moment a partner relationship began.
 - `"3"` Socio Estrangeiro -- `cnpj_cpf_socio` is always blank; this is not
   a data-quality gap, it is the entire foreign-partner category, which
   structurally has no CPF/CNPJ field. The only identity signal available is
@@ -53,20 +58,32 @@ are NOT included in any candidate key unless that measurement shows they
 define a genuinely separate relationship.
 
 Normalized partner name (`_nome_socio_norm`, built once in `_socio_base`)
-is deliberately conservative: uppercase, collapse internal whitespace, trim
--- RFB free text in this field is not expected to vary in spelling, only in
-case/whitespace.
+strips accents (`strip_accents()`), uppercases, collapses internal
+whitespace, and trims -- RFB free text in this field is not consistently
+accented or cased across records, and a literal byte comparison would
+wrongly treat two spellings of the same name as different people.
 
 For each candidate key, this measures: blank/null key-component rows (a
 key-integrity failure, never an ordinary duplicate -- same distinction
 `canonical_shadow.py`'s writers make), distinct valid key count, duplicate
 key count, excess row count, cross-part duplicate key count, and --
-critically -- how many of those duplicate keys are "exact" (every OTHER
-raw column, including both free-text name fields, also matches -- the same
-value just republished) versus "conflicting" (something else genuinely
-differs). A high conflict rate at a candidate means that candidate does not
-actually identify a real-world fact; a candidate with near-zero duplicates
-AND near-zero conflicts is a real, if unproven, contract.
+for RELATIONSHIP-level (company-scoped) candidates only -- how many of
+those duplicate keys are "exact" (every OTHER raw column, including both
+free-text name fields, also matches via real per-column comparison, never
+a hash -- a hash match is evidence, not proof, of row equality) versus
+"conflicting" (something else genuinely differs). IDENTITY-level
+(company-unscoped) candidates skip this check: duplication there is
+usually just the same partner appearing in different companies, not a
+conflict to resolve, and for a category like PF the duplicate-key set can
+cover nearly the entire source, making a full-row comparison both
+expensive and not a meaningful measurement (see `_audit_one_candidate`'s
+`compute_conflicting` parameter). A high conflict rate at a relationship
+candidate means that candidate does not actually identify a real-world
+fact; near-zero duplicates AND near-zero conflicts is a real, if
+unproven, contract. Where residual conflicts remain (e.g. foreign
+partners), they are reported and preserved, not resolved by folding more
+columns like `representante_legal` into the identity without evidence
+that they define a genuinely separate relationship.
 
 Design, same discipline as `estabelecimento_key_audit.py` (issue #100):
 
@@ -528,7 +545,7 @@ class CandidateKeyReport:
     duplicate_key_count: int
     excess_duplicate_row_count: int
     cross_part_duplicate_key_count: int
-    conflicting_key_count: int
+    conflicting_key_count: int | None
     evidence_sample: list[dict[str, Any]]
 
     def to_json_dict(self) -> dict[str, Any]:
@@ -542,6 +559,7 @@ def _audit_one_candidate(
     columns: tuple[str, ...],
     *,
     collect_sample: bool,
+    compute_conflicting: bool = True,
     sample_limit: int = _EVIDENCE_SAMPLE_LIMIT,
 ) -> CandidateKeyReport:
     """``source`` is a FROM-clause-ready SQL fragment (a temp table or view
@@ -567,6 +585,24 @@ def _audit_one_candidate(
     silently drop those groups from the conflict count and evidence sample
     even though the GROUP BY above (which treats NULLs as equal) counted
     them correctly.
+
+    ``compute_conflicting`` gates the "conflicting vs exact" full-row
+    comparison (``conflicting_key_count`` is ``None`` when skipped). This is
+    real per-column struct equality -- NOT a hash -- because a hash match is
+    not proof of row equality, only evidence of it; a collision would
+    silently misreport a genuine conflict as an exact duplicate. Real struct
+    comparison is only run for candidates where the duplicate-key set is
+    small (company-scoped relationship candidates in practice): for a
+    company-UNSCOPED identity candidate where duplication is the very thing
+    being measured (e.g. masked CPF alone, ~1e6 possible values colliding
+    across 26.8M real PF rows), the "duplicate keys" JOIN covers nearly the
+    entire source and a full 11-column struct comparison over that many
+    rows is not just slow, it is not a meaningful measurement either --
+    apparent "conflicts" there are mostly just different real-world
+    relationships in different companies. Callers should pass
+    ``compute_conflicting=False`` for identity-level candidates and rely on
+    the category-specific diagnostics (`_pj_diagnostics`/`_pf_diagnostics`)
+    for what genuinely varies at that level.
     """
     quoted = _quoted(columns)
     key_list = ", ".join(quoted)
@@ -606,30 +642,37 @@ def _audit_one_candidate(
         """
     ).fetchone()
 
-    # Conflicting-vs-exact: among duplicate keys, how many have more than
-    # one distinct FULL ROW (every raw column, including the two name
-    # fields -- see module docstring for why: this is the most
-    # conservative definition, never UNDER-counts a conflict). Compares the
-    # `_row_hash` precomputed once in `_socio_base` rather than rebuilding
-    # an 11-column STRUCT here -- see `_build_socio_base` for why.
-    t_keys = ", ".join(f"t.{c}" for c in quoted)
-    join_on = " AND ".join(f"t.{c} IS NOT DISTINCT FROM dk.{c}" for c in quoted)
-    row_hash = registry.quote_identifier(_ROW_HASH)
-    conflicting = int(
-        con.execute(
-            f"""
-            WITH dupe_keys AS (SELECT {key_list} FROM _grouped WHERE n > 1),
-            conflicting_keys AS (
-                SELECT {t_keys}
-                FROM {source} t
-                JOIN dupe_keys dk ON {join_on}
-                GROUP BY {t_keys}
-                HAVING COUNT(DISTINCT t.{row_hash}) > 1
-            )
-            SELECT COUNT(*) FROM conflicting_keys
-            """
-        ).fetchone()[0]
-    )
+    conflicting: int | None = None
+    if compute_conflicting:
+        # Conflicting-vs-exact: among duplicate keys, how many have more
+        # than one distinct FULL ROW (every raw column, including both
+        # free-text name fields -- the most conservative definition, never
+        # UNDER-counts a conflict). Real per-column struct equality, so
+        # NULL fields compare IS NOT DISTINCT FROM (same semantics as the
+        # GROUP BY above), not a hash -- see the docstring above for why.
+        all_cols = [f"t.{c}" for c in _quoted(_ALL_COLUMNS)]
+        full_row_struct = (
+            "{"
+            + ", ".join(f"'{c}': {expr}" for c, expr in zip(_ALL_COLUMNS, all_cols, strict=True))
+            + "}"
+        )
+        t_keys = ", ".join(f"t.{c}" for c in quoted)
+        join_on = " AND ".join(f"t.{c} IS NOT DISTINCT FROM dk.{c}" for c in quoted)
+        conflicting = int(
+            con.execute(
+                f"""
+                WITH dupe_keys AS (SELECT {key_list} FROM _grouped WHERE n > 1),
+                conflicting_keys AS (
+                    SELECT {t_keys}
+                    FROM {source} t
+                    JOIN dupe_keys dk ON {join_on}
+                    GROUP BY {t_keys}
+                    HAVING COUNT(DISTINCT {full_row_struct}) > 1
+                )
+                SELECT COUNT(*) FROM conflicting_keys
+                """
+            ).fetchone()[0]
+        )
 
     evidence_sample: list[dict[str, Any]] = []
     if collect_sample:
@@ -680,37 +723,25 @@ def _audit_one_candidate(
 
 
 def _normalized_name_expr(column: str) -> str:
-    """Uppercase, collapse internal whitespace, trim -- deliberately
-    conservative (RFB free text here is expected to vary in case/spacing,
-    not spelling)."""
+    """Strip accents (`strip_accents()`, a DuckDB core string function, no
+    extension needed), uppercase, collapse internal whitespace, trim. RFB
+    free text is not consistently accented across records -- the same real
+    name can appear with and without diacritics in different snapshots or
+    even different rows of the same snapshot -- so without accent removal,
+    two spellings of the same name would wrongly compare as different
+    people. This matches how Portuguese free text should be compared for
+    identity purposes: case- and diacritic-insensitive, not a literal byte
+    comparison.
+    """
     quoted = registry.quote_identifier(column)
-    return rf"TRIM(REGEXP_REPLACE(UPPER({quoted}), '\s+', ' ', 'g'))"
-
-
-_ROW_HASH = "_row_hash"
+    return rf"TRIM(REGEXP_REPLACE(UPPER(strip_accents({quoted})), '\s+', ' ', 'g'))"
 
 
 def _build_socio_base(con: duckdb.DuckDBPyConnection, paths_sql: str) -> str:
     """`_socio_base` -- every raw `SOCIO_COLUMNS` plus `_source_file`, plus
     the normalized-name diagnostic columns every category's candidates and
-    diagnostics below reuse, plus a single precomputed `_row_hash` of the
-    full row (every raw column). `_audit_one_candidate`'s conflicting-vs-exact
-    check needs "is every OTHER column the same too" for each duplicate
-    key -- computing that from an 11-column STRUCT comparison INSIDE every
-    one of a category's ~9 candidate queries is what made a company-unscoped
-    identity candidate (e.g. masked CPF alone, where duplication is the
-    whole point being measured -- ~1e6 possible masked values across 26.8M
-    real PF rows means the "duplicate key" JOIN covers nearly the entire
-    category) blow up in memory. Hashing the full row once here and
-    comparing that single value everywhere else avoids rebuilding the wide
-    struct on every candidate.
-    """
+    diagnostics below reuse."""
     cols_sql = ", ".join(_quoted(_ALL_COLUMNS))
-    all_cols_struct = (
-        "{"
-        + ", ".join(f"'{c}': {q}" for c, q in zip(_ALL_COLUMNS, _quoted(_ALL_COLUMNS), strict=True))
-        + "}"
-    )
     con.execute(
         f"""
         CREATE OR REPLACE TEMP TABLE _socio_base AS
@@ -718,8 +749,7 @@ def _build_socio_base(con: duckdb.DuckDBPyConnection, paths_sql: str) -> str:
                {_normalized_name_expr("nome_socio_razao_social")}
                    AS {registry.quote_identifier(_NOME_SOCIO_NORM)},
                {_normalized_name_expr("nome_representante_legal")}
-                   AS {registry.quote_identifier(_NOME_REPRESENTANTE_NORM)},
-               hash({all_cols_struct}) AS {registry.quote_identifier(_ROW_HASH)}
+                   AS {registry.quote_identifier(_NOME_REPRESENTANTE_NORM)}
         FROM read_parquet({paths_sql})
         """
     )
@@ -738,6 +768,27 @@ def _category_view(con: duckdb.DuckDBPyConnection, base: str, category: str) -> 
     return view
 
 
+_REPRESENTANTE_COLUMNS = (
+    "representante_legal",
+    "nome_representante_legal",
+    "qualificacao_representante_legal",
+)
+
+
+def _null_aware_varies_expr(column_ref: str) -> str:
+    """True if `column_ref` takes more than one distinct value within the
+    enclosing GROUP BY, where NULL counts as a value in its own right.
+    Plain ``COUNT(DISTINCT column_ref) > 1`` silently ignores NULL rows
+    entirely, so a group with one NULL row and one non-NULL row -- e.g. one
+    occurrence has a legal representative on file and the other doesn't --
+    would be reported as "consistent" when it is not."""
+    return (
+        f"(COUNT(DISTINCT {column_ref}) > 1 OR "
+        f"(COUNT(*) FILTER (WHERE {column_ref} IS NULL) > 0 "
+        f"AND COUNT(*) FILTER (WHERE {column_ref} IS NOT NULL) > 0))"
+    )
+
+
 def _representante_independence(
     con: duckdb.DuckDBPyConnection, source: str, relationship_columns: tuple[str, ...]
 ) -> dict[str, Any]:
@@ -750,28 +801,25 @@ def _representante_independence(
 
     Two passes, same discipline as `_audit_one_candidate`: a cheap single-
     aggregate GROUP BY over the full (potentially tens of millions of rows)
-    source finds which keys are duplicates, then the three-way
-    COUNT(DISTINCT ...) -- expensive per group -- only runs on a JOIN
-    restricted to that small duplicate subset. Doing the triple DISTINCT in
-    one GROUP BY over the full source measurably OOM'd on the real PF
-    category (26.8M rows).
+    source finds which keys are duplicates, then the NULL-aware variation
+    check -- expensive per group -- only runs on a JOIN restricted to that
+    small duplicate subset. Doing this in one GROUP BY over the full source
+    measurably OOM'd on the real PF category (26.8M rows).
     """
     quoted = _quoted(relationship_columns)
     key_list = ", ".join(quoted)
     t_key_list = ", ".join(f"t.{c}" for c in quoted)
     join_on = " AND ".join(f"t.{c} IS NOT DISTINCT FROM dk.{c}" for c in quoted)
+    varies_expr = " OR ".join(
+        _null_aware_varies_expr(f"t.{registry.quote_identifier(c)}") for c in _REPRESENTANTE_COLUMNS
+    )
     row = con.execute(
         f"""
         WITH dupe_keys AS (
             SELECT {key_list} FROM {source} GROUP BY {key_list} HAVING COUNT(*) > 1
         ),
         variation AS (
-            SELECT
-                (COUNT(DISTINCT t.{registry.quote_identifier("representante_legal")}) > 1
-                 OR COUNT(DISTINCT t.{registry.quote_identifier("nome_representante_legal")}) > 1
-                 OR COUNT(DISTINCT
-                        t.{registry.quote_identifier("qualificacao_representante_legal")}) > 1
-                ) AS varies
+            SELECT ({varies_expr}) AS varies
             FROM {source} t
             JOIN dupe_keys dk ON {join_on}
             GROUP BY {t_key_list}
@@ -874,9 +922,23 @@ def _audit_category(con: duckdb.DuckDBPyConnection, source: str, category: str) 
     row_count = int(con.execute(f"SELECT COUNT(*) FROM {source}").fetchone()[0])
     recommended_identity = _CATEGORY_PARTNER_IDENTITY[category]
 
+    # compute_conflicting=False for identity candidates: they are
+    # company-UNSCOPED by design (that's what "identity" means here), so
+    # for a category like PF the "duplicate keys" set can cover nearly the
+    # entire source (see _audit_one_candidate's docstring) -- a real
+    # full-row comparison there is both too expensive and not a meaningful
+    # measurement (apparent overlaps are mostly different real-world
+    # relationships in different companies, not conflicts to resolve).
+    # Category-specific diagnostics below measure what genuinely varies at
+    # the identity level instead.
     identity_candidates = {
         f"{prefix}:{suffix}": _audit_one_candidate(
-            con, source, f"{prefix}:{suffix}", columns, collect_sample=True
+            con,
+            source,
+            f"{prefix}:{suffix}",
+            columns,
+            collect_sample=True,
+            compute_conflicting=False,
         ).to_json_dict()
         for suffix, columns in _CATEGORY_IDENTITY_CANDIDATES[category].items()
     }
@@ -895,8 +957,23 @@ def _audit_category(con: duckdb.DuckDBPyConnection, source: str, category: str) 
             "data_entrada_sociedade",
         ),
     }
+    if category == _CATEGORY_PF:
+        # Measured for comparison, NOT recommended -- see module docstring:
+        # faixa_etaria (age bracket) is temporally unstable, unlike
+        # qualificacao_socio/data_entrada_sociedade which are facts fixed
+        # at the moment a partner entered. Excluding it is a semantic
+        # judgment, not just "it doesn't move the numbers much".
+        relationship_defs[f"{prefix}:relationship_with_faixa"] = (
+            "cnpj_basico",
+            *recommended_identity,
+            "qualificacao_socio",
+            "data_entrada_sociedade",
+            "faixa_etaria",
+        )
     relationship_candidates = {
-        cname: _audit_one_candidate(con, source, cname, cols, collect_sample=True).to_json_dict()
+        cname: _audit_one_candidate(
+            con, source, cname, cols, collect_sample=True, compute_conflicting=True
+        ).to_json_dict()
         for cname, cols in relationship_defs.items()
     }
 
@@ -1037,11 +1114,128 @@ def run_key_audit(
     return KeyAuditResult(root, report_path, payload, tuple(part_results))
 
 
+@dataclass(frozen=True)
+class AggregationOnlyResult:
+    root: Path
+    report_path: Path
+    report: dict[str, Any]
+    verified_checksums: dict[str, str]
+
+
+def run_aggregation_only(root: Path, month: str) -> AggregationOnlyResult:
+    """Run ONLY the global cross-part aggregation (current code) against
+    per-part checkpoint Parquets that are ALREADY PRESENT under
+    `root/columns/` -- e.g. restored from a prior run's GH Actions
+    artifact. No ZIP download, no CSV extraction, no raw-source network
+    access of any kind: this exists specifically so the category-aware
+    analysis can be re-run against already-verified real data whenever the
+    code changes, without re-downloading the ten real `SociosN.zip` files
+    from the Internet Archive mirror every time.
+
+    Requires all ten `columns/part-N.parquet` files to already exist under
+    `root`. If the matching `evidence/part-N.key-audit.manifest.json`
+    files are also present (restored from the same artifact), each part's
+    checksum is independently RE-COMPUTED and compared against that
+    manifest before aggregation runs -- a corrupted or tampered restored
+    checkpoint fails loudly here instead of silently producing a report
+    from wrong data.
+    """
+    if not is_valid_month(month):
+        raise ValueError(f"month must be YYYY-MM, got {month!r}")
+    root = root.resolve()
+
+    part_paths: list[Path] = []
+    verified_checksums: dict[str, str] = {}
+    for part in _PARTS:
+        paths = _paths(root, part)
+        output = paths["output"]
+        if not output.is_file():
+            raise FileNotFoundError(
+                f"missing checkpoint for part {part}: {output} -- aggregation-only mode "
+                "requires all ten columns/part-N.parquet files to already be present "
+                "(restore them from a prior run's artifact first)"
+            )
+        actual = canonical_history._sha256(output)  # noqa: SLF001
+        manifest_path = paths["manifest"]
+        if manifest_path.is_file():
+            manifest = canonical_history._load_json(manifest_path)  # noqa: SLF001
+            expected = manifest.get("output", {}).get("sha256")
+            if expected and expected != actual:
+                raise RuntimeError(
+                    f"checksum mismatch for part {part}: manifest recorded {expected}, "
+                    f"restored file hashes to {actual} -- refusing to aggregate over a "
+                    "checkpoint that does not match its own recorded checksum"
+                )
+        verified_checksums[f"part-{part}"] = actual
+        part_paths.append(output)
+
+    global_work = root / "work" / "global"
+    database = global_work / "socio-key-audit-global.duckdb"
+    temp = global_work / "duckdb_tmp"
+    con = _connection(database, temp)
+    try:
+        global_report = run_global_key_audit(con, part_paths)
+        duckdb_version = duckdb.__version__
+        threads = con.execute("SELECT current_setting('threads')").fetchone()[0]
+        memory_limit = con.execute("SELECT current_setting('memory_limit')").fetchone()[0]
+    finally:
+        con.close()
+        database.unlink(missing_ok=True)
+        database.with_suffix(".duckdb.wal").unlink(missing_ok=True)
+        shutil.rmtree(temp, ignore_errors=True)
+
+    payload: dict[str, Any] = {
+        "format_version": _FORMAT_VERSION,
+        "tool_version": _TOOL_VERSION,
+        "snapshot_month": month,
+        "mode": "aggregation-only",
+        "source_commit": metrics._git_sha(),  # noqa: SLF001
+        "workflow_run_id": os.environ.get("GITHUB_RUN_ID", "local"),
+        "duckdb_version": duckdb_version,
+        "execution_profile": {"threads": str(threads), "memory_limit": str(memory_limit)},
+        "verified_checkpoint_checksums": verified_checksums,
+        **global_report,
+    }
+    report_path = root / "evidence" / "global.socio-key-audit.json"
+    canonical_history._write_json_atomic(report_path, payload)  # noqa: SLF001
+    return AggregationOnlyResult(root, report_path, payload, verified_checksums)
+
+
+def _print_report(report: dict[str, Any], report_path: Path) -> None:
+    print(f"socio key audit done — {report['total_rows_scanned']:,} rows scanned")
+    for label, category in report["categories"].items():
+        print(
+            f"  {label} (identificador_socio={category['identificador_socio']!r}): "
+            f"{category['row_count']:,} rows"
+        )
+        for group in ("identity_candidates", "relationship_candidates"):
+            for name, candidate in category[group].items():
+                conflicting = candidate["conflicting_key_count"]
+                conflicting_str = (
+                    f"{conflicting:,} conflicting"
+                    if conflicting is not None
+                    else "conflicting not computed (identity-level)"
+                )
+                print(
+                    f"    {name}: {candidate['distinct_valid_key_count']:,} distinct, "
+                    f"{candidate['duplicate_key_count']:,} duplicate key(s), "
+                    f"{conflicting_str}"
+                )
+    print(f"report: {report_path}")
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--month", required=True)
     parser.add_argument("--root", type=Path, required=True)
     parser.add_argument("--force", action="store_true")
+    parser.add_argument(
+        "--aggregate-only",
+        action="store_true",
+        help="Skip download/extract entirely and run only the global cross-part "
+        "aggregation against columns/part-N.parquet files that already exist under "
+        "--root (e.g. restored from a prior run's artifact). No network access.",
+    )
     parser.add_argument(
         "--zip",
         action="append",
@@ -1052,6 +1246,20 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+
+    if args.aggregate_only:
+        if args.zip or args.force:
+            print(
+                "error: --aggregate-only cannot be combined with --zip or --force", file=sys.stderr
+            )
+            return 2
+        try:
+            agg_result = run_aggregation_only(args.root, args.month)
+        except (FileNotFoundError, OSError, RuntimeError, ValueError, json.JSONDecodeError) as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+        _print_report(agg_result.report, agg_result.report_path)
+        return 0
 
     zip_overrides: dict[int, Path] = {}
     for entry in args.zip:
@@ -1088,21 +1296,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"error: {exc}", file=sys.stderr)
         return 1
 
-    report = result.report
-    print(f"socio key audit done — {report['total_rows_scanned']:,} rows scanned")
-    for label, category in report["categories"].items():
-        print(
-            f"  {label} (identificador_socio={category['identificador_socio']!r}): "
-            f"{category['row_count']:,} rows"
-        )
-        for group in ("identity_candidates", "relationship_candidates"):
-            for name, candidate in category[group].items():
-                print(
-                    f"    {name}: {candidate['distinct_valid_key_count']:,} distinct, "
-                    f"{candidate['duplicate_key_count']:,} duplicate key(s), "
-                    f"{candidate['conflicting_key_count']:,} conflicting"
-                )
-    print(f"report: {result.report_path}")
+    _print_report(result.report, result.report_path)
     return 0
 
 
@@ -1111,12 +1305,14 @@ if __name__ == "__main__":  # pragma: no cover
 
 
 __all__ = [
+    "AggregationOnlyResult",
     "CandidateKeyReport",
     "KeyAuditResult",
     "PartCheckpointResult",
     "PartKeyAuditReport",
     "main",
     "preflight_parts",
+    "run_aggregation_only",
     "run_global_key_audit",
     "run_key_audit",
     "run_part_checkpoint",

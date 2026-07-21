@@ -105,14 +105,22 @@ def test_pf_no_duplicates_for_any_candidate(tmp_path):
         con.close()
 
     pf = report["categories"]["pessoa_fisica"]
-    for candidates in (pf["identity_candidates"], pf["relationship_candidates"]):
-        for name, candidate in candidates.items():
-            assert candidate["distinct_valid_key_count"] == 2, name
-            assert candidate["duplicate_key_count"] == 0, name
-            assert candidate["conflicting_key_count"] == 0, name
+    for name, candidate in pf["identity_candidates"].items():
+        assert candidate["distinct_valid_key_count"] == 2, name
+        assert candidate["duplicate_key_count"] == 0, name
+        assert candidate["conflicting_key_count"] is None, name  # not computed at identity level
+    for name, candidate in pf["relationship_candidates"].items():
+        assert candidate["distinct_valid_key_count"] == 2, name
+        assert candidate["duplicate_key_count"] == 0, name
+        assert candidate["conflicting_key_count"] == 0, name
 
 
 def test_pf_exact_duplicate_is_duplicate_not_conflicting(tmp_path):
+    """Real full-row comparison at the relationship level (company-scoped,
+    where conflicting_key_count is actually computed -- see
+    `_audit_one_candidate`'s `compute_conflicting`), not a hash: a
+    byte-identical duplicate must report zero conflicts, proven by
+    comparing every column, not by a probabilistic hash match."""
     con = duckdb.connect()
     try:
         p0 = tmp_path / "part-0.parquet"
@@ -122,11 +130,18 @@ def test_pf_exact_duplicate_is_duplicate_not_conflicting(tmp_path):
     finally:
         con.close()
 
-    narrow = report["categories"]["pessoa_fisica"]["identity_candidates"]["pf:cpf_nome"]
-    assert narrow["distinct_valid_key_count"] == 1
-    assert narrow["duplicate_key_count"] == 1
-    assert narrow["excess_duplicate_row_count"] == 1
-    assert narrow["conflicting_key_count"] == 0  # same payload, not a conflict
+    identity = report["categories"]["pessoa_fisica"]["identity_candidates"]["pf:cpf_nome"]
+    assert identity["distinct_valid_key_count"] == 1
+    assert identity["duplicate_key_count"] == 1
+    assert identity["conflicting_key_count"] is None  # not computed at identity level
+
+    relationship = report["categories"]["pessoa_fisica"]["relationship_candidates"][
+        "pf:company_partner"
+    ]
+    assert relationship["distinct_valid_key_count"] == 1
+    assert relationship["duplicate_key_count"] == 1
+    assert relationship["excess_duplicate_row_count"] == 1
+    assert relationship["conflicting_key_count"] == 0  # same payload, not a conflict
 
 
 def test_pf_conflicting_duplicate_across_parts_resolved_by_qualificacao(tmp_path):
@@ -165,11 +180,13 @@ def test_pf_conflicting_duplicate_across_parts_resolved_by_qualificacao(tmp_path
 def test_pf_masked_cpf_collision_between_different_people_resolved_by_name(tmp_path):
     """RFB masks cnpj_cpf_socio down to its middle six digits -- two
     genuinely DIFFERENT people can share the same masked value. Simulated
-    here as two rows with the same masked CPF but different names and a
-    different qualificacao_socio: the CPF-only candidate wrongly reports
-    this as one conflicting key (as if it were the same partner switching
-    roles); the name-augmented candidate correctly recognizes two distinct
-    people and reports zero conflict.
+    here as two rows with the same masked CPF but different names: the
+    CPF-only identity candidate wrongly groups them into one duplicate
+    key, and the dedicated `same_masked_cpf_different_normalized_name_count`
+    diagnostic (not `conflicting_key_count`, which identity-level
+    candidates don't compute -- see `_audit_one_candidate`) confirms the
+    collision is exactly this masked-CPF-plus-different-name case; the
+    name-augmented candidate correctly recognizes two distinct people.
     """
     con = duckdb.connect()
     try:
@@ -194,16 +211,17 @@ def test_pf_masked_cpf_collision_between_different_people_resolved_by_name(tmp_p
     finally:
         con.close()
 
-    identity = report["categories"]["pessoa_fisica"]["identity_candidates"]
-    cpf_only = identity["pf:cpf"]
+    pf = report["categories"]["pessoa_fisica"]
+    cpf_only = pf["identity_candidates"]["pf:cpf"]
     assert cpf_only["distinct_valid_key_count"] == 1
-    assert cpf_only["duplicate_key_count"] == 1
-    assert cpf_only["conflicting_key_count"] == 1  # wrongly looks like one conflicting partner
+    assert cpf_only["duplicate_key_count"] == 1  # wrongly looks like one partner
+    assert cpf_only["conflicting_key_count"] is None  # not computed at identity level
 
-    with_name = identity["pf:cpf_nome"]
+    with_name = pf["identity_candidates"]["pf:cpf_nome"]
     assert with_name["distinct_valid_key_count"] == 2  # correctly two different people
     assert with_name["duplicate_key_count"] == 0
-    assert with_name["conflicting_key_count"] == 0
+
+    assert pf["diagnostics"]["same_masked_cpf_different_normalized_name_count"] == 1
 
 
 def test_pf_blank_cnpj_cpf_socio_excluded_as_key_integrity_failure(tmp_path):
@@ -262,6 +280,71 @@ def test_pf_diagnostics_same_cpf_different_name_and_faixa(tmp_path):
     diagnostics = report["categories"]["pessoa_fisica"]["diagnostics"]
     assert diagnostics["same_masked_cpf_different_normalized_name_count"] == 1
     assert diagnostics["same_masked_cpf_and_name_different_faixa_etaria_count"] == 1
+
+
+def test_name_normalization_strips_accents(tmp_path):
+    """RFB free text is not consistently accented across records -- the
+    same real person's name can appear with and without diacritics.
+    Without accent removal, `\"JOSÉ\"` and `\"JOSE\"` would wrongly compare
+    as two different people; `_normalized_name_expr` uses `strip_accents()`
+    so both map to the same normalized identity.
+    """
+    con = duckdb.connect()
+    try:
+        p0 = tmp_path / "part-0.parquet"
+        _write_socio_parquet(
+            con,
+            p0,
+            [
+                _socio_row(nome_socio_razao_social="JOSÉ DA SILVA"),
+                _socio_row(nome_socio_razao_social="JOSE DA SILVA", cnpj_basico="00000002"),
+            ],
+        )
+        report = key_audit.run_global_key_audit(con, [p0])
+    finally:
+        con.close()
+
+    with_name = report["categories"]["pessoa_fisica"]["identity_candidates"]["pf:cpf_nome"]
+    assert with_name["distinct_valid_key_count"] == 1  # accented/unaccented spellings collapse
+    assert with_name["duplicate_key_count"] == 1
+
+
+def test_pf_relationship_with_faixa_is_measured_but_not_recommended(tmp_path):
+    """`faixa_etaria` is measured at the relationship level for
+    comparison (`pf:relationship_with_faixa`) but is NOT part of the
+    recommended `pf:relationship` candidate: two rows sharing the exact
+    recommended relationship key but differing only in age bracket must
+    still collapse to one duplicate/conflicting pair at `pf:relationship`
+    (age bracket does not define a separate relationship), while
+    `pf:relationship_with_faixa` splits them into two distinct keys
+    purely as a measurement of what including it WOULD do.
+    """
+    con = duckdb.connect()
+    try:
+        p0 = tmp_path / "part-0.parquet"
+        _write_socio_parquet(
+            con,
+            p0,
+            [
+                _socio_row(faixa_etaria="5"),
+                _socio_row(faixa_etaria="6"),  # same relationship key, different age bracket
+            ],
+        )
+        report = key_audit.run_global_key_audit(con, [p0])
+    finally:
+        con.close()
+
+    relationship = report["categories"]["pessoa_fisica"]["relationship_candidates"]
+    recommended = relationship["pf:relationship"]
+    assert recommended["distinct_valid_key_count"] == 1
+    assert recommended["duplicate_key_count"] == 1
+    assert recommended["conflicting_key_count"] == 1  # faixa_etaria genuinely differs
+
+    with_faixa = relationship["pf:relationship_with_faixa"]
+    assert (
+        with_faixa["distinct_valid_key_count"] == 2
+    )  # measured, not folded into the recommendation
+    assert with_faixa["duplicate_key_count"] == 0
 
 
 def test_pj_cnpj_alone_matches_cnpj_plus_name_when_names_are_consistent(tmp_path):
@@ -369,21 +452,77 @@ def test_foreign_partner_has_no_cnpj_cpf_and_is_not_excluded(tmp_path):
     assert "cnpj_cpf_socio" not in nome_pais["blank_or_null_counts_by_component"]
 
 
+def test_foreign_partner_conflict_is_preserved_not_resolved_by_representante(tmp_path):
+    """Two foreign-partner rows sharing the full recommended
+    `foreign:relationship` key (company + normalized name + pais +
+    qualificacao_socio + data_entrada_sociedade) but with different
+    `representante_legal` must still be reported as duplicate AND
+    conflicting -- the conflict is measured and preserved, not silently
+    resolved by folding `representante_legal` into the identity. Only
+    `representante_independence` (a separate diagnostic) surfaces that the
+    representative varies; it never changes what `foreign:relationship`'s
+    own columns are.
+    """
+    con = duckdb.connect()
+    try:
+        p0 = tmp_path / "part-0.parquet"
+        _write_socio_parquet(
+            con,
+            p0,
+            [
+                _socio_row(
+                    identificador_socio="3",
+                    cnpj_cpf_socio=None,
+                    nome_socio_razao_social="JOHN SMITH",
+                    pais="249",
+                    representante_legal="11111111111",
+                ),
+                _socio_row(
+                    identificador_socio="3",
+                    cnpj_cpf_socio=None,
+                    nome_socio_razao_social="JOHN SMITH",
+                    pais="249",
+                    representante_legal="22222222222",  # only this differs
+                ),
+            ],
+        )
+        report = key_audit.run_global_key_audit(con, [p0])
+    finally:
+        con.close()
+
+    foreign = report["categories"]["socio_estrangeiro"]
+    relationship = foreign["relationship_candidates"]["foreign:relationship"]
+    assert "representante_legal" not in relationship["columns"]
+    assert relationship["distinct_valid_key_count"] == 1
+    assert relationship["duplicate_key_count"] == 1
+    assert relationship["conflicting_key_count"] == 1  # preserved, not silently resolved
+
+    independence = foreign["diagnostics"]["representante_independence"]
+    assert independence["duplicate_relationship_groups"] == 1
+    assert independence["groups_with_representante_variation"] == 1
+
+
 def test_foreign_partner_null_pais_evidence_sample_not_dropped_by_null_safe_join(tmp_path):
-    """Regression: `pais` is blank/NULL for ~0.6% of real foreign-partner
-    rows. A plain `=` join between the duplicate-key aggregate and the raw
-    rows silently drops NULL-valued groups (`NULL = NULL` is not TRUE),
+    """Regression, with a REAL SQL NULL (not an empty string): `pais` is
+    NULL for ~0.6% of real foreign-partner rows (loaded as SQL NULL by
+    `CsvSpec.null_padding=True` in the real pipeline, not empty string). A
+    plain `=` join between the duplicate-key aggregate and the raw rows
+    silently drops NULL-valued groups (`NULL = NULL` is not TRUE in SQL),
     producing an empty evidence_sample even though duplicate_key_count is
     correctly non-zero. `IS NOT DISTINCT FROM` must be used instead.
+    `_write_socio_parquet` inserts a Python `None` as an actual SQL NULL
+    cell (via parameterized INSERT), not the literal string `""` -- this is
+    the distinction that matters: `TRIM(NULL) = ''` is NULL/unknown, not
+    TRUE, so a test using `pais=""` would not actually exercise this path.
     """
     con = duckdb.connect()
     try:
         p0 = tmp_path / "part-0.parquet"
         row = _socio_row(
             identificador_socio="3",
-            cnpj_cpf_socio="",
+            cnpj_cpf_socio=None,
             nome_socio_razao_social="JOHN SMITH",
-            pais="",  # blank -> NULL after CSV load in the real pipeline; NULL here too
+            pais=None,  # real SQL NULL, not ""
         )
         _write_socio_parquet(con, p0, [row, dict(row)])
         report = key_audit.run_global_key_audit(con, [p0])
@@ -396,6 +535,7 @@ def test_foreign_partner_null_pais_evidence_sample_not_dropped_by_null_safe_join
     assert nome_pais["duplicate_key_count"] == 1
     assert nome_pais["evidence_sample"], "NULL-valued pais silently dropped this duplicate group"
     assert nome_pais["evidence_sample"][0]["count"] == 2
+    assert nome_pais["evidence_sample"][0]["pais"] is None
 
 
 def test_representante_independence_flags_variation_within_relationship_group(tmp_path):
@@ -410,6 +550,47 @@ def test_representante_independence_flags_variation_within_relationship_group(tm
                 # same relationship key (cnpj_basico, cpf, name, qualificacao, data_entrada)
                 # but a different legal representative
                 _socio_row(representante_legal="22222222222", nome_representante_legal="REP B"),
+            ],
+        )
+        report = key_audit.run_global_key_audit(con, [p0])
+    finally:
+        con.close()
+
+    independence = report["categories"]["pessoa_fisica"]["diagnostics"][
+        "representante_independence"
+    ]
+    assert independence["duplicate_relationship_groups"] == 1
+    assert independence["groups_with_representante_variation"] == 1
+
+
+def test_representante_independence_is_null_aware(tmp_path):
+    """Regression: `COUNT(DISTINCT col) > 1` alone silently ignores NULL
+    rows, so a group with one row that has a legal representative on file
+    (a real value) and one that doesn't (real SQL NULL, not an empty
+    string) would be reported as "consistent" -- COUNT(DISTINCT) over
+    (NULL, 'value') is 1, not 2. That is a genuine variation and must be
+    flagged; `_null_aware_varies_expr` exists specifically for this case.
+    """
+    con = duckdb.connect()
+    try:
+        p0 = tmp_path / "part-0.parquet"
+        _write_socio_parquet(
+            con,
+            p0,
+            [
+                _socio_row(
+                    representante_legal=None,
+                    nome_representante_legal=None,
+                    qualificacao_representante_legal=None,
+                ),
+                # same relationship key, but this occurrence HAS a legal
+                # representative on file -- real NULL vs real value, no
+                # second DISTINCT non-NULL value involved
+                _socio_row(
+                    representante_legal="11111111111",
+                    nome_representante_legal="REP A",
+                    qualificacao_representante_legal="05",
+                ),
             ],
         )
         report = key_audit.run_global_key_audit(con, [p0])
@@ -637,7 +818,7 @@ def test_full_ten_part_offline_run_differentiates_candidate_keys(tmp_path):
     narrow = pf["identity_candidates"]["pf:cpf"]
     assert narrow["distinct_valid_key_count"] == 2
     assert narrow["duplicate_key_count"] == 2  # both ***111111** and ***222222** recur
-    assert narrow["conflicting_key_count"] == 1  # only ***111111**: differing qualificacao_socio
+    assert narrow["conflicting_key_count"] is None  # not computed at identity level
     assert narrow["cross_part_duplicate_key_count"] == 1
     assert narrow["blank_or_null_counts_by_component"]["cnpj_cpf_socio"] == 1
 
@@ -696,3 +877,94 @@ def test_cli_rejects_missing_override_file(tmp_path):
         ]
     )
     assert result == 2
+
+
+# -----------------------------------------------------------------------------
+# c) aggregation-only mode -- re-runs the current code's global aggregation
+#    against checkpoints that already exist on disk (e.g. restored from a
+#    prior run's artifact), with no network access at all.
+# -----------------------------------------------------------------------------
+
+
+def _build_offline_checkpoints(root: Path, tmp_path: Path) -> None:
+    """Populate `root/columns/part-N.parquet` (+ manifests) for all ten
+    parts via the normal offline `run_part_checkpoint` path (tiny
+    synthetic ZIPs), simulating what a restored artifact would already
+    contain on disk before `run_aggregation_only` is called."""
+    for part in range(10):
+        zip_path = tmp_path / f"Socios{part}.zip"
+        if part == 0:
+            _write_zip(zip_path, [_row(cnpj_basico="00000001", cnpj_cpf_socio="***111111**")])
+        else:
+            _write_zip(zip_path, [])
+        key_audit.run_part_checkpoint("2026-04", part, root, zip_override=zip_path)
+
+
+def test_run_aggregation_only_requires_all_parts_present(tmp_path):
+    root = tmp_path / "run"
+    _build_offline_checkpoints(root, tmp_path)
+    (root / "columns" / "part-3.parquet").unlink()
+
+    with pytest.raises(FileNotFoundError, match="part 3"):
+        key_audit.run_aggregation_only(root, "2026-04")
+
+
+def test_run_aggregation_only_rejects_checksum_mismatch(tmp_path):
+    root = tmp_path / "run"
+    _build_offline_checkpoints(root, tmp_path)
+    # Corrupt one checkpoint's bytes without updating its manifest --
+    # aggregation-only must refuse to run over data that doesn't match
+    # its own recorded checksum instead of silently aggregating over it.
+    tampered = root / "columns" / "part-0.parquet"
+    tampered.write_bytes(tampered.read_bytes() + b"\x00")
+
+    with pytest.raises(RuntimeError, match="checksum mismatch"):
+        key_audit.run_aggregation_only(root, "2026-04")
+
+
+def test_run_aggregation_only_succeeds_against_existing_checkpoints_no_network(
+    tmp_path, monkeypatch
+):
+    root = tmp_path / "run"
+    _build_offline_checkpoints(root, tmp_path)
+
+    def should_not_be_called(*_args, **_kwargs):
+        raise AssertionError("aggregation-only mode must not touch the network")
+
+    monkeypatch.setattr(key_audit, "preflight_parts", should_not_be_called)
+    monkeypatch.setattr(key_audit, "run_part_checkpoint", should_not_be_called)
+
+    result = key_audit.run_aggregation_only(root, "2026-04")
+
+    assert result.report["mode"] == "aggregation-only"
+    assert result.report["total_rows_scanned"] == 1
+    assert len(result.verified_checksums) == 10
+    assert result.report["categories"]["pessoa_fisica"]["row_count"] == 1
+
+
+def test_cli_aggregate_only_rejects_zip_override(tmp_path):
+    result = key_audit.main(
+        [
+            "--month",
+            "2026-04",
+            "--root",
+            str(tmp_path / "run"),
+            "--aggregate-only",
+            "--zip",
+            f"0={tmp_path / 'does-not-exist.zip'}",
+        ]
+    )
+    assert result == 2
+
+
+def test_cli_aggregate_only_end_to_end(tmp_path, capsys):
+    root = tmp_path / "run"
+    _build_offline_checkpoints(root, tmp_path)
+
+    result = key_audit.main(["--month", "2026-04", "--root", str(root), "--aggregate-only"])
+
+    assert result == 0
+    out = capsys.readouterr().out
+    assert "1 rows scanned" in out
+    report = json.loads((root / "evidence" / "global.socio-key-audit.json").read_text())
+    assert report["mode"] == "aggregation-only"
