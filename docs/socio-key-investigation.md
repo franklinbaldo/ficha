@@ -8,7 +8,7 @@ company-partner relationship per row and publishes no row id. **No
 `SOCIO_CANONICAL` contract exists and no canonical socio writer was built**
 -- both remain future work, gated on this recommendation.
 
-This document has gone through two revisions. The first tested one flat
+This document has gone through three revisions. The first tested one flat
 composite key uniformly across every row -- correct cardinality, wrong
 characterization: it treated `socio`'s 12,832 blank-`cnpj_cpf_socio` rows as
 a generic key-integrity gap, when they are in fact the entire
@@ -16,13 +16,19 @@ foreign-partner category, and it could not account for RFB masking
 `cnpj_cpf_socio` for individuals. The second introduced the category-aware
 model below but proved "exact duplicate" using a hash comparison, which is
 evidence, not proof, of row equality, and used tests built from empty
-strings where the real pipeline produces SQL NULL. This revision fixes both:
-"conflicting vs exact" is now a real per-column comparison, restricted to
-where it is cheap and meaningful (company-scoped relationship candidates);
-name normalization strips accents; representative-field variation detection
-is NULL-preserving; and `faixa_etaria`'s exclusion is argued on semantic
-(temporal-stability) grounds, backed by the measured fact that including it
-changes nothing once the recommended relationship key is already applied.
+strings where the real pipeline produces SQL NULL. That revision fixed
+both: "conflicting vs exact" became a real per-column comparison,
+restricted to where it is cheap and meaningful (company-scoped relationship
+candidates); name normalization strips accents; representative-field
+variation detection is NULL-preserving; and `faixa_etaria`'s exclusion is
+argued on semantic (temporal-stability) grounds, backed by the measured
+fact that including it changes nothing once the recommended relationship
+key is already applied. This third revision fixes a provenance gap in the
+aggregation-only reanalysis mode itself: it previously treated a missing
+manifest or an unrecorded checksum as "nothing to check" rather than a
+failure, and didn't persist machine-readable source provenance (which
+prior run and artifact the checkpoints came from) in the generated report.
+Both are fixed -- see Real run below.
 
 ## Method
 
@@ -108,7 +114,7 @@ different people.
 
 ## Real run (2026-04, complete ten-part dataset)
 
-This is the **second real run** against the same underlying source data,
+This is the **third real run** against the same underlying source data,
 executed entirely through CI in an **aggregation-only** mode that never
 touches the raw ZIPs:
 
@@ -122,27 +128,53 @@ touches the raw ZIPs:
    and a new `reanalyze` job in `socio-key-audit.yml`: given a
    `reanalyze_source_run_id` input, it downloads that prior run's
    checkpoint artifact via `actions/download-artifact@v4` (cross-run,
-   same repo), **independently re-verifies each of the ten parts' SHA-256
-   against its manifest** (a corrupted or tampered restored checkpoint
-   fails the run instead of silently producing a report from wrong data),
-   and then runs only the global cross-part aggregation -- no ZIP
-   download, no CSV extraction, no archive.org network access at all.
-3. This document's numbers come from dispatching that job with
-   `reanalyze_source_run_id=29789142307`: workflow run
-   [`29823339857`](https://github.com/franklinbaldo/ficha/actions/runs/29823339857),
-   job `reanalyze`, produced the durable artifact
-   `socio-key-audit-reanalysis-2026-04-29823339857`, containing
+   same repo), **requires and independently re-verifies every one of the
+   ten parts' manifest and SHA-256** (a missing manifest, a manifest
+   without a recorded checksum, or a checksum that doesn't match the
+   restored file all fail the run loudly -- there is no silent
+   "nothing to check" fallback), and then runs only the global cross-part
+   aggregation -- no ZIP download, no CSV extraction, no archive.org
+   network access at all.
+3. The second run of this job (`reanalyze_source_run_id=29789142307`,
+   workflow run
+   [`29823339857`](https://github.com/franklinbaldo/ficha/actions/runs/29823339857))
+   produced the first aggregation-only artifact, but its manifest
+   verification was optional (a missing manifest was silently treated as
+   "trust the local file") and the report didn't persist which prior
+   run/artifact it came from.
+4. **This document's numbers come from the third run**, with that gap
+   fixed: workflow run
+   [`29830325532`](https://github.com/franklinbaldo/ficha/actions/runs/29830325532),
+   same source artifact
+   (`reanalyze_source_run_id=29789142307`), produced the durable artifact
+   `socio-key-audit-reanalysis-2026-04-29830325532`, containing
    `global.socio-key-audit.json` with `"mode": "aggregation-only"`,
-   `"source_commit": "502fe11e72cabc9cf270dda9c5413f7b74188f14"` (this
-   revision's code, including the real-comparison/NULL-preservation/accent
-   fixes), and `"verified_checkpoint_checksums"` for all ten parts.
+   `"reanalysis_workflow_run_id": "29830325532"`,
+   `"reanalysis_source_commit": "6b7a3bfc9f0be243b5ccb906333a2463ff298fb1"`
+   (this revision's code), and a `"source_provenance"` object recording
+   `workflow_run_id: "29789142307"`,
+   `artifact_name: "socio-key-audit-2026-04-29789142307"`, and
+   `checkpoint_commit: "29fa59921c492021ec8cb52b22d8ae2c8e7c5805"` (read
+   from the restored artifact's own prior report, before this run
+   overwrote it) -- `artifact_id` is `null` because
+   `actions/download-artifact@v4` doesn't expose a numeric artifact id as
+   a step output when downloading by name; this is reported honestly as
+   unavailable rather than fabricated. `verified_checkpoint_checksums`
+   records, for all ten parts, both the manifest's expected SHA-256 and
+   the independently recomputed actual one -- all ten matched. Every
+   candidate-key number in this document is byte-identical between the
+   second and third runs, confirming the provenance fix changed only what
+   is verified and recorded, not the underlying analysis.
 
 DuckDB 1.5.2 (same version as the original run), `threads=1`,
-`memory_limit=8.3 GiB`. Total job duration: 6m11s end to end (download the
-already-verified artifact, re-verify ten checksums, run the full
-category-aware aggregation, upload the new evidence artifact) -- versus the
-original run's ~7m21s that also had to download and extract ten real ZIPs,
-demonstrating the aggregation-only path avoids that cost as intended.
+`memory_limit=8.3 GiB`. Total job duration: 7m31s end to end (download the
+already-verified artifact, independently re-verify all ten manifests and
+checksums, run the full category-aware aggregation, upload the new
+evidence artifact) -- comparable to the original run's ~7m21s despite this
+run also downloading and extracting nothing, since re-verification and the
+category-aware aggregation itself (not the download) dominate the time;
+still avoids the cost of re-downloading and re-extracting the ten real ZIPs
+from archive.org, which is the expense this mode exists to skip.
 
 27,494,723 total rows, split by `identificador_socio` into exactly three
 categories that sum to the total with no stragglers:
@@ -334,13 +366,14 @@ canonical contract is written, at minimum:
   physical writer design -- those are writer-implementation questions for
   whenever slice 5's recommendation is acted on, out of scope for this
   investigation.
-- Aggregation-only mode re-verifies each restored checkpoint's checksum
-  against its own manifest, but does not re-verify the manifest itself
-  against, say, an independent third copy of the raw ZIP -- it inherits
-  the original run's (29789142307) source-ZIP checksums as its root of
-  trust. A full `audit` dispatch that re-downloads and re-extracts the raw
-  ZIPs from scratch remains the strongest independent check and has not
-  been re-run since the original investigation.
+- Aggregation-only mode now requires and re-verifies each restored
+  checkpoint's checksum against its own manifest (a missing manifest or
+  missing checksum fails the run), but does not re-verify the manifest
+  itself against, say, an independent third copy of the raw ZIP -- it
+  inherits the original run's (29789142307) source-ZIP checksums as its
+  root of trust. A full `audit` dispatch that re-downloads and re-extracts
+  the raw ZIPs from scratch remains the strongest independent check and
+  has not been re-run since the original investigation.
 
 ## Deliberate boundary
 
