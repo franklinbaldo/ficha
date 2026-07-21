@@ -315,6 +315,7 @@ jobs:
       - run: uv sync --frozen
 
       - name: Download source checkpoint artifact (no raw ZIP download)
+        id: download_artifact
         uses: actions/download-artifact@v4
         with:
           name: ${{ steps.inputs.outputs.artifact_name }}
@@ -322,15 +323,47 @@ jobs:
           github-token: ${{ github.token }}
           path: etl/${{ steps.inputs.outputs.root }}
 
+      - name: Read source checkpoint commit from the restored artifact
+        id: source_commit
+        env:
+          ROOT: ${{ steps.inputs.outputs.root }}
+        run: |
+          # The prior audit run's own global report (if the artifact
+          # includes one) records the commit that produced the checkpoints
+          # -- structured provenance already written by the code, read
+          # BEFORE the aggregation step below overwrites this same file
+          # with the new report. Not inferred from any directory/file name.
+          SRC="$ROOT/evidence/global.socio-key-audit.json"
+          if [ -f "$SRC" ]; then
+            COMMIT=$(jq -r '.source_commit // empty' "$SRC")
+          else
+            COMMIT=""
+          fi
+          echo "commit=$COMMIT" >> "$GITHUB_OUTPUT"
+
       - name: Run aggregation-only against the restored checkpoints
         env:
           MONTH: ${{ steps.inputs.outputs.month }}
           ROOT: ${{ steps.inputs.outputs.root }}
+          SOURCE_RUN_ID: ${{ inputs.reanalyze_source_run_id }}
+          SOURCE_ARTIFACT_NAME: ${{ steps.inputs.outputs.artifact_name }}
+          SOURCE_ARTIFACT_ID: ${{ steps.download_artifact.outputs.artifact-id }}
+          SOURCE_CHECKPOINT_COMMIT: ${{ steps.source_commit.outputs.commit }}
         run: |
+          EXTRA_ARGS=()
+          if [ -n "$SOURCE_ARTIFACT_ID" ]; then
+            EXTRA_ARGS+=(--source-artifact-id "$SOURCE_ARTIFACT_ID")
+          fi
+          if [ -n "$SOURCE_CHECKPOINT_COMMIT" ]; then
+            EXTRA_ARGS+=(--source-checkpoint-commit "$SOURCE_CHECKPOINT_COMMIT")
+          fi
           uv run python -m ficha_etl.socio_key_audit \
             --month "$MONTH" \
             --root "$ROOT" \
-            --aggregate-only
+            --aggregate-only \
+            --source-run-id "$SOURCE_RUN_ID" \
+            --source-artifact-name "$SOURCE_ARTIFACT_NAME" \
+            "${EXTRA_ARGS[@]}"
 
       - name: Write summary
         if: always()
@@ -357,7 +390,9 @@ jobs:
                 "- Snapshot: `" + .snapshot_month + "`",
                 "- Mode: `" + .mode + "`",
                 "- Total rows scanned: `" + (.total_rows_scanned|tostring) + "`",
-                "- Verified checkpoint checksums: `" + (.verified_checkpoint_checksums | length | tostring) + "` parts",
+                "- Verified checkpoint checksums: `" + (.verified_checkpoint_checksums | length | tostring) + "` parts (expected == actual for every part)",
+                "- Source: run [`" + .source_provenance.workflow_run_id + "`](https://github.com/${{ github.repository }}/actions/runs/" + .source_provenance.workflow_run_id + "), artifact `" + .source_provenance.artifact_name + "`" + (if .source_provenance.artifact_id then " (id `" + .source_provenance.artifact_id + "`)" else "" end) + (if .source_provenance.checkpoint_commit then ", checkpoint commit `" + .source_provenance.checkpoint_commit + "`" else "" end),
+                "- This reanalysis: workflow run `" + .reanalysis_workflow_run_id + "`, commit `" + .reanalysis_source_commit + "`",
                 "",
                 (.categories | to_entries[] |
                   "### " + .key + " (identificador_socio=\"" + .value.identificador_socio +

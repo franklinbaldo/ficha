@@ -1119,10 +1119,18 @@ class AggregationOnlyResult:
     root: Path
     report_path: Path
     report: dict[str, Any]
-    verified_checksums: dict[str, str]
+    verified_checksums: dict[str, dict[str, str]]
 
 
-def run_aggregation_only(root: Path, month: str) -> AggregationOnlyResult:
+def run_aggregation_only(
+    root: Path,
+    month: str,
+    *,
+    source_workflow_run_id: str,
+    source_artifact_name: str,
+    source_artifact_id: str | None = None,
+    source_checkpoint_commit: str | None = None,
+) -> AggregationOnlyResult:
     """Run ONLY the global cross-part aggregation (current code) against
     per-part checkpoint Parquets that are ALREADY PRESENT under
     `root/columns/` -- e.g. restored from a prior run's GH Actions
@@ -1132,20 +1140,33 @@ def run_aggregation_only(root: Path, month: str) -> AggregationOnlyResult:
     code changes, without re-downloading the ten real `SociosN.zip` files
     from the Internet Archive mirror every time.
 
-    Requires all ten `columns/part-N.parquet` files to already exist under
-    `root`. If the matching `evidence/part-N.key-audit.manifest.json`
-    files are also present (restored from the same artifact), each part's
-    checksum is independently RE-COMPUTED and compared against that
-    manifest before aggregation runs -- a corrupted or tampered restored
-    checkpoint fails loudly here instead of silently producing a report
-    from wrong data.
+    Requires all ten `columns/part-N.parquet` files AND their matching
+    `evidence/part-N.key-audit.manifest.json` to already exist under
+    `root`, each manifest recording a non-empty output checksum. A missing
+    manifest, a manifest without a recorded checksum, or a checksum that
+    doesn't match the restored file all fail loudly here -- a checkpoint
+    can only be called "verified" if it was actually checked against a
+    manifest; there is no silent "trust the local file" fallback.
+
+    ``source_workflow_run_id``/``source_artifact_name`` identify which
+    prior GH Actions run and artifact these checkpoints were restored
+    from, and are required -- this is provenance that only the caller
+    (the workflow, which downloaded the artifact) can supply; it is never
+    inferred from directory names or file contents.
+    ``source_artifact_id``/``source_checkpoint_commit`` are optional
+    additional provenance (the artifact's numeric GH id, and the commit
+    that produced the original checkpoints, if known).
     """
     if not is_valid_month(month):
         raise ValueError(f"month must be YYYY-MM, got {month!r}")
+    if not source_workflow_run_id:
+        raise ValueError("source_workflow_run_id is required for aggregation-only mode")
+    if not source_artifact_name:
+        raise ValueError("source_artifact_name is required for aggregation-only mode")
     root = root.resolve()
 
     part_paths: list[Path] = []
-    verified_checksums: dict[str, str] = {}
+    verified_checksums: dict[str, dict[str, str]] = {}
     for part in _PARTS:
         paths = _paths(root, part)
         output = paths["output"]
@@ -1155,18 +1176,29 @@ def run_aggregation_only(root: Path, month: str) -> AggregationOnlyResult:
                 "requires all ten columns/part-N.parquet files to already be present "
                 "(restore them from a prior run's artifact first)"
             )
-        actual = canonical_history._sha256(output)  # noqa: SLF001
         manifest_path = paths["manifest"]
-        if manifest_path.is_file():
-            manifest = canonical_history._load_json(manifest_path)  # noqa: SLF001
-            expected = manifest.get("output", {}).get("sha256")
-            if expected and expected != actual:
-                raise RuntimeError(
-                    f"checksum mismatch for part {part}: manifest recorded {expected}, "
-                    f"restored file hashes to {actual} -- refusing to aggregate over a "
-                    "checkpoint that does not match its own recorded checksum"
-                )
-        verified_checksums[f"part-{part}"] = actual
+        if not manifest_path.is_file():
+            raise FileNotFoundError(
+                f"missing manifest for part {part}: {manifest_path} -- aggregation-only mode "
+                "requires every checkpoint's manifest.json to be present so its checksum can "
+                "be independently re-verified; a checkpoint without a manifest cannot be "
+                "labeled verified"
+            )
+        manifest = canonical_history._load_json(manifest_path)  # noqa: SLF001
+        expected = manifest.get("output", {}).get("sha256")
+        if not expected:
+            raise RuntimeError(
+                f"manifest for part {part} ({manifest_path}) has no recorded output checksum "
+                "-- refusing to treat this checkpoint as verified"
+            )
+        actual = canonical_history._sha256(output)  # noqa: SLF001
+        if expected != actual:
+            raise RuntimeError(
+                f"checksum mismatch for part {part}: manifest recorded {expected}, "
+                f"restored file hashes to {actual} -- refusing to aggregate over a "
+                "checkpoint that does not match its own recorded checksum"
+            )
+        verified_checksums[f"part-{part}"] = {"expected": expected, "actual": actual}
         part_paths.append(output)
 
     global_work = root / "work" / "global"
@@ -1189,8 +1221,14 @@ def run_aggregation_only(root: Path, month: str) -> AggregationOnlyResult:
         "tool_version": _TOOL_VERSION,
         "snapshot_month": month,
         "mode": "aggregation-only",
-        "source_commit": metrics._git_sha(),  # noqa: SLF001
-        "workflow_run_id": os.environ.get("GITHUB_RUN_ID", "local"),
+        "reanalysis_workflow_run_id": os.environ.get("GITHUB_RUN_ID", "local"),
+        "reanalysis_source_commit": metrics._git_sha(),  # noqa: SLF001
+        "source_provenance": {
+            "workflow_run_id": source_workflow_run_id,
+            "artifact_name": source_artifact_name,
+            "artifact_id": source_artifact_id,
+            "checkpoint_commit": source_checkpoint_commit,
+        },
         "duckdb_version": duckdb_version,
         "execution_profile": {"threads": str(threads), "memory_limit": str(memory_limit)},
         "verified_checkpoint_checksums": verified_checksums,
@@ -1234,7 +1272,30 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Skip download/extract entirely and run only the global cross-part "
         "aggregation against columns/part-N.parquet files that already exist under "
-        "--root (e.g. restored from a prior run's artifact). No network access.",
+        "--root (e.g. restored from a prior run's artifact). No network access. "
+        "Requires --source-run-id and --source-artifact-name.",
+    )
+    parser.add_argument(
+        "--source-run-id",
+        help="[--aggregate-only] GH Actions run id the restored checkpoint artifact came "
+        "from. Required with --aggregate-only; must be supplied by the workflow, never "
+        "inferred from directory names.",
+    )
+    parser.add_argument(
+        "--source-artifact-name",
+        help="[--aggregate-only] Name of the restored checkpoint artifact. Required with "
+        "--aggregate-only.",
+    )
+    parser.add_argument(
+        "--source-artifact-id",
+        default=None,
+        help="[--aggregate-only] Optional numeric GH Actions artifact id, if known.",
+    )
+    parser.add_argument(
+        "--source-checkpoint-commit",
+        default=None,
+        help="[--aggregate-only] Optional commit SHA that produced the original "
+        "checkpoints, if known.",
     )
     parser.add_argument(
         "--zip",
@@ -1253,8 +1314,21 @@ def main(argv: list[str] | None = None) -> int:
                 "error: --aggregate-only cannot be combined with --zip or --force", file=sys.stderr
             )
             return 2
+        if not args.source_run_id or not args.source_artifact_name:
+            print(
+                "error: --aggregate-only requires --source-run-id and --source-artifact-name",
+                file=sys.stderr,
+            )
+            return 2
         try:
-            agg_result = run_aggregation_only(args.root, args.month)
+            agg_result = run_aggregation_only(
+                args.root,
+                args.month,
+                source_workflow_run_id=args.source_run_id,
+                source_artifact_name=args.source_artifact_name,
+                source_artifact_id=args.source_artifact_id,
+                source_checkpoint_commit=args.source_checkpoint_commit,
+            )
         except (FileNotFoundError, OSError, RuntimeError, ValueError, json.JSONDecodeError) as exc:
             print(f"error: {exc}", file=sys.stderr)
             return 1

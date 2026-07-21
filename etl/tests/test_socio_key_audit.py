@@ -900,13 +900,57 @@ def _build_offline_checkpoints(root: Path, tmp_path: Path) -> None:
         key_audit.run_part_checkpoint("2026-04", part, root, zip_override=zip_path)
 
 
+def _run_aggregation_only(root, month="2026-04", **overrides):
+    kwargs = {
+        "source_workflow_run_id": "111111",
+        "source_artifact_name": "socio-key-audit-2026-04-111111",
+    }
+    kwargs.update(overrides)
+    return key_audit.run_aggregation_only(root, month, **kwargs)
+
+
 def test_run_aggregation_only_requires_all_parts_present(tmp_path):
     root = tmp_path / "run"
     _build_offline_checkpoints(root, tmp_path)
     (root / "columns" / "part-3.parquet").unlink()
 
     with pytest.raises(FileNotFoundError, match="part 3"):
-        key_audit.run_aggregation_only(root, "2026-04")
+        _run_aggregation_only(root)
+
+
+def test_run_aggregation_only_requires_source_provenance(tmp_path):
+    root = tmp_path / "run"
+    _build_offline_checkpoints(root, tmp_path)
+
+    with pytest.raises(ValueError, match="source_workflow_run_id"):
+        key_audit.run_aggregation_only(
+            root, "2026-04", source_workflow_run_id="", source_artifact_name="x"
+        )
+    with pytest.raises(ValueError, match="source_artifact_name"):
+        key_audit.run_aggregation_only(
+            root, "2026-04", source_workflow_run_id="111111", source_artifact_name=""
+        )
+
+
+def test_run_aggregation_only_requires_manifest_for_every_part(tmp_path):
+    root = tmp_path / "run"
+    _build_offline_checkpoints(root, tmp_path)
+    (root / "evidence" / "part-3.key-audit.manifest.json").unlink()
+
+    with pytest.raises(FileNotFoundError, match="manifest for part 3"):
+        _run_aggregation_only(root)
+
+
+def test_run_aggregation_only_requires_manifest_checksum(tmp_path):
+    root = tmp_path / "run"
+    _build_offline_checkpoints(root, tmp_path)
+    manifest_path = root / "evidence" / "part-3.key-audit.manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["output"]["sha256"] = ""  # present but empty -- not a usable checksum
+    manifest_path.write_text(json.dumps(manifest))
+
+    with pytest.raises(RuntimeError, match="no recorded output checksum"):
+        _run_aggregation_only(root)
 
 
 def test_run_aggregation_only_rejects_checksum_mismatch(tmp_path):
@@ -919,7 +963,7 @@ def test_run_aggregation_only_rejects_checksum_mismatch(tmp_path):
     tampered.write_bytes(tampered.read_bytes() + b"\x00")
 
     with pytest.raises(RuntimeError, match="checksum mismatch"):
-        key_audit.run_aggregation_only(root, "2026-04")
+        _run_aggregation_only(root)
 
 
 def test_run_aggregation_only_succeeds_against_existing_checkpoints_no_network(
@@ -934,12 +978,48 @@ def test_run_aggregation_only_succeeds_against_existing_checkpoints_no_network(
     monkeypatch.setattr(key_audit, "preflight_parts", should_not_be_called)
     monkeypatch.setattr(key_audit, "run_part_checkpoint", should_not_be_called)
 
-    result = key_audit.run_aggregation_only(root, "2026-04")
+    result = _run_aggregation_only(
+        root,
+        source_workflow_run_id="29789142307",
+        source_artifact_name="socio-key-audit-2026-04-29789142307",
+        source_artifact_id="8479703886",
+        source_checkpoint_commit="29fa59921c492021ec8cb52b22d8ae2c8e7c5805",
+    )
 
     assert result.report["mode"] == "aggregation-only"
     assert result.report["total_rows_scanned"] == 1
     assert len(result.verified_checksums) == 10
     assert result.report["categories"]["pessoa_fisica"]["row_count"] == 1
+
+
+def test_run_aggregation_only_report_contains_source_provenance(tmp_path):
+    """Machine-readable provenance in the generated report: which prior
+    run/artifact the checkpoints came from, which commit produced this
+    reanalysis, and every part's expected+actual checksum -- not just a
+    pass/fail boolean."""
+    root = tmp_path / "run"
+    _build_offline_checkpoints(root, tmp_path)
+
+    result = _run_aggregation_only(
+        root,
+        source_workflow_run_id="29789142307",
+        source_artifact_name="socio-key-audit-2026-04-29789142307",
+        source_artifact_id="8479703886",
+        source_checkpoint_commit="29fa59921c492021ec8cb52b22d8ae2c8e7c5805",
+    )
+
+    provenance = result.report["source_provenance"]
+    assert provenance["workflow_run_id"] == "29789142307"
+    assert provenance["artifact_name"] == "socio-key-audit-2026-04-29789142307"
+    assert provenance["artifact_id"] == "8479703886"
+    assert provenance["checkpoint_commit"] == "29fa59921c492021ec8cb52b22d8ae2c8e7c5805"
+    assert "reanalysis_workflow_run_id" in result.report
+    assert "reanalysis_source_commit" in result.report
+
+    assert len(result.report["verified_checkpoint_checksums"]) == 10
+    for part_key, checksums in result.report["verified_checkpoint_checksums"].items():
+        assert checksums["expected"] == checksums["actual"], part_key
+        assert len(checksums["expected"]) == 64, part_key  # sha256 hex digest
 
 
 def test_cli_aggregate_only_rejects_zip_override(tmp_path):
@@ -950,9 +1030,20 @@ def test_cli_aggregate_only_rejects_zip_override(tmp_path):
             "--root",
             str(tmp_path / "run"),
             "--aggregate-only",
+            "--source-run-id",
+            "111111",
+            "--source-artifact-name",
+            "socio-key-audit-2026-04-111111",
             "--zip",
             f"0={tmp_path / 'does-not-exist.zip'}",
         ]
+    )
+    assert result == 2
+
+
+def test_cli_aggregate_only_requires_source_provenance(tmp_path):
+    result = key_audit.main(
+        ["--month", "2026-04", "--root", str(tmp_path / "run"), "--aggregate-only"]
     )
     assert result == 2
 
@@ -961,10 +1052,28 @@ def test_cli_aggregate_only_end_to_end(tmp_path, capsys):
     root = tmp_path / "run"
     _build_offline_checkpoints(root, tmp_path)
 
-    result = key_audit.main(["--month", "2026-04", "--root", str(root), "--aggregate-only"])
+    result = key_audit.main(
+        [
+            "--month",
+            "2026-04",
+            "--root",
+            str(root),
+            "--aggregate-only",
+            "--source-run-id",
+            "29789142307",
+            "--source-artifact-name",
+            "socio-key-audit-2026-04-29789142307",
+            "--source-artifact-id",
+            "8479703886",
+            "--source-checkpoint-commit",
+            "29fa59921c492021ec8cb52b22d8ae2c8e7c5805",
+        ]
+    )
 
     assert result == 0
     out = capsys.readouterr().out
     assert "1 rows scanned" in out
     report = json.loads((root / "evidence" / "global.socio-key-audit.json").read_text())
     assert report["mode"] == "aggregation-only"
+    assert report["source_provenance"]["workflow_run_id"] == "29789142307"
+    assert report["source_provenance"]["artifact_name"] == "socio-key-audit-2026-04-29789142307"
