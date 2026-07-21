@@ -11,30 +11,62 @@ write a canonical socio Parquet, and does not decide a key. The
 recommendation belongs in `docs/socio-key-investigation.md`, written from
 this tool's measured output, not hard-coded here.
 
-Candidate keys tested (see `_CANDIDATE_KEYS`), narrowest to widest:
+`identificador_socio` splits every row into exactly three categories with
+structurally different partner-identity content (confirmed against the
+complete real 2026-04 snapshot -- see the doc for the numbers), so the
+candidate keys below are CATEGORY-SPECIFIC, not one flat composite tested
+uniformly across all rows:
 
-1. `(cnpj_basico, cnpj_cpf_socio)` -- "which company, which partner." The
-   minimal natural pairing a human would guess first.
-2. + `identificador_socio` -- partner type (legal entity / individual /
-   foreign, per RFB's layout).
-3. + `qualificacao_socio` -- the partner's role/qualification code.
-4. + `data_entrada_sociedade` -- entry date, distinguishing a partner who
-   left and later re-entered under the same role.
-5. `full_row_minus_names` -- every raw column except the two free-text name
-   fields (`nome_socio_razao_social`, `nome_representante_legal`), i.e. the
-   largest defensible NATURAL composite before resorting to a synthetic
-   row identity.
+- `"1"` Pessoa Juridica -- `cnpj_cpf_socio` is always a complete, unmasked
+  14-digit CNPJ. Treated as the primary partner identity on its own;
+  normalized partner name is measured only as a consistency diagnostic
+  (does the same CNPJ ever show a different name), not folded into the key.
+- `"2"` Pessoa Fisica -- `cnpj_cpf_socio` is always masked down to its
+  middle six digits (e.g. `"***816343**"`) and is NOT a reliable individual
+  identifier alone: two genuinely different people can share the same
+  masked value. The identity tested is masked CPF + normalized partner
+  name, with `faixa_etaria` (age bracket) measured as an additional
+  disambiguator on top.
+- `"3"` Socio Estrangeiro -- `cnpj_cpf_socio` is always blank; this is not
+  a data-quality gap, it is the entire foreign-partner category, which
+  structurally has no CPF/CNPJ field. The only identity signal available is
+  normalized partner name + `pais` (country code) -- documented as a weak
+  technical identity, not a strong one.
 
-For each candidate, this measures: blank/null key-component rows (a
+For each category, two layers are measured:
+
+- identity-level candidates -- "who is this partner," independent of which
+  company (`<prefix>:cnpj`/`<prefix>:cnpj_nome` for PJ,
+  `<prefix>:cpf`/`<prefix>:cpf_nome`/`<prefix>:cpf_nome_faixa` for PF,
+  `<prefix>:nome`/`<prefix>:nome_pais` for foreign partners);
+- relationship-level candidates -- `cnpj_basico` (company) + that
+  category's recommended partner identity, narrowed in stages by
+  `qualificacao_socio` then `data_entrada_sociedade`
+  (`<prefix>:company_partner` -> `<prefix>:company_partner_qualificacao` ->
+  `<prefix>:relationship`), mirroring the same "does the next column
+  absorb a real conflict" technique the original flat design used.
+
+`representante_legal`/`nome_representante_legal`/
+`qualificacao_representante_legal` are measured for independent variation
+within a duplicate relationship group (`_representante_independence`) but
+are NOT included in any candidate key unless that measurement shows they
+define a genuinely separate relationship.
+
+Normalized partner name (`_nome_socio_norm`, built once in `_socio_base`)
+is deliberately conservative: uppercase, collapse internal whitespace, trim
+-- RFB free text in this field is not expected to vary in spelling, only in
+case/whitespace.
+
+For each candidate key, this measures: blank/null key-component rows (a
 key-integrity failure, never an ordinary duplicate -- same distinction
 `canonical_shadow.py`'s writers make), distinct valid key count, duplicate
 key count, excess row count, cross-part duplicate key count, and --
 critically -- how many of those duplicate keys are "exact" (every OTHER
-raw column, including the two name fields, also matches -- the same value
-just republished) versus "conflicting" (something else genuinely differs).
-A high conflict rate at a candidate means that candidate does not actually
-identify a real-world fact; a candidate with near-zero duplicates AND
-near-zero conflicts is a real, if unproven, contract.
+raw column, including both free-text name fields, also matches -- the same
+value just republished) versus "conflicting" (something else genuinely
+differs). A high conflict rate at a candidate means that candidate does not
+actually identify a real-world fact; a candidate with near-zero duplicates
+AND near-zero conflicts is a real, if unproven, contract.
 
 Design, same discipline as `estabelecimento_key_audit.py` (issue #100):
 
@@ -90,33 +122,65 @@ _NAME_COLUMNS = ("nome_socio_razao_social", "nome_representante_legal")
 # failure (a socio row that doesn't say which company or which partner is
 # broken data, full stop). Every other raw column -- including ones a
 # WIDER candidate key adds -- can be legitimately blank for real rows.
+# `cnpj_cpf_socio` only gates candidates that actually include it in their
+# own column list, so this is a no-op for the foreign-partner category
+# (identificador_socio="3"), where it is ALWAYS blank by construction --
+# that category's candidates never reference it in the first place.
 _KEY_INTEGRITY_COLUMNS = ("cnpj_basico", "cnpj_cpf_socio")
 _ALL_COLUMNS: tuple[str, ...] = registry.SOCIO_COLUMNS
-_NON_NAME_COLUMNS: tuple[str, ...] = tuple(c for c in _ALL_COLUMNS if c not in _NAME_COLUMNS)
 
-_CANDIDATE_KEYS: dict[str, tuple[str, ...]] = {
-    "cnpj_basico_socio": ("cnpj_basico", "cnpj_cpf_socio"),
-    "cnpj_basico_socio_identificador": ("cnpj_basico", "cnpj_cpf_socio", "identificador_socio"),
-    "cnpj_basico_socio_identificador_qualificacao": (
-        "cnpj_basico",
-        "cnpj_cpf_socio",
-        "identificador_socio",
-        "qualificacao_socio",
-    ),
-    "cnpj_basico_socio_identificador_qualificacao_entrada": (
-        "cnpj_basico",
-        "cnpj_cpf_socio",
-        "identificador_socio",
-        "qualificacao_socio",
-        "data_entrada_sociedade",
-    ),
-    "full_row_minus_names": _NON_NAME_COLUMNS,
+_CATEGORY_PJ = "1"
+_CATEGORY_PF = "2"
+_CATEGORY_FOREIGN = "3"
+_CATEGORIES: tuple[str, ...] = (_CATEGORY_PJ, _CATEGORY_PF, _CATEGORY_FOREIGN)
+_CATEGORY_LABELS: dict[str, str] = {
+    _CATEGORY_PJ: "pessoa_juridica",
+    _CATEGORY_PF: "pessoa_fisica",
+    _CATEGORY_FOREIGN: "socio_estrangeiro",
 }
-# Evidence samples (bounded, not full-group aggregates) are only collected
-# for these -- the narrowest natural guess and the widest natural
-# candidate; the two middle ones are numeric-summary-only to keep the
-# real run's query count reasonable.
-_SAMPLED_CANDIDATE_KEYS = ("cnpj_basico_socio", "full_row_minus_names")
+_CATEGORY_PREFIX: dict[str, str] = {
+    _CATEGORY_PJ: "pj",
+    _CATEGORY_PF: "pf",
+    _CATEGORY_FOREIGN: "foreign",
+}
+
+# Derived, normalized-name columns built once in `_socio_base` -- not part
+# of registry.SOCIO_COLUMNS since they don't exist in the RFB layout, but
+# every category's candidates/diagnostics below reuse the same computation.
+_NOME_SOCIO_NORM = "_nome_socio_norm"
+_NOME_REPRESENTANTE_NORM = "_nome_representante_norm"
+
+# Recommended partner-identity columns per category (see module docstring):
+# PJ's CNPJ is already unmasked and complete, so name is a diagnostic only
+# and is deliberately NOT part of this dict's PJ entry. PF's CPF is masked,
+# so name is required for the identity to mean anything. Foreign partners
+# have no CPF/CNPJ at all, so name+country is the only signal available.
+_CATEGORY_PARTNER_IDENTITY: dict[str, tuple[str, ...]] = {
+    _CATEGORY_PJ: ("cnpj_cpf_socio",),
+    _CATEGORY_PF: ("cnpj_cpf_socio", _NOME_SOCIO_NORM),
+    _CATEGORY_FOREIGN: (_NOME_SOCIO_NORM, "pais"),
+}
+
+# Identity-level candidates tested per category -- the recommended identity
+# above plus the specific diagnostic variants the investigation asked for
+# (does name resolve a collision CNPJ alone doesn't; how much do name and
+# faixa_etaria each narrow PF's masked-CPF collisions; how much does
+# country narrow a foreign partner's name-only collisions).
+_CATEGORY_IDENTITY_CANDIDATES: dict[str, dict[str, tuple[str, ...]]] = {
+    _CATEGORY_PJ: {
+        "cnpj": ("cnpj_cpf_socio",),
+        "cnpj_nome": ("cnpj_cpf_socio", _NOME_SOCIO_NORM),
+    },
+    _CATEGORY_PF: {
+        "cpf": ("cnpj_cpf_socio",),
+        "cpf_nome": ("cnpj_cpf_socio", _NOME_SOCIO_NORM),
+        "cpf_nome_faixa": ("cnpj_cpf_socio", _NOME_SOCIO_NORM, "faixa_etaria"),
+    },
+    _CATEGORY_FOREIGN: {
+        "nome": (_NOME_SOCIO_NORM,),
+        "nome_pais": (_NOME_SOCIO_NORM, "pais"),
+    },
+}
 
 
 def _literal(value: str) -> str:
@@ -473,14 +537,19 @@ class CandidateKeyReport:
 
 def _audit_one_candidate(
     con: duckdb.DuckDBPyConnection,
-    paths_sql: str,
+    source: str,
     name: str,
     columns: tuple[str, ...],
     *,
     collect_sample: bool,
     sample_limit: int = _EVIDENCE_SAMPLE_LIMIT,
 ) -> CandidateKeyReport:
-    """``valid`` (which rows are eligible for the cardinality/duplicate
+    """``source`` is a FROM-clause-ready SQL fragment (a temp table or view
+    name, e.g. one of the category views built by `_category_view`) rather
+    than always the raw per-part Parquets, so this can be reused against a
+    category-filtered, name-normalized source.
+
+    ``valid`` (which rows are eligible for the cardinality/duplicate
     analysis at all) only requires `_KEY_INTEGRITY_COLUMNS` -- `cnpj_basico`
     and `cnpj_cpf_socio`, whichever the candidate includes -- to be
     non-blank. Every OTHER column a wider candidate adds (`pais`,
@@ -490,6 +559,14 @@ def _audit_one_candidate(
     is would incorrectly disqualify the majority of rows from a wide
     candidate's analysis instead of measuring it. Blank counts are still
     reported per component as a diagnostic either way.
+
+    Joins use ``IS NOT DISTINCT FROM`` rather than ``=`` because
+    `CsvSpec.null_padding=True` loads blank RFB fields as SQL NULL, and a
+    candidate key can legitimately contain a column that is NULL for some
+    duplicate rows (e.g. `pais` for domestic partners) -- plain `=` would
+    silently drop those groups from the conflict count and evidence sample
+    even though the GROUP BY above (which treats NULLs as equal) counted
+    them correctly.
     """
     quoted = _quoted(columns)
     key_list = ", ".join(quoted)
@@ -499,7 +576,7 @@ def _audit_one_candidate(
     blanks = {
         col: int(
             con.execute(
-                f"SELECT COUNT(*) FROM read_parquet({paths_sql}) WHERE "
+                f"SELECT COUNT(*) FROM {source} WHERE "
                 f"{registry.quote_identifier(col)} IS NULL OR "
                 f"TRIM({registry.quote_identifier(col)}) = ''"
             ).fetchone()[0]
@@ -513,7 +590,7 @@ def _audit_one_candidate(
         SELECT {key_list},
                COUNT(*)::BIGINT AS n,
                COUNT(DISTINCT "_source_file")::BIGINT AS n_parts
-        FROM read_parquet({paths_sql})
+        FROM {source}
         WHERE {valid}
         GROUP BY {key_list}
         """
@@ -532,25 +609,22 @@ def _audit_one_candidate(
     # Conflicting-vs-exact: among duplicate keys, how many have more than
     # one distinct FULL ROW (every raw column, including the two name
     # fields -- see module docstring for why: this is the most
-    # conservative definition, never UNDER-counts a conflict).
-    all_cols = [f"t.{c}" for c in _quoted(_ALL_COLUMNS)]
-    full_row_struct = (
-        "{"
-        + ", ".join(f"'{c}': {expr}" for c, expr in zip(_ALL_COLUMNS, all_cols, strict=True))
-        + "}"
-    )
+    # conservative definition, never UNDER-counts a conflict). Compares the
+    # `_row_hash` precomputed once in `_socio_base` rather than rebuilding
+    # an 11-column STRUCT here -- see `_build_socio_base` for why.
     t_keys = ", ".join(f"t.{c}" for c in quoted)
-    join_on = " AND ".join(f"t.{c} = dk.{c}" for c in quoted)
+    join_on = " AND ".join(f"t.{c} IS NOT DISTINCT FROM dk.{c}" for c in quoted)
+    row_hash = registry.quote_identifier(_ROW_HASH)
     conflicting = int(
         con.execute(
             f"""
             WITH dupe_keys AS (SELECT {key_list} FROM _grouped WHERE n > 1),
             conflicting_keys AS (
                 SELECT {t_keys}
-                FROM read_parquet({paths_sql}) t
+                FROM {source} t
                 JOIN dupe_keys dk ON {join_on}
                 GROUP BY {t_keys}
-                HAVING COUNT(DISTINCT {full_row_struct}) > 1
+                HAVING COUNT(DISTINCT t.{row_hash}) > 1
             )
             SELECT COUNT(*) FROM conflicting_keys
             """
@@ -560,7 +634,7 @@ def _audit_one_candidate(
     evidence_sample: list[dict[str, Any]] = []
     if collect_sample:
         top_keys_sql = ", ".join(f"top.{c}" for c in quoted)
-        join_on2 = " AND ".join(f"top.{c} = full_scan.{c}" for c in quoted)
+        join_on2 = " AND ".join(f"top.{c} IS NOT DISTINCT FROM full_scan.{c}" for c in quoted)
         sample_rows = con.execute(
             f"""
             WITH top AS (
@@ -574,7 +648,7 @@ def _audit_one_candidate(
                    list(DISTINCT full_scan."_source_file") AS source_files
             FROM top
             JOIN (
-                SELECT {key_list}, "_source_file" FROM read_parquet({paths_sql}) WHERE {valid}
+                SELECT {key_list}, "_source_file" FROM {source} WHERE {valid}
             ) AS full_scan
             ON {join_on2}
             GROUP BY {top_keys_sql}, top.n
@@ -605,22 +679,262 @@ def _audit_one_candidate(
     )
 
 
+def _normalized_name_expr(column: str) -> str:
+    """Uppercase, collapse internal whitespace, trim -- deliberately
+    conservative (RFB free text here is expected to vary in case/spacing,
+    not spelling)."""
+    quoted = registry.quote_identifier(column)
+    return rf"TRIM(REGEXP_REPLACE(UPPER({quoted}), '\s+', ' ', 'g'))"
+
+
+_ROW_HASH = "_row_hash"
+
+
+def _build_socio_base(con: duckdb.DuckDBPyConnection, paths_sql: str) -> str:
+    """`_socio_base` -- every raw `SOCIO_COLUMNS` plus `_source_file`, plus
+    the normalized-name diagnostic columns every category's candidates and
+    diagnostics below reuse, plus a single precomputed `_row_hash` of the
+    full row (every raw column). `_audit_one_candidate`'s conflicting-vs-exact
+    check needs "is every OTHER column the same too" for each duplicate
+    key -- computing that from an 11-column STRUCT comparison INSIDE every
+    one of a category's ~9 candidate queries is what made a company-unscoped
+    identity candidate (e.g. masked CPF alone, where duplication is the
+    whole point being measured -- ~1e6 possible masked values across 26.8M
+    real PF rows means the "duplicate key" JOIN covers nearly the entire
+    category) blow up in memory. Hashing the full row once here and
+    comparing that single value everywhere else avoids rebuilding the wide
+    struct on every candidate.
+    """
+    cols_sql = ", ".join(_quoted(_ALL_COLUMNS))
+    all_cols_struct = (
+        "{"
+        + ", ".join(f"'{c}': {q}" for c, q in zip(_ALL_COLUMNS, _quoted(_ALL_COLUMNS), strict=True))
+        + "}"
+    )
+    con.execute(
+        f"""
+        CREATE OR REPLACE TEMP TABLE _socio_base AS
+        SELECT {cols_sql}, "_source_file",
+               {_normalized_name_expr("nome_socio_razao_social")}
+                   AS {registry.quote_identifier(_NOME_SOCIO_NORM)},
+               {_normalized_name_expr("nome_representante_legal")}
+                   AS {registry.quote_identifier(_NOME_REPRESENTANTE_NORM)},
+               hash({all_cols_struct}) AS {registry.quote_identifier(_ROW_HASH)}
+        FROM read_parquet({paths_sql})
+        """
+    )
+    return "_socio_base"
+
+
+def _category_view(con: duckdb.DuckDBPyConnection, base: str, category: str) -> str:
+    view = f"_socio_{_CATEGORY_PREFIX[category]}"
+    con.execute(
+        f"""
+        CREATE OR REPLACE TEMP VIEW {view} AS
+        SELECT * FROM {base}
+        WHERE {registry.quote_identifier("identificador_socio")} = {_literal(category)}
+        """
+    )
+    return view
+
+
+def _representante_independence(
+    con: duckdb.DuckDBPyConnection, source: str, relationship_columns: tuple[str, ...]
+) -> dict[str, Any]:
+    """Among relationship groups that already share the same
+    company+partner-identity+qualificacao+data_entrada key (i.e. groups
+    `_audit_one_candidate` would call duplicates), does the legal
+    representative vary WITHIN the group? If so, the representative fields
+    might define a genuinely separate relationship; if not, there is no
+    evidence they belong in the identity.
+
+    Two passes, same discipline as `_audit_one_candidate`: a cheap single-
+    aggregate GROUP BY over the full (potentially tens of millions of rows)
+    source finds which keys are duplicates, then the three-way
+    COUNT(DISTINCT ...) -- expensive per group -- only runs on a JOIN
+    restricted to that small duplicate subset. Doing the triple DISTINCT in
+    one GROUP BY over the full source measurably OOM'd on the real PF
+    category (26.8M rows).
+    """
+    quoted = _quoted(relationship_columns)
+    key_list = ", ".join(quoted)
+    t_key_list = ", ".join(f"t.{c}" for c in quoted)
+    join_on = " AND ".join(f"t.{c} IS NOT DISTINCT FROM dk.{c}" for c in quoted)
+    row = con.execute(
+        f"""
+        WITH dupe_keys AS (
+            SELECT {key_list} FROM {source} GROUP BY {key_list} HAVING COUNT(*) > 1
+        ),
+        variation AS (
+            SELECT
+                (COUNT(DISTINCT t.{registry.quote_identifier("representante_legal")}) > 1
+                 OR COUNT(DISTINCT t.{registry.quote_identifier("nome_representante_legal")}) > 1
+                 OR COUNT(DISTINCT
+                        t.{registry.quote_identifier("qualificacao_representante_legal")}) > 1
+                ) AS varies
+            FROM {source} t
+            JOIN dupe_keys dk ON {join_on}
+            GROUP BY {t_key_list}
+        )
+        SELECT
+            COUNT(*)::BIGINT AS duplicate_relationship_groups,
+            COALESCE(SUM(CASE WHEN varies THEN 1 ELSE 0 END), 0)::BIGINT
+                AS groups_with_representante_variation
+        FROM variation
+        """
+    ).fetchone()
+    return {
+        "duplicate_relationship_groups": int(row[0]),
+        "groups_with_representante_variation": int(row[1]),
+    }
+
+
+def _pj_diagnostics(
+    con: duckdb.DuckDBPyConnection, source: str, identity_candidates: dict[str, Any]
+) -> dict[str, Any]:
+    cnpj = registry.quote_identifier("cnpj_cpf_socio")
+    nome_norm = registry.quote_identifier(_NOME_SOCIO_NORM)
+    fmt = con.execute(
+        f"""
+        SELECT
+            COUNT(*) FILTER (
+                WHERE {cnpj} IS NOT NULL AND LENGTH(TRIM({cnpj})) = 14
+                      AND TRIM({cnpj}) NOT SIMILAR TO '%[^0-9]%'
+            ) AS valid,
+            COUNT(*) FILTER (
+                WHERE {cnpj} IS NULL OR LENGTH(TRIM({cnpj})) <> 14
+                      OR TRIM({cnpj}) SIMILAR TO '%[^0-9]%'
+            ) AS invalid
+        FROM {source}
+        """
+    ).fetchone()
+    same_cnpj_different_name = int(
+        con.execute(
+            f"""
+            SELECT COUNT(*) FROM (
+                SELECT {cnpj}
+                FROM {source}
+                WHERE {cnpj} IS NOT NULL AND TRIM({cnpj}) <> ''
+                GROUP BY {cnpj}
+                HAVING COUNT(DISTINCT {nome_norm}) > 1
+            )
+            """
+        ).fetchone()[0]
+    )
+    cnpj_only = identity_candidates["pj:cnpj"]
+    cnpj_and_name = identity_candidates["pj:cnpj_nome"]
+    return {
+        "cnpj_format_valid_count": int(fmt[0]),
+        "cnpj_format_invalid_count": int(fmt[1]),
+        "same_cnpj_different_normalized_name_count": same_cnpj_different_name,
+        "name_resolves_collision_beyond_valid_cnpj": (
+            cnpj_and_name["distinct_valid_key_count"] > cnpj_only["distinct_valid_key_count"]
+        ),
+    }
+
+
+def _pf_diagnostics(con: duckdb.DuckDBPyConnection, source: str) -> dict[str, Any]:
+    cpf = registry.quote_identifier("cnpj_cpf_socio")
+    nome_norm = registry.quote_identifier(_NOME_SOCIO_NORM)
+    faixa = registry.quote_identifier("faixa_etaria")
+    same_cpf_different_name = int(
+        con.execute(
+            f"""
+            SELECT COUNT(*) FROM (
+                SELECT {cpf}
+                FROM {source}
+                WHERE {cpf} IS NOT NULL AND TRIM({cpf}) <> ''
+                GROUP BY {cpf}
+                HAVING COUNT(DISTINCT {nome_norm}) > 1
+            )
+            """
+        ).fetchone()[0]
+    )
+    same_cpf_nome_different_faixa = int(
+        con.execute(
+            f"""
+            SELECT COUNT(*) FROM (
+                SELECT {cpf}, {nome_norm}
+                FROM {source}
+                WHERE {cpf} IS NOT NULL AND TRIM({cpf}) <> ''
+                GROUP BY {cpf}, {nome_norm}
+                HAVING COUNT(DISTINCT {faixa}) > 1
+            )
+            """
+        ).fetchone()[0]
+    )
+    return {
+        "same_masked_cpf_different_normalized_name_count": same_cpf_different_name,
+        "same_masked_cpf_and_name_different_faixa_etaria_count": same_cpf_nome_different_faixa,
+    }
+
+
+def _audit_category(con: duckdb.DuckDBPyConnection, source: str, category: str) -> dict[str, Any]:
+    prefix = _CATEGORY_PREFIX[category]
+    row_count = int(con.execute(f"SELECT COUNT(*) FROM {source}").fetchone()[0])
+    recommended_identity = _CATEGORY_PARTNER_IDENTITY[category]
+
+    identity_candidates = {
+        f"{prefix}:{suffix}": _audit_one_candidate(
+            con, source, f"{prefix}:{suffix}", columns, collect_sample=True
+        ).to_json_dict()
+        for suffix, columns in _CATEGORY_IDENTITY_CANDIDATES[category].items()
+    }
+
+    relationship_defs: dict[str, tuple[str, ...]] = {
+        f"{prefix}:company_partner": ("cnpj_basico", *recommended_identity),
+        f"{prefix}:company_partner_qualificacao": (
+            "cnpj_basico",
+            *recommended_identity,
+            "qualificacao_socio",
+        ),
+        f"{prefix}:relationship": (
+            "cnpj_basico",
+            *recommended_identity,
+            "qualificacao_socio",
+            "data_entrada_sociedade",
+        ),
+    }
+    relationship_candidates = {
+        cname: _audit_one_candidate(con, source, cname, cols, collect_sample=True).to_json_dict()
+        for cname, cols in relationship_defs.items()
+    }
+
+    diagnostics: dict[str, Any] = {
+        "representante_independence": _representante_independence(
+            con, source, relationship_defs[f"{prefix}:relationship"]
+        ),
+    }
+    if category == _CATEGORY_PJ:
+        diagnostics.update(_pj_diagnostics(con, source, identity_candidates))
+    elif category == _CATEGORY_PF:
+        diagnostics.update(_pf_diagnostics(con, source))
+
+    return {
+        "identificador_socio": category,
+        "row_count": row_count,
+        "recommended_partner_identity": list(recommended_identity),
+        "identity_candidates": identity_candidates,
+        "relationship_candidates": relationship_candidates,
+        "diagnostics": diagnostics,
+    }
+
+
 def run_global_key_audit(
     con: duckdb.DuckDBPyConnection, part_parquets: list[Path]
 ) -> dict[str, Any]:
     paths_sql = registry.paths_literal(part_parquets)
-    total_rows = int(con.execute(f"SELECT COUNT(*) FROM read_parquet({paths_sql})").fetchone()[0])
-    candidates = {
-        name: _audit_one_candidate(
-            con,
-            paths_sql,
-            name,
-            columns,
-            collect_sample=name in _SAMPLED_CANDIDATE_KEYS,
-        ).to_json_dict()
-        for name, columns in _CANDIDATE_KEYS.items()
-    }
-    return {"total_rows_scanned": total_rows, "candidate_keys": candidates}
+    base = _build_socio_base(con, paths_sql)
+    total_rows = int(con.execute(f"SELECT COUNT(*) FROM {base}").fetchone()[0])
+
+    categories: dict[str, Any] = {}
+    for category in _CATEGORIES:
+        view = _category_view(con, base, category)
+        categories[_CATEGORY_LABELS[category]] = _audit_category(con, view, category)
+        con.execute(f"DROP VIEW {view}")
+    con.execute(f"DROP TABLE {base}")
+
+    return {"total_rows_scanned": total_rows, "categories": categories}
 
 
 # -----------------------------------------------------------------------------
@@ -776,12 +1090,18 @@ def main(argv: list[str] | None = None) -> int:
 
     report = result.report
     print(f"socio key audit done — {report['total_rows_scanned']:,} rows scanned")
-    for name, candidate in report["candidate_keys"].items():
+    for label, category in report["categories"].items():
         print(
-            f"  {name}: {candidate['distinct_valid_key_count']:,} distinct, "
-            f"{candidate['duplicate_key_count']:,} duplicate key(s), "
-            f"{candidate['conflicting_key_count']:,} conflicting"
+            f"  {label} (identificador_socio={category['identificador_socio']!r}): "
+            f"{category['row_count']:,} rows"
         )
+        for group in ("identity_candidates", "relationship_candidates"):
+            for name, candidate in category[group].items():
+                print(
+                    f"    {name}: {candidate['distinct_valid_key_count']:,} distinct, "
+                    f"{candidate['duplicate_key_count']:,} duplicate key(s), "
+                    f"{candidate['conflicting_key_count']:,} conflicting"
+                )
     print(f"report: {result.report_path}")
     return 0
 

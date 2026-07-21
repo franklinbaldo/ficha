@@ -114,18 +114,16 @@ jobs:
           REPORT=.socio-key-audit-smoke/run/evidence/global.socio-key-audit.json
           jq -e '
             .total_rows_scanned == 5 and
-            .candidate_keys.cnpj_basico_socio.distinct_valid_key_count == 2 and
-            .candidate_keys.cnpj_basico_socio.duplicate_key_count == 2 and
-            .candidate_keys.cnpj_basico_socio.conflicting_key_count == 1 and
-            .candidate_keys.cnpj_basico_socio.cross_part_duplicate_key_count == 1 and
-            (.candidate_keys.cnpj_basico_socio.evidence_sample | length) == 2 and
-            .candidate_keys.cnpj_basico_socio_identificador_qualificacao.distinct_valid_key_count == 3 and
-            .candidate_keys.cnpj_basico_socio_identificador_qualificacao.duplicate_key_count == 1 and
-            .candidate_keys.cnpj_basico_socio_identificador_qualificacao.conflicting_key_count == 0 and
-            .candidate_keys.full_row_minus_names.distinct_valid_key_count == 3 and
-            .candidate_keys.full_row_minus_names.duplicate_key_count == 1 and
-            .candidate_keys.full_row_minus_names.conflicting_key_count == 0 and
-            .candidate_keys.cnpj_basico_socio.blank_or_null_counts_by_component.cnpj_cpf_socio == 1
+            .categories.pessoa_fisica.row_count == 5 and
+            .categories.pessoa_fisica.identity_candidates["pf:cpf"].distinct_valid_key_count == 2 and
+            .categories.pessoa_fisica.identity_candidates["pf:cpf"].duplicate_key_count == 2 and
+            .categories.pessoa_fisica.identity_candidates["pf:cpf"].conflicting_key_count == 1 and
+            .categories.pessoa_fisica.identity_candidates["pf:cpf"].cross_part_duplicate_key_count == 1 and
+            (.categories.pessoa_fisica.identity_candidates["pf:cpf"].evidence_sample | length) == 2 and
+            .categories.pessoa_fisica.identity_candidates["pf:cpf"].blank_or_null_counts_by_component.cnpj_cpf_socio == 1 and
+            .categories.pessoa_fisica.relationship_candidates["pf:company_partner_qualificacao"].distinct_valid_key_count == 3 and
+            .categories.pessoa_fisica.relationship_candidates["pf:company_partner_qualificacao"].duplicate_key_count == 1 and
+            .categories.pessoa_fisica.relationship_candidates["pf:company_partner_qualificacao"].conflicting_key_count == 0
           ' "$REPORT"
 
   audit:
@@ -205,17 +203,35 @@ jobs:
             echo
             if [ -f "$REPORT" ]; then
               jq -r '
+                def row_table(cands): "| Candidate | Distinct | Duplicate keys | Excess rows | Cross-part | Conflicting |",
+                  "|---|---:|---:|---:|---:|---:|",
+                  (cands | to_entries[] | "| `" + .key + "` | " +
+                    (.value.distinct_valid_key_count|tostring) + " | " +
+                    (.value.duplicate_key_count|tostring) + " | " +
+                    (.value.excess_duplicate_row_count|tostring) + " | " +
+                    (.value.cross_part_duplicate_key_count|tostring) + " | " +
+                    (.value.conflicting_key_count|tostring) + " |");
                 "- Snapshot: `" + .snapshot_month + "`",
                 "- Total rows scanned: `" + (.total_rows_scanned|tostring) + "`",
                 "",
-                "| Candidate key | Distinct | Duplicate keys | Excess rows | Cross-part | Conflicting |",
-                "|---|---:|---:|---:|---:|---:|",
-                (.candidate_keys | to_entries[] | "| `" + .key + "` | " +
-                  (.value.distinct_valid_key_count|tostring) + " | " +
-                  (.value.duplicate_key_count|tostring) + " | " +
-                  (.value.excess_duplicate_row_count|tostring) + " | " +
-                  (.value.cross_part_duplicate_key_count|tostring) + " | " +
-                  (.value.conflicting_key_count|tostring) + " |")
+                (.categories | to_entries[] |
+                  "### " + .key + " (identificador_socio=\"" + .value.identificador_socio +
+                    "\", rows=" + (.value.row_count|tostring) + ")",
+                  "",
+                  "**Identity candidates**",
+                  "",
+                  row_table(.value.identity_candidates),
+                  "",
+                  "**Relationship candidates**",
+                  "",
+                  row_table(.value.relationship_candidates),
+                  "",
+                  "**Diagnostics**",
+                  "",
+                  "```json",
+                  (.value.diagnostics | tojson),
+                  "```",
+                  "")
               ' "$REPORT"
             else
               echo "- No global report was produced — check part-level failure evidence below."

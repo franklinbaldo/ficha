@@ -63,7 +63,32 @@ def _socio_row(**overrides: str) -> dict[str, str]:
     return row
 
 
-def test_no_duplicates_for_any_candidate(tmp_path):
+def test_category_row_counts_sum_to_total(tmp_path):
+    con = duckdb.connect()
+    try:
+        p0 = tmp_path / "part-0.parquet"
+        _write_socio_parquet(
+            con,
+            p0,
+            [
+                _socio_row(identificador_socio="1", cnpj_cpf_socio="12345678000199"),
+                _socio_row(identificador_socio="2", cnpj_cpf_socio="***111111**"),
+                _socio_row(identificador_socio="3", cnpj_cpf_socio="", pais="105"),
+            ],
+        )
+        report = key_audit.run_global_key_audit(con, [p0])
+    finally:
+        con.close()
+
+    assert report["total_rows_scanned"] == 3
+    categories = report["categories"]
+    assert categories["pessoa_juridica"]["row_count"] == 1
+    assert categories["pessoa_fisica"]["row_count"] == 1
+    assert categories["socio_estrangeiro"]["row_count"] == 1
+    assert sum(c["row_count"] for c in categories.values()) == 3
+
+
+def test_pf_no_duplicates_for_any_candidate(tmp_path):
     con = duckdb.connect()
     try:
         p0 = tmp_path / "part-0.parquet"
@@ -79,15 +104,15 @@ def test_no_duplicates_for_any_candidate(tmp_path):
     finally:
         con.close()
 
-    assert report["total_rows_scanned"] == 2
-    for name in key_audit._CANDIDATE_KEYS:  # noqa: SLF001
-        candidate = report["candidate_keys"][name]
-        assert candidate["distinct_valid_key_count"] == 2, name
-        assert candidate["duplicate_key_count"] == 0, name
-        assert candidate["conflicting_key_count"] == 0, name
+    pf = report["categories"]["pessoa_fisica"]
+    for candidates in (pf["identity_candidates"], pf["relationship_candidates"]):
+        for name, candidate in candidates.items():
+            assert candidate["distinct_valid_key_count"] == 2, name
+            assert candidate["duplicate_key_count"] == 0, name
+            assert candidate["conflicting_key_count"] == 0, name
 
 
-def test_exact_duplicate_is_duplicate_not_conflicting(tmp_path):
+def test_pf_exact_duplicate_is_duplicate_not_conflicting(tmp_path):
     con = duckdb.connect()
     try:
         p0 = tmp_path / "part-0.parquet"
@@ -97,18 +122,19 @@ def test_exact_duplicate_is_duplicate_not_conflicting(tmp_path):
     finally:
         con.close()
 
-    narrow = report["candidate_keys"]["cnpj_basico_socio"]
+    narrow = report["categories"]["pessoa_fisica"]["identity_candidates"]["pf:cpf_nome"]
     assert narrow["distinct_valid_key_count"] == 1
     assert narrow["duplicate_key_count"] == 1
     assert narrow["excess_duplicate_row_count"] == 1
     assert narrow["conflicting_key_count"] == 0  # same payload, not a conflict
 
 
-def test_conflicting_duplicate_across_parts_is_cross_part_and_conflicting(tmp_path):
-    """Same (cnpj_basico, cnpj_cpf_socio) in two different parts, but a
-    different qualificacao_socio -- a real conflict at the narrow candidate,
-    which the wider candidates (that include qualificacao_socio in the key
-    itself) resolve by simply treating them as different keys instead."""
+def test_pf_conflicting_duplicate_across_parts_resolved_by_qualificacao(tmp_path):
+    """Same company + masked CPF + name in two different parts, but a
+    different qualificacao_socio -- a real conflict at `pf:company_partner`
+    (company + category identity, no role yet), which
+    `pf:company_partner_qualificacao` resolves by treating them as
+    different keys once the role is part of the key."""
     con = duckdb.connect()
     try:
         p0 = tmp_path / "part-0.parquet"
@@ -123,27 +149,64 @@ def test_conflicting_duplicate_across_parts_is_cross_part_and_conflicting(tmp_pa
     finally:
         con.close()
 
-    narrow = report["candidate_keys"]["cnpj_basico_socio"]
+    relationship = report["categories"]["pessoa_fisica"]["relationship_candidates"]
+    narrow = relationship["pf:company_partner"]
     assert narrow["distinct_valid_key_count"] == 1
     assert narrow["duplicate_key_count"] == 1
     assert narrow["cross_part_duplicate_key_count"] == 1
     assert narrow["conflicting_key_count"] == 1
-    assert narrow["evidence_sample"] == [
-        {
-            "cnpj_basico": "00000001",
-            "cnpj_cpf_socio": "***111111**",
-            "count": 2,
-            "source_files": ["Socios0.zip", "Socios5.zip"],
-        }
-    ]
 
-    wider = report["candidate_keys"]["cnpj_basico_socio_identificador_qualificacao"]
+    wider = relationship["pf:company_partner_qualificacao"]
     assert wider["distinct_valid_key_count"] == 2  # qualificacao_socio differs -> different keys
     assert wider["duplicate_key_count"] == 0
     assert wider["conflicting_key_count"] == 0
 
 
-def test_blank_cnpj_cpf_socio_excluded_as_key_integrity_failure(tmp_path):
+def test_pf_masked_cpf_collision_between_different_people_resolved_by_name(tmp_path):
+    """RFB masks cnpj_cpf_socio down to its middle six digits -- two
+    genuinely DIFFERENT people can share the same masked value. Simulated
+    here as two rows with the same masked CPF but different names and a
+    different qualificacao_socio: the CPF-only candidate wrongly reports
+    this as one conflicting key (as if it were the same partner switching
+    roles); the name-augmented candidate correctly recognizes two distinct
+    people and reports zero conflict.
+    """
+    con = duckdb.connect()
+    try:
+        p0 = tmp_path / "part-0.parquet"
+        _write_socio_parquet(
+            con,
+            p0,
+            [
+                _socio_row(
+                    cnpj_cpf_socio="***111111**",
+                    nome_socio_razao_social="FULANO DE TAL",
+                    qualificacao_socio="49",
+                ),
+                _socio_row(
+                    cnpj_cpf_socio="***111111**",
+                    nome_socio_razao_social="BELTRANO OUTRO",  # different person, same masked CPF
+                    qualificacao_socio="99",
+                ),
+            ],
+        )
+        report = key_audit.run_global_key_audit(con, [p0])
+    finally:
+        con.close()
+
+    identity = report["categories"]["pessoa_fisica"]["identity_candidates"]
+    cpf_only = identity["pf:cpf"]
+    assert cpf_only["distinct_valid_key_count"] == 1
+    assert cpf_only["duplicate_key_count"] == 1
+    assert cpf_only["conflicting_key_count"] == 1  # wrongly looks like one conflicting partner
+
+    with_name = identity["pf:cpf_nome"]
+    assert with_name["distinct_valid_key_count"] == 2  # correctly two different people
+    assert with_name["duplicate_key_count"] == 0
+    assert with_name["conflicting_key_count"] == 0
+
+
+def test_pf_blank_cnpj_cpf_socio_excluded_as_key_integrity_failure(tmp_path):
     con = duckdb.connect()
     try:
         p0 = tmp_path / "part-0.parquet"
@@ -159,52 +222,237 @@ def test_blank_cnpj_cpf_socio_excluded_as_key_integrity_failure(tmp_path):
     finally:
         con.close()
 
-    narrow = report["candidate_keys"]["cnpj_basico_socio"]
+    narrow = report["categories"]["pessoa_fisica"]["identity_candidates"]["pf:cpf"]
     assert narrow["blank_or_null_counts_by_component"]["cnpj_cpf_socio"] == 1
     assert narrow["distinct_valid_key_count"] == 1  # the blank row is excluded entirely
 
 
-def test_optional_columns_blank_does_not_exclude_wide_candidate(tmp_path):
-    """`pais`/`representante_legal` are legitimately blank for most real
-    rows (domestic partners, no legal representative) -- a wide candidate
-    that includes them must NOT treat that as a key-integrity failure the
-    way a blank cnpj_basico/cnpj_cpf_socio would. Only the two identity
-    columns gate validity; pais/representante_legal blank is just a normal
-    value that participates in the comparison.
-    """
+def test_pf_diagnostics_same_cpf_different_name_and_faixa(tmp_path):
     con = duckdb.connect()
     try:
         p0 = tmp_path / "part-0.parquet"
         _write_socio_parquet(
             con,
             p0,
-            [_socio_row(pais="", representante_legal="")],  # both blank, as in most real rows
+            [
+                _socio_row(
+                    cnpj_cpf_socio="***111111**",
+                    nome_socio_razao_social="FULANO DE TAL",
+                    faixa_etaria="5",
+                ),
+                # same masked CPF, different normalized name
+                _socio_row(
+                    cnpj_cpf_socio="***111111**",
+                    nome_socio_razao_social="BELTRANO OUTRO",
+                    faixa_etaria="5",
+                ),
+                # same masked CPF and name, different faixa_etaria
+                _socio_row(
+                    cnpj_cpf_socio="***111111**",
+                    nome_socio_razao_social="FULANO DE TAL",
+                    faixa_etaria="6",
+                    cnpj_basico="00000002",
+                ),
+            ],
         )
         report = key_audit.run_global_key_audit(con, [p0])
     finally:
         con.close()
 
-    wide = report["candidate_keys"]["full_row_minus_names"]
-    assert wide["distinct_valid_key_count"] == 1  # NOT zero
-    assert wide["blank_or_null_counts_by_component"]["pais"] == 1  # still reported as a diagnostic
-    assert wide["blank_or_null_counts_by_component"]["representante_legal"] == 1
+    diagnostics = report["categories"]["pessoa_fisica"]["diagnostics"]
+    assert diagnostics["same_masked_cpf_different_normalized_name_count"] == 1
+    assert diagnostics["same_masked_cpf_and_name_different_faixa_etaria_count"] == 1
 
 
-def test_evidence_sample_only_collected_for_sampled_candidates(tmp_path):
+def test_pj_cnpj_alone_matches_cnpj_plus_name_when_names_are_consistent(tmp_path):
     con = duckdb.connect()
     try:
         p0 = tmp_path / "part-0.parquet"
-        row = _socio_row()
+        _write_socio_parquet(
+            con,
+            p0,
+            [
+                _socio_row(
+                    identificador_socio="1",
+                    cnpj_cpf_socio="12345678000199",
+                    nome_socio_razao_social="EMPRESA A LTDA",
+                ),
+                _socio_row(
+                    identificador_socio="1",
+                    cnpj_cpf_socio="98765432000155",
+                    nome_socio_razao_social="EMPRESA B LTDA",
+                    cnpj_basico="00000002",
+                ),
+            ],
+        )
+        report = key_audit.run_global_key_audit(con, [p0])
+    finally:
+        con.close()
+
+    pj = report["categories"]["pessoa_juridica"]
+    cnpj_only = pj["identity_candidates"]["pj:cnpj"]
+    cnpj_and_name = pj["identity_candidates"]["pj:cnpj_nome"]
+    assert cnpj_only["distinct_valid_key_count"] == 2
+    assert cnpj_and_name["distinct_valid_key_count"] == 2  # name adds nothing here
+    assert pj["diagnostics"]["name_resolves_collision_beyond_valid_cnpj"] is False
+
+
+def test_pj_diagnostics_cnpj_format_and_same_cnpj_different_name(tmp_path):
+    con = duckdb.connect()
+    try:
+        p0 = tmp_path / "part-0.parquet"
+        _write_socio_parquet(
+            con,
+            p0,
+            [
+                _socio_row(
+                    identificador_socio="1",
+                    cnpj_cpf_socio="12345678000199",  # valid: 14 digits, all numeric
+                    nome_socio_razao_social="EMPRESA A LTDA",
+                ),
+                # same CNPJ republished with a different normalized name -- a
+                # consistency diagnostic, not evidence name belongs in the key
+                _socio_row(
+                    identificador_socio="1",
+                    cnpj_cpf_socio="12345678000199",
+                    nome_socio_razao_social="EMPRESA A LTDA - RENOMEADA",
+                ),
+                # malformed: not 14 digits
+                _socio_row(
+                    identificador_socio="1",
+                    cnpj_cpf_socio="123",
+                    nome_socio_razao_social="EMPRESA C",
+                    cnpj_basico="00000003",
+                ),
+            ],
+        )
+        report = key_audit.run_global_key_audit(con, [p0])
+    finally:
+        con.close()
+
+    diagnostics = report["categories"]["pessoa_juridica"]["diagnostics"]
+    assert diagnostics["cnpj_format_valid_count"] == 2
+    assert diagnostics["cnpj_format_invalid_count"] == 1
+    assert diagnostics["same_cnpj_different_normalized_name_count"] == 1
+
+
+def test_foreign_partner_has_no_cnpj_cpf_and_is_not_excluded(tmp_path):
+    """identificador_socio='3' rows always have a blank cnpj_cpf_socio --
+    this is the entire foreign-partner category, not a key-integrity
+    failure, and must not exclude the row from that category's candidates
+    (which never reference cnpj_cpf_socio in the first place)."""
+    con = duckdb.connect()
+    try:
+        p0 = tmp_path / "part-0.parquet"
+        _write_socio_parquet(
+            con,
+            p0,
+            [
+                _socio_row(
+                    identificador_socio="3",
+                    cnpj_cpf_socio="",
+                    nome_socio_razao_social="JOHN SMITH",
+                    pais="249",
+                ),
+            ],
+        )
+        report = key_audit.run_global_key_audit(con, [p0])
+    finally:
+        con.close()
+
+    foreign = report["categories"]["socio_estrangeiro"]
+    assert foreign["row_count"] == 1
+    nome_pais = foreign["identity_candidates"]["foreign:nome_pais"]
+    assert nome_pais["distinct_valid_key_count"] == 1  # NOT excluded/zero
+    # cnpj_cpf_socio isn't part of this candidate's columns at all, so it's
+    # never measured (let alone treated as a key-integrity failure).
+    assert "cnpj_cpf_socio" not in nome_pais["blank_or_null_counts_by_component"]
+
+
+def test_foreign_partner_null_pais_evidence_sample_not_dropped_by_null_safe_join(tmp_path):
+    """Regression: `pais` is blank/NULL for ~0.6% of real foreign-partner
+    rows. A plain `=` join between the duplicate-key aggregate and the raw
+    rows silently drops NULL-valued groups (`NULL = NULL` is not TRUE),
+    producing an empty evidence_sample even though duplicate_key_count is
+    correctly non-zero. `IS NOT DISTINCT FROM` must be used instead.
+    """
+    con = duckdb.connect()
+    try:
+        p0 = tmp_path / "part-0.parquet"
+        row = _socio_row(
+            identificador_socio="3",
+            cnpj_cpf_socio="",
+            nome_socio_razao_social="JOHN SMITH",
+            pais="",  # blank -> NULL after CSV load in the real pipeline; NULL here too
+        )
         _write_socio_parquet(con, p0, [row, dict(row)])
         report = key_audit.run_global_key_audit(con, [p0])
     finally:
         con.close()
 
-    for name, candidate in report["candidate_keys"].items():
-        if name in key_audit._SAMPLED_CANDIDATE_KEYS:  # noqa: SLF001
-            assert candidate["evidence_sample"], name
-        else:
-            assert candidate["evidence_sample"] == [], name
+    nome_pais = report["categories"]["socio_estrangeiro"]["identity_candidates"][
+        "foreign:nome_pais"
+    ]
+    assert nome_pais["duplicate_key_count"] == 1
+    assert nome_pais["evidence_sample"], "NULL-valued pais silently dropped this duplicate group"
+    assert nome_pais["evidence_sample"][0]["count"] == 2
+
+
+def test_representante_independence_flags_variation_within_relationship_group(tmp_path):
+    con = duckdb.connect()
+    try:
+        p0 = tmp_path / "part-0.parquet"
+        _write_socio_parquet(
+            con,
+            p0,
+            [
+                _socio_row(representante_legal="11111111111", nome_representante_legal="REP A"),
+                # same relationship key (cnpj_basico, cpf, name, qualificacao, data_entrada)
+                # but a different legal representative
+                _socio_row(representante_legal="22222222222", nome_representante_legal="REP B"),
+            ],
+        )
+        report = key_audit.run_global_key_audit(con, [p0])
+    finally:
+        con.close()
+
+    independence = report["categories"]["pessoa_fisica"]["diagnostics"][
+        "representante_independence"
+    ]
+    assert independence["duplicate_relationship_groups"] == 1
+    assert independence["groups_with_representante_variation"] == 1
+
+
+def test_optional_wide_column_blank_does_not_exclude_rows_from_candidate(tmp_path):
+    """Direct unit test of `_audit_one_candidate`'s gating logic: a
+    candidate column outside `_KEY_INTEGRITY_COLUMNS` (here `pais`) must
+    not be treated as a key-integrity failure when blank -- only reported
+    as a diagnostic. Guards the bug this module's docstring describes
+    (a wide candidate wrongly zeroing out distinct_valid_key_count because
+    every row's optional column happened to be blank). `source` must carry
+    every raw SOCIO_COLUMNS plus `_row_hash` -- `_audit_one_candidate`'s
+    conflict check always compares it -- so this goes through
+    `_build_socio_base` rather than a minimal ad hoc table.
+    """
+    con = duckdb.connect()
+    try:
+        p0 = tmp_path / "part-0.parquet"
+        _write_socio_parquet(con, p0, [_socio_row(pais="")])  # blank, as in most real rows
+        source = key_audit._build_socio_base(  # noqa: SLF001
+            con, registry.paths_literal([p0])
+        )
+        report = key_audit._audit_one_candidate(  # noqa: SLF001
+            con,
+            source,
+            "probe",
+            ("cnpj_basico", "cnpj_cpf_socio", "pais"),
+            collect_sample=False,
+        )
+    finally:
+        con.close()
+
+    assert report.distinct_valid_key_count == 1  # NOT zero
+    assert report.blank_or_null_counts_by_component["pais"] == 1  # still reported as a diagnostic
 
 
 # -----------------------------------------------------------------------------
@@ -382,16 +630,28 @@ def test_full_ten_part_offline_run_differentiates_candidate_keys(tmp_path):
     assert report["total_rows_scanned"] == 5
     assert len(report["parts"]) == 10
 
-    narrow = report["candidate_keys"]["cnpj_basico_socio"]
+    # All five rows use identificador_socio="2" (the _row() default) -> pessoa_fisica.
+    pf = report["categories"]["pessoa_fisica"]
+    assert pf["row_count"] == 5
+
+    narrow = pf["identity_candidates"]["pf:cpf"]
     assert narrow["distinct_valid_key_count"] == 2
-    assert narrow["duplicate_key_count"] == 2  # both (1,111111) and (2,222222) recur
-    assert narrow["conflicting_key_count"] == 1  # only (1,111111): differing qualificacao_socio
+    assert narrow["duplicate_key_count"] == 2  # both ***111111** and ***222222** recur
+    assert narrow["conflicting_key_count"] == 1  # only ***111111**: differing qualificacao_socio
     assert narrow["cross_part_duplicate_key_count"] == 1
     assert narrow["blank_or_null_counts_by_component"]["cnpj_cpf_socio"] == 1
 
-    with_qualificacao = report["candidate_keys"]["cnpj_basico_socio_identificador_qualificacao"]
+    # Both rows sharing ***111111** use the SAME name (the _row() default) --
+    # unlike the masked-CPF-collision test, this genuinely is one person
+    # switching roles, so adding the name must NOT spuriously resolve this
+    # real conflict at the company_partner level.
+    company_partner = pf["relationship_candidates"]["pf:company_partner"]
+    assert company_partner["distinct_valid_key_count"] == 2
+    assert company_partner["conflicting_key_count"] == 1
+
+    with_qualificacao = pf["relationship_candidates"]["pf:company_partner_qualificacao"]
     assert with_qualificacao["distinct_valid_key_count"] == 3
-    assert with_qualificacao["duplicate_key_count"] == 1  # only the exact (2,222222) pair remains
+    assert with_qualificacao["duplicate_key_count"] == 1  # only the exact ***222222** pair remains
     assert with_qualificacao["conflicting_key_count"] == 0
 
     # Disk lifecycle: ZIPs retained (checkpoint reuse), extracted CSVs cleaned up.
