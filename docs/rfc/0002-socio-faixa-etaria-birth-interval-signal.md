@@ -14,12 +14,18 @@ chave de relacionamento recomendada, com o argumento de que o código é
 ela envelhece entre snapshots.
 
 Essa RFC propõe **não descartar a informação**, e sim transformá-la num
-**intervalo de nascimento estimado, relativo ao snapshot** — uma quantidade
-que, ao contrário do código bruto, não muda de valor entre snapshots para a
-mesma pessoa real (só pode ficar mais estreita conforme mais snapshots são
-observados). Esse intervalo é proposto como **sinal auxiliar de
-diagnóstico e reconciliação entre snapshots**, nunca como componente da
-chave primária de relacionamento.
+**intervalo de nascimento estimado, relativo a cada snapshot**. Cada
+snapshot produz o seu próprio intervalo, e esse intervalo POR SNAPSHOT
+**muda sim** de um snapshot pro outro -- porque a data de referência `R`
+muda a cada snapshot e o código de faixa etária bruto também pode mudar. A
+propriedade estável não é o intervalo individual de um snapshot: é a
+**interseção acumulada entre os intervalos de snapshots sucessivos**. Essa
+interseção consolidada nunca cresce -- ela pode permanecer igual, ficar
+mais estreita, ou ficar vazia -- conforme mais snapshots são observados,
+mas nunca fica mais larga. O intervalo por snapshot e sua interseção
+consolidada são propostos como **sinal auxiliar de diagnóstico e
+reconciliação entre snapshots**, nunca como componente da chave primária
+de relacionamento.
 
 A chave de relacionamento de pessoa física recomendada por #97 slice 5
 continua:
@@ -70,27 +76,52 @@ Esta RFC não revisita:
 
 - **Código de faixa etária**: o valor bruto de `socio.faixa_etaria` (1–10).
 - **Data de referência (`R`)**: a data usada para converter o código numa
-  janela de nascimento (ver seção 6).
-- **Intervalo de nascimento estimado**: par `[birth_year_min, birth_year_max]`
-  (ou par de datas exatas) derivado do código + `R`, representando o
-  conjunto de anos de nascimento compatíveis com aquele código naquele
-  snapshot.
-- **Consolidação entre snapshots**: interseção dos intervalos de nascimento
-  estimados da mesma identidade observada em múltiplos snapshots.
+  janela de nascimento (ver seção 7). Muda a cada snapshot.
+- **Intervalo de nascimento por snapshot**: `(birth_date_lower_exclusive,
+  birth_date_upper_inclusive]` -- datas exatas, derivadas do código +
+  `R` daquele snapshot específico (seção 9). Este é o intervalo
+  AUTORITATIVO para teste de compatibilidade (seção 11.2). Muda de
+  snapshot pra snapshot para a mesma pessoa real.
+- **Limites conservadores em ano** (`birth_year_min`/`birth_year_max`):
+  projeção do intervalo exato acima pro componente de ano, só pra
+  apresentação e diagnóstico grosseiro -- NÃO é a fonte de verdade pra
+  teste de compatibilidade (ver seção 11.2 sobre por que a interseção em
+  nível de ano pode divergir da interseção exata).
+- **Candidata de nível de pessoa**: CPF mascarado + nome normalizado, sem
+  escopo de empresa -- a mesma granularidade que as candidatas de
+  identidade de `socio_key_audit.py` já medem (`pf:cpf_nome`), sem incluir
+  `cnpj_basico`.
+- **Candidata de nível de relacionamento**: `cnpj_basico` (empresa) +
+  candidata de nível de pessoa + fatos de papel/entrada
+  (`qualificacao_socio` + `data_entrada_sociedade`) -- a mesma
+  granularidade que a chave de relacionamento recomendada por #97
+  slice 5 (`pf:relationship`).
+- **Interseção consolidada (entre snapshots)**: interseção dos intervalos
+  de nascimento por snapshot (datas exatas, não anos) de UMA MESMA
+  candidata -- de pessoa OU de relacionamento, dependendo do escopo sendo
+  medido -- observada em múltiplos snapshots. Não é prova de que os
+  registros são a mesma pessoa real; é só um sinal de
+  compatibilidade/incompatibilidade (ver seção 11.3).
 
 ## 5. Objetivos
 
 1. Preservar a informação temporal contida em `faixa_etaria` sem
    reintroduzir instabilidade na chave de relacionamento.
 2. Definir uma derivação determinística, auditável e testável do código
-   RFB para um intervalo de nascimento.
-3. Definir como o intervalo derivado se consolida ao observar a mesma
-   identidade em múltiplos snapshots, e o que uma interseção vazia
-   significa.
-4. Deixar claro que, **dentro de um único snapshot**, o intervalo derivado
+   RFB para um intervalo de nascimento por snapshot (datas exatas).
+3. Definir, usando datas exatas (não a projeção em ano), como o intervalo
+   por snapshot consolida ao observar a mesma candidata em múltiplos
+   snapshots, e o que uma interseção vazia significa.
+4. Separar reconciliação em **nível de pessoa** (CPF mascarado + nome
+   normalizado, sem empresa) de reconciliação em **nível de
+   relacionamento** (empresa + pessoa + papel/entrada), e documentar que
+   agrupamento em nível de pessoa é inerentemente probabilístico -- CPF é
+   mascarado e nomes podem colidir, então uma interseção não vazia não é
+   prova de que dois registros são a mesma pessoa real.
+5. Deixar claro que, **dentro de um único snapshot**, o intervalo derivado
    não carrega mais informação que o código bruto — o ganho real é
    **entre snapshots**.
-5. Especificar um plano de testes e um plano de medição via
+6. Especificar um plano de testes e um plano de medição via
    `socio_key_audit.py`, sem implementar ainda.
 
 ## 6. Não objetivos
@@ -165,7 +196,8 @@ birth_date_upper_inclusive = R - idade_min anos
 (o limite inferior é exclusivo e o superior é inclusivo porque uma pessoa
 com `idade_max` anos completos ainda não fez `idade_max + 1`; a data exata
 de aniversário dentro do ano é desconhecida, então a sobreposição nas
-bordas entre faixas adjacentes é esperada e correta — ver seção 10).
+bordas entre faixas adjacentes é esperada e correta — ver o exemplo de
+transição de faixa etária na seção 11.2).
 
 Para código 9 (aberto por cima): `birth_date_upper_inclusive = R - 81 anos`,
 sem `birth_date_lower_exclusive`.
@@ -193,6 +225,14 @@ usa a data completa de `R`, não só o ano):
 | 71–80 | 1945–1955 |
 | acima de 80 | até 1945 |
 
+**As datas exatas (`birth_date_lower_exclusive`/`birth_date_upper_inclusive`)
+são a fonte de verdade para teste de compatibilidade entre intervalos
+(seção 11.2). Os limites em ano acima são só apresentação e diagnóstico
+grosseiro** -- duas janelas exatas podem ser disjuntas mesmo quando suas
+projeções em ano ainda compartilham um ano em comum, porque a projeção em
+ano descarta a informação de mês/dia que a subtração exata preserva (ver
+o exemplo na seção 11.2).
+
 ## 10. Campos derivados
 
 Todos os campos abaixo são **auxiliares/diagnósticos**, nunca parte de uma
@@ -204,13 +244,15 @@ chave persistente:
 - `_birth_interval_source`: de onde veio `R` -- `"snapshot_asof"` (regra 1),
   `"snapshot_month_last_day"` (regra 2). Nunca `"workflow_run_date"` --
   essa origem não é uma opção válida (ver seção 7).
-- `_birth_year_min_estimated` / `_birth_year_max_estimated`: os limites de
-  ano conservadores (seção 9); `NULL` para código 10/ausente;
-  `_birth_year_min_estimated` também `NULL` para código 9.
-- limites de data exatos (`_birth_date_lower_exclusive_estimated` /
-  `_birth_date_upper_inclusive_estimated`): mantidos internamente para
-  quem precisar de precisão sub-ano; os campos de ano acima são a
-  interface principal para diagnóstico.
+- `_birth_date_lower_exclusive_estimated` / `_birth_date_upper_inclusive_estimated`:
+  os limites de data EXATOS (seção 9) -- fonte de verdade pra qualquer
+  teste de compatibilidade/interseção (seção 11.2); `NULL` para código
+  10/ausente; `_birth_date_lower_exclusive_estimated` também `NULL` para
+  código 9.
+- `_birth_year_min_estimated` / `_birth_year_max_estimated`: projeção dos
+  limites exatos acima pro componente de ano -- só apresentação e
+  diagnóstico grosseiro, NÃO usados pra teste de compatibilidade; mesmas
+  regras de `NULL` que os campos de data exata.
 
 Nenhum desses campos entra na chave de relacionamento recomendada de
 `socio` pessoa física (seção 1) nem em qualquer candidata testada por
@@ -228,53 +270,130 @@ distinção que o código original. **Esta RFC não afirma que a versão
 derivada melhora cardinalidade dentro de um snapshot isolado**, e o plano
 de medição (seção 13) deve confirmar isso explicitamente, não assumir.
 
-### 11.2 Entre snapshots -- o ganho real
+### 11.2 Interseção entre snapshots -- datas exatas são a fonte de verdade
 
-Ao observar a mesma identidade candidata (ex.: mesmo `cnpj_basico` +
-CPF mascarado + nome normalizado) em múltiplos snapshots, os intervalos de
-nascimento estimados podem ser consolidados por interseção:
+Ao observar a mesma candidata (de pessoa ou de relacionamento -- seção
+11.3) em múltiplos snapshots, cada snapshot contribui seu **próprio
+intervalo de nascimento exato** (seção 9). A interseção consolidada usa
+SEMPRE as datas exatas, nunca a projeção em ano:
 
 ```text
-ano_min_consolidado = máximo dos ano_min observados entre os snapshots
-ano_max_consolidado = mínimo dos ano_max observados entre os snapshots
+consolidado_lower_exclusive = máximo dos birth_date_lower_exclusive observados
+consolidado_upper_inclusive = mínimo dos birth_date_upper_inclusive observados
+
+vazio quando consolidado_lower_exclusive >= consolidado_upper_inclusive
 ```
 
-Duas propriedades importantes:
+A condição de vazio usa `>=`, não só `>`: como o limite inferior é
+exclusivo e o superior é inclusivo, um consolidado onde os dois valores
+são exatamente iguais também é vazio -- o único ponto candidato é excluído
+pelo próprio limite inferior. Ver os testes de fronteira abaixo.
 
-- a interseção **nunca cresce** conforme mais snapshots são observados --
-  ela só permanece igual ou estreita;
-- **uma interseção vazia** (`ano_min_consolidado > ano_max_consolidado`)
-  é evidência de que os dois registros não podem ser a mesma pessoa (dado
-  o mascaramento de CPF e a possibilidade de nomes normalizados
-  coincidirem) -- ou de inconsistência na fonte. Isso vira um sinal de
-  diagnóstico, não uma correção automática.
+**Por que não usar os limites em ano para este teste**: duas janelas
+exatas podem ser disjuntas mesmo quando suas projeções em ano ainda
+compartilham um ano em comum, porque a projeção em ano descarta
+informação de mês/dia. Exemplo concreto:
 
-Esse mecanismo também explica corretamente uma pessoa real migrando de
-`31–40` para `41–50` entre dois snapshots: os intervalos de nascimento das
-duas faixas se sobrepõem parcialmente (ver a sobreposição de bordas na
-tabela da seção 9), então a interseção continua não vazia -- a identidade
-não muda "de repente" mesmo com o código de faixa etária mudando.
+- Intervalo A (de algum código/`R` cuja derivação resulte nisso): exato
+  `(1988-01-01, 1990-06-30]`; projeção em ano `[1988, 1990]`.
+- Intervalo B: exato `(1990-07-01, 1992-01-01]`; projeção em ano
+  `[1990, 1992]`.
+- As projeções em ano **parecem** se sobrepor em `1990`. As datas exatas
+  **não se sobrepõem**: `máximo(1988-01-01, 1990-07-01) = 1990-07-01` é
+  posterior a `mínimo(1990-06-30, 1992-01-01) = 1990-06-30` -- interseção
+  exata vazia.
+
+Se o código de produção usasse só a projeção em ano como teste de
+compatibilidade, esse par seria erroneamente classificado como
+compatível. Por isso a interseção em ano é só apresentação/diagnóstico
+grosseiro (seção 9), nunca a implementação do teste de compatibilidade.
+
+Um segundo exemplo mostra que uma transição real de faixa etária entre
+dois snapshots próximos permanece corretamente compatível quando testada
+com datas exatas: `R1 = 2026-01-31` com código `4` (31–40) produz
+`(1985-01-31, 1995-01-31]`; `R2 = 2026-02-28` (snapshot seguinte) com
+código `5` (41–50, a pessoa "mudou de faixa") produz
+`(1975-02-28, 1985-02-28]`. A interseção exata é
+`(1985-01-31, 1985-02-28]` -- não vazia (28 dias), então a candidata
+continua compatível mesmo com o código de faixa etária tendo mudado.
+
+### 11.3 Escopo: candidata de pessoa vs. candidata de relacionamento
+
+A interseção de intervalos de nascimento deve ser medida em dois escopos
+separados, com interpretações diferentes:
+
+- **Nível de pessoa** (CPF mascarado + nome normalizado, sem
+  `cnpj_basico`): testa se pessoas aparentemente idênticas -- possivelmente
+  em empresas diferentes, ou no mesmo snapshot, ou em snapshots diferentes
+  -- continuam compatíveis em idade. Como o CPF é mascarado e nomes podem
+  colidir, uma candidata de nível de pessoa **não é uma prova de
+  identidade real** -- é apenas um agrupamento por coincidência de campos
+  observáveis. O agrupamento em nível de pessoa é, portanto,
+  **inerentemente probabilístico**.
+- **Nível de relacionamento** (`cnpj_basico` + candidata de pessoa +
+  `qualificacao_socio` + `data_entrada_sociedade`): testa a continuidade
+  de UMA relação empresa-sócio específica ao longo de snapshots -- a
+  mesma granularidade que a chave recomendada por #97 slice 5.
+
+**O intervalo de nascimento é um sinal auxiliar de incompatibilidade, não
+uma prova de que linhas compatíveis são a mesma pessoa.** Uma interseção
+vazia é evidência forte de que dois registros NÃO podem ser a mesma
+pessoa real (dado o intervalo). Uma interseção não vazia não prova o
+contrário -- só significa que o sinal disponível não encontrou uma
+incompatibilidade; a candidata pode ainda ser duas pessoas reais
+diferentes que coincidem em CPF mascarado, nome normalizado, e faixa
+etária compatível. Isso vale com mais força ainda em nível de pessoa
+(sem o escopo de empresa) do que em nível de relacionamento.
 
 ## 12. Plano de testes
 
 Antes de qualquer implementação, a PR que fechar esta RFC deve incluir
 testes cobrindo:
 
+**Derivação por snapshot:**
+
 - cada mapeamento código → `[idade_min, idade_max]` da tabela da seção 8;
-- os anos-limite exatos (`birth_year_min`/`birth_year_max`) para pelo
-  menos um código de cada extremo (`1` e `8`);
-- o intervalo aberto por cima do código `9` (`birth_year_min` ausente,
-  `birth_year_max` derivado de idade 81);
+- as datas exatas (`birth_date_lower_exclusive`/`birth_date_upper_inclusive`)
+  e os anos-limite conservadores (`birth_year_min`/`birth_year_max`) pra
+  pelo menos um código de cada extremo (`1` e `8`);
+- o intervalo aberto por cima do código `9` (limite inferior ausente,
+  limite superior derivado de idade 81);
 - código `10` / valor ausente / valor inválido → nenhum intervalo inferido
   (campos `NULL`, não um intervalo vazio);
 - o tratamento da data de referência: `R` = último dia de
   `snapshot_yyyymm` quando não há data as-of real; a origem persistida
-  (`_birth_interval_source`) reflete corretamente qual regra foi usada;
-- dois snapshots sucessivos onde a mesma pessoa muda de faixa etária mas
-  os intervalos de nascimento inferidos continuam compatíveis
-  (interseção não vazia);
-- dois registros cujos intervalos têm interseção vazia (sinal de
-  identidades incompatíveis ou inconsistência de fonte).
+  (`_birth_interval_source`) reflete corretamente qual regra foi usada.
+
+**Interseção entre snapshots (datas exatas, seção 11.2) -- testes de
+fronteira, obrigatórios:**
+
+- duas janelas cujas projeções em ano se sobrepõem mas cujas datas exatas
+  NÃO se sobrepõem (o exemplo `(1988-01-01,1990-06-30]` vs.
+  `(1990-07-01,1992-01-01]` da seção 11.2) -- deve resultar em interseção
+  exata vazia mesmo que uma implementação ingênua baseada em ano a
+  classificasse como compatível;
+- duas janelas que se tocam exatamente no limite inferior excluído (ex.:
+  `(1988-01-01,1990-06-30]` vs. `(1990-06-30,1992-01-01]`) -- deve
+  resultar em vazio, não em "compatível por um instante", porque o limite
+  inferior é exclusivo;
+- uma transição real de faixa etária entre snapshots sucessivos que
+  permanece compatível (o exemplo `R1=2026-01-31`/código `4` vs.
+  `R2=2026-02-28`/código `5` da seção 11.2, interseção não vazia de 28
+  dias) -- confirma que o mecanismo não quebra o caso comum de uma pessoa
+  real envelhecendo entre snapshots.
+
+**Escopo pessoa vs. relacionamento (seção 11.3):**
+
+- a mesma candidata de nível de PESSOA (CPF mascarado + nome) medida em
+  duas empresas diferentes, com intervalos de nascimento compatíveis --
+  documentar explicitamente no teste que compatibilidade aqui NÃO prova
+  que é a mesma pessoa real, só que o sinal disponível não encontrou
+  incompatibilidade;
+- a mesma candidata de nível de RELACIONAMENTO (empresa + pessoa +
+  papel/entrada) medida em snapshots sucessivos, intervalos compatíveis;
+- um par com interseção vazia em nível de pessoa (sinal de identidades
+  incompatíveis ou inconsistência de fonte) propagando corretamente pra
+  qualquer candidata de relacionamento que a contenha.
 
 ## 13. Plano de medição
 
@@ -286,10 +405,21 @@ temporalmente na mesma ferramenta que já mede `faixa_etaria` cru
 - confirmar, com dado real, que o intervalo derivado não muda cardinalidade
   dentro de um único snapshot (seção 11.1);
 - medir, contra pelo menos dois snapshots históricos reais, quantos pares
-  de identidade candidata (mesmo CPF mascarado + nome normalizado) têm
-  interseção vazia entre snapshots -- isso quantifica o valor do sinal
-  como reconciliador/desambiguador entre snapshots, que é o motivo real
-  de preservar a informação em vez de descartá-la.
+  de candidata de nível de PESSOA (mesmo CPF mascarado + nome normalizado,
+  sem `cnpj_basico`) têm interseção EXATA (não em ano) vazia entre
+  snapshots -- isso quantifica o valor do sinal como
+  reconciliador/desambiguador nesse escopo, mais amplo e mais
+  probabilístico;
+- medir separadamente o mesmo, restrito a candidatas de nível de
+  RELACIONAMENTO (com `cnpj_basico`) -- esse escopo é o que efetivamente
+  importa para a chave recomendada por #97 slice 5, e a expectativa é que
+  a taxa de interseção vazia seja próxima de zero ali (já que a chave de
+  relacionamento já é quase perfeitamente única sem esse sinal, ver
+  `docs/socio-key-investigation.md`);
+- reportar as duas taxas separadamente, nunca uma única taxa combinada --
+  misturar os dois escopos esconderia justamente a diferença entre "sinal
+  probabilístico de agrupamento de pessoa" e "verificação de continuidade
+  de um relacionamento já identificado por outras colunas".
 
 Este plano de medição não é implementado por esta RFC.
 
@@ -335,19 +465,32 @@ Este plano de medição não é implementado por esta RFC.
   manter os campos derivados em produção, ou se o valor é majoritariamente
   o efeito documental de deixar claro por que `faixa_etaria` foi excluído
   da chave.
+- Se e como uma interseção não vazia em nível de PESSOA deveria acumular
+  mais confiança com o tempo (ex.: compatível em três snapshots seguidos
+  é mais forte que compatível em dois), dado que compatibilidade nunca é
+  prova -- ou se essa noção de "confiança acumulada" é desnecessária
+  porque o escopo de relacionamento já resolve o problema prático que
+  motivou esta RFC.
 
 ## 17. Decisão solicitada
 
 Aceitar esta RFC como a base para uma implementação futura (fora do
 escopo de #97 slice 5 / PR #108) que:
 
-1. adiciona a derivação de intervalo de nascimento como campos
+1. adiciona a derivação de intervalo de nascimento por snapshot (datas
+   exatas + projeção em ano só para apresentação) como campos
    diagnósticos em `socio_key_audit.py`, seguindo as fórmulas da seção 9
    e a tabela de mapeamento da seção 8;
-2. mede, contra pelo menos dois snapshots históricos reais, o valor do
-   sinal como reconciliador entre snapshots (seção 13);
-3. atualiza `docs/socio-key-investigation.md` para descrever
+2. implementa a interseção consolidada usando SEMPRE as datas exatas
+   (seção 11.2), com os testes de fronteira da seção 12;
+3. mede, contra pelo menos dois snapshots históricos reais, o valor do
+   sinal como reconciliador entre snapshots, separadamente em nível de
+   pessoa e em nível de relacionamento (seção 13);
+4. documenta explicitamente que candidatas de nível de pessoa são
+   probabilísticas -- compatibilidade de intervalo não é prova de
+   identidade (seção 11.3);
+5. atualiza `docs/socio-key-investigation.md` para descrever
    `faixa_etaria` como transformável num sinal auxiliar em vez de
    simplesmente descartável;
-4. não altera a chave de relacionamento recomendada de nenhuma categoria
+6. não altera a chave de relacionamento recomendada de nenhuma categoria
    de sócio, nem declara `SOCIO_CANONICAL`.
