@@ -26,6 +26,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+import time
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from typing import Final
@@ -46,6 +47,8 @@ ENV_VAR: Final = "CNPJ_SHARE_TOKEN"
 ENV_BASE_URL: Final = "FICHA_RFB_BASE_URL"
 
 _HTTP_TIMEOUT = httpx.Timeout(connect=15.0, read=60.0, write=15.0, pool=15.0)
+_TOKEN_PROBE_RETRIES: Final = 3
+_TOKEN_RETRY_SLEEP: Final = 2.0
 
 # Apenas pasta `YYYY-MM/` é considerada snapshot válido.
 _MONTH_DIR_RE = re.compile(r"^\d{4}-(0[1-9]|1[0-2])$")
@@ -81,17 +84,33 @@ def webdav_url(*parts: str) -> str:
 
 
 def discover_token(*, client: httpx.Client | None = None) -> str:
-    """Resolve um token funcional. Tenta env → KNOWN_TOKENS, valida via PROPFIND."""
+    """Resolve um token funcional. Tenta env → KNOWN_TOKENS, valida via PROPFIND.
+
+    A sonda é deliberadamente resiliente a falhas de transporte transitórias:
+    o backfill real de 2026-05 (#110/#113) mostrou que um único timeout podia
+    transformar um token válido em `NoTokenError` e abortar o snapshot antes do
+    primeiro GET. Status HTTP não-207 continua sendo rejeição imediata.
+    """
     own_client = client is None
     client = client or httpx.Client(timeout=_HTTP_TIMEOUT, follow_redirects=True)
     try:
         env_tok = os.environ.get(ENV_VAR, "").strip()
-        if env_tok and _token_works(env_tok, client):
-            log.info("token from env (%s)", ENV_VAR)
-            return env_tok
-        for tok in KNOWN_TOKENS:
+        candidates: list[tuple[str, str]] = []
+        if env_tok:
+            candidates.append((env_tok, f"env ({ENV_VAR})"))
+        candidates.extend((tok, "KNOWN_TOKENS") for tok in KNOWN_TOKENS)
+
+        # O secret do workflow normalmente contém o mesmo token que
+        # KNOWN_TOKENS. Sem deduplicação, uma indisponibilidade transitória
+        # fazia a mesma credencial ser sondada duas vezes como se fossem
+        # alternativas independentes.
+        seen: set[str] = set()
+        for tok, source in candidates:
+            if tok in seen:
+                continue
+            seen.add(tok)
             if _token_works(tok, client):
-                log.info("token from KNOWN_TOKENS")
+                log.info("token from %s", source)
                 return tok
         raise NoTokenError(
             f"no working share token found (tried env {ENV_VAR} + {len(KNOWN_TOKENS)} known tokens)"
@@ -102,7 +121,7 @@ def discover_token(*, client: httpx.Client | None = None) -> str:
 
 
 def list_snapshots(token: str, *, client: httpx.Client | None = None) -> list[str]:
-    """PROPFIND root, devolve lista de pastas YYYY-MM ordenadas."""
+    """PROPFIND root, devolve lista de pastas YYYY-MM ordenada."""
     own_client = client is None
     client = client or httpx.Client(timeout=_HTTP_TIMEOUT, follow_redirects=True)
     try:
@@ -154,21 +173,45 @@ def _token_works(token: str, client: httpx.Client) -> bool:
     Só 207 conta: um WebDAV real sempre responde Multi-Status ao PROPFIND.
     Aceitar 200 deixava uma página HTML de erro/manutenção "validar" o token
     e a falha só aparecia depois, como lista de snapshots vazia.
+
+    Timeouts e outros erros de transporte recebem retry limitado. Respostas
+    HTTP reais não-207 não recebem retry: 401/403/HTML continuam significando
+    token inválido ou endpoint incorreto, não uma falha transitória mascarável.
     """
-    try:
-        r = client.request(
-            "PROPFIND",
-            webdav_url(),
-            auth=httpx.BasicAuth(token, ""),
-            headers={"Depth": "0", "Content-Type": "text/xml"},
-        )
-    except httpx.HTTPError as exc:
-        log.warning("token probe http error: %s", exc)
-        return False
-    if r.status_code != 207:
-        log.warning("token probe unexpected status %d (esperado 207)", r.status_code)
-        return False
-    return True
+    for attempt in range(1, _TOKEN_PROBE_RETRIES + 1):
+        try:
+            r = client.request(
+                "PROPFIND",
+                webdav_url(),
+                auth=httpx.BasicAuth(token, ""),
+                headers={"Depth": "0", "Content-Type": "text/xml"},
+            )
+        except httpx.TransportError as exc:
+            if attempt == _TOKEN_PROBE_RETRIES:
+                log.warning(
+                    "token probe transport error after %d/%d attempts: %s",
+                    attempt,
+                    _TOKEN_PROBE_RETRIES,
+                    exc,
+                )
+                return False
+            log.warning(
+                "token probe transport error (attempt %d/%d): %s; retrying in %.1fs",
+                attempt,
+                _TOKEN_PROBE_RETRIES,
+                exc,
+                _TOKEN_RETRY_SLEEP,
+            )
+            time.sleep(_TOKEN_RETRY_SLEEP)
+            continue
+        except httpx.HTTPError as exc:
+            log.warning("token probe http error: %s", exc)
+            return False
+        if r.status_code != 207:
+            log.warning("token probe unexpected status %d (esperado 207)", r.status_code)
+            return False
+        return True
+    return False
 
 
 def _propfind(client: httpx.Client, token: str, url: str) -> bytes:
