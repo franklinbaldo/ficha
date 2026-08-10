@@ -1,0 +1,88 @@
+name: Ops — IA probe 2026-05 (#110)
+
+on:
+  push:
+    branches:
+      - ops/probe-ia-2026-05-110
+    paths:
+      - '.github/workflows/ia-probe-110.yml'
+
+permissions:
+  pull-requests: write
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Read Internet Archive metadata
+        id: probe
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --retry 3 \
+            https://archive.org/metadata/ficha-2026-05 -o /tmp/meta.json
+          python - <<'PY' > /tmp/report.txt
+          import json
+          from pathlib import Path
+
+          data = json.loads(Path('/tmp/meta.json').read_text())
+          files = {f.get('name'): f for f in data.get('files', []) if f.get('name')}
+          raw = sorted(n for n in files if n.startswith('raw/') and n.endswith('.zip'))
+          required = [
+              'cnpjs.parquet',
+              'cnpj_contatos.parquet',
+              'cnpj_cnaes.parquet',
+              'raizes.parquet',
+              'socios.parquet',
+              'enderecos.parquet',
+              'pessoas.parquet',
+              'lookups.json',
+              'lookups/cnaes.parquet',
+              'lookups/motivos.parquet',
+              'lookups/municipios.parquet',
+              'lookups/naturezas.parquet',
+              'lookups/paises.parquet',
+              'lookups/qualificacoes.parquet',
+              'companies.zip',
+          ]
+          print('## IA read-only probe — `ficha-2026-05`')
+          print()
+          print(f'Raw ZIPs visible: **{len(raw)}/37**')
+          print()
+          print('| Required artifact | Visible | IA size |')
+          print('|---|---:|---:|')
+          for name in required:
+              item = files.get(name)
+              if item:
+                  size = item.get('size', '?')
+                  print(f'| `{name}` | yes | {size} |')
+              else:
+                  print(f'| `{name}` | no | — |')
+          PY
+          cat /tmp/report.txt
+          {
+            echo 'report<<REPORT_EOF'
+            cat /tmp/report.txt
+            echo REPORT_EOF
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Comment probe result
+        uses: actions/github-script@v7
+        env:
+          REPORT: ${{ steps.probe.outputs.report }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        with:
+          script: |
+            const branch = context.ref.replace('refs/heads/', '');
+            const { data: prs } = await github.rest.pulls.list({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              head: `${context.repo.owner}:${branch}`,
+              state: 'open',
+            });
+            if (!prs.length) return;
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: prs[0].number,
+              body: `${process.env.REPORT}\n\n[workflow run](${process.env.RUN_URL})`,
+            });
