@@ -1,4 +1,4 @@
-name: Apply #116 encoding fix
+name: Apply #116 lossless encoding fix
 
 on:
   push:
@@ -27,22 +27,33 @@ jobs:
         working-directory: etl
 
       - name: Apply deterministic patch
-        run: python scripts/apply-encoding-invariance-116.py
+        run: |
+          python scripts/apply-encoding-invariance-116.py
+          # Remove an accidental trailing semicolon in the generated regression fixture.
+          sed -i 's/));$/))/g' etl/tests/test_encoding_invariance_116.py
 
       - name: Run focused regression tests
         working-directory: etl
-        run: uv run pytest -q tests/test_encoding_invariance_116.py tests/test_transform.py
+        run: uv run pytest -q tests/test_encoding_invariance_116.py tests/test_transform.py tests/test_registry.py
+
+      - name: Run full ETL test suite
+        working-directory: etl
+        run: uv run pytest -q
 
       - name: Run lint
         working-directory: etl
         run: |
-          uv run ruff check src/ficha_etl/transform.py tests/test_encoding_invariance_116.py
-          uv run ruff format --check src/ficha_etl/transform.py tests/test_encoding_invariance_116.py
+          uv run ruff check src tests
+          uv run ruff format --check src tests
 
       - name: Commit fix to branch
         run: |
           git config user.name "ficha-etl-bot"
           git config user.email "ficha-etl-bot@users.noreply.github.com"
-          git add etl/src/ficha_etl/transform.py etl/tests/test_encoding_invariance_116.py
-          git commit -m "fix(etl): resolve CSV encoding per file (#116)"
+          git add \
+            etl/src/ficha_etl/transform.py \
+            etl/src/ficha_etl/registry.py \
+            etl/tests/test_registry.py \
+            etl/tests/test_encoding_invariance_116.py
+          git commit -m "fix(etl): transcode legacy CSVs before DuckDB (#116)"
           git push origin HEAD:fix/encoding-invariance-116
