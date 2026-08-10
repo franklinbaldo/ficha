@@ -30,6 +30,7 @@ jobs:
       - name: Apply deterministic patch
         run: |
           python scripts/apply-encoding-invariance-116.py
+          python scripts/apply-encoding-followup-116.py
           # Temporary scaffolding: normalize one accidental semicolon in generated fixture.
           sed -i 's/));$/))/g' etl/tests/test_encoding_invariance_116.py
 
@@ -54,6 +55,7 @@ jobs:
           git add \
             etl/src/ficha_etl/transform.py \
             etl/src/ficha_etl/registry.py \
+            etl/tests/test_transform.py \
             etl/tests/test_registry.py \
             etl/tests/test_encoding_invariance_116.py
           git commit -m "fix(etl): transcode legacy CSVs before DuckDB (#116)"
