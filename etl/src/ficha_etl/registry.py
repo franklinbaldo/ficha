@@ -7,7 +7,7 @@ O registry separa dois contratos:
 - ``ParquetSpec`` descreve o schema canônico interno, com tipos, casts,
   políticas de valor inválido, chaves, linhagem e versão.
 
-A orquestração (I/O, tentativas de encoding, escrita e métricas) continua fora
+A orquestração (I/O, normalização de encoding, escrita e métricas) continua fora
 deste módulo. As funções daqui são puras e determinísticas.
 """
 
@@ -551,7 +551,7 @@ def read_csv_select_sql(
     encoding: str,
     ignore_errors: bool,
 ) -> str:
-    """Gera o ``SELECT * FROM read_csv(...)`` semanticamente equivalente ao legado."""
+    """Gera ``read_csv`` com dialeto/schema pinados e sem sniff heurístico."""
     literal = paths_literal(paths)
     cols_clause = csv_columns_clause(spec.columns)
     header = "true" if spec.header else "false"
@@ -562,6 +562,7 @@ def read_csv_select_sql(
     return (
         "SELECT * FROM read_csv(\n"
         f"    {literal},\n"
+        "    auto_detect=false,\n"
         f"    delim='{spec.delimiter}',\n"
         f"    header={header},\n"
         f"    quote='{spec.quote}',\n"
@@ -574,16 +575,3 @@ def read_csv_select_sql(
         f"    ignore_errors={ignore}\n"
         ")"
     )
-
-
-def encoding_attempts(sample: bytes) -> tuple[tuple[str, bool], ...]:
-    """Determina tentativas ``(encoding, ignore_errors)`` a partir da amostra."""
-    try:
-        sample.decode("utf-8", errors="strict")
-        return (("utf-8", True),)
-    except UnicodeDecodeError:
-        pass
-    attempts: list[tuple[str, bool]] = [("latin-1", False)]
-    if attempts[0] != ("utf-8", True):
-        attempts.append(("utf-8", True))
-    return tuple(attempts)

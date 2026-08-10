@@ -8,11 +8,13 @@ Pipeline (ADR 0008 + ADR 0009):
 
 from __future__ import annotations
 
+import codecs
 import collections
 import json
 import logging
 import os
 import shutil
+import tempfile
 import time
 import zipfile
 from collections.abc import Callable, Iterable
@@ -142,93 +144,128 @@ def extract_all(
     return out
 
 
+_ENCODING_SCAN_CHUNK_BYTES = 8 * 1024 * 1024
+
+
+def _is_strict_utf8_file(csv_path: Path) -> bool:
+    """Valida UTF-8 sobre o arquivo INTEIRO, em streaming.
+
+    O sniff histórico olhava só o primeiro MiB. Em `Empresas0` de 2026-05
+    essa amostra era ASCII puro, embora bytes latin-1 aparecessem depois; a
+    decisão prematura mandava o arquivo inteiro para utf-8+ignore_errors e
+    descartava linhas válidas. A decisão agora cobre todos os bytes.
+    """
+    decoder = codecs.getincrementaldecoder("utf-8")(errors="strict")
+    try:
+        with csv_path.open("rb") as src:
+            while chunk := src.read(_ENCODING_SCAN_CHUNK_BYTES):
+                decoder.decode(chunk, final=False)
+        decoder.decode(b"", final=True)
+    except UnicodeDecodeError:
+        return False
+    return True
+
+
+def _transcode_latin1_to_utf8(csv_path: Path) -> Path:
+    """Transcodifica ISO-8859-1 → UTF-8 sem descarte nem substituição.
+
+    ISO-8859-1 define um code point para cada byte 0x00..0xFF, inclusive a
+    faixa C1 0x80..0x9F que o scanner `latin-1` do DuckDB rejeita. Portanto
+    `decode('latin-1').encode('utf-8')` é um mapeamento total e reversível dos
+    bytes de origem para texto UTF-8 válido: nenhum registro precisa de
+    `ignore_errors=True`.
+
+    O temporário fica no mesmo filesystem do CSV e existe só durante a leitura
+    daquele arquivo, limitando o overhead de disco ao maior CSV individual.
+    """
+    with tempfile.NamedTemporaryFile(
+        mode="wb",
+        delete=False,
+        dir=csv_path.parent,
+        prefix=f".{csv_path.name}.ficha-utf8-",
+        suffix=".csv",
+    ) as dst:
+        temp_path = Path(dst.name)
+        try:
+            with csv_path.open("rb") as src:
+                while chunk := src.read(_ENCODING_SCAN_CHUNK_BYTES):
+                    dst.write(chunk.decode("latin-1").encode("utf-8"))
+        except Exception:
+            temp_path.unlink(missing_ok=True)
+            raise
+    return temp_path
+
+
+def _create_table_from_single_csv(
+    con: duckdb.DuckDBPyConnection,
+    table: str,
+    csv_path: Path,
+    spec: registry.CsvSpec,
+) -> None:
+    """Carrega um CSV RFB sem expor bytes latin-1 crus ao DuckDB.
+
+    Arquivos UTF-8 estritos são lidos diretamente. Qualquer arquivo que não
+    seja UTF-8 estrito é primeiro transcodificado de ISO-8859-1 para UTF-8 de
+    forma lossless. Em ambos os casos o DuckDB recebe exatamente a mesma
+    política: `encoding='utf-8', ignore_errors=false`.
+    """
+    cleanup: Path | None = None
+    if _is_strict_utf8_file(csv_path):
+        duckdb_path = csv_path
+    else:
+        cleanup = _transcode_latin1_to_utf8(csv_path)
+        duckdb_path = cleanup
+        log.info(
+            "transcoded %s ISO-8859-1 → UTF-8 before DuckDB (lossless)",
+            csv_path.name,
+        )
+
+    try:
+        select_sql = registry.read_csv_select_sql(
+            spec,
+            [duckdb_path],
+            encoding="utf-8",
+            ignore_errors=False,
+        )
+        con.execute(f"CREATE OR REPLACE TABLE {table} AS\n{select_sql}")
+    finally:
+        if cleanup is not None:
+            cleanup.unlink(missing_ok=True)
+
+
 def _create_table_from_csvs(
     con: duckdb.DuckDBPyConnection,
     table: str,
     csv_paths: Iterable[Path],
     spec: registry.CsvSpec,
 ) -> None:
-    """Cria/recria `table` lendo todos os CSVs conforme `spec`.
+    """Cria/recria ``table`` como união lossless de leituras por arquivo.
 
-    Tenta latin-1 primeiro (encoding histórico da RFB); se falhar por encoding,
-    tenta utf-8 (algumas partições da RFB foram publicadas em UTF-8).
+    O contrato é ``bulk(paths) == UNION(read(path)...)``. Antes de #116, uma
+    decisão de encoding tomada pelo primeiro MiB do primeiro arquivo e um
+    fallback aplicado ao lote faziam bulk e chunked observarem cardinalidades
+    diferentes. Pior: `utf-8 + ignore_errors=True` descartava silenciosamente
+    linhas latin-1 válidas.
 
-    Filtra arquivos vazios pra evitar problemas no sniffer do DuckDB.
-
-    `spec` vem do registry (chamador decide qual TableSpec/CsvSpec usar) —
-    esta função nunca reconstrói um CsvSpec com defaults, senão qualquer
-    override futuro (delimiter, quote, parallel, etc.) seria silenciosamente
-    ignorado. O SQL de leitura vem de `registry.read_csv_select_sql`; esta
-    função só orquestra: filtragem de arquivos vazios, tabela vazia com
-    schema correto, sniff de encoding, loop de tentativas, logging e
-    tratamento de erro.
+    Agora cada arquivo passa pela mesma normalização inteira e o DuckDB só lê
+    UTF-8 estrito sem `ignore_errors`. Isso preserva bytes C1 (ex. `0x8F` no
+    campo `correio_eletronico`) como U+008F em vez de rejeitar ou apagar a
+    linha, e mantém arquivos UTF-8 verdadeiros sem mojibake.
     """
-    # Pula arquivos zero-byte (alguns ZIPs particionados podem vir vazios).
     paths = [p for p in csv_paths if p.exists() and p.stat().st_size > 0]
     if not paths:
-        # Tabela vazia com schema correto, pra que JOINs não quebrem.
         col_defs = ", ".join(f"{c} VARCHAR" for c in spec.columns)
         con.execute(f"CREATE OR REPLACE TABLE {table} ({col_defs})")
         return
 
-    # Each attempt: (encoding, ignore_errors). RFB occasionally emits rows
-    # that are neither valid latin-1 nor utf-8 (mixed-encoding garbage from
-    # legacy systems). DuckDB's latin-1 mode pre-flight-rejects the whole
-    # file ("File is not latin-1 encoded"), so `ignore_errors` doesn't
-    # help that branch. utf-8 mode accepts any bytes at parse time and
-    # only fails per-row, so `ignore_errors=true` there drops the bad
-    # rows. Per ADR 0006, a handful of dropped rows out of 60M+ is
-    # preferable to no snapshot. The fallback is logged loudly so we
-    # can see if it ever fires in production.
-
-    # Sniff the first 1 MB of the first non-empty CSV.
-    first_path = paths[0]
-    with open(first_path, "rb") as f:
-        sample = f.read(1024 * 1024)
-    attempts = registry.encoding_attempts(sample)
-
-    # parallel=false is load-bearing, not a perf knob (see CsvSpec default —
-    # registry.py has the full rationale). DuckDB's parallel CSV scanner
-    # range-splits a single large file across byte offsets; with
-    # null_padding=true it cannot recover ragged rows whose fields contain a
-    # quoted newline that straddles a split boundary, and aborts:
-    #   "The parallel scanner does not support null_padding in conjunction
-    #    with quoted new lines."
-    # This is data-position-dependent, so it hid until the 2026-07 run reached
-    # the chunked cnpjs write, where estabelecimento is read one CSV at a time
-    # (single-file → intra-file split) instead of as a 10-file list. threads=1
-    # is already the norm here (see PRAGMA call site), so disabling the parallel
-    # reader costs nothing and makes the load deterministic across both paths.
-    for encoding, ignore_errors in attempts:
-        select_sql = registry.read_csv_select_sql(
-            spec, paths, encoding=encoding, ignore_errors=ignore_errors
-        )
-        try:
-            con.execute(f"CREATE OR REPLACE TABLE {table} AS\n{select_sql}")
-            if encoding != "latin-1" or ignore_errors:
-                log.warning(
-                    "tabela '%s' carregada com encoding=%s ignore_errors=%s (fallback)",
-                    table,
-                    encoding,
-                    ignore_errors,
-                )
-            return
-        except Exception as exc:
-            msg = str(exc).lower()
-            if "not latin-1 encoded" in msg or "not utf-8" in msg or "encoding" in msg:
-                log.warning(
-                    "encoding=%s ignore_errors=%s falhou para '%s': %s -- tentando proximo",
-                    encoding,
-                    ignore_errors,
-                    table,
-                    exc,
-                )
-                continue
-            raise
-    raise RuntimeError(
-        f"Falha ao carregar tabela '{table}': nenhum encoding funcionou "
-        "(latin-1, utf-8, utf-8+ignore_errors)"
-    )
+    _create_table_from_single_csv(con, table, paths[0], spec)
+    staging = f"__ficha_{table}_csv_part"
+    try:
+        for csv_path in paths[1:]:
+            _create_table_from_single_csv(con, staging, csv_path, spec)
+            con.execute(f"INSERT INTO {table} SELECT * FROM {staging}")
+    finally:
+        con.execute(f"DROP TABLE IF EXISTS {staging}")
 
 
 _OS_HEADROOM_GB = 6  # OS + runner agent + Python heap + tee + DuckDB overshoots
@@ -512,25 +549,10 @@ def load_lookup_into_duckdb(
     kind: FileKind,
     csv_path: Path,
 ) -> None:
-    """Carrega uma tabela de lookup (codigo;descricao) numa view DuckDB."""
+    """Carrega lookup RFB pelo mesmo caminho lossless das tabelas principais."""
     table = f"lookup_{kind}"
-    con.execute(
-        f"""
-        CREATE OR REPLACE TABLE {table} AS
-        SELECT
-            CAST(column0 AS VARCHAR) AS codigo,
-            CAST(column1 AS VARCHAR) AS descricao
-        FROM read_csv(
-            ?,
-            delim=';',
-            header=false,
-            quote='"',
-            encoding='latin-1',
-            columns={{'column0': 'VARCHAR', 'column1': 'VARCHAR'}}
-        )
-        """,
-        [str(csv_path)],
-    )
+    spec = registry.CsvSpec(columns=("codigo", "descricao"))
+    _create_table_from_csvs(con, table, [csv_path], spec)
 
 
 def lookups_dict(con: duckdb.DuckDBPyConnection, kind: FileKind) -> dict[str, str]:

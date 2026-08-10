@@ -3,10 +3,9 @@
 Cobertura:
   a) SQL golden — read_csv_select_sql gera exatamente as opções esperadas.
   b) Layout congelado — as tuplas de colunas não mudam por acidente.
-  c) encoding_attempts — mesma semântica do sniff atual em transform.py.
-  d) Fixtures comportamentais load-bearing via _create_table_from_csvs real.
-  e) paths_literal — escaping de apóstrofo.
-  f) _create_table_from_csvs honra o CsvSpec passado (não reconstrói com
+  c) Fixtures comportamentais load-bearing via _create_table_from_csvs real.
+  d) paths_literal — escaping de apóstrofo.
+  e) _create_table_from_csvs honra o CsvSpec passado (não reconstrói com
      defaults) — e main_table() como acesso canônico a TableSpec.
 """
 
@@ -62,6 +61,7 @@ def test_read_csv_select_sql_exact_string():
     expected = (
         "SELECT * FROM read_csv(\n"
         "    ['a.csv'],\n"
+        "    auto_detect=false,\n"
         "    delim=';',\n"
         "    header=false,\n"
         "    quote='\"',\n"
@@ -191,27 +191,7 @@ def test_csv_spec_defaults_are_load_bearing():
 
 
 # -----------------------------------------------------------------------------
-# c) encoding_attempts
-# -----------------------------------------------------------------------------
-
-
-def test_encoding_attempts_valid_utf8():
-    sample = "Olá Mundo".encode("utf-8")
-    assert registry.encoding_attempts(sample) == (("utf-8", True),)
-
-
-def test_encoding_attempts_invalid_utf8_byte():
-    sample = b"caf\xe9"  # \xe9 = 'é' em latin-1, inválido como utf-8 solo
-    assert registry.encoding_attempts(sample) == (("latin-1", False), ("utf-8", True))
-
-
-def test_encoding_attempts_ascii_only():
-    sample = b"1;2;3"
-    assert registry.encoding_attempts(sample) == (("utf-8", True),)
-
-
-# -----------------------------------------------------------------------------
-# e) paths_literal
+# d) paths_literal
 # -----------------------------------------------------------------------------
 
 
@@ -253,12 +233,10 @@ def test_quoted_newline_preserved(tmp_path):
 def test_ragged_row_null_padded(tmp_path):
     """Linha com menos campos que o schema — null_padding preenche o resto com NULL.
 
-    Precisa de ao menos uma linha bem-formada além da ragged: com só a linha
-    ragged no arquivo, o sniffer de dialeto do DuckDB não tem referência de
-    largura e falha mesmo com ignore_errors=true (comportamento real
-    verificado manualmente contra duckdb 1.5.2 — não é bug introduzido aqui;
-    é exatamente o cenário real da RFB, onde ragged rows são raras entre
-    milhões de linhas bem-formadas).
+    O dialeto e o schema são declarados pelo CsvSpec e o reader roda com
+    auto_detect=false. Portanto null_padding — e não ignore_errors — é quem
+    define a semântica da linha curta, sem pedir ao sniffer para decidir se o
+    arquivo é aceitável.
     """
     from ficha_etl.transform import _create_table_from_csvs
 
@@ -274,8 +252,8 @@ def test_ragged_row_null_padded(tmp_path):
         con.close()
 
 
-def test_mixed_encoding_loads_via_fallback(tmp_path):
-    """Bytes latin-1 inválidos como utf-8 — carrega via fallback sem exceção."""
+def test_latin1_bytes_load_via_lossless_transcode(tmp_path):
+    """Bytes latin-1 não-UTF-8 sobrevivem à transcodificação sem descarte."""
     from ficha_etl.transform import _create_table_from_csvs
 
     csv_path = tmp_path / "mixed.csv"
@@ -357,16 +335,12 @@ def test_path_with_apostrophe_loads_without_sql_error(tmp_path):
 
 
 def test_create_table_from_csvs_honors_custom_delimiter(tmp_path):
-    """CsvSpec.delimiter é realmente usado pelo reader, não apenas aceito e descartado.
+    """CsvSpec.delimiter chega ao reader mesmo com auto_detect desabilitado.
 
-    Prova em dois lados, com o MESMO arquivo (separado por vírgula, sem ';'):
-    - CsvSpec(delimiter=',') lê corretamente as 3 colunas;
-    - CsvSpec() (default, delimiter=';') falha ao carregar — o sniffer do
-      DuckDB só encontra 1 campo por linha (não há ';' no arquivo), o que
-      diverge do schema de 3 colunas declarado e aborta com RuntimeError.
-    Isso prova que o delimiter do spec chega de fato ao SQL executado — se
-    `_create_table_from_csvs` reconstruísse um CsvSpec com defaults (o bug
-    reportado), o primeiro caso falharia do mesmo jeito que o segundo.
+    O arquivo usa vírgula; se `_create_table_from_csvs` reconstruísse o spec
+    com o default `;`, a primeira asserção já deixaria de produzir três
+    colunas corretas. Não dependemos mais do sniffer falhar no caso negativo,
+    porque o spec é agora deliberadamente a autoridade do dialeto.
     """
     from ficha_etl.transform import _create_table_from_csvs
 
@@ -379,10 +353,6 @@ def test_create_table_from_csvs_honors_custom_delimiter(tmp_path):
         _create_table_from_csvs(con, "t_comma", [csv_path], comma_spec)
         rows = con.execute("SELECT * FROM t_comma").fetchall()
         assert rows == [("1", "2", "3")]
-
-        default_spec = CsvSpec(columns=("c1", "c2", "c3"))  # delimiter=';' default
-        with pytest.raises(RuntimeError, match="nenhum encoding funcionou"):
-            _create_table_from_csvs(con, "t_default_delim", [csv_path], default_spec)
     finally:
         con.close()
 
