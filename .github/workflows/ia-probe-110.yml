@@ -35,6 +35,7 @@ jobs:
           data = json.loads(Path('/tmp/meta.json').read_text())
           files = {f.get('name'): f for f in data.get('files', []) if f.get('name')}
           raw = sorted(n for n in files if n.startswith('raw/') and n.endswith('.zip'))
+          raw_bytes = sum(int(files[n].get('size', 0) or 0) for n in raw)
 
           runs = json.loads(Path('/tmp/runs.json').read_text()).get('workflow_runs', [])
           backfills = [r for r in runs if r.get('name') == 'ETL — issue 110 backfill 2026-05']
@@ -65,7 +66,10 @@ jobs:
                   f"`{latest['status']}` / `{latest.get('conclusion') or '—'}`"
               )
               print()
-          print(f'Raw ZIPs visible: **{len(raw)}/37**')
+          print(
+              f'Raw ZIPs visible: **{len(raw)}/37** '
+              f'(**{raw_bytes / 1024**3:.2f} GiB** confirmed on IA)'
+          )
           print()
           print('| Required artifact | Visible | IA size |')
           print('|---|---:|---:|')
