@@ -7,6 +7,8 @@ on:
     paths:
       - '.github/workflows/ia-probe-110.yml'
       - 'etl/.ops-ia-probe-110'
+  pull_request:
+    types: [reopened]
 
 permissions:
   actions: read
@@ -14,6 +16,7 @@ permissions:
 
 jobs:
   probe:
+    if: github.event_name == 'push' || github.event.pull_request.number == 115
     runs-on: ubuntu-latest
     steps:
       - name: Read Internet Archive metadata and backfill status
@@ -26,7 +29,7 @@ jobs:
           curl --fail --silent --show-error --retry 3 \
             https://archive.org/metadata/ficha-2026-05 -o /tmp/meta.json
           gh api \
-            "repos/${GH_REPO}/actions/runs?branch=ops%2Fbackfill-2026-05-110&event=push&per_page=20" \
+            "repos/${GH_REPO}/actions/runs?branch=ops%2Fbackfill-2026-05-110&per_page=20" \
             > /tmp/runs.json
           python - <<'PY' > /tmp/report.txt
           import json
@@ -118,7 +121,7 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         with:
           script: |
-            const branch = context.ref.replace('refs/heads/', '');
+            const branch = context.payload.pull_request?.head?.ref || context.ref.replace('refs/heads/', '');
             const { data: prs } = await github.rest.pulls.list({
               owner: context.repo.owner,
               repo: context.repo.repo,
