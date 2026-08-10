@@ -1,0 +1,99 @@
+name: Ops — schema compare 2026-04 vs 2026-05 (#110)
+
+on:
+  push:
+    branches:
+      - ops/probe-ia-2026-05-110
+    paths:
+      - 'etl/.ops-schema-probe-110'
+
+permissions:
+  pull-requests: write
+
+jobs:
+  compare:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+
+      - run: uv python install 3.11
+        working-directory: etl
+
+      - run: uv sync --frozen
+        working-directory: etl
+
+      - name: Compare remote cnpjs.parquet schemas
+        id: compare
+        working-directory: etl
+        run: |
+          uv run python - <<'PY' > /tmp/schema-report.md
+          import duckdb
+
+          urls = {
+              '2026-04': 'https://archive.org/download/ficha-2026-04/cnpjs.parquet',
+              '2026-05': 'https://archive.org/download/ficha-2026-05/cnpjs.parquet',
+          }
+
+          con = duckdb.connect()
+          con.execute('INSTALL httpfs; LOAD httpfs;')
+
+          def schema(url):
+              rows = con.execute(
+                  'DESCRIBE SELECT * FROM read_parquet(?)', [url]
+              ).fetchall()
+              return [(r[0], r[1]) for r in rows]
+
+          schemas = {month: schema(url) for month, url in urls.items()}
+          a = schemas['2026-04']
+          b = schemas['2026-05']
+          da = dict(a)
+          db = dict(b)
+          names = list(dict.fromkeys([n for n, _ in a] + [n for n, _ in b]))
+          diffs = [(n, da.get(n), db.get(n)) for n in names if da.get(n) != db.get(n)]
+
+          print('## `cnpjs.parquet` schema — 2026-04 vs 2026-05')
+          print()
+          print(f'- 2026-04: **{len(a)} columns**')
+          print(f'- 2026-05: **{len(b)} columns**')
+          print(f'- Column/type differences: **{len(diffs)}**')
+          print()
+          if diffs:
+              print('| Column | 2026-04 | 2026-05 |')
+              print('|---|---|---|')
+              for name, old, new in diffs:
+                  print(f'| `{name}` | `{old or "—"}` | `{new or "—"}` |')
+          else:
+              print('No column/type drift detected by DuckDB `DESCRIBE`.')
+          PY
+          cat /tmp/schema-report.md
+          {
+            echo 'report<<REPORT_EOF'
+            cat /tmp/schema-report.md
+            echo REPORT_EOF
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Comment comparison
+        uses: actions/github-script@v7
+        env:
+          REPORT: ${{ steps.compare.outputs.report }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        with:
+          script: |
+            const branch = context.ref.replace('refs/heads/', '');
+            const { data: prs } = await github.rest.pulls.list({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              head: `${context.repo.owner}:${branch}`,
+              state: 'open',
+            });
+            if (!prs.length) return;
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: prs[0].number,
+              body: `${process.env.REPORT}\n\n[workflow run](${process.env.RUN_URL})`,
+            });
