@@ -58,6 +58,17 @@ jobs:
               'lookups/qualificacoes.parquet',
               'companies.zip',
           ]
+          families = {
+              'Empresas': lambda n: n.startswith('raw/Empresas'),
+              'Estabelecimentos': lambda n: n.startswith('raw/Estabelecimentos'),
+              'Socios': lambda n: n.startswith('raw/Socios'),
+              'Other': lambda n: not any(
+                  n.startswith(p) for p in (
+                      'raw/Empresas', 'raw/Estabelecimentos', 'raw/Socios'
+                  )
+              ),
+          }
+
           print('## IA read-only probe — `ficha-2026-05`')
           print()
           if latest:
@@ -70,6 +81,13 @@ jobs:
               f'Raw ZIPs visible: **{len(raw)}/37** '
               f'(**{raw_bytes / 1024**3:.2f} GiB** confirmed on IA)'
           )
+          print()
+          print('| Raw family | Files | Confirmed GiB |')
+          print('|---|---:|---:|')
+          for label, predicate in families.items():
+              names = [n for n in raw if predicate(n)]
+              size = sum(int(files[n].get('size', 0) or 0) for n in names)
+              print(f'| {label} | {len(names)} | {size / 1024**3:.2f} |')
           print()
           print('| Required artifact | Visible | IA size |')
           print('|---|---:|---:|')
