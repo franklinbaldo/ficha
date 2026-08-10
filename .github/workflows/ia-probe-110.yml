@@ -9,18 +9,25 @@ on:
       - 'etl/.ops-ia-probe-110'
 
 permissions:
+  actions: read
   pull-requests: write
 
 jobs:
   probe:
     runs-on: ubuntu-latest
     steps:
-      - name: Read Internet Archive metadata
+      - name: Read Internet Archive metadata and backfill status
         id: probe
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
           curl --fail --silent --show-error --retry 3 \
             https://archive.org/metadata/ficha-2026-05 -o /tmp/meta.json
+          gh api \
+            "repos/${GH_REPO}/actions/runs?branch=ops%2Fbackfill-2026-05-110&event=push&per_page=20" \
+            > /tmp/runs.json
           python - <<'PY' > /tmp/report.txt
           import json
           from pathlib import Path
@@ -28,6 +35,11 @@ jobs:
           data = json.loads(Path('/tmp/meta.json').read_text())
           files = {f.get('name'): f for f in data.get('files', []) if f.get('name')}
           raw = sorted(n for n in files if n.startswith('raw/') and n.endswith('.zip'))
+
+          runs = json.loads(Path('/tmp/runs.json').read_text()).get('workflow_runs', [])
+          backfills = [r for r in runs if r.get('name') == 'ETL — issue 110 backfill 2026-05']
+          latest = backfills[0] if backfills else None
+
           required = [
               'cnpjs.parquet',
               'cnpj_contatos.parquet',
@@ -47,6 +59,12 @@ jobs:
           ]
           print('## IA read-only probe — `ficha-2026-05`')
           print()
+          if latest:
+              print(
+                  f"Backfill run: **{latest['id']}** — "
+                  f"`{latest['status']}` / `{latest.get('conclusion') or '—'}`"
+              )
+              print()
           print(f'Raw ZIPs visible: **{len(raw)}/37**')
           print()
           print('| Required artifact | Visible | IA size |')
