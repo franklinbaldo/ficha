@@ -6,6 +6,7 @@ on:
       - ops/probe-ia-2026-05-110
     paths:
       - '.github/workflows/ia-probe-110.yml'
+      - 'etl/.ops-ia-probe-110'
 
 permissions:
   pull-requests: write
