@@ -24,7 +24,7 @@ jobs:
 
       - run: uv python install 3.11
         working-directory: etl
-      - run: uv sync --frozen
+      - run: uv sync --extra dev
         working-directory: etl
 
       - name: Apply deterministic patch
@@ -39,13 +39,13 @@ jobs:
 
       - name: Run full ETL test suite
         working-directory: etl
-        run: uv run pytest -q
+        run: uv run pytest -q tests
 
       - name: Run lint
         working-directory: etl
         run: |
-          uv run ruff check src tests
-          uv run ruff format --check src tests
+          uv run ruff check src tests bench
+          uv run ruff format --check src tests bench
 
       - name: Commit fix to PR head
         run: |
