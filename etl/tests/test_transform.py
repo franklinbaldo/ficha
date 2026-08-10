@@ -1443,13 +1443,12 @@ def test_write_cnpjs_parquet_handles_duplicate_cnae_codigo(tmp_path):
         con.close()
 
 
-def test_create_table_from_csvs_sniff_utf8(tmp_path, caplog):
+def test_create_table_from_csvs_reads_true_utf8_without_fallback(tmp_path, caplog):
     import logging
     from ficha_etl.transform import _create_table_from_csvs
     import duckdb
 
     csv_path = tmp_path / "data_utf8.csv"
-    # Write some utf-8 characters
     csv_path.write_bytes('1;2;"Olá Mundo"'.encode("utf-8"))
 
     con = duckdb.connect()
@@ -1458,11 +1457,7 @@ def test_create_table_from_csvs_sniff_utf8(tmp_path, caplog):
             spec = registry.CsvSpec(columns=("c1", "c2", "c3"))
             _create_table_from_csvs(con, "test_table", [csv_path], spec)
 
-        assert (
-            "tabela 'test_table' carregada com encoding=utf-8 ignore_errors=True (fallback)"
-            in caplog.text
-        )
-
+        assert "fallback" not in caplog.text
         res = con.execute("SELECT * FROM test_table").fetchall()
         assert res == [("1", "2", "Olá Mundo")]
     finally:
