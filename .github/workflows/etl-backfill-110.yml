@@ -7,6 +7,8 @@ on:
     paths:
       - '.github/workflows/etl-backfill-110.yml'
       - 'etl/.ops-backfill-110'
+  pull_request:
+    types: [reopened]
 
 permissions:
   contents: write
@@ -14,13 +16,18 @@ permissions:
 
 jobs:
   backfill:
+    if: github.event_name == 'push' || github.event.pull_request.number == 112
     runs-on: ubuntu-latest
     timeout-minutes: 350
+    env:
+      TARGET_BRANCH: ${{ github.event.pull_request.head.ref || github.ref_name }}
     defaults:
       run:
         working-directory: etl
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_BRANCH }}
 
       - name: Free disk space
         run: |
@@ -80,7 +87,7 @@ jobs:
           git config user.name "ficha-etl-bot"
           git config user.email "ficha-etl-bot@users.noreply.github.com"
           git commit -m "chore(etl): publish verified snapshot 2026-05 (#110)"
-          git push origin "HEAD:${GITHUB_REF_NAME}"
+          git push origin "HEAD:${TARGET_BRANCH}"
 
       - name: Capture log tail
         if: always()
@@ -102,7 +109,7 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         with:
           script: |
-            const branch = context.ref.replace('refs/heads/', '');
+            const branch = process.env.TARGET_BRANCH;
             const { data: prs } = await github.rest.pulls.list({
               owner: context.repo.owner,
               repo: context.repo.repo,
