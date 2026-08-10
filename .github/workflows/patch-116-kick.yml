@@ -1,20 +1,21 @@
 name: Apply #116 lossless encoding fix
 
 on:
-  push:
-    branches:
-      - fix/encoding-invariance-116
-    paths:
-      - 'etl/.ops-patch-116'
+  pull_request:
+    types: [reopened]
 
 permissions:
   contents: write
+  pull-requests: read
 
 jobs:
   patch-and-test:
+    if: github.event.pull_request.number == 117
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
 
       - name: Install uv
         uses: astral-sh/setup-uv@v3
@@ -29,7 +30,7 @@ jobs:
       - name: Apply deterministic patch
         run: |
           python scripts/apply-encoding-invariance-116.py
-          # Remove an accidental trailing semicolon in the generated regression fixture.
+          # Temporary scaffolding: normalize one accidental semicolon in generated fixture.
           sed -i 's/));$/))/g' etl/tests/test_encoding_invariance_116.py
 
       - name: Run focused regression tests
@@ -46,7 +47,7 @@ jobs:
           uv run ruff check src tests
           uv run ruff format --check src tests
 
-      - name: Commit fix to branch
+      - name: Commit fix to PR head
         run: |
           git config user.name "ficha-etl-bot"
           git config user.email "ficha-etl-bot@users.noreply.github.com"
@@ -56,4 +57,4 @@ jobs:
             etl/tests/test_registry.py \
             etl/tests/test_encoding_invariance_116.py
           git commit -m "fix(etl): transcode legacy CSVs before DuckDB (#116)"
-          git push origin HEAD:fix/encoding-invariance-116
+          git push origin HEAD:${{ github.event.pull_request.head.ref }}
