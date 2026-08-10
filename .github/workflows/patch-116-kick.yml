@@ -31,6 +31,7 @@ jobs:
         run: |
           python scripts/apply-encoding-invariance-116.py
           python scripts/apply-encoding-followup-116.py
+          python scripts/apply-encoding-exact-sql-116.py
           # Temporary scaffolding: normalize one accidental semicolon in generated fixture.
           sed -i 's/));$/))/g' etl/tests/test_encoding_invariance_116.py
 
