@@ -76,6 +76,11 @@ jobs:
                   f"Backfill run: **{latest['id']}** — "
                   f"`{latest['status']}` / `{latest.get('conclusion') or '—'}`"
               )
+              print(
+                  f"Created: `{latest.get('created_at') or '—'}` · "
+                  f"Started: `{latest.get('run_started_at') or '—'}` · "
+                  f"Updated: `{latest.get('updated_at') or '—'}`"
+              )
               print()
           print(
               f'Raw ZIPs visible: **{len(raw)}/37** '
