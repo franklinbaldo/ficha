@@ -44,6 +44,7 @@ from ficha_etl.proto.ficha.v1.company_pb2 import (
     TipoSocio,
     DESCRIPTOR as _COMPANY_FILE_DESCRIPTOR,
 )
+from ficha_etl.spooling_zip import SpoolingZipFile
 
 log = logging.getLogger(__name__)
 _PROTO_DIR = Path(__file__).parent.parent.parent.parent / "proto"
@@ -296,7 +297,9 @@ def pack_companies(
     prev_cnpj_base: int | None = None
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    with zipfile.ZipFile(output_path, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
+    with SpoolingZipFile(
+        output_path, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6, allowZip64=True
+    ) as zf:
         # schema artifacts
         zf.writestr("_schema.desc", schema_desc)
         zf.writestr("_schema.proto", _schema_proto_text())
