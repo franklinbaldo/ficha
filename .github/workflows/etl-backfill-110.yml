@@ -55,6 +55,10 @@ jobs:
           CNPJ_SHARE_TOKEN: ${{ secrets.CNPJ_SHARE_TOKEN }}
           PYTHONIOENCODING: utf-8
           PYTHONUTF8: '1'
+          # Backfill is one-shot and the 37 raw ZIPs are already durable on IA.
+          # Reclaim their local copies after load to give raizes ~7 GiB more
+          # spill headroom; this is the same supported switch used by bootstrap.
+          FICHA_DROP_ZIPS_AFTER_LOAD: '1'
         run: |
           set -o pipefail
           uv run ficha-etl run --month 2026-05 2>&1 | tee run.log
