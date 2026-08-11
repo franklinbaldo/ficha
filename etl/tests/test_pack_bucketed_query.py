@@ -6,8 +6,9 @@ from ficha_etl import pack
 class _Cursor:
     description = [("cnpj_base",)]
 
-    def __init__(self, prefix: str) -> None:
-        self._batches = [[(f"{prefix}0000001",), (f"{prefix}0000002",)], []]
+    def __init__(self, lower: str) -> None:
+        prefix = lower[:2]
+        self._batches = [[(f"{prefix}000001",), (f"{prefix}000002",)], []]
 
     def fetchmany(self, _size: int):
         return self._batches.pop(0)
@@ -15,16 +16,16 @@ class _Cursor:
 
 class _Connection:
     def __init__(self) -> None:
-        self.prefixes: list[tuple[str, str, str]] = []
+        self.ranges: list[tuple[str, str, str, str, str, str]] = []
 
     def execute(self, _sql: str, params: list[str]):
-        # Company bucket query params are [raizes, p, cnpjs, p, socios, p].
-        assert len(params) == 6
-        self.prefixes.append((params[1], params[3], params[5]))
+        # Params are [raizes, lo, hi, cnpjs, lo, hi, socios, lo, hi].
+        assert len(params) == 9
+        self.ranges.append((params[1], params[2], params[4], params[5], params[7], params[8]))
         return _Cursor(params[1])
 
 
-def test_company_row_iterator_processes_disjoint_prefixes_in_order():
+def test_company_row_iterator_processes_disjoint_ranges_in_order():
     con = _Connection()
 
     rows = list(
@@ -37,9 +38,16 @@ def test_company_row_iterator_processes_disjoint_prefixes_in_order():
         )
     )
 
-    assert con.prefixes == [(str(i), str(i), str(i)) for i in range(10)]
-    assert [row["cnpj_base"] for row in rows] == [
-        value for i in range(10) for value in (f"{i}0000001", f"{i}0000002")
-    ]
-    # Each of the three large inputs is filtered before its GROUP BY/join.
-    assert pack._COMPANIES_SQL.count("WHERE LEFT(cnpj_base, 1) = ?") == 3
+    expected_ranges = []
+    expected_rows = []
+    for i in range(100):
+        prefix = f"{i:02d}"
+        lower = f"{prefix}000000"
+        upper = f"{i + 1:02d}000000" if i < 99 else "A0000000"
+        expected_ranges.append((lower, upper, lower, upper, lower, upper))
+        expected_rows.extend((f"{prefix}000001", f"{prefix}000002"))
+
+    assert con.ranges == expected_ranges
+    assert [row["cnpj_base"] for row in rows] == expected_rows
+    # Each of the three large inputs is range-filtered before GROUP BY/join.
+    assert pack._COMPANIES_SQL.count("WHERE cnpj_base >= ? AND cnpj_base < ?") == 3
