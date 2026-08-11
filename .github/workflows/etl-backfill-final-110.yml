@@ -38,7 +38,7 @@ jobs:
         with:
           enable-cache: true
       - run: uv python install 3.11
-      - run: uv sync --frozen --all-groups
+      - run: uv sync --frozen --extra dev
 
       - name: Apply and validate issue 118 raizes patch in checkout
         run: |
