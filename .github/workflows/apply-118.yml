@@ -1,6 +1,11 @@
 name: Apply issue 118 patch
 
 on:
+  push:
+    branches:
+      - fix/raizes-final-join-spill-118
+    paths:
+      - '.github/workflows/apply-118.yml'
   pull_request:
     types: [reopened]
 
@@ -9,7 +14,7 @@ permissions:
 
 jobs:
   apply:
-    if: github.event.pull_request.head.ref == 'fix/raizes-final-join-spill-118'
+    if: github.event_name == 'push' || github.event.pull_request.number == 119
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -53,6 +58,7 @@ jobs:
         ("_raizes_cnaes_agg", "_raizes_cnaes_agg_b"),
         ("_raizes_matriz", "_raizes_matriz_b"),
     )
+    _empty = ibis.literal([], type="array<string>")
     try:
         written_parts: list[Path] = []
         for prefix in "0123456789":
