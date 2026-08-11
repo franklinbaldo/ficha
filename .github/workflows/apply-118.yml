@@ -5,7 +5,7 @@ on:
     types: [opened, reopened, synchronize]
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   apply:
@@ -32,8 +32,6 @@ jobs:
           start_marker = '    log.info("    joining + writing raizes.parquet from cnpjs...")'
           end_marker = '    # Free all temp tables.'
           if start_marker not in text:
-              # The production patch may already be present after a synchronize
-              # event caused by this workflow's own push.
               if 'joining + writing raizes.parquet from cnpjs (bucketed)' in text:
                   raise SystemExit(0)
               raise SystemExit('expected raizes final-join marker not found')
@@ -142,14 +140,11 @@ jobs:
           uv run pytest tests/test_raizes_partitioned_join.py tests/test_transform.py -q
           uv run ruff format --check src tests
 
-      - name: Commit production files
-        run: |
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add etl/src/ficha_etl/transform.py etl/tests/test_raizes_partitioned_join.py
-          if git diff --cached --quiet; then
-            echo 'Production patch already present; nothing to commit.'
-            exit 0
-          fi
-          git commit -m "fix(etl): bucket raizes final join to bound spill (#118)"
-          git push origin HEAD:fix/refresh-temp-cap-118
+      - name: Upload tested production files
+        uses: actions/upload-artifact@v4
+        with:
+          name: issue-118-production-patch
+          path: |
+            etl/src/ficha_etl/transform.py
+            etl/tests/test_raizes_partitioned_join.py
+          if-no-files-found: error
