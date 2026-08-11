@@ -36,3 +36,4 @@ menores, cada um registrando uma decisão concreta.
 | [0022](0022-cnpjs-summary-detail-split.md) | `cnpjs_summary.parquet` para lista de busca | Proposed |
 | [0023](0023-enderecos-parquet.md) | `enderecos.parquet`: reverse lookup por endereço e município | Accepted |
 | [0024](0024-pessoas-parquet.md) | `pessoas.parquet`: reverse lookup PF por CPF mascarado + nome | Accepted |
+| [0025](0025-publication-state-vocabulary.md) | Vocabulário de estados de publicação (tentativa/materialização/candidato/promovido/público) | Accepted |

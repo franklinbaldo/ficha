@@ -73,7 +73,12 @@ jobs:
               # ficha-py é dependência local editável do etl (ADR 0017) —
               # uma mudança lá pode quebrar write_lookup_parquets sem tocar etl/**.
               - 'ficha-py/**'
-              - '.github/workflows/ci.yml'
+              # etl/tests inclui testes estáticos que parseiam
+              # .github/workflows/*.yml (etl-monthly, etl-bootstrap e o guard
+              # de nomenclatura de publicação do #131). Sem cobrir os demais
+              # workflows aqui, alterar um deles não roda o teste que o
+              # guarda — que é exatamente quando ele precisa rodar.
+              - '.github/workflows/**'
 
       - name: Install uv
         if: steps.changes.outputs.etl == 'true'
@@ -157,7 +162,12 @@ jobs:
             etl:
               - 'etl/**'
               - 'ficha-py/**'
-              - '.github/workflows/ci.yml'
+              # etl/tests inclui testes estáticos que parseiam
+              # .github/workflows/*.yml (etl-monthly, etl-bootstrap e o guard
+              # de nomenclatura de publicação do #131). Sem cobrir os demais
+              # workflows aqui, alterar um deles não roda o teste que o
+              # guarda — que é exatamente quando ele precisa rodar.
+              - '.github/workflows/**'
 
       - name: Install uv
         if: steps.changes.outputs.etl == 'true'
