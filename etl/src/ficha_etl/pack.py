@@ -24,6 +24,7 @@ import json
 import logging
 import re
 import zipfile
+from collections.abc import Callable, Container, Sequence
 from pathlib import Path
 from typing import Iterator
 
@@ -455,6 +456,7 @@ def _iter_company_rows(
     cnpjs_url: str,
     socios_url: str,
     batch_size: int,
+    shards: Sequence[str] | None = None,
 ) -> Iterator[dict]:
     """Yield joined company rows in globally increasing cnpj_base order.
 
@@ -463,8 +465,9 @@ def _iter_company_rows(
     state, while range order plus per-bucket ORDER BY preserves the strict
     ordering required by pack_companies' O(1) duplicate guard.
     """
-    for i in range(100):
-        prefix = f"{i:02d}"
+    selected = list(shards) if shards is not None else [f"{i:02d}" for i in range(100)]
+    for prefix in selected:
+        i = int(prefix)
         lower = f"{prefix}000000"
         upper = f"{i + 1:02d}000000" if i < 99 else "A0000000"
         log.info(
@@ -495,6 +498,98 @@ def _iter_company_rows(
                 yield dict(zip(cols, row))
 
 
+SHARD_PREFIX_LEN = 2
+"""Dígitos de `cnpj_base` que definem o shard.
+
+2 dígitos = 100 shards de ~234 MB em 2026-05. A escolha é medida, não
+arbitrária (ver #147): o upload no Internet Archive degrada de forma
+super-linear com o tamanho do objeto — 256 MiB a 13,2 MiB/s, 2 GiB a 3,1 MiB/s
+e 21,8 GiB a 1,64 MiB/s — e ~234 MB cai no melhor regime observado.
+
+Também é exatamente a faixa que `_iter_company_rows` já percorre desde #128,
+então shardar não muda o plano de consulta: muda só o destino das linhas.
+"""
+
+
+def shard_name(shard: str) -> str:
+    """`'07'` → `'companies-07.zip'`.
+
+    O acesso atômico continua resolvendo por URL previsível a partir da raiz do
+    CNPJ, porque o prefixo do shard é o primeiro nível do caminho interno:
+    `companies-07.zip/07/123/456.pb`.
+    """
+    return f"companies-{shard}.zip"
+
+
+def shard_of(cnpj_base: int | str) -> str:
+    """Shard a que uma raiz pertence."""
+    return str(cnpj_base).zfill(8)[:SHARD_PREFIX_LEN]
+
+
+def pack_shards_from_parquets(
+    month: str,
+    output_dir: Path,
+    *,
+    parquets_base: str | None = None,
+    batch_size: int = 10_000,
+    memory_limit_gb: float | None = None,
+    on_shard: Callable[[str, Path, dict], None] | None = None,
+    skip_shards: Container[str] = (),
+) -> list[dict]:
+    """Escreve um ZIP por shard em vez de um monólito.
+
+    Cada shard é auto-descritivo — carrega `_schema.desc`, `_schema.proto`,
+    `_lookups/*.pb` e `_meta.json` próprios — para poder ser consultado
+    isoladamente, sem depender dos outros 99.
+
+    `on_shard` é chamado assim que um shard fica pronto, antes de o próximo ser
+    gerado. É o gancho que torna o trabalho durável de forma incremental: o
+    chamador sobe o shard e apaga o arquivo local, então uma interrupção custa
+    um shard e não a execução inteira. `skip_shards` permite retomar pulando o
+    que já é durável.
+
+    Returns:
+        lista de `{shard, path, count, size_bytes, schema_sha256}` na ordem
+        processada; shards pulados não aparecem.
+    """
+    con, lookup_rows, urls = _open_pack_inputs(
+        parquets_base or mirror.item_root(month), memory_limit_gb
+    )
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    results: list[dict] = []
+    total = 10**SHARD_PREFIX_LEN
+    for i in range(total):
+        shard = f"{i:0{SHARD_PREFIX_LEN}d}"
+        if shard in skip_shards:
+            log.info("pack_shards: %s já durável — pulando", shard)
+            continue
+        path = output_dir / shard_name(shard)
+        log.info("pack_shards: gerando %s (%d/%d)", path.name, i + 1, total)
+        rows = _iter_company_rows(
+            con,
+            raizes_url=urls["raizes"],
+            cnpjs_url=urls["cnpjs"],
+            socios_url=urls["socios"],
+            batch_size=batch_size,
+            shards=[shard],
+        )
+        result = pack_companies(rows, lookup_rows, path, snapshot_month=month)
+        result["shard"] = shard
+        result["path"] = path
+        results.append(result)
+        log.info(
+            "pack_shards: %s pronto — %d empresas, %.1f MB",
+            path.name,
+            result["count"],
+            result["size_bytes"] / 1e6,
+        )
+        if on_shard is not None:
+            on_shard(shard, path, result)
+
+    return results
+
+
 def pack_from_parquets(
     month: str,
     output_path: Path,
@@ -516,22 +611,34 @@ def pack_from_parquets(
     Returns:
         { count, size_bytes, schema_sha256 }
     """
-    if parquets_base is None:
-        # mirror.item_root honors FICHA_IA_BASE_URL — same source of truth as
-        # the rest of the pipeline (tests/staging/self-hosted mirrors).
-        parquets_base = mirror.item_root(month)
+    con, lookup_rows, urls = _open_pack_inputs(
+        parquets_base or mirror.item_root(month), memory_limit_gb
+    )
+    rows = _iter_company_rows(
+        con,
+        raizes_url=urls["raizes"],
+        cnpjs_url=urls["cnpjs"],
+        socios_url=urls["socios"],
+        batch_size=batch_size,
+    )
+    return pack_companies(rows, lookup_rows, output_path, snapshot_month=month)
 
-    raizes_url = f"{parquets_base}/raizes.parquet"
-    cnpjs_url = f"{parquets_base}/cnpjs.parquet"
-    socios_url = f"{parquets_base}/socios.parquet"
 
+def _open_pack_inputs(
+    parquets_base: str, memory_limit_gb: float | None
+) -> tuple[duckdb.DuckDBPyConnection, dict[str, list[dict]], dict[str, str]]:
+    """Conexão DuckDB, lookups carregados e URLs dos três Parquets de entrada.
+
+    Compartilhado pelo pack monolítico e pelo shardado: os lookups são lidos uma
+    única vez e reaproveitados por todos os shards.
+    """
     con = duckdb.connect()
     if parquets_base.startswith("http"):
         con.execute("INSTALL httpfs; LOAD httpfs;")
     if memory_limit_gb is not None:
         con.execute(f"SET memory_limit='{memory_limit_gb}GB'")
 
-    log.info("pack_from_parquets: reading lookups from %s", parquets_base)
+    log.info("pack: reading lookups from %s", parquets_base)
     lookup_rows: dict[str, list[dict]] = {}
     for kind in LOOKUP_KINDS:
         lk_url = f"{parquets_base}/lookups/{kind}.parquet"
@@ -539,11 +646,5 @@ def pack_from_parquets(
         lookup_rows[kind] = [{"codigo": r[0], "descricao": r[1]} for r in rows]
         log.info("  lookup %s: %d entries", kind, len(rows))
 
-    rows = _iter_company_rows(
-        con,
-        raizes_url=raizes_url,
-        cnpjs_url=cnpjs_url,
-        socios_url=socios_url,
-        batch_size=batch_size,
-    )
-    return pack_companies(rows, lookup_rows, output_path, snapshot_month=month)
+    urls = {k: f"{parquets_base}/{k}.parquet" for k in ("raizes", "cnpjs", "socios")}
+    return con, lookup_rows, urls
