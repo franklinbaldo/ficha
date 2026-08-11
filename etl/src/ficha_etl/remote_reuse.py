@@ -37,6 +37,11 @@ repositório — as chaves de `sort` declaradas em `manifest.py` para os artefat
 que as declaram, e as colunas que `pack._COMPANIES_SQL` de fato lê para os
 demais. Nenhuma contagem específica de mês é fixada em lugar nenhum.
 
+`lookups.json` não tem footer, mas também não é aprovado por tamanho: ele é
+baixado (~272 KB), parseado e checado contra as chaves que
+`transform.write_lookups_json()` sempre emite. **Nenhum artefato do contrato é
+considerado reutilizável apenas por presença e tamanho.**
+
 Qualquer ambiguidade resulta em recomputação. Corrupção não vira erro
 irrecuperável: o pipeline sabe reconstruir o artefato.
 """
@@ -45,6 +50,7 @@ from __future__ import annotations
 
 import enum
 import logging
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 
@@ -58,6 +64,12 @@ log = logging.getLogger(__name__)
 
 _METADATA_URL = "https://archive.org/metadata/{identifier}"
 _HTTP_TIMEOUT = httpx.Timeout(connect=15.0, read=60.0, write=15.0, pool=15.0)
+
+# Retry curto e explícito: o custo de tratar um timeout momentâneo como
+# ambiguidade é ~2h30 de transform desnecessário.
+_METADATA_ATTEMPTS = 3
+_METADATA_BACKOFF_S = 2.0
+_TRANSIENT_STATUS = frozenset({429, 500, 502, 503, 504})
 
 
 class ReuseState(enum.StrEnum):
@@ -95,6 +107,7 @@ class ParquetProbeResult:
 
 
 ParquetProbe = Callable[[str], ParquetProbeResult]
+JsonFetch = Callable[[str], object]
 
 
 # Colunas mínimas por artefato. Origem de cada conjunto:
@@ -115,13 +128,47 @@ REQUIRED_COLUMNS: dict[str, frozenset[str] | None] = {
     "cnpj_cnaes.parquet": frozenset({"cnae_codigo", "posicao", "cnpj_base"}),
     "enderecos.parquet": frozenset({"uf", "municipio_codigo", "logradouro_normalizado", "numero"}),
     "pessoas.parquet": frozenset({"cpf_mascarado", "nome_normalizado"}),
+    # Não-Parquet: validado por `_classify_lookups_json`, não por footer.
     "lookups.json": None,
 }
+
+# Chaves que `transform.write_lookups_json()` sempre emite (schema
+# `web/src/schemas/v1/lookups.ts`). Presença + tamanho autorizariam um JSON
+# truncado, um `{}` ou uma página de erro HTML a passar por materialização
+# válida — daí a validação estrutural. O arquivo tem ~272 KB, então baixá-lo
+# é mais barato que qualquer alternativa indireta.
+LOOKUPS_JSON_REQUIRED_KEYS = frozenset(
+    {
+        "schema_version",
+        "snapshot_date",
+        "cnaes",
+        "motivos_situacao_cadastral",
+        "municipios",
+        "naturezas_juridicas",
+        "paises",
+        "qualificacoes_socio",
+    }
+)
 
 _LOOKUP_KINDS = ("cnaes", "motivos", "municipios", "naturezas", "paises", "qualificacoes")
 
 for _kind in _LOOKUP_KINDS:
     REQUIRED_COLUMNS[f"lookups/{_kind}.parquet"] = frozenset({"codigo", "descricao"})
+
+
+def _load_httpfs(con: duckdb.DuckDBPyConnection) -> None:
+    """Carrega httpfs, instalando só se ainda não estiver disponível.
+
+    `INSTALL` pode resolver/baixar a extensão de um repositório remoto. Fazer
+    isso uma vez por artefato acrescentaria N dependências externas justamente
+    no mecanismo de recuperação — o oposto do que este módulo existe para
+    oferecer. `LOAD` sozinho basta quando a extensão já está instalada, que é o
+    caso no runner e no ambiente de dev.
+    """
+    try:
+        con.execute("LOAD httpfs;")
+    except duckdb.Error:
+        con.execute("INSTALL httpfs; LOAD httpfs;")
 
 
 def duckdb_parquet_probe(url: str) -> ParquetProbeResult:
@@ -132,7 +179,7 @@ def duckdb_parquet_probe(url: str) -> ParquetProbeResult:
     con = duckdb.connect()
     try:
         if url.startswith("http"):
-            con.execute("INSTALL httpfs; LOAD httpfs;")
+            _load_httpfs(con)
         cursor = con.execute("SELECT * FROM read_parquet(?) LIMIT 0", [url])
         columns = frozenset(description[0] for description in cursor.description)
         row_count = con.execute("SELECT COUNT(*) FROM read_parquet(?)", [url]).fetchone()[0]
@@ -141,11 +188,23 @@ def duckdb_parquet_probe(url: str) -> ParquetProbeResult:
         con.close()
 
 
-def fetch_item_metadata(month: str, *, client: httpx.Client | None = None) -> dict | None:
+def fetch_item_metadata(
+    month: str,
+    *,
+    client: httpx.Client | None = None,
+    attempts: int = _METADATA_ATTEMPTS,
+    sleep: Callable[[float], None] = time.sleep,
+) -> dict | None:
     """Metadata do item do mês, ou `None` quando indisponível/ilegível.
 
-    Não levanta: indisponibilidade de rede é ambiguidade, e ambiguidade leva a
+    Não levanta: indisponibilidade é ambiguidade, e ambiguidade leva a
     recomputar — não a derrubar o pipeline.
+
+    Faz retry curto **apenas** para falhas transitórias (erro de transporte,
+    5xx, 429). Sem isso, um único timeout de `archive.org/metadata` custaria as
+    ~2h30 de transform que este módulo existe para evitar. Um 404 é resposta
+    estrutural — o item não existe — e não é retentado: insistir nele só
+    atrasaria a recomputação legítima.
     """
     if not is_valid_month(month):
         raise ValueError(f"month must be YYYY-MM, got {month!r}")
@@ -154,21 +213,97 @@ def fetch_item_metadata(month: str, *, client: httpx.Client | None = None) -> di
     owns_client = client is None
     client = client or httpx.Client(timeout=_HTTP_TIMEOUT, follow_redirects=True)
     try:
-        response = client.get(url)
-        if response.status_code != 200:
-            log.warning("metadata de %s → HTTP %d", url, response.status_code)
-            return None
-        return response.json()
-    except (httpx.HTTPError, ValueError) as exc:
-        log.warning("metadata de %s indisponível: %s", url, exc)
+        for attempt in range(1, attempts + 1):
+            transient: str | None = None
+            try:
+                response = client.get(url)
+                if response.status_code == 200:
+                    try:
+                        return response.json()
+                    except ValueError as exc:
+                        # JSON inválido é resposta estrutural, não transitória.
+                        log.warning("metadata de %s ilegível: %s", url, exc)
+                        return None
+                if response.status_code in _TRANSIENT_STATUS:
+                    transient = f"HTTP {response.status_code}"
+                else:
+                    log.warning("metadata de %s → HTTP %d", url, response.status_code)
+                    return None
+            except httpx.HTTPError as exc:
+                transient = str(exc)
+
+            if attempt == attempts:
+                log.warning(
+                    "metadata de %s indisponível após %d tentativas: %s",
+                    url,
+                    attempts,
+                    transient,
+                )
+                return None
+            delay = _METADATA_BACKOFF_S * attempt
+            log.warning(
+                "metadata de %s falhou (tentativa %d/%d): %s — repetindo em %.0fs",
+                url,
+                attempt,
+                attempts,
+                transient,
+                delay,
+            )
+            sleep(delay)
         return None
     finally:
         if owns_client:
             client.close()
 
 
+def httpx_json_fetch(url: str) -> object:
+    """Baixa e parseia um JSON pequeno. `follow_redirects` é obrigatório.
+
+    `archive.org/download/...` redireciona para o nó de armazenamento; sem
+    seguir o redirect a resposta chega vazia **sem erro**, e um arquivo vazio
+    não pode ser confundido com um arquivo válido.
+    """
+    with httpx.Client(timeout=_HTTP_TIMEOUT, follow_redirects=True) as client:
+        response = client.get(url)
+        response.raise_for_status()
+        if not response.content:
+            raise ValueError("resposta vazia")
+        return response.json()
+
+
 def _files_by_name(metadata: dict) -> dict[str, dict]:
     return {entry["name"]: entry for entry in metadata.get("files", []) if "name" in entry}
+
+
+def _classify_lookups_json(
+    name: str,
+    *,
+    size: int,
+    base_url: str,
+    fetch: JsonFetch,
+) -> ReuseVerdict:
+    """Valida estrutura mínima de `lookups.json` — presença/tamanho não bastam.
+
+    Um JSON truncado, um `{}`, uma página de erro HTML ou conteúdo de outro
+    formato têm `size > 0` e passariam por materialização válida.
+    """
+    try:
+        payload = fetch(f"{base_url}/{name}")
+    except Exception as exc:  # noqa: BLE001 — qualquer falha de leitura é ambiguidade
+        return ReuseVerdict(name, ReuseState.INVALID, f"ilegível: {exc}", size=size)
+
+    if not isinstance(payload, dict):
+        return ReuseVerdict(
+            name, ReuseState.INVALID, f"não é objeto JSON: {type(payload).__name__}", size=size
+        )
+
+    missing = LOOKUPS_JSON_REQUIRED_KEYS - payload.keys()
+    if missing:
+        return ReuseVerdict(
+            name, ReuseState.INVALID, f"chaves ausentes: {sorted(missing)}", size=size
+        )
+
+    return ReuseVerdict(name, ReuseState.REUSABLE, "JSON com as chaves do schema", size=size)
 
 
 def _classify_one(
@@ -177,6 +312,7 @@ def _classify_one(
     *,
     base_url: str,
     probe: ParquetProbe,
+    json_fetch: JsonFetch,
 ) -> ReuseVerdict:
     if entry is None:
         return ReuseVerdict(name, ReuseState.ABSENT, "ausente no item remoto")
@@ -191,10 +327,12 @@ def _classify_one(
     if size <= 0:
         return ReuseVerdict(name, ReuseState.INVALID, "size zero", size=size)
 
+    if name == "lookups.json":
+        return _classify_lookups_json(name, size=size, base_url=base_url, fetch=json_fetch)
+
     expected_columns = REQUIRED_COLUMNS.get(name)
     if expected_columns is None:
-        # Não-Parquet: presença + tamanho é toda a evidência estrutural possível.
-        return ReuseVerdict(name, ReuseState.REUSABLE, "presente com size > 0", size=size)
+        return ReuseVerdict(name, ReuseState.INVALID, "artefato sem validação definida", size=size)
 
     try:
         result = probe(f"{base_url}/{name}")
@@ -230,6 +368,7 @@ def classify_outputs(
     *,
     metadata: dict | None,
     probe: ParquetProbe = duckdb_parquet_probe,
+    json_fetch: JsonFetch = httpx_json_fetch,
 ) -> dict[str, ReuseVerdict]:
     """Classifica cada output derivado do contrato como reusable/absent/invalid.
 
@@ -248,7 +387,9 @@ def classify_outputs(
     base_url = item_root(month)
     entries = _files_by_name(metadata)
     return {
-        name: _classify_one(name, entries.get(name), base_url=base_url, probe=probe)
+        name: _classify_one(
+            name, entries.get(name), base_url=base_url, probe=probe, json_fetch=json_fetch
+        )
         for name in REQUIRED_COLUMNS
     }
 
