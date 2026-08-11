@@ -3,6 +3,7 @@
   import type * as duckdb from '@duckdb/duckdb-wasm';
   import { strip as stripCNPJ } from '../lib/cnpj';
   import { fetchManifest, currentSnapshot } from '../lib/manifest';
+  import { allFilesHashed, archiveItemFrom, formatDay } from '../lib/provenance';
   import { createDuckDB, attachCnpjs, attachLookups, attachEnderecos, attachPessoas, attachSocios, attachCnpjContatos, attachCnpjCnaes } from '../lib/analytical';
   import EmpresaFicha from './EmpresaFicha.svelte';
 
@@ -79,7 +80,7 @@
      Cada campo só é exibido quando o snapshot em uso o sustenta. */
   let generatedAt = $state<string | null>(null);
   let archiveItem = $state<string | null>(null);
-  let allFilesHashed = $state(false);
+  let filesHashed = $state(false);
 
   /** "2026-04" → "abril de 2026" */
   function formatMonth(date: string): string {
@@ -98,29 +99,6 @@
   }
 
   const isStale = $derived(snapshotDate !== null && monthsBehind(snapshotDate) >= 3);
-
-  /** "2026-05-15T01:02:37Z" → "15/05/2026", ou null se não parseável. */
-  function formatDay(iso: string): string | null {
-    const d = new Date(iso);
-    return Number.isNaN(d.getTime())
-      ? null
-      : new Intl.DateTimeFormat('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric' })
-          .format(d);
-  }
-
-  /** Identificador do item no Internet Archive, extraído da URL real do
-   *  snapshot. Devolve null para qualquer outro host — não afirmamos
-   *  preservação no IA sem que a URL carregada sustente exatamente isso. */
-  function archiveItemFrom(url: string): string | null {
-    try {
-      const u = new URL(url);
-      if (!u.hostname.endsWith('archive.org')) return null;
-      const m = u.pathname.match(/^\/(?:download|details)\/([^/]+)/);
-      return m ? m[1] : null;
-    } catch {
-      return null;
-    }
-  }
 
   function clearResults() {
     results = [];
@@ -146,9 +124,7 @@
       generatedAt = snap.generated_at ? formatDay(snap.generated_at) : null;
       archiveItem = archiveItemFrom(snap.files.cnpjs.url);
       // Só afirmamos verificação quando TODO arquivo declarado traz sha256.
-      allFilesHashed = Object.values(snap.files).every(
-        (f) => typeof f?.sha256 === 'string' && f.sha256.length > 0
-      );
+      filesHashed = allFilesHashed(snap.files);
 
       status = 'Preparando o mecanismo de consulta…';
       const duckDB = await createDuckDB();
@@ -491,7 +467,7 @@
           <dt>Competência</dt>
           <dd>
             {formatMonth(snapshotDate)}
-            {#if generatedAt}<span class="prov-nota">· fechada em {generatedAt}</span>{/if}
+            {#if generatedAt}<span class="prov-nota">· snapshot gerado em {generatedAt}</span>{/if}
           </dd>
         </div>
         {#if archiveItem}
@@ -500,7 +476,7 @@
             <dd>Internet Archive <span class="prov-nota">· {archiveItem}</span></dd>
           </div>
         {/if}
-        {#if allFilesHashed}
+        {#if filesHashed}
           <div class="prov-item">
             <dt>Verificação</dt>
             <dd>SHA-256 por arquivo</dd>
