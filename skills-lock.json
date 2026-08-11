@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "skills": {
+    "cobogo-design-review": {
+      "source": "franklinbaldo/skills",
+      "sourceType": "github",
+      "skillPath": "cobogo-design-review/SKILL.md",
+      "computedHash": "c0bf661aa29a275ae97556aae5f20a108c6fec8e4fdea2708fbf5863a51e9a6d"
+    }
+  }
+}

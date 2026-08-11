@@ -1,0 +1,232 @@
+<!doctype html>
+<html lang="pt-br">
+<head>
+<meta charset="utf-8">
+<title>FICHA — concept probe</title>
+<style>
+  /* Probe especulativo. Nenhum número aqui é inventado: row_counts, tamanhos,
+     competência e generated_at vêm de web/public/manifest.json (2026-04). */
+  :root{
+    --tinta:#141210;
+    --tinta-2:#4a463f;
+    --tinta-3:#7d776c;
+    --papel:#f2efe9;
+    --papel-2:#e6e1d7;
+    --linha:#141210;
+    --gesto:#8a2b12;      /* um único gesto localizado */
+    --medida:1180px;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0}
+  body{
+    background:var(--papel);
+    color:var(--tinta);
+    font-family:"Helvetica Neue",Helvetica,Arial,sans-serif;
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:var(--medida);margin:0 auto;padding:0 40px}
+
+  /* ── FAIXA superior: identidade + estado da base, na mesma linha ───────── */
+  .faixa-topo{
+    border-bottom:1.5px solid var(--linha);
+  }
+  .faixa-topo .wrap{
+    display:flex;align-items:baseline;gap:32px;
+    padding-top:18px;padding-bottom:14px;
+  }
+  .marca{
+    font-size:20px;letter-spacing:.24em;font-weight:700;
+  }
+  .marca span{color:var(--gesto)}
+  .faixa-topo nav{margin-left:auto;display:flex;gap:26px}
+  .faixa-topo a{
+    color:var(--tinta-2);text-decoration:none;font-size:13px;
+    letter-spacing:.08em;text-transform:uppercase;
+  }
+
+  /* ── INSCRIÇÃO: chapéu que orienta origem, não decora ──────────────────── */
+  .inscricao{
+    font-size:11.5px;letter-spacing:.18em;text-transform:uppercase;
+    color:var(--tinta-3);
+  }
+
+  /* ── Primeira dobra: texto é arquitetura, vão no lugar de card ─────────── */
+  .dobra{padding-top:52px}
+  .dobra .grade{
+    display:grid;grid-template-columns:minmax(0,1fr) 300px;gap:64px;align-items:start;
+  }
+  h1{
+    margin:14px 0 0;
+    font-size:52px;line-height:1.03;letter-spacing:-.022em;font-weight:700;
+    max-width:15ch;
+  }
+  .sub{
+    margin:20px 0 0;max-width:52ch;
+    font-size:16.5px;line-height:1.55;color:var(--tinta-2);
+  }
+
+  /* ── Campo de consulta: linha, não caixa ───────────────────────────────── */
+  .consulta{margin-top:34px;max-width:640px}
+  .campo{
+    display:flex;align-items:center;gap:16px;
+    border-bottom:2px solid var(--linha);padding-bottom:10px;
+  }
+  .campo input{
+    border:0;background:transparent;outline:none;flex:1;
+    font-size:19px;color:var(--tinta);font-family:inherit;
+  }
+  .campo input::placeholder{color:var(--tinta-3)}
+  .campo button{
+    border:0;background:var(--gesto);color:#fff;cursor:pointer;
+    font-size:12.5px;letter-spacing:.14em;text-transform:uppercase;
+    padding:11px 20px;font-family:inherit;
+  }
+  .modos{
+    margin-top:12px;display:flex;gap:22px;
+    font-size:13px;color:var(--tinta-2);
+  }
+  .modos b{font-weight:600;color:var(--tinta);border-bottom:2px solid var(--gesto);padding-bottom:2px}
+
+  /* ── FAIXA de proveniência: contrato público visível na primeira dobra ─── */
+  .proveniencia{
+    border-top:1px solid var(--linha);border-bottom:1px solid var(--linha);
+    margin-top:46px;
+  }
+  .proveniencia .wrap{
+    display:grid;grid-template-columns:repeat(4,1fr);
+    padding-top:14px;padding-bottom:14px;gap:28px;
+  }
+  .prov-item{display:flex;flex-direction:column;gap:5px}
+  .prov-valor{font-size:15px;font-weight:600;letter-spacing:-.01em}
+  .prov-valor small{font-weight:400;color:var(--tinta-3)}
+
+  /* ── Coluna direita: competências como RITMO recuperável ───────────────── */
+  .competencias{border-left:1.5px solid var(--linha);padding-left:22px}
+  .competencias ol{list-style:none;margin:14px 0 0;padding:0}
+  .competencias li{
+    display:flex;align-items:baseline;gap:12px;
+    padding:9px 0;border-bottom:1px solid var(--papel-2);
+    font-size:14px;
+  }
+  .competencias li .mes{font-weight:600;letter-spacing:.01em;min-width:78px}
+  .competencias li .qtd{color:var(--tinta-3);font-size:12.5px;margin-left:auto}
+  .competencias li.atual{border-bottom-color:var(--linha)}
+  .competencias li.atual .mes{color:var(--gesto)}
+  .competencias li.vazio .mes{color:var(--tinta-3);font-weight:400}
+  .rotulo-atual{
+    font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;
+    color:var(--gesto);
+  }
+
+  /* ── Duas portas de acesso: ritmo de dois módulos, sem card ────────────── */
+  .portas{padding:46px 0 0}
+  .portas .grade{display:grid;grid-template-columns:1fr 1fr;gap:56px}
+  .porta h2{
+    margin:12px 0 0;font-size:22px;letter-spacing:-.012em;
+  }
+  .porta p{margin:9px 0 0;font-size:14.5px;line-height:1.5;color:var(--tinta-2);max-width:44ch}
+  .porta .num{
+    font-size:11.5px;letter-spacing:.18em;color:var(--gesto);font-weight:600;
+  }
+  .porta .linha-topo{border-top:1.5px solid var(--linha);padding-top:12px}
+  .porta ul{margin:14px 0 0;padding:0;list-style:none;font-size:13px;color:var(--tinta-3)}
+  .porta ul li{padding:4px 0;display:flex;gap:10px}
+  .porta ul li::before{content:"—";color:var(--tinta-3)}
+</style>
+</head>
+<body>
+
+<div class="faixa-topo">
+  <div class="wrap">
+    <div class="marca">FICHA<span>.</span></div>
+    <nav><a href="#">Consulta</a><a href="#">Dados</a><a href="#">Método</a><a href="#">Sobre</a></nav>
+  </div>
+</div>
+
+<div class="dobra">
+  <div class="wrap grade">
+    <div>
+      <div class="inscricao">Cadastro Nacional da Pessoa Jurídica · Receita Federal do Brasil</div>
+      <h1>Toda empresa brasileira, mês a mês.</h1>
+      <p class="sub">
+        Cada competência é um retrato fechado do cadastro público — preservado, verificável
+        e consultável sem servidor. Você consulta uma empresa ou leva a base inteira.
+      </p>
+
+      <div class="consulta">
+        <div class="campo">
+          <input placeholder="CNPJ, razão social ou nome de sócio">
+          <button>Consultar</button>
+        </div>
+        <div class="modos">
+          <b>Empresa</b><span>Sócio</span><span>Endereço</span><span>Atividade (CNAE)</span>
+        </div>
+      </div>
+    </div>
+
+    <aside class="competencias">
+      <div class="inscricao">Competências</div>
+      <ol>
+        <li class="atual">
+          <span class="mes">2026-04</span>
+          <span class="rotulo-atual">em consulta</span>
+          <span class="qtd">70,1 mi</span>
+        </li>
+        <li class="vazio"><span class="mes">2026-03</span><span class="qtd">—</span></li>
+        <li class="vazio"><span class="mes">2026-02</span><span class="qtd">—</span></li>
+        <li class="vazio"><span class="mes">2026-01</span><span class="qtd">—</span></li>
+      </ol>
+    </aside>
+  </div>
+</div>
+
+<div class="proveniencia">
+  <div class="wrap">
+    <div class="prov-item">
+      <span class="inscricao">Origem</span>
+      <span class="prov-valor">Receita Federal do Brasil</span>
+    </div>
+    <div class="prov-item">
+      <span class="inscricao">Competência em consulta</span>
+      <span class="prov-valor">abril de 2026 <small>· fechada em 15/05</small></span>
+    </div>
+    <div class="prov-item">
+      <span class="inscricao">Preservação</span>
+      <span class="prov-valor">Internet Archive <small>· ficha-2026-04</small></span>
+    </div>
+    <div class="prov-item">
+      <span class="inscricao">Verificação</span>
+      <span class="prov-valor">SHA-256 por arquivo</span>
+    </div>
+  </div>
+</div>
+
+<div class="portas">
+  <div class="wrap grade">
+    <div class="porta">
+      <div class="linha-topo">
+        <span class="num">01</span>
+        <h2>Consultar uma empresa</h2>
+        <p>Busca direta por raiz de CNPJ. Um arquivo por empresa, servido estaticamente — sem carregar a base.</p>
+        <ul>
+          <li>situação cadastral, filiais e sócios</li>
+          <li>resposta por URL previsível</li>
+        </ul>
+      </div>
+    </div>
+    <div class="porta">
+      <div class="linha-topo">
+        <span class="num">02</span>
+        <h2>Levar a base inteira</h2>
+        <p>Parquet por competência, com soma de verificação declarada. O mesmo contrato que máquinas já consomem.</p>
+        <ul>
+          <li>cnpjs 6,43 GB · raízes 2,86 GB · sócios 538 MB</li>
+          <li>manifest.json como ponto de entrada</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</div>
+
+</body>
+</html>
