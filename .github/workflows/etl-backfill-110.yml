@@ -1,0 +1,111 @@
+name: ETL — issue 110 backfill 2026-05
+
+on:
+  push:
+    branches:
+      - ops/backfill-2026-05-v2-110
+    paths:
+      - '.github/workflows/etl-backfill-110.yml'
+      - 'etl/.ops-backfill-v2-110'
+
+permissions:
+  contents: read
+
+jobs:
+  dry-run-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    defaults:
+      run:
+        working-directory: etl
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ops/backfill-2026-05-v2-110
+
+      - name: Free disk space
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /usr/local/share/powershell /usr/share/swift \
+                      "$AGENT_TOOLSDIRECTORY" || true
+          sudo apt-get clean
+          df -h /
+
+      - uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+      - run: uv python install 3.11
+      - run: uv sync --frozen
+
+      - name: Transform + pack real 2026-05 without publishing
+        env:
+          CNPJ_SHARE_TOKEN: ${{ secrets.CNPJ_SHARE_TOKEN }}
+          FICHA_DROP_ZIPS_AFTER_LOAD: '1'
+          PYTHONIOENCODING: utf-8
+          PYTHONUTF8: '1'
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          from ficha_etl import manifest, pack, transform
+
+          month = '2026-05'
+          cache_dir = Path('.cache/raw')
+          output_dir = cache_dir / month / 'output'
+
+          original = transform.write_raizes_parquet_from_cnpjs
+
+          def with_refreshed_temp_limit(con, *args, **kwargs):
+              before = str(con.execute("SELECT current_setting('max_temp_directory_size')").fetchone()[0])
+              con.execute("SET max_temp_directory_size='90% of available disk space'")
+              after = str(con.execute("SELECT current_setting('max_temp_directory_size')").fetchone()[0])
+              print(f'RAIZES_TEMP_LIMIT before={before} after={after}', flush=True)
+              return original(con, *args, **kwargs)
+
+          transform.write_raizes_parquet_from_cnpjs = with_refreshed_temp_limit
+          try:
+              transform.transform_snapshot(
+                  month,
+                  cache_dir=cache_dir,
+                  output_dir=output_dir,
+                  skip_unimplemented=False,
+                  verify=True,
+                  verify_sample_size=1000,
+              )
+          finally:
+              transform.write_raizes_parquet_from_cnpjs = original
+
+          companies_zip = output_dir / 'companies.zip'
+          pack_result = pack.pack_from_parquets(
+              month,
+              companies_zip,
+              parquets_base=str(output_dir),
+          )
+          entry = manifest.build_snapshot_entry(month, output_dir)
+          evidence = {
+              'pack': pack_result,
+              'row_counts': entry['row_counts'],
+              'file_sizes': {k: v['size'] for k, v in entry['files'].items()},
+              'sha256': {k: v['sha256'] for k, v in entry['files'].items()},
+          }
+          Path('/tmp/backfill-v2-evidence.json').write_text(json.dumps(evidence, indent=2))
+          print(json.dumps(evidence, indent=2))
+          PY
+
+      - name: Upload compact local evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backfill-v2-2026-05-evidence
+          path: /tmp/backfill-v2-evidence.json
+          if-no-files-found: warn
+
+      - name: Upload transform metrics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backfill-v2-2026-05-metrics
+          path: etl/.cache/raw/2026-05/metrics/transform_metrics.json
+          if-no-files-found: warn
