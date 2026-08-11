@@ -138,15 +138,13 @@ jobs:
           echo "should_run=$SHOULD_RUN" >> "$GITHUB_OUTPUT"
           echo "value=$MONTH" >> "$GITHUB_OUTPUT"
 
-      # Cache restrito aos ZIPs crus (≤ ~7 GB) — exclui extracted/ (~25-30 GB)
-      # que estouraria o limite de 10 GB do GH Actions.
-      - name: Cache RFB raw ZIPs
-        if: steps.month.outputs.should_run == 'true'
-        uses: actions/cache@v4
-        with:
-          path: etl/.cache/${{ steps.month.outputs.value }}/*.zip
-          key: rfb-zips-${{ steps.month.outputs.value }}-v1
-
+      # The run mirrors the raw ZIPs to IA before transform. Keeping a second
+      # local copy through phase 3 competes directly with DuckDB spill and has
+      # already pushed the 2026-05 raizes stage to the filesystem ceiling.
+      # Bootstrap has used this supported switch for the same reason. Re-runs
+      # can fetch the durable raws from IA (fetch chain: local → IA → RFB), so
+      # preserving ~7 GiB in actions/cache is a convenience, not a correctness
+      # requirement.
       - name: Run pipeline
         if: steps.month.outputs.should_run == 'true'
         env:
@@ -156,6 +154,7 @@ jobs:
           MONTH: ${{ steps.month.outputs.value }}
           SKIP_UPLOAD: ${{ inputs.skip_upload }}
           NO_VERIFY: ${{ inputs.no_verify }}
+          FICHA_DROP_ZIPS_AFTER_LOAD: '1'
           # Defense against `'ascii' codec can't encode character` crashes
           # when runner stderr defaults to ascii (PR #24, commit 75691a94).
           PYTHONIOENCODING: utf-8
