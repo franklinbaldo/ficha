@@ -118,11 +118,35 @@ def local_identity(path: Path, *, chunk_size: int = _CHUNK_SIZE) -> LocalIdentit
     return LocalIdentity(size=path.stat().st_size, sha1=sha1_of_file(path, chunk_size=chunk_size))
 
 
+def files_list(metadata: dict) -> list[dict] | None:
+    """Lista `files` do metadata, ou `None` se estruturalmente inutilizável.
+
+    `{}`, `{"metadata": {...}}`, `files: null` e `files` não-lista significam
+    **ausência de observação**, não observação de ausência. Confundir os dois
+    faria um metadata parcial virar `MISSING` → `UPLOAD`, isto é, uma escrita
+    remota autorizada por falta de informação.
+    """
+    files = metadata.get("files")
+    if not isinstance(files, list):
+        return None
+    if not all(isinstance(entry, dict) for entry in files):
+        return None
+    return files
+
+
 def remote_entry(name: str, metadata: dict | None) -> dict | None:
-    """Entrada do arquivo no metadata do item, ou `None` se ausente/ilegível."""
+    """Entrada do arquivo, ou `None` quando ausente de uma lista válida.
+
+    Só distingue ausência dentro de uma lista utilizável; a distinção entre
+    "não está na lista" e "não há lista" é feita em `decide()`, porque as duas
+    levam a ações diferentes.
+    """
     if metadata is None:
         return None
-    for entry in metadata.get("files", []):
+    files = files_list(metadata)
+    if files is None:
+        return None
+    for entry in files:
         if entry.get("name") == name:
             return entry
     return None
@@ -138,8 +162,20 @@ def decide(name: str, local: LocalIdentity, metadata: dict | None) -> IdentityDe
             "metadata do item indisponível — estado remoto desconhecido",
         )
 
-    entry = remote_entry(name, metadata)
+    files = files_list(metadata)
+    if files is None:
+        # Metadata chegou, mas sem lista `files` utilizável. Não é evidência de
+        # ausência — é ausência de evidência, e não autoriza escrita.
+        return IdentityDecision(
+            name,
+            RemoteIdentityState.UNAVAILABLE,
+            UploadAction.RETRY_FAIL,
+            "metadata sem lista `files` utilizável — ausência não observada",
+        )
+
+    entry = next((candidate for candidate in files if candidate.get("name") == name), None)
     if entry is None:
+        # Lista válida e o arquivo não está nela: ausência **observada**.
         return IdentityDecision(
             name, RemoteIdentityState.MISSING, UploadAction.UPLOAD, "ausente no item remoto"
         )

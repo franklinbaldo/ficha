@@ -261,3 +261,59 @@ def test_mismatch_log_carries_both_identities(tmp_path) -> None:
     decision = decide(NAME, local, _metadata(_entry(b"BBBBB")))
     assert local.sha1 in decision.detail
     assert hashlib.sha1(b"BBBBB").hexdigest() in decision.detail  # noqa: S324
+
+
+# --- ausência observada vs ausência de observação ----------------------------
+# Só ausência OBSERVADA autoriza UPLOAD. Metadata estruturalmente incompleto não
+# é evidência de ausência, e autorizar escrita nele seria escrever por falta de
+# informação — o oposto da regra do slice.
+
+
+@pytest.mark.parametrize(
+    ("metadata", "rotulo"),
+    [
+        ({}, "objeto vazio"),
+        ({"metadata": {"identifier": "ficha-2026-05"}}, "sem chave files"),
+        ({"files": None}, "files=None"),
+        ({"files": "cnpjs.parquet"}, "files não-lista (str)"),
+        ({"files": {"name": NAME}}, "files não-lista (dict)"),
+        ({"files": ["cnpjs.parquet"]}, "files com entradas não-dict"),
+    ],
+)
+def test_structurally_incomplete_metadata_is_unavailable(tmp_path, metadata, rotulo) -> None:
+    local = local_identity(_file(tmp_path, b"dados"))
+    decision = decide(NAME, local, metadata)
+    assert decision.state is RemoteIdentityState.UNAVAILABLE, rotulo
+    assert decision.action is UploadAction.RETRY_FAIL, rotulo
+
+
+def test_empty_but_valid_files_list_is_missing(tmp_path) -> None:
+    """Lista válida e vazia é ausência observada — aí UPLOAD é correto."""
+    local = local_identity(_file(tmp_path, b"dados"))
+    decision = decide(NAME, local, {"files": []})
+    assert decision.state is RemoteIdentityState.MISSING
+    assert decision.action is UploadAction.UPLOAD
+
+
+def test_valid_list_without_the_target_is_missing(tmp_path) -> None:
+    local = local_identity(_file(tmp_path, b"dados"))
+    metadata = _metadata(
+        _entry(b"outro", name="raizes.parquet"), _entry(b"x", name="socios.parquet")
+    )
+    decision = decide(NAME, local, metadata)
+    assert decision.state is RemoteIdentityState.MISSING
+    assert decision.action is UploadAction.UPLOAD
+
+
+def test_incomplete_metadata_never_triggers_a_write(tmp_path) -> None:
+    """Fecha a brecha: metadata parcial não pode virar UPLOAD."""
+    path = _file(tmp_path, b"dados")
+
+    def upload() -> None:
+        raise AssertionError("ausência não observada não autoriza escrita")
+
+    for metadata in ({}, {"metadata": {}}, {"files": None}, {"files": 42}):
+        with pytest.raises(IdentityNotConfirmed):
+            ensure_uploaded(
+                NAME, path, upload=upload, fetch_metadata=lambda m=metadata: m, sleep=lambda _: None
+            )
