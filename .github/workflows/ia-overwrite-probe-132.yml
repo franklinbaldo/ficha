@@ -1,0 +1,44 @@
+name: Probe — semântica de overwrite no IA (#132)
+
+# Probe operacional e efêmero: responde empiricamente se um PUT no mesmo nome
+# substitui o objeto no Internet Archive, antes de `REPLACE` virar contrato no
+# slice 2 de #132.
+#
+# Roda num item descartável (`ficha-overwrite-probe-132`), nunca em
+# `ficha-YYYY-MM`: o item de 2026-05 está recebendo companies.zip agora e não
+# deve receber tarefas extras. Payload de 64 KB e limpeza ao final.
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize]
+
+concurrency:
+  group: ia-overwrite-probe-132
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    if: github.event.pull_request.head.ref == 'ops/ia-overwrite-probe-132'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: etl
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+      - run: uv python install 3.11
+      - run: uv sync --frozen --extra dev
+
+      - name: Probe overwrite semantics
+        env:
+          IA_ACCESS_KEY: ${{ secrets.IA_ACCESS_KEY }}
+          IA_SECRET_KEY: ${{ secrets.IA_SECRET_KEY }}
+          PYTHONIOENCODING: utf-8
+          PYTHONUTF8: '1'
+        run: uv run python .ops_probe_ia_overwrite.py
