@@ -53,7 +53,23 @@ log = logging.getLogger(__name__)
 
 _CHUNK_SIZE = 1024 * 1024  # 1 MiB — companies.zip tem 21,8 GiB; nada em RAM.
 
-# O metadata do IA fica atrás do PUT por alguns segundos (derive assíncrono).
+# O metadata do IA fica atrás do PUT (derive assíncrono). A janela abaixo é
+# provisória e deliberadamente NÃO calibrada pelo pior caso observado.
+#
+# O run 31502999943 mostrou que, ao criar um item NOVO, o arquivo não apareceu
+# em `files` nem 79 s depois do PUT. Mas esse é um caso distinto do de produção,
+# e transformar aquele número em constante global seria calibrar pelo cenário
+# errado. Os quatro casos precisam ser medidos separadamente:
+#
+#   1. item novo                      — observado: >79 s, e não é caso de produção
+#   2. item existente, objeto novo    — não medido
+#   3. overwrite em item existente    — não medido (probe de #140 pendente)
+#   4. item com derive pendente       — não medido
+#
+# Produção acontece em (2) e (3): `ficha-YYYY-MM` já existe quando o pipeline
+# escreve. Enquanto (2)/(3) não forem medidos, a janela fica curta e ambos
+# `confirm_attempts` e `sleep` seguem injetáveis, para que o call site escolha
+# com base em evidência em vez de herdar um default arbitrário.
 _CONFIRM_ATTEMPTS = 5
 _CONFIRM_BACKOFF_S = 2.0
 
