@@ -1,0 +1,140 @@
+name: Apply issue 118 patch
+
+on:
+  pull_request:
+    types: [reopened]
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.event.pull_request.head.ref == 'fix/raizes-final-join-spill-118'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/raizes-final-join-spill-118
+      - uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+      - run: uv python install 3.11
+      - working-directory: etl
+        run: uv sync --frozen --all-groups
+      - name: Patch raizes final join
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('etl/src/ficha_etl/transform.py')
+          text = path.read_text()
+          start = text.index('    log.info("    joining + writing raizes.parquet from cnpjs...")')
+          end = text.index('    # Free all temp tables.', start)
+          replacement = '''    log.info("    joining + writing raizes.parquet from cnpjs (bucketed)...")
+    # Run the final four-way LEFT JOIN in cnpj_base-prefix buckets. At 2026-05
+    # scale, the global join spilled ~71 GiB and filled 99.5% of the Actions
+    # runner disk even though every aggregate feeding it was already safely
+    # materialized (#118, run 31435386961). Materializing bucket-local inputs
+    # keeps each hash join bounded without changing schema or row semantics.
+    parts_dir = output_path.parent / f"{output_path.stem}.parts"
+    shutil.rmtree(parts_dir, ignore_errors=True)
+    parts_dir.mkdir(parents=True, exist_ok=True)
+    bucket_tables = (
+        "_raizes_empresa_b",
+        "_raizes_counts_b",
+        "_raizes_ufs_agg_b",
+        "_raizes_cnaes_agg_b",
+        "_raizes_matriz_b",
+    )
+    sources = (
+        ("_raizes_empresa", "_raizes_empresa_b"),
+        ("_raizes_counts", "_raizes_counts_b"),
+        ("_raizes_ufs_agg", "_raizes_ufs_agg_b"),
+        ("_raizes_cnaes_agg", "_raizes_cnaes_agg_b"),
+        ("_raizes_matriz", "_raizes_matriz_b"),
+    )
+    try:
+        written_parts: list[Path] = []
+        for prefix in "0123456789":
+            log.info("      raizes bucket %s/9: materializing inputs", prefix)
+            for source, target in sources:
+                con.execute(
+                    f"CREATE OR REPLACE TEMP TABLE {target} AS "
+                    f"SELECT * FROM {source} WHERE LEFT(cnpj_base, 1) = '{prefix}'"
+                )
+
+            n = con.execute("SELECT COUNT(*) FROM _raizes_empresa_b").fetchone()[0]
+            if n == 0:
+                for tbl in bucket_tables:
+                    con.execute(f"DROP TABLE IF EXISTS {tbl}")
+                continue
+
+            emp_b = icon.table("_raizes_empresa_b")
+            cnt_b = icon.table("_raizes_counts_b")
+            ufs_b = icon.table("_raizes_ufs_agg_b")
+            cnaes_b = icon.table("_raizes_cnaes_agg_b")
+            mat_b = icon.table("_raizes_matriz_b")
+            bucket_expr = (
+                emp_b.left_join(cnt_b, emp_b.cnpj_base == cnt_b.cnpj_base)
+                .left_join(ufs_b, emp_b.cnpj_base == ufs_b.cnpj_base)
+                .left_join(cnaes_b, emp_b.cnpj_base == cnaes_b.cnpj_base)
+                .left_join(mat_b, emp_b.cnpj_base == mat_b.cnpj_base)
+                .select(
+                    "cnpj_base",
+                    *_empresa_fields,
+                    qtd_estabelecimentos=cnt_b.qtd_estabelecimentos.coalesce(0),
+                    qtd_estabelecimentos_ativos=cnt_b.qtd_estabelecimentos_ativos.coalesce(0),
+                    ufs_atuacao=ufs_b.ufs_atuacao.coalesce(_empty),
+                    cnaes_principais_distintos=cnaes_b.cnaes_principais_distintos.coalesce(_empty),
+                    data_inicio_atividade_matriz=mat_b.data_inicio_atividade_matriz,
+                    uf_matriz=mat_b.uf_matriz,
+                    municipio_matriz_codigo=mat_b.municipio_matriz_codigo,
+                    municipio_matriz_nome=mat_b.municipio_matriz_nome,
+                    cnae_principal_matriz_codigo=mat_b.cnae_principal_matriz_codigo,
+                    cnae_principal_matriz_descricao=mat_b.cnae_principal_matriz_descricao,
+                )
+            )
+            part = parts_dir / f"bucket-{prefix}.parquet"
+            con.execute(
+                f"COPY ({ibis.to_sql(bucket_expr, dialect='duckdb')}) "
+                f"TO '{part}' (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 200000)"
+            )
+            written_parts.append(part)
+            log.info("      raizes bucket %s: wrote %d roots", prefix, n)
+            for tbl in bucket_tables:
+                con.execute(f"DROP TABLE IF EXISTS {tbl}")
+
+        if not written_parts:
+            raise RuntimeError("raizes final join produced no bucket parts")
+
+        # No global ORDER BY here: raizes has no public sort contract, and a
+        # global sort would recreate an unbounded spill operator after we just
+        # bounded the joins. Explicit file order keeps the merge deterministic
+        # while COPY streams the already-materialized bucket outputs.
+        quoted_parts = ", ".join(repr(str(part)) for part in written_parts)
+        con.execute(
+            f"COPY (SELECT * FROM read_parquet([{quoted_parts}])) "
+            f"TO '{output_path}' (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 200000)"
+        )
+    finally:
+        for tbl in bucket_tables:
+            con.execute(f"DROP TABLE IF EXISTS {tbl}")
+        shutil.rmtree(parts_dir, ignore_errors=True)
+
+'''
+          path.write_text(text[:start] + replacement + text[end:])
+          PY
+      - working-directory: etl
+        run: |
+          uv run ruff format src/ficha_etl/transform.py tests/test_raizes_partitioned_join.py
+          uv run ruff check src tests
+          uv run pytest tests/test_raizes_partitioned_join.py tests/test_transform.py -q
+          uv run ruff format --check src tests
+      - name: Commit production patch
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add etl/src/ficha_etl/transform.py etl/tests/test_raizes_partitioned_join.py
+          git diff --cached --quiet && exit 0
+          git commit -m "fix(etl): bucket raizes final join to bound spill (#118)"
+          git push origin HEAD:fix/raizes-final-join-spill-118
