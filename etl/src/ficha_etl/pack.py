@@ -56,9 +56,6 @@ SCHEMA_VERSION = "1.0.0"
 LOOKUP_KINDS = ["cnaes", "motivos", "municipios", "naturezas", "paises", "qualificacoes"]
 
 
-# ---- helpers: type coercion ----------------------------------------
-
-
 def _int(v) -> int:
     try:
         return int(v) if v is not None else 0
@@ -131,13 +128,9 @@ def _faixa_etaria(v) -> int:
     return FaixaEtaria.FAIXA_ETARIA_UNSPECIFIED
 
 
-# ---- schema artifacts -----------------------------------------------
-
-
 def _schema_desc_bytes() -> bytes:
     """Serialise FileDescriptorSet for company.proto (self-contained)."""
     fds = descriptor_pb2.FileDescriptorSet()
-    # Collect transitive dependencies (proto3 well-known types etc.)
     seen: set[str] = set()
 
     def _add(fd: FileDescriptor) -> None:
@@ -156,9 +149,6 @@ def _schema_proto_text() -> bytes:
     if _PROTO_PATH.exists():
         return _PROTO_PATH.read_bytes()
     return b"# source not bundled"
-
-
-# ---- row → protobuf ------------------------------------------------
 
 
 def row_to_company(row: dict) -> Company:
@@ -182,9 +172,7 @@ def row_to_company(row: dict) -> Company:
         e.nome_fantasia = _str(estab_dict.get("nome_fantasia"))
         e.situacao_cadastral = _int(estab_dict.get("situacao_cadastral"))
         e.data_situacao_cadastral = _date(estab_dict.get("data_situacao_cadastral"))
-        e.motivo_situacao_cadastral_codigo = _int(
-            estab_dict.get("motivo_situacao_cadastral_codigo")
-        )
+        e.motivo_situacao_cadastral_codigo = _int(estab_dict.get("motivo_situacao_cadastral_codigo"))
         e.situacao_especial = _str(estab_dict.get("situacao_especial"))
         e.data_situacao_especial = _date(estab_dict.get("data_situacao_especial"))
         e.data_inicio_atividade = _date(estab_dict.get("data_inicio_atividade"))
@@ -243,9 +231,6 @@ def cnpjpath(cnpj_base: int) -> str:
     return f"{s[0:2]}/{s[2:5]}/{s[5:8]}.pb"
 
 
-# ---- lookup serialisation ------------------------------------------
-
-
 def build_lookup_pb(kind: str, rows: list[dict]) -> bytes:
     lf = LookupFile(kind=kind)
     for r in rows:
@@ -255,35 +240,16 @@ def build_lookup_pb(kind: str, rows: list[dict]) -> bytes:
     return lf.SerializeToString()
 
 
-# ---- main entry point ----------------------------------------------
-
-
 def pack_companies(
     rows: Iterator[dict],
     lookup_rows: dict[str, list[dict]],
     output_path: Path,
     snapshot_month: str,
 ) -> dict:
-    """Write companies.zip.
-
-    Args:
-        rows: iterator of joined company dicts (cnpjs ⊕ raizes ⊕ socios).
-        lookup_rows: { kind: [{codigo, descricao}, ...] }
-        output_path: destination path for the ZIP.
-        snapshot_month: "YYYY-MM" string.
-
-    Returns:
-        { count, size_bytes, schema_sha256 }
-    """
+    """Write companies.zip."""
     schema_desc = _schema_desc_bytes()
     schema_sha256 = hashlib.sha256(schema_desc).hexdigest()
     snapshot_yyyymm = int(snapshot_month.replace("-", ""))
-
-    # Fail fast if the caller didn't provide every required lookup kind
-    # (Codex P2 on PR #41). The package contract is that every published
-    # companies.zip is queryable end-to-end — if a kind is missing the
-    # frontend can't decode codes of that kind and there's no recovery
-    # short of republishing.
     missing_kinds = sorted(set(LOOKUP_KINDS) - set(lookup_rows.keys()))
     if missing_kinds:
         raise ValueError(
@@ -291,34 +257,19 @@ def pack_companies(
         )
 
     count = 0
-    # O(1) duplicate guard: requires input sorted by cnpj_base (pack_from_parquets
-    # guarantees this via ORDER BY; external callers must sort too). A full set
-    # would grow to tens of millions of entries on production snapshots.
     prev_cnpj_base: int | None = None
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     with SpoolingZipFile(
         output_path, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6, allowZip64=True
     ) as zf:
-        # schema artifacts
         zf.writestr("_schema.desc", schema_desc)
         zf.writestr("_schema.proto", _schema_proto_text())
-
-        # lookups
         for kind, lrows in lookup_rows.items():
-            pb_bytes = build_lookup_pb(kind, lrows)
-            zf.writestr(f"_lookups/{kind}.pb", pb_bytes)
+            zf.writestr(f"_lookups/{kind}.pb", build_lookup_pb(kind, lrows))
 
-        # company docs
         for row in rows:
             company = row_to_company(row)
-            # Enforce strictly-increasing cnpj_base. Two reasons:
-            #   1. Duplicates: zipfile silently writes both entries under the
-            #      same name and different ZIP readers resolve conflicts
-            #      differently — safer to fail at pack time.
-            #   2. Sorted-input contract: the adjacent-only duplicate check
-            #      above would miss non-adjacent duplicates in unsorted input.
-            #      Requiring strictly-increasing keys makes the guard complete.
             if prev_cnpj_base is not None and company.cnpj_base <= prev_cnpj_base:
                 if company.cnpj_base == prev_cnpj_base:
                     raise ValueError(
@@ -331,11 +282,9 @@ def pack_companies(
                 )
             prev_cnpj_base = company.cnpj_base
             company.snapshot_yyyymm = snapshot_yyyymm
-            pb_bytes = company.SerializeToString()
-            zf.writestr(cnpjpath(company.cnpj_base), pb_bytes)
+            zf.writestr(cnpjpath(company.cnpj_base), company.SerializeToString())
             count += 1
 
-        # meta (written last so count is accurate)
         meta = {
             "schema_version": SCHEMA_VERSION,
             "schema_sha256": schema_sha256,
@@ -348,12 +297,10 @@ def pack_companies(
     return {"count": count, "size_bytes": size, "schema_sha256": schema_sha256}
 
 
-# ---- read from parquets (IA or local) ----------------------------------------
-
-# Each invocation is deliberately restricted to one cnpj_base prefix before
-# the expensive list(struct(...)) GROUP BY operators. Real 2026-04 data OOMed
-# at 12.4 GiB before yielding the first row when these aggregates were global,
-# even with threads=1 and preserve_insertion_order=false (issue #127).
+# Each invocation is deliberately restricted to one two-digit cnpj_base range
+# before the expensive list(struct(...)) GROUP BY operators. A one-digit
+# prefix still OOMed at 12.4 GiB on real 2026-04 data, so 100 direct ranges
+# bound state further and keep predicates eligible for Parquet min/max pruning.
 _COMPANIES_SQL = """
 SELECT
     r.cnpj_base,
@@ -370,7 +317,7 @@ SELECT
 FROM (
     SELECT *
     FROM read_parquet(?)
-    WHERE LEFT(cnpj_base, 1) = ?
+    WHERE cnpj_base >= ? AND cnpj_base < ?
 ) r
 LEFT JOIN (
     SELECT cnpj_base,
@@ -412,7 +359,7 @@ LEFT JOIN (
                'data_exclusao_mei': data_exclusao_mei
            } ORDER BY cnpj_ordem, cnpj_dv) AS estabelecimentos
     FROM read_parquet(?)
-    WHERE LEFT(cnpj_base, 1) = ?
+    WHERE cnpj_base >= ? AND cnpj_base < ?
     GROUP BY cnpj_base
 ) e USING (cnpj_base)
 LEFT JOIN (
@@ -441,7 +388,7 @@ LEFT JOIN (
                       representante_legal_nome,
                       representante_legal_qualificacao_codigo) AS socios
     FROM read_parquet(?)
-    WHERE LEFT(cnpj_base, 1) = ?
+    WHERE cnpj_base >= ? AND cnpj_base < ?
     GROUP BY cnpj_base
 ) s USING (cnpj_base)
 ORDER BY r.cnpj_base
@@ -458,16 +405,19 @@ def _iter_company_rows(
 ) -> Iterator[dict]:
     """Yield joined company rows in globally increasing cnpj_base order.
 
-    One prefix is executed and fully drained before the next one. Filtering
-    all three large inputs before their GROUP BY/join bounds DuckDB state,
-    while prefix order plus per-bucket ORDER BY preserves the strict ordering
-    required by pack_companies' O(1) duplicate guard.
+    One two-digit range is executed and fully drained before the next one.
+    Filtering all three large inputs before their GROUP BY/join bounds DuckDB
+    state, while range order plus per-bucket ORDER BY preserves the strict
+    ordering required by pack_companies' O(1) duplicate guard.
     """
-    for prefix in "0123456789":
-        log.info("pack_from_parquets: querying company rows prefix=%s", prefix)
+    for i in range(100):
+        prefix = f"{i:02d}"
+        lower = f"{prefix}000000"
+        upper = f"{i + 1:02d}000000" if i < 99 else "A0000000"
+        log.info("pack_from_parquets: querying company rows range=[%s,%s)", lower, upper)
         cur = con.execute(
             _COMPANIES_SQL,
-            [raizes_url, prefix, cnpjs_url, prefix, socios_url, prefix],
+            [raizes_url, lower, upper, cnpjs_url, lower, upper, socios_url, lower, upper],
         )
         cols = [d[0] for d in cur.description]
         while True:
@@ -486,22 +436,8 @@ def pack_from_parquets(
     batch_size: int = 10_000,
     memory_limit_gb: float | None = None,
 ) -> dict:
-    """Build companies.zip by reading parquets from IA (or a local directory).
-
-    Args:
-        month: snapshot in YYYY-MM format.
-        output_path: destination path for companies.zip.
-        parquets_base: URL prefix or local directory path containing the parquets.
-            Defaults to the IA item URL for the given month.
-        batch_size: rows to fetch per DuckDB fetchmany() call.
-        memory_limit_gb: optional DuckDB memory cap in GB.
-
-    Returns:
-        { count, size_bytes, schema_sha256 }
-    """
+    """Build companies.zip by reading parquets from IA (or a local directory)."""
     if parquets_base is None:
-        # mirror.item_root honors FICHA_IA_BASE_URL — same source of truth as
-        # the rest of the pipeline (tests/staging/self-hosted mirrors).
         parquets_base = mirror.item_root(month)
 
     raizes_url = f"{parquets_base}/raizes.parquet"
