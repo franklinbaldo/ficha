@@ -1,0 +1,46 @@
+name: Probe — curva de throughput de upload no IA (#133)
+
+# Experimento operacional que decide a arquitetura de #110/#136.
+#
+# Fato medido no run 31489373093: companies.zip (21,8 GiB) subiu a 1,64 MiB/s
+# sustentados por 2h37; uma sonda de 512 MiB no mesmo item deu >28 MiB/s.
+# Se a queda for função do tamanho do objeto, shardar o artefato é a correção.
+# Se a banda for limitada por conta/item, sharding não resolve o transporte.
+#
+# Item descartável, nomes únicos por PUT (nada é sobrescrito), objetos apagados
+# ao final. ~3,4 GiB sequenciais + 1 GiB concorrente.
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize]
+
+concurrency:
+  group: ia-upload-curve-133
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  curve:
+    if: github.event.pull_request.head.ref == 'ops/ia-upload-curve-133'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    defaults:
+      run:
+        working-directory: etl
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+      - run: uv python install 3.11
+      - run: uv sync --frozen --extra dev
+
+      - name: Measure upload throughput by object size
+        env:
+          IA_ACCESS_KEY: ${{ secrets.IA_ACCESS_KEY }}
+          IA_SECRET_KEY: ${{ secrets.IA_SECRET_KEY }}
+          PYTHONIOENCODING: utf-8
+          PYTHONUTF8: '1'
+        run: uv run python .ops_probe_upload_curve.py
