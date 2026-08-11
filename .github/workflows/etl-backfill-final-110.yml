@@ -48,6 +48,21 @@ jobs:
           uv run pytest tests -q
           uv run ruff format --check src tests
 
+      - name: Materialize validated issue 118 transform on durable PR branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          target='fix/refresh-temp-cap-118'
+          path='etl/src/ficha_etl/transform.py'
+          sha=$(gh api "repos/${GITHUB_REPOSITORY}/contents/${path}?ref=${target}" --jq .sha)
+          content=$(base64 -w0 src/ficha_etl/transform.py)
+          gh api --method PUT "repos/${GITHUB_REPOSITORY}/contents/${path}" \
+            -f message='fix(etl): bucket raizes final join to bound spill (#118)' \
+            -f content="$content" \
+            -f sha="$sha" \
+            -f branch="$target" >/dev/null
+
       - name: Run real publishing pipeline for 2026-05
         id: run
         continue-on-error: true
