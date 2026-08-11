@@ -350,6 +350,10 @@ def pack_companies(
 
 # ---- read from parquets (IA or local) ----------------------------------------
 
+# Each invocation is deliberately restricted to one cnpj_base prefix before
+# the expensive list(struct(...)) GROUP BY operators. Real 2026-04 data OOMed
+# at 12.4 GiB before yielding the first row when these aggregates were global,
+# even with threads=1 and preserve_insertion_order=false (issue #127).
 _COMPANIES_SQL = """
 SELECT
     r.cnpj_base,
@@ -363,7 +367,11 @@ SELECT
     r.qtd_estabelecimentos_ativos,
     e.estabelecimentos,
     s.socios
-FROM read_parquet(?) r
+FROM (
+    SELECT *
+    FROM read_parquet(?)
+    WHERE LEFT(cnpj_base, 1) = ?
+) r
 LEFT JOIN (
     SELECT cnpj_base,
            list({
@@ -404,6 +412,7 @@ LEFT JOIN (
                'data_exclusao_mei': data_exclusao_mei
            } ORDER BY cnpj_ordem, cnpj_dv) AS estabelecimentos
     FROM read_parquet(?)
+    WHERE LEFT(cnpj_base, 1) = ?
     GROUP BY cnpj_base
 ) e USING (cnpj_base)
 LEFT JOIN (
@@ -432,10 +441,41 @@ LEFT JOIN (
                       representante_legal_nome,
                       representante_legal_qualificacao_codigo) AS socios
     FROM read_parquet(?)
+    WHERE LEFT(cnpj_base, 1) = ?
     GROUP BY cnpj_base
 ) s USING (cnpj_base)
 ORDER BY r.cnpj_base
 """
+
+
+def _iter_company_rows(
+    con,
+    *,
+    raizes_url: str,
+    cnpjs_url: str,
+    socios_url: str,
+    batch_size: int,
+) -> Iterator[dict]:
+    """Yield joined company rows in globally increasing cnpj_base order.
+
+    One prefix is executed and fully drained before the next one. Filtering
+    all three large inputs before their GROUP BY/join bounds DuckDB state,
+    while prefix order plus per-bucket ORDER BY preserves the strict ordering
+    required by pack_companies' O(1) duplicate guard.
+    """
+    for prefix in "0123456789":
+        log.info("pack_from_parquets: querying company rows prefix=%s", prefix)
+        cur = con.execute(
+            _COMPANIES_SQL,
+            [raizes_url, prefix, cnpjs_url, prefix, socios_url, prefix],
+        )
+        cols = [d[0] for d in cur.description]
+        while True:
+            batch = cur.fetchmany(batch_size)
+            if not batch:
+                break
+            for row in batch:
+                yield dict(zip(cols, row))
 
 
 def pack_from_parquets(
@@ -482,16 +522,11 @@ def pack_from_parquets(
         lookup_rows[kind] = [{"codigo": r[0], "descricao": r[1]} for r in rows]
         log.info("  lookup %s: %d entries", kind, len(rows))
 
-    log.info("pack_from_parquets: querying company rows")
-    cur = con.execute(_COMPANIES_SQL, [raizes_url, cnpjs_url, socios_url])
-    cols = [d[0] for d in cur.description]
-
-    def _row_iter() -> Iterator[dict]:
-        while True:
-            batch = cur.fetchmany(batch_size)
-            if not batch:
-                break
-            for row in batch:
-                yield dict(zip(cols, row))
-
-    return pack_companies(_row_iter(), lookup_rows, output_path, snapshot_month=month)
+    rows = _iter_company_rows(
+        con,
+        raizes_url=raizes_url,
+        cnpjs_url=cnpjs_url,
+        socios_url=socios_url,
+        batch_size=batch_size,
+    )
+    return pack_companies(rows, lookup_rows, output_path, snapshot_month=month)
