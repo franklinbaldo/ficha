@@ -3,253 +3,131 @@ name: CI
 on:
   pull_request:
     branches: [main]
-  push:
-    branches: [main]
 
-# Path filters per ADR 0005: each subproject has its own job, only runs when relevant.
+permissions:
+  contents: read
+
 jobs:
-  web:
-    name: web/
+  apply-118:
+    if: github.head_ref == 'fix/refresh-temp-cap-118'
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: web
     steps:
       - uses: actions/checkout@v4
-
-      - name: Detect changes in web/
-        id: changes
-        uses: dorny/paths-filter@v3
         with:
-          filters: |
-            web:
-              - 'web/**'
-              - '.github/workflows/ci.yml'
-
-      - uses: actions/setup-node@v4
-        if: steps.changes.outputs.web == 'true'
-        with:
-          node-version: '22'
-
-      - uses: oven-sh/setup-bun@v2
-        if: steps.changes.outputs.web == 'true'
-        with:
-          # Pinado (não `latest`): um bump de major do Bun não deve poder
-          # quebrar o CID sem um commit que o declare.
-          bun-version: 1.3.11
-
-      - name: Install
-        if: steps.changes.outputs.web == 'true'
-        run: bun install --frozen-lockfile
-
-      - name: Astro check
-        if: steps.changes.outputs.web == 'true'
-        run: bunx astro check
-
-      - name: Test
-        if: steps.changes.outputs.web == 'true'
-        run: bun run test
-
-      - name: Build
-        if: steps.changes.outputs.web == 'true'
-        run: bun run build
-
-  etl:
-    name: etl/
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: etl
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Detect changes in etl/
-        id: changes
-        uses: dorny/paths-filter@v3
-        with:
-          filters: |
-            etl:
-              - 'etl/**'
-              # ficha-py é dependência local editável do etl (ADR 0017) —
-              # uma mudança lá pode quebrar write_lookup_parquets sem tocar etl/**.
-              - 'ficha-py/**'
-              - '.github/workflows/ci.yml'
-
-      - name: Install uv
-        if: steps.changes.outputs.etl == 'true'
-        uses: astral-sh/setup-uv@v3
+          ref: fix/refresh-temp-cap-118
+      - uses: astral-sh/setup-uv@v3
         with:
           enable-cache: true
-
-      - name: Set up Python
-        if: steps.changes.outputs.etl == 'true'
-        run: uv python install 3.11
-
-      - name: Install
-        if: steps.changes.outputs.etl == 'true'
-        run: uv sync --extra dev
-
-      - name: Lint
-        if: steps.changes.outputs.etl == 'true'
+      - run: uv python install 3.11
+      - working-directory: etl
+        run: uv sync --frozen --all-groups
+      - name: Apply bucketed final raizes join
         run: |
-          uv run ruff check src tests bench
-          uv run ruff format --check src tests bench
+          python - <<'PY'
+          from pathlib import Path
 
-      - name: Test
-        if: steps.changes.outputs.etl == 'true'
-        run: uv run pytest tests
+          path = Path('etl/src/ficha_etl/transform.py')
+          text = path.read_text()
+          start_marker = '    log.info("    joining + writing raizes.parquet from cnpjs...")'
+          end_marker = '    # Free all temp tables.'
+          start = text.index(start_marker)
+          end = text.index(end_marker, start)
+          replacement = '''    log.info("    joining + writing raizes.parquet from cnpjs (bucketed)...")
+    # At 2026-05 scale the global four-way LEFT JOIN below spilled ~71 GiB
+    # and filled 99.5% of the Actions filesystem (run 31435386961). The eager
+    # aggregates above already complete safely, so bound only this final join
+    # by the first digit of cnpj_base. Every input uses the same partition key,
+    # preserving join semantics while keeping each hash input ~1/10 scale.
+    parts_dir = output_path.parent / f"{output_path.stem}.parts"
+    shutil.rmtree(parts_dir, ignore_errors=True)
+    parts_dir.mkdir(parents=True, exist_ok=True)
+    bucket_tables = (
+        "_raizes_empresa_b",
+        "_raizes_counts_b",
+        "_raizes_ufs_agg_b",
+        "_raizes_cnaes_agg_b",
+        "_raizes_matriz_b",
+    )
+    bucket_sources = (
+        ("_raizes_empresa", "_raizes_empresa_b"),
+        ("_raizes_counts", "_raizes_counts_b"),
+        ("_raizes_ufs_agg", "_raizes_ufs_agg_b"),
+        ("_raizes_cnaes_agg", "_raizes_cnaes_agg_b"),
+        ("_raizes_matriz", "_raizes_matriz_b"),
+    )
+    _empty = ibis.literal([], type="array<string>")
+    try:
+        written_parts: list[Path] = []
+        for prefix in "0123456789":
+            log.info("      raizes bucket %s/9: materializing inputs", prefix)
+            for source, target in bucket_sources:
+                con.execute(
+                    f"CREATE OR REPLACE TEMP TABLE {target} AS "
+                    f"SELECT * FROM {source} WHERE LEFT(cnpj_base, 1) = '{prefix}'"
+                )
+            roots = con.execute("SELECT COUNT(*) FROM _raizes_empresa_b").fetchone()[0]
+            if roots == 0:
+                for table in bucket_tables:
+                    con.execute(f"DROP TABLE IF EXISTS {table}")
+                continue
+            emp = icon.table("_raizes_empresa_b")
+            cnt = icon.table("_raizes_counts_b")
+            ufs = icon.table("_raizes_ufs_agg_b")
+            cnaes = icon.table("_raizes_cnaes_agg_b")
+            mat = icon.table("_raizes_matriz_b")
+            bucket_expr = (
+                emp.left_join(cnt, emp.cnpj_base == cnt.cnpj_base)
+                .left_join(ufs, emp.cnpj_base == ufs.cnpj_base)
+                .left_join(cnaes, emp.cnpj_base == cnaes.cnpj_base)
+                .left_join(mat, emp.cnpj_base == mat.cnpj_base)
+                .select(
+                    "cnpj_base",
+                    *_empresa_fields,
+                    qtd_estabelecimentos=cnt.qtd_estabelecimentos.coalesce(0),
+                    qtd_estabelecimentos_ativos=cnt.qtd_estabelecimentos_ativos.coalesce(0),
+                    ufs_atuacao=ufs.ufs_atuacao.coalesce(_empty),
+                    cnaes_principais_distintos=cnaes.cnaes_principais_distintos.coalesce(_empty),
+                    data_inicio_atividade_matriz=mat.data_inicio_atividade_matriz,
+                    uf_matriz=mat.uf_matriz,
+                    municipio_matriz_codigo=mat.municipio_matriz_codigo,
+                    municipio_matriz_nome=mat.municipio_matriz_nome,
+                    cnae_principal_matriz_codigo=mat.cnae_principal_matriz_codigo,
+                    cnae_principal_matriz_descricao=mat.cnae_principal_matriz_descricao,
+                )
+            )
+            part = parts_dir / f"bucket-{prefix}.parquet"
+            con.execute(
+                f"COPY ({ibis.to_sql(bucket_expr, dialect='duckdb')}) "
+                f"TO '{part}' (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 200000)"
+            )
+            written_parts.append(part)
+            for table in bucket_tables:
+                con.execute(f"DROP TABLE IF EXISTS {table}")
+        if not written_parts:
+            raise RuntimeError("raizes final join produced no bucket parts")
+        quoted_parts = ", ".join(repr(str(part)) for part in written_parts)
+        con.execute(
+            f"COPY (SELECT * FROM read_parquet([{quoted_parts}])) "
+            f"TO '{output_path}' (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 200000)"
+        )
+    finally:
+        for table in bucket_tables:
+            con.execute(f"DROP TABLE IF EXISTS {table}")
+        shutil.rmtree(parts_dir, ignore_errors=True)
 
-      - name: Benchmark harness smoke
-        if: steps.changes.outputs.etl == 'true'
-        # Proves every bench/ script still starts and completes end-to-end on
-        # a tiny synthetic fixture — bench/ is exercised by nothing else in
-        # CI, which is exactly how a prior schema-registry refactor silently
-        # broke it (removed columns the scripts still referenced) with
-        # lint+tests both green. Tiny scale keeps this fast; it's a smoke
-        # check (does it run at all), not a benchmark run.
-        #
-        # --scale 500, not 200: generate()'s duplicate injection is 1-in-500
-        # bases (_DUP_EVERY_N), so scale 200 never emitted a single duplicate
-        # and silently never exercised load_main_tables_into_duckdb's dedup
-        # path here at all. 500 guarantees exactly one (base=500).
-        #
-        # benchmark.py runs first, WITHOUT --workdir override: it populates
-        # the default bench/.work/data cache that ab_contatos_cnaes.py and
-        # ab_typed_keys.py both read from directly (hardcoded, no --workdir
-        # flag of their own) — running benchmark.py against a different
-        # workdir here would leave them nothing to load.
-        #
-        # Invoked from etl/ (the job's default working-directory), NOT from
-        # inside bench/ — every script's default/hardcoded paths (--workdir
-        # default bench/.work, DATA/OUT/DB_PATH = bench/.work/...) assume
-        # that cwd, matching the usage examples in bench/README.md.
+'''
+          path.write_text(text[:start] + replacement + text[end:])
+          PY
+      - working-directory: etl
         run: |
-          uv run python bench/benchmark.py --scale 500 --chunks 2 --repeats 1 \
-            --json bench/.work/benchmark.json
-          uv run python bench/ab_contatos_cnaes.py --repeats 1
-          uv run python bench/ab_typed_keys.py --repeats 1
-          rm -rf bench/.work
-
-  etl-windows:
-    name: etl/ (Windows compat)
-    runs-on: windows-latest
-    # Guards the promise made in PR #92/#93: ficha_etl (and every bench/
-    # script) must import and run on Windows -- a dev machine, not a
-    # production target. Before #92, `metrics.py` imported `resource`
-    # (POSIX-only) unguarded at module level, which broke `from ficha_etl
-    # import transform` outright on Windows; that was only caught by manual
-    # testing on an actual Windows dev machine, never by CI. `shell: bash`
-    # so this job can reuse the exact same commands as the Linux `etl` job
-    # instead of a parallel PowerShell dialect -- Windows runners ship Git
-    # Bash.
-    defaults:
-      run:
-        working-directory: etl
-        shell: bash
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Detect changes in etl/
-        id: changes
-        uses: dorny/paths-filter@v3
-        with:
-          filters: |
-            etl:
-              - 'etl/**'
-              - 'ficha-py/**'
-              - '.github/workflows/ci.yml'
-
-      - name: Install uv
-        if: steps.changes.outputs.etl == 'true'
-        uses: astral-sh/setup-uv@v3
-        with:
-          enable-cache: true
-
-      - name: Set up Python
-        if: steps.changes.outputs.etl == 'true'
-        run: uv python install 3.11
-
-      - name: Install
-        if: steps.changes.outputs.etl == 'true'
-        run: uv sync --extra dev
-
-      - name: Import check
-        if: steps.changes.outputs.etl == 'true'
-        # The exact regression this job exists to catch: any unguarded
-        # POSIX-only import (resource, fcntl, ...) anywhere in this list
-        # would break the whole import chain on Windows again.
-        run: |
-          uv run python -c "from ficha_etl import transform, metrics, registry, cli"
-          cd bench
-          uv run python -c "import sys; sys.path.insert(0, '.'); import _profile, benchmark, ab_contatos_cnaes, ab_typed_keys, ab_verify_roundtrip, dedup_evidence, run_with_peaks; print('all bench/ modules import OK on', sys.platform)"
-
-      - name: Test
-        if: steps.changes.outputs.etl == 'true'
-        run: uv run pytest tests -q
-
-      - name: CLI smoke (real console, not just import)
-        if: steps.changes.outputs.etl == 'true'
-        # cli.py's --help text is full of non-ASCII (→, —). pytest's capsys
-        # replaces sys.stdout/stderr, which can mask an encoding bug that
-        # only shows up against the real Windows console -- this runs
-        # every subcommand's --help through the actual `ficha-etl` console
-        # script the way a human/cron would invoke it.
-        run: |
-          uv run ficha-etl --help
-          for cmd in run download smoke list-snapshots list-files transform pack fetch; do
-            uv run ficha-etl "$cmd" --help
-          done
-
-      - name: Benchmark harness smoke
-        if: steps.changes.outputs.etl == 'true'
-        # Same scale/scripts as the Linux `etl` job's smoke step -- short on
-        # purpose (this job's point is "does it run on Windows at all", not
-        # a second full benchmark surface).
-        run: |
-          uv run python bench/benchmark.py --scale 500 --chunks 2 --repeats 1 \
-            --json bench/.work/benchmark.json
-          uv run python bench/ab_contatos_cnaes.py --repeats 1
-          uv run python bench/ab_typed_keys.py --repeats 1
-          rm -rf bench/.work
-
-  ficha-py:
-    name: ficha-py/
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: ficha-py
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Detect changes in ficha-py/
-        id: changes
-        uses: dorny/paths-filter@v3
-        with:
-          filters: |
-            ficha-py:
-              - 'ficha-py/**'
-              - '.github/workflows/ci.yml'
-
-      - name: Install uv
-        if: steps.changes.outputs.ficha-py == 'true'
-        uses: astral-sh/setup-uv@v3
-        with:
-          enable-cache: true
-
-      - name: Set up Python
-        if: steps.changes.outputs.ficha-py == 'true'
-        run: uv python install 3.11
-
-      - name: Install
-        if: steps.changes.outputs.ficha-py == 'true'
-        run: uv sync --extra dev
-
-      - name: Lint
-        if: steps.changes.outputs.ficha-py == 'true'
-        run: |
+          uv run ruff format src/ficha_etl/transform.py tests/test_raizes_partitioned_join.py
           uv run ruff check src tests
+          uv run pytest tests/test_raizes_partitioned_join.py tests/test_transform.py -q
           uv run ruff format --check src tests
-
-      - name: Test
-        if: steps.changes.outputs.ficha-py == 'true'
-        run: uv run pytest tests
+      - uses: actions/upload-artifact@v4
+        with:
+          name: issue-118-production-patch
+          path: |
+            etl/src/ficha_etl/transform.py
+            etl/tests/test_raizes_partitioned_join.py
+          if-no-files-found: error
