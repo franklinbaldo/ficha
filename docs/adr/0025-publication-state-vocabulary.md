@@ -38,18 +38,40 @@ workflow declare a qual deles pertence:
 | 5 | **público** | o que `main` anuncia em `web/public/manifest.json` | manifesto servido |
 
 Regras derivadas, verificadas estaticamente em
-`etl/tests/test_workflow_publication_naming.py`:
+`etl/tests/test_workflow_publication_naming.py`. Ambas só se aplicam a
+**artifacts de publicação** — os que apontam para `web/public/manifest.json` ou
+cujo nome contém `manifest`/`publication`/`publish`:
 
 1. Um artifact cujo nome anuncia publicação concretizada (`promoted`, `final`,
-   `published`) **não pode** rodar sob `if: always()`. Ele só pode existir sob a
-   mesma condição semântica que autoriza a promoção.
-2. Um artifact que publica `web/public/manifest.json` sem gate **deve** declarar
-   que não foi promovido, via prefixo `manifest-before-`, `manifest-candidate-`
-   ou `manifest-attempt-`.
+   `published`) **exige gate explícito**: um `if:` que referencie
+   `steps.<id>.outcome`/`.conclusion` ou `success()`. Nem `always()` nem a
+   ausência de `if:` satisfazem a regra.
+2. Um artifact que publica `web/public/manifest.json` sem gate explícito
+   **deve** declarar que não foi promovido, via prefixo `manifest-before-`,
+   `manifest-candidate-` ou `manifest-attempt-`.
+
+### O que o guard prova — e o que não prova
+
+Ele prova que a evidência de promoção **não repousa em `success()` implícito**:
+um step sem `if:` roda por herança dos anteriores, e ninguém declarou sob qual
+resultado ele deveria existir. Foi essa a forma que a primeira versão do guard
+deixava passar.
+
+Ele **não** prova que o step referenciado no `if:` seja de fato
+`build_snapshot_entry()` + `verify_snapshot_files()`. Verificar isso exigiria um
+parser semântico de expressões do Actions e um modelo do que cada step faz —
+desproporcional ao problema. A regra é deliberadamente conservadora: exige que
+alguém tenha **declarado explicitamente** a condição, e deixa a correção dessa
+condição para o review humano.
+
+O escopo restrito ao domínio de publicação também é intencional. `final` e
+`published` aparecem legitimamente em artifacts sem relação com o manifesto — um
+guard que reprovasse `final-transform-metrics` estaria proibindo vocabulário que
+nunca teve a ver com o bug.
 
 Evidência de estado (1) sob `always()` continua sendo desejável — é justamente
-quando o pipeline falha que `transform_metrics.json` mais importa. A regra não a
-atinge: ela só age sobre nomes que afirmam (4)/(5).
+quando o pipeline falha que `transform_metrics.json` mais importa. As regras não
+a atingem.
 
 ## Consequências
 

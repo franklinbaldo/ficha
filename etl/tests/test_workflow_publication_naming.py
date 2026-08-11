@@ -33,6 +33,12 @@ NON_PROMOTED_PREFIXES = ("manifest-before", "manifest-candidate", "manifest-atte
 
 PUBLIC_MANIFEST = "web/public/manifest.json"
 
+# O bug de #131 é sobre estado de *publicação*. `final`/`published` aparecem
+# legitimamente em artifacts sem relação com o manifesto (`final-transform-
+# metrics`, por exemplo), então o vocabulário de promoção só é fiscalizado em
+# artifacts que tratam de publicação — por path ou por nome.
+PUBLICATION_NAME_TOKENS = ("manifest", "publication", "publish")
+
 
 def _iter_steps(workflow: dict):
     for job_name, job in (workflow.get("jobs") or {}).items():
@@ -44,13 +50,33 @@ def _is_artifact_upload(step: dict) -> bool:
     return "actions/upload-artifact" in str(step.get("uses", ""))
 
 
-def _is_ungated(condition: str) -> bool:
-    """True quando o step roda mesmo com o gate de publicação reprovado.
+def _has_explicit_promotion_gate(condition: str) -> bool:
+    """True quando o step declara explicitamente sob qual resultado ele roda.
 
-    `always()` é o caso explícito. A ausência de `if` também conta como
-    gated: o Actions só roda o step se os anteriores tiveram sucesso.
+    Deliberadamente conservador — não é um parser semântico de expressões do
+    Actions. Exige apenas que exista um `if:` referenciando o resultado de um
+    step (`steps.<id>.outcome`/`.conclusion`) ou `success()`.
+
+    O que isto NÃO prova: que o step referenciado seja de fato
+    `build_snapshot_entry()` + `verify_snapshot_files()`. Prova só que a
+    promoção não repousa no `success()` **implícito** dos steps anteriores —
+    que foi o buraco: um step sem `if:` roda por herança e ninguém declarou
+    nada. Ausência de `if:` conta como ausência de gate.
     """
-    return "always()" in condition.replace(" ", "")
+    normalized = condition.replace(" ", "")
+    if not normalized or "always()" in normalized:
+        return False
+    referencia_step = "steps." in normalized and (
+        "outcome" in normalized or "conclusion" in normalized
+    )
+    return referencia_step or "success()" in normalized
+
+
+def _is_publication_artifact(artifact_name: str, path: str) -> bool:
+    """Restringe o guard ao domínio do bug: evidência de publicação."""
+    if PUBLIC_MANIFEST in path:
+        return True
+    return any(token in artifact_name.lower() for token in PUBLICATION_NAME_TOKENS)
 
 
 def _claims_promotion(artifact_name: str) -> bool:
@@ -75,24 +101,30 @@ def publication_naming_violations(workflow: dict, source: str) -> list[str]:
         artifact_name = str(with_block.get("name", ""))
         path = str(with_block.get("path", ""))
 
-        # R1 — um artifact que anuncia promoção só pode existir quando o gate
-        # de promoção passou. `always()` o produz inclusive em run abortado.
-        if _claims_promotion(artifact_name) and _is_ungated(condition):
+        if not _is_publication_artifact(artifact_name, path):
+            continue
+
+        gated = _has_explicit_promotion_gate(condition)
+
+        # R1 — nome que anuncia promoção exige gate explícito. `always()` o
+        # produziria em run abortado; a ausência de `if:` o produziria por
+        # herança do success() implícito, sem ninguém ter declarado nada.
+        if _claims_promotion(artifact_name) and not gated:
+            declared = f"`if: {condition}`" if condition else "nenhum `if:`"
             problems.append(
                 f"{where}: artifact {artifact_name!r} anuncia publicação concretizada "
-                f"mas roda sob `if: {condition}` — seria produzido mesmo com o run "
-                f"abortado antes de build_snapshot_entry()/verify_snapshot_files()"
+                f"mas tem {declared} — exige gate explícito referenciando "
+                f"steps.<id>.outcome/.conclusion ou success()"
             )
 
         # R2 — o manifesto do working tree é o estado (1)/(3). Publicá-lo sem
-        # gate exige um nome que declare que ele não foi promovido.
-        if PUBLIC_MANIFEST in path and _is_ungated(condition):
-            if not _declares_non_promoted(artifact_name):
-                problems.append(
-                    f"{where}: artifact {artifact_name!r} publica {PUBLIC_MANIFEST} "
-                    f"sob `if: {condition}` sem declarar que não foi promovido — "
-                    f"use um dos prefixos {NON_PROMOTED_PREFIXES}"
-                )
+        # gate explícito exige um nome que declare que ele não foi promovido.
+        if PUBLIC_MANIFEST in path and not gated and not _declares_non_promoted(artifact_name):
+            problems.append(
+                f"{where}: artifact {artifact_name!r} publica {PUBLIC_MANIFEST} "
+                f"sem gate explícito e sem declarar que não foi promovido — "
+                f"use um dos prefixos {NON_PROMOTED_PREFIXES}"
+            )
 
     return problems
 
@@ -138,6 +170,25 @@ def test_rule_catches_the_artifact_from_run_31450937194() -> None:
     assert "sem declarar que não foi promovido" in problems[1]
 
 
+def test_rule_catches_promoted_artifact_relying_on_implicit_success() -> None:
+    """Sem `if:` o step roda por herança — ninguém declarou sob que resultado.
+
+    Esta é a forma que a primeira versão do guard deixava passar: o `success()`
+    implícito dos steps anteriores não é evidência de que a promoção ocorreu.
+    """
+    workflow = _synthetic(
+        {
+            "name": "Upload manifest evidence",
+            "uses": "actions/upload-artifact@v4",
+            "with": {"name": "manifest-promoted-2026-05", "path": PUBLIC_MANIFEST},
+        }
+    )
+    problems = publication_naming_violations(workflow, "synthetic.yml")
+    assert len(problems) == 2, problems
+    assert "nenhum `if:`" in problems[0]
+    assert "sem gate explícito" in problems[1]
+
+
 def test_rule_accepts_promoted_artifact_gated_on_promotion_outcome() -> None:
     workflow = _synthetic(
         {
@@ -170,6 +221,36 @@ def test_rule_ignores_non_manifest_artifacts() -> None:
             "if": "always()",
             "uses": "actions/upload-artifact@v4",
             "with": {"name": "transform-metrics-2026-05", "path": "etl/.cache/m.json"},
+        }
+    )
+    assert publication_naming_violations(workflow, "synthetic.yml") == []
+
+
+def test_promotion_vocabulary_is_only_policed_on_publication_artifacts() -> None:
+    """`final` fora do domínio de publicação é legítimo e não pode ser bloqueado.
+
+    O bug de #131 é sobre estado de publicação; um guard que reprovasse
+    `final-transform-metrics` estaria proibindo vocabulário sem relação nenhuma
+    com o manifesto.
+    """
+    workflow = _synthetic(
+        {
+            "name": "Upload final metrics",
+            "if": "always()",
+            "uses": "actions/upload-artifact@v4",
+            "with": {"name": "final-transform-metrics-2026-05", "path": "etl/.cache/m.json"},
+        }
+    )
+    assert publication_naming_violations(workflow, "synthetic.yml") == []
+
+
+def test_rule_accepts_promoted_artifact_gated_on_success_function() -> None:
+    workflow = _synthetic(
+        {
+            "name": "Upload manifest evidence",
+            "if": "success() && steps.promote.outcome == 'success'",
+            "uses": "actions/upload-artifact@v4",
+            "with": {"name": "manifest-promoted-2026-05", "path": PUBLIC_MANIFEST},
         }
     )
     assert publication_naming_violations(workflow, "synthetic.yml") == []
