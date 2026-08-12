@@ -1,0 +1,33 @@
+name: Temporary format PR 188
+
+on:
+  push:
+    branches:
+      - perf/direct-confirm-after-put-187
+
+permissions:
+  contents: write
+
+jobs:
+  format:
+    if: ${{ !startsWith(github.event.head_commit.message, 'style(etl): apply ruff format') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: perf/direct-confirm-after-put-187
+      - uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+      - run: uv python install 3.11
+      - working-directory: etl
+        run: uv sync --frozen --extra dev
+      - working-directory: etl
+        run: uv run ruff format src tests bench
+      - run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add etl/src/ficha_etl/shard_publish.py etl/tests/test_shard_publish.py
+          git diff --cached --quiet && exit 0
+          git commit -m "style(etl): apply ruff format (#187)"
+          git push origin HEAD:perf/direct-confirm-after-put-187
