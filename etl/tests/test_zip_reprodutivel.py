@@ -4,6 +4,10 @@ Antes desta correção, `zipfile.writestr(str, ...)` construía cada `ZipInfo` a
 partir de `time.localtime()`, então dois packs dos mesmos dados produziam
 artefatos com `sha256` diferente — em todos os ~68 milhões de membros.
 
+A data gravada é o primeiro dia da competência, e não uma época artificial,
+porque o Internet Archive **renderiza** a data dos membros na listagem de unzip
+transparente (verificado em `ficha-2026-04/raw/Cnaes.zip`).
+
 A propriedade de regressão **forte** é uma só:
 
     mesmos inputs → SHA-256 do ZIP idêntico
@@ -29,7 +33,7 @@ import zipfile
 
 import pytest
 
-from ficha_etl.pack import LOOKUP_KINDS, ZIP_EPOCA, pack_companies
+from ficha_etl.pack import LOOKUP_KINDS, data_canonica_do_snapshot, pack_companies
 
 
 def _lookups():
@@ -70,10 +74,25 @@ def test_dois_packs_dos_mesmos_dados_sao_byte_identicos(tmp_path):
 # --- complementares: localizam a causa quando o teste forte falha -----------
 
 
-def test_todo_membro_grava_a_epoca_canonica(tmp_path):
+def test_todo_membro_grava_a_data_canonica_da_competencia(tmp_path):
     with zipfile.ZipFile(_feito(tmp_path)) as zf:
         datas = {i.date_time for i in zf.infolist()}
-    assert datas == {ZIP_EPOCA}
+    assert datas == {(2026, 5, 1, 0, 0, 0)}
+
+
+def test_a_data_canonica_vem_da_competencia_e_nao_do_relogio():
+    assert data_canonica_do_snapshot("2026-05") == (2026, 5, 1, 0, 0, 0)
+    assert data_canonica_do_snapshot("2019-12") == (2019, 12, 1, 0, 0, 0)
+
+
+def test_competencias_diferentes_gravam_datas_diferentes(tmp_path):
+    """A data descreve a que retrato o membro pertence — é isso que o IA mostra
+    ao usuário na listagem de unzip transparente."""
+    pack_companies(_rows(), _lookups(), tmp_path / "abr.zip", snapshot_month="2026-04")
+    pack_companies(_rows(), _lookups(), tmp_path / "mai.zip", snapshot_month="2026-05")
+    with zipfile.ZipFile(tmp_path / "abr.zip") as a, zipfile.ZipFile(tmp_path / "mai.zip") as b:
+        assert {i.date_time for i in a.infolist()} == {(2026, 4, 1, 0, 0, 0)}
+        assert {i.date_time for i in b.infolist()} == {(2026, 5, 1, 0, 0, 0)}
 
 
 # --- o que passar um ZipInfo poderia quebrar em silêncio ---------------------
@@ -198,5 +217,5 @@ def test_o_caminho_de_producao_tambem_e_byte_reproduzivel(tmp_path):
     assert hashlib.sha256(a.read_bytes()).hexdigest() == hashlib.sha256(b.read_bytes()).hexdigest()
     with zipfile.ZipFile(a) as zf:
         assert zf.testzip() is None
-        assert {i.date_time for i in zf.infolist()} == {ZIP_EPOCA}
+        assert {i.date_time for i in zf.infolist()} == {(2026, 5, 1, 0, 0, 0)}
         assert zf.read("00/000/001.pb")

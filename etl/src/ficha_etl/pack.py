@@ -258,25 +258,35 @@ def build_lookup_pb(kind: str, rows: list[dict]) -> bytes:
 # ---- main entry point ----------------------------------------------
 
 
-ZIP_EPOCA = (1980, 1, 1, 0, 0, 0)
-"""Época canônica gravada em todo membro do ZIP.
+def data_canonica_do_snapshot(snapshot_month: str) -> tuple[int, int, int, int, int, int]:
+    """Data gravada em todo membro do ZIP: o primeiro dia da competência.
 
-`zipfile.writestr(str, ...)` monta o `ZipInfo` a partir de `time.localtime()`,
-então dois packs dos mesmos dados produziam artefatos com hash diferente (#151).
-1980-01-01 é o mínimo representável no campo de data do ZIP e não finge ser
-mtime real — nenhum membro de `companies.zip` tem data de modificação
-significativa, já que todos são materializados no mesmo ato.
-"""
+    `zipfile.writestr(str, ...)` monta o `ZipInfo` a partir de `time.localtime()`,
+    então dois packs dos mesmos dados produziam artefatos com hash diferente
+    (#151). Trocar o relógio por uma constante resolve isso, mas a constante não
+    é livre: o Internet Archive **renderiza** a data dos membros para o usuário.
+    Verificado em `ficha-2026-04/raw/Cnaes.zip`, cuja listagem de unzip
+    transparente tem uma coluna `timestamp` com `2026-04-12 06:56`.
+
+    Uma época artificial como 1980-01-01 apareceria em ~68 milhões de linhas
+    dessa listagem, sem significar nada. O primeiro dia da competência é
+    determinístico, derivado de um input que já existe antes da geração, e
+    descreve corretamente a que retrato aquele arquivo pertence.
+
+    A propriedade preservada é: mesmos inputs + mesma competência → mesmos bytes.
+    """
+    ano, mes = snapshot_month.split("-")
+    return (int(ano), int(mes), 1, 0, 0, 0)
 
 
-def _membro(zf: zipfile.ZipFile, nome: str) -> zipfile.ZipInfo:
+def _membro(zf: zipfile.ZipFile, nome: str, data: tuple) -> zipfile.ZipInfo:
     """`ZipInfo` com data canônica e os defaults que `writestr(str, ...)` aplica.
 
     Passar um `ZipInfo` **desliga** esses defaults: sem repor `compress_type` e
     `_compresslevel` o membro sairia STORED em vez de DEFLATE, mudando o formato
     em silêncio.
     """
-    zi = zipfile.ZipInfo(filename=nome, date_time=ZIP_EPOCA)
+    zi = zipfile.ZipInfo(filename=nome, date_time=data)
     zi.compress_type = zf.compression
     zi._compresslevel = zf.compresslevel  # noqa: SLF001 — sem equivalente público
     zi.external_attr = 0o600 << 16
@@ -303,6 +313,7 @@ def pack_companies(
     schema_desc = _schema_desc_bytes()
     schema_sha256 = hashlib.sha256(schema_desc).hexdigest()
     snapshot_yyyymm = int(snapshot_month.replace("-", ""))
+    data_zip = data_canonica_do_snapshot(snapshot_month)
 
     # Fail fast if the caller didn't provide every required lookup kind
     # (Codex P2 on PR #41). The package contract is that every published
@@ -326,13 +337,13 @@ def pack_companies(
         output_path, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6, allowZip64=True
     ) as zf:
         # schema artifacts
-        zf.writestr(_membro(zf, "_schema.desc"), schema_desc)
-        zf.writestr(_membro(zf, "_schema.proto"), _schema_proto_text())
+        zf.writestr(_membro(zf, "_schema.desc", data_zip), schema_desc)
+        zf.writestr(_membro(zf, "_schema.proto", data_zip), _schema_proto_text())
 
         # lookups
         for kind, lrows in lookup_rows.items():
             pb_bytes = build_lookup_pb(kind, lrows)
-            zf.writestr(_membro(zf, f"_lookups/{kind}.pb"), pb_bytes)
+            zf.writestr(_membro(zf, f"_lookups/{kind}.pb", data_zip), pb_bytes)
 
         # company docs
         for row in rows:
@@ -357,7 +368,7 @@ def pack_companies(
             prev_cnpj_base = company.cnpj_base
             company.snapshot_yyyymm = snapshot_yyyymm
             pb_bytes = company.SerializeToString()
-            zf.writestr(_membro(zf, cnpjpath(company.cnpj_base)), pb_bytes)
+            zf.writestr(_membro(zf, cnpjpath(company.cnpj_base), data_zip), pb_bytes)
             count += 1
 
         # meta (written last so count is accurate)
@@ -367,7 +378,7 @@ def pack_companies(
             "snapshot_month": snapshot_month,
             "count": count,
         }
-        zf.writestr(_membro(zf, "_meta.json"), json.dumps(meta, indent=2))
+        zf.writestr(_membro(zf, "_meta.json", data_zip), json.dumps(meta, indent=2))
 
     size = output_path.stat().st_size
     return {"count": count, "size_bytes": size, "schema_sha256": schema_sha256}
