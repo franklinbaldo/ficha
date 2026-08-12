@@ -6,6 +6,11 @@ A unidade de sucesso é um shard remoto que satisfaz duas provas independentes:
 2. ``_meta.json`` remoto declara exatamente o ``MaterializationSpec`` pinado.
 
 Nada aqui faz replace. ``UNKNOWN`` e ``MISMATCH`` abortam antes de escrita.
+
+O SHA-256 público do artefato é uma terceira identidade e não pertence ao
+``MaterializationSpec``. Ele será persistido em sidecar própria (#167), porque
+um hash do ZIP não pode ser embutido no próprio ``_meta.json`` sem virar uma
+autorreferência e precisa sobreviver aos reruns que pulam shards já duráveis.
 """
 
 from __future__ import annotations
