@@ -3,7 +3,8 @@
   import type * as duckdb from '@duckdb/duckdb-wasm';
   import { strip as stripCNPJ } from '../lib/cnpj';
   import { fetchManifest, currentSnapshot } from '../lib/manifest';
-  import { allFilesHashed, archiveItemFrom, formatDay } from '../lib/provenance';
+  import { archiveItemFrom, formatDay, verificationClaim } from '../lib/provenance';
+  import type { VerificationClaim } from '../lib/provenance';
   import { createDuckDB, attachCnpjs, attachLookups, attachEnderecos, attachPessoas, attachSocios, attachCnpjContatos, attachCnpjCnaes } from '../lib/analytical';
   import EmpresaFicha from './EmpresaFicha.svelte';
 
@@ -84,7 +85,7 @@
      Cada campo só é exibido quando o snapshot em uso o sustenta. */
   let generatedAt = $state<string | null>(null);
   let archiveItem = $state<string | null>(null);
-  let filesHashed = $state(false);
+  let verification = $state<VerificationClaim | null>(null);
 
   /** "2026-04" → "abril de 2026" */
   function formatMonth(date: string): string {
@@ -127,8 +128,9 @@
       snapshotDate = snap.date;
       generatedAt = snap.generated_at ? formatDay(snap.generated_at) : null;
       archiveItem = archiveItemFrom(snap.files.cnpjs.url);
-      // Só afirmamos verificação quando TODO arquivo declarado traz sha256.
-      filesHashed = allFilesHashed(snap.files);
+      // A afirmação depende do contrato: snapshots shardados verificam os
+      // arquivos por SHA-256 e os 100 shards pelo SHA-1 do Internet Archive.
+      verification = verificationClaim(snap.files);
 
       status = 'Preparando o mecanismo de consulta…';
       const duckDB = await createDuckDB();
@@ -503,10 +505,14 @@
             <dd>Internet Archive <span class="prov-nota">· {archiveItem}</span></dd>
           </div>
         {/if}
-        {#if filesHashed}
+        {#if verification}
           <div class="prov-item">
             <dt>Verificação</dt>
-            <dd>SHA-256 por arquivo</dd>
+            <dd>
+              {verification === 'sha256'
+                ? 'SHA-256 por arquivo'
+                : 'SHA-256 por arquivo · SHA-1 nos shards'}
+            </dd>
           </div>
         {/if}
         <div class="prov-item">

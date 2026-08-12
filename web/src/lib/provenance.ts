@@ -33,16 +33,48 @@ export function archiveItemFrom(url: string): string | null {
 }
 
 /**
- * `true` somente quando TODO arquivo declarado no snapshot traz `sha256`
- * não-vazio. A faixa afirma "SHA-256 por arquivo" — se um único arquivo não
- * tiver hash, a afirmação é falsa.
+ * Que afirmação de verificação o snapshot sustenta — ou `null` quando nenhuma.
+ *
+ * O contrato deixou de ser homogêneo (#183): os `FileEntry` continuam trazendo
+ * **SHA-256**, mas `files.companies` é a camada atômica retomável, cujos 100
+ * shards trazem o **SHA-1** que o próprio Internet Archive calcula para cada
+ * objeto. Um único booleano "tudo tem sha256" não descreve mais isso.
+ *
+ * Tratar `companies` como se fosse um `FileEntry` fazia a checagem devolver
+ * `false` para snapshots shardados — o que escondia a linha inteira em vez de
+ * afirmar algo errado. Não era uma mentira, mas era uma omissão: `2026-05` tem
+ * verificação por arquivo e por shard, e a faixa não dizia nenhuma das duas.
  */
-export function allFilesHashed(files: Snapshot['files']): boolean {
-	const entries = Object.values(files ?? {});
-	if (entries.length === 0) return false;
-	return entries.every(
+export type VerificationClaim = 'sha256' | 'sha256+sha1-shards';
+
+const SHA1_HEX = /^[0-9a-f]{40}$/;
+const COMPANY_SHARD_COUNT = 100;
+
+export function verificationClaim(files: Snapshot['files']): VerificationClaim | null {
+	if (!files) return null;
+
+	const { companies, ...plain } = files;
+
+	// Os arquivos analíticos continuam sob SHA-256, e a afirmação sobre eles é
+	// tudo-ou-nada: um único sem hash torna "SHA-256 por arquivo" falso.
+	const entries = Object.values(plain);
+	if (entries.length === 0) return null;
+	const allHashed = entries.every(
 		(file) => typeof file?.sha256 === 'string' && file.sha256.length > 0
 	);
+	if (!allHashed) return null;
+
+	if (companies === undefined) return 'sha256';
+
+	// Com shards, a afirmação só vale se o conjunto estiver completo e cada
+	// SHA-1 for um hex de 40 — o schema já exige isso, mas a faixa não pode
+	// depender de validação feita em outro lugar para afirmar um fato público.
+	const shards = companies.shards ?? [];
+	const complete =
+		shards.length === COMPANY_SHARD_COUNT &&
+		shards.every((shard) => typeof shard?.sha1 === 'string' && SHA1_HEX.test(shard.sha1));
+
+	return complete ? 'sha256+sha1-shards' : null;
 }
 
 /**
