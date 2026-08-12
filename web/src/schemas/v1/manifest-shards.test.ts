@@ -30,14 +30,23 @@ function shards() {
   });
 }
 
+function shardedSnapshot(companyShards = shards()) {
+  const base = baseSnapshot();
+  return {
+    ...base,
+    files: {
+      ...base.files,
+      companies: {
+        shard_by: 'cnpj_base_prefix_2' as const,
+        shards: companyShards,
+      },
+    },
+  };
+}
+
 describe('SnapshotEntrySchema companies shards', () => {
   it('accepts the complete 00..99 set', () => {
-    const snapshot = baseSnapshot();
-    snapshot.files.companies = {
-      shard_by: 'cnpj_base_prefix_2',
-      shards: shards(),
-    };
-    expect(SnapshotEntrySchema.parse(snapshot).files.companies?.shards).toHaveLength(100);
+    expect(SnapshotEntrySchema.parse(shardedSnapshot()).files.companies?.shards).toHaveLength(100);
   });
 
   it('keeps historical snapshots valid without an atomic companies layer', () => {
@@ -46,12 +55,7 @@ describe('SnapshotEntrySchema companies shards', () => {
 
   it('rejects duplicate/missing prefixes even when the array still has 100 entries', () => {
     const broken = shards();
-    broken[99] = { ...broken[98] };
-    const snapshot = baseSnapshot();
-    snapshot.files.companies = {
-      shard_by: 'cnpj_base_prefix_2',
-      shards: broken,
-    };
-    expect(() => SnapshotEntrySchema.parse(snapshot)).toThrow();
+    broken[99] = { ...broken[98]! };
+    expect(() => SnapshotEntrySchema.parse(shardedSnapshot(broken))).toThrow();
   });
 });
