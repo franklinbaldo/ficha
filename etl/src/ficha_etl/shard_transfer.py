@@ -5,9 +5,12 @@ preflight fail-closed do publisher forte: um PUT só é permitido quando catálo
 e observação direta concordam que o nome ainda não existe. Depois que o PUT
 retorna, o resultado é deliberadamente ``SUBMITTED`` — não um checkpoint.
 
-``verify_one_shard`` é estritamente read-only. Ela só retorna ``VERIFIED``
-quando os bytes remotos (``size + sha1``) e o ``MaterializationSpec`` do
-``_meta.json`` concordam exatamente com os inputs pinados.
+A verificação é estritamente read-only e usa o contrato publicado pelo próprio
+Internet Archive: ``size + sha1`` vêm do metadata do item e o ``_meta.json``
+interno declara exatamente o ``MaterializationSpec`` esperado. O VERIFY não
+baixa novamente o ZIP inteiro. A observação direta dos bytes permanece apenas
+no preflight de escrita, onde protege contra overwrite quando o catálogo está
+stale.
 
 A separação impede que a consistência eventual do Internet Archive serialize a
 submissão de nomes independentes sem enfraquecer a pós-condição que alimenta o
@@ -100,6 +103,27 @@ def _classify(
     )
 
 
+def _verify_from_metadata(
+    session: ShardPackSession,
+    prefix: str,
+    *,
+    pinned_inputs: Mapping[str, str],
+    metadata: dict,
+    fetch_meta: RemoteMetaFetch,
+) -> ShardTransferResult:
+    prefix = session.geometry.validate_prefix(prefix)
+    expected = session.materialization_spec(prefix, input_sha1s=pinned_inputs)
+    expected_id = expected.materialization_id()
+    verdict = _classify(session, prefix, expected, metadata, fetch_meta)
+    if verdict.state is ShardReuseState.REUSABLE:
+        return _result_from_verified(prefix, expected_id, verdict)
+    if verdict.state is ShardReuseState.ABSENT:
+        raise ShardPublishError(
+            f"{verdict.name}: ainda não verificável no metadata do Internet Archive"
+        )
+    raise ShardPublishError(f"{verdict.name}: {verdict.state}: {verdict.detail}")
+
+
 def submit_one_shard(
     session: ShardPackSession,
     prefix: str,
@@ -114,8 +138,8 @@ def submit_one_shard(
     """Submete no máximo um objeto e nunca espera sua visibilidade pós-PUT.
 
     ``SUBMITTED`` significa apenas que ``upload`` retornou com sucesso para os
-    bytes locais informados no resultado. O chamador deve executar
-    ``verify_one_shard`` antes de considerar o checkpoint completo.
+    bytes locais informados no resultado. O chamador deve executar uma fase de
+    verificação via metadata antes de considerar o checkpoint completo.
     """
     _validate_session(session)
     prefix = session.geometry.validate_prefix(prefix)
@@ -187,38 +211,61 @@ def verify_one_shard(
     pinned_inputs: Mapping[str, str],
     fetch_metadata: MetadataFetch,
     fetch_meta: RemoteMetaFetch,
-    fetch_direct: DirectArtifactFetch | None = None,
 ) -> ShardTransferResult:
-    """Verifica um checkpoint sem qualquer capacidade de escrita.
+    """Verifica um checkpoint somente pelo contrato observável do IA.
 
-    O argumento ``upload`` deliberadamente não existe nesta API. Catálogo stale
-    pode ser reconciliado pelo URL direto, mas ausência em ambos é apenas
-    ``ainda não verificável`` — nunca autorização de PUT.
+    O metadata do item fornece ``size + sha1`` do objeto e o unzip transparente
+    fornece o pequeno ``_meta.json`` interno. Não há GET integral do ZIP nesta
+    fase; se o catálogo ainda não lista o shard, ele simplesmente ainda não pode
+    ser promovido.
     """
     _validate_session(session)
-    prefix = session.geometry.validate_prefix(prefix)
-    expected = session.materialization_spec(prefix, input_sha1s=pinned_inputs)
-    expected_id = expected.materialization_id()
-    fetch_direct = _direct_fetcher(session, fetch_direct)
-
     metadata = _metadata_still_matches(pinned_inputs, fetch_metadata)
-    verdict = _classify(session, prefix, expected, metadata, fetch_meta)
-    if verdict.state is ShardReuseState.REUSABLE:
-        return _result_from_verified(prefix, expected_id, verdict)
-    if verdict.state is not ShardReuseState.ABSENT:
-        raise ShardPublishError(f"{verdict.name}: {verdict.state}: {verdict.detail}")
-
-    direct = _reconcile_catalog_absent(
+    return _verify_from_metadata(
+        session,
         prefix,
-        expected,
-        metadata,
+        pinned_inputs=pinned_inputs,
+        metadata=metadata,
         fetch_meta=fetch_meta,
-        fetch_direct=fetch_direct,
-        geometry=session.geometry,
     )
-    if direct is None:
+
+
+def verify_all_shards(
+    session: ShardPackSession,
+    *,
+    pinned_inputs: Mapping[str, str],
+    fetch_metadata: MetadataFetch,
+    fetch_meta: RemoteMetaFetch,
+) -> tuple[ShardTransferResult, ...]:
+    """Verifica toda a geometria pública com uma única leitura do catálogo IA.
+
+    Cada shard ainda tem seu ``_meta.json`` semântico validado individualmente,
+    mas ``/metadata`` é lido exatamente uma vez. Isso evita 100 jobs e 100
+    downloads integrais só para concluir a pós-condição de publicação.
+    """
+    _validate_session(session)
+    metadata = _metadata_still_matches(pinned_inputs, fetch_metadata)
+
+    results: list[ShardTransferResult] = []
+    problems: list[str] = []
+    for prefix in session.geometry.prefixes():
+        try:
+            result = _verify_from_metadata(
+                session,
+                prefix,
+                pinned_inputs=pinned_inputs,
+                metadata=metadata,
+                fetch_meta=fetch_meta,
+            )
+        except ShardPublishError as exc:
+            problems.append(str(exc))
+        else:
+            results.append(result)
+
+    if problems:
         raise ShardPublishError(
-            f"{session.geometry.shard_name(prefix)}: ainda não verificável; "
-            "ausente no catálogo e no URL direto"
+            f"{len(problems)}/{session.geometry.count} shards não verificáveis via metadata do IA: "
+            + "; ".join(problems)
         )
-    return _result_from_verified(prefix, expected_id, direct)
+
+    return tuple(results)
