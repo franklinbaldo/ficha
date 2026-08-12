@@ -65,7 +65,11 @@ class ShardGeometry:
     def validate_prefix(self, prefix: str) -> str:
         if not isinstance(prefix, str):
             raise TypeError("shard prefix must be str")
-        if len(prefix) != self.prefix_digits or not prefix.isascii() or not prefix.isdigit():
+        if (
+            len(prefix) != self.prefix_digits
+            or not prefix.isascii()
+            or not prefix.isdigit()
+        ):
             raise ValueError(
                 f"shard prefix must be exactly {self.prefix_digits} ASCII digits, got {prefix!r}"
             )
@@ -92,7 +96,9 @@ class ShardGeometry:
             normalized = f"{cnpj_base:08d}"
         elif isinstance(cnpj_base, str):
             if len(cnpj_base) != 8 or not cnpj_base.isascii() or not cnpj_base.isdigit():
-                raise ValueError(f"cnpj_base string must contain exactly 8 ASCII digits: {cnpj_base!r}")
+                raise ValueError(
+                    f"cnpj_base string must contain exactly 8 ASCII digits: {cnpj_base!r}"
+                )
             normalized = cnpj_base
         else:
             raise TypeError(f"cnpj_base must be int or str, got {type(cnpj_base).__name__}")
@@ -159,7 +165,9 @@ class ShardPackSession:
             log.info("sharded_pack: reading lookups from %s", self.parquets_base)
             for kind in LOOKUP_KINDS:
                 url = f"{self.parquets_base}/lookups/{kind}.parquet"
-                rows = con.execute("SELECT codigo, descricao FROM read_parquet(?)", [url]).fetchall()
+                rows = con.execute(
+                    "SELECT codigo, descricao FROM read_parquet(?)", [url]
+                ).fetchall()
                 lookups[kind] = [{"codigo": row[0], "descricao": row[1]} for row in rows]
 
             self._con = con
@@ -321,7 +329,9 @@ def _pack_rows(
     partial = output_path.with_name(output_path.name + ".part")
     partial.unlink(missing_ok=True)
 
-    with SpoolingZipFile(partial, "w", compression=8, compresslevel=6, allowZip64=True) as zf:
+    with SpoolingZipFile(
+        partial, "w", compression=8, compresslevel=6, allowZip64=True
+    ) as zf:
         zf.writestr(_membro(zf, "_schema.desc", zip_date), schema_desc)
         zf.writestr(_membro(zf, "_schema.proto", zip_date), _schema_proto_text())
         for kind, lookup in lookup_rows.items():
@@ -334,7 +344,9 @@ def _pack_rows(
             company = row_to_company(row)
             if previous is not None and company.cnpj_base <= previous:
                 if company.cnpj_base == previous:
-                    raise ValueError(f"duplicate cnpj_base in shard input: {company.cnpj_base:08d}")
+                    raise ValueError(
+                        f"duplicate cnpj_base in shard input: {company.cnpj_base:08d}"
+                    )
                 raise ValueError(
                     f"unsorted shard input: {company.cnpj_base:08d} < {previous:08d}"
                 )
