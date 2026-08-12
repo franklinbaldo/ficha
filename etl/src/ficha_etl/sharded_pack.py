@@ -95,13 +95,19 @@ class ShardGeometry:
                 raise ValueError(f"cnpj_base out of 8-digit range: {cnpj_base}")
             normalized = f"{cnpj_base:08d}"
         elif isinstance(cnpj_base, str):
-            if len(cnpj_base) != 8 or not cnpj_base.isascii() or not cnpj_base.isdigit():
+            if (
+                len(cnpj_base) != 8
+                or not cnpj_base.isascii()
+                or not cnpj_base.isdigit()
+            ):
                 raise ValueError(
                     f"cnpj_base string must contain exactly 8 ASCII digits: {cnpj_base!r}"
                 )
             normalized = cnpj_base
         else:
-            raise TypeError(f"cnpj_base must be int or str, got {type(cnpj_base).__name__}")
+            raise TypeError(
+                f"cnpj_base must be int or str, got {type(cnpj_base).__name__}"
+            )
         return normalized[: self.prefix_digits]
 
     def shard_name(self, prefix: str) -> str:
@@ -253,7 +259,11 @@ class ShardPackSession:
 
     def _require_open(
         self,
-    ) -> tuple[duckdb.DuckDBPyConnection, dict[str, list[dict]], dict[str, str]]:
+    ) -> tuple[
+        duckdb.DuckDBPyConnection,
+        dict[str, list[dict]],
+        dict[str, str],
+    ]:
         if self._con is None or self._lookups is None or self._urls is None:
             raise RuntimeError("ShardPackSession must be used inside a with block")
         return self._con, self._lookups, self._urls
@@ -263,7 +273,10 @@ class ShardPackSession:
             raise ValueError(
                 f"materialization snapshot {spec.snapshot!r} != session month {self.month!r}"
             )
-        if spec.shard_range.kind != "cnpj_base_prefix" or spec.shard_range.value != prefix:
+        if (
+            spec.shard_range.kind != "cnpj_base_prefix"
+            or spec.shard_range.value != prefix
+        ):
             raise ValueError(
                 "materialization range does not match shard: "
                 f"{spec.shard_range.as_document()!r} vs {prefix!r}"
