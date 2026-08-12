@@ -1,15 +1,14 @@
-"""Publicação retomável de shards de ``companies`` (#165/#167).
+"""Publicação retomável de shards de ``companies`` (#165/#167/#175/#176).
 
 Um checkpoint só é completo quando três identidades concordam:
 
 1. ``size + sha1`` do ZIP remoto são iguais aos bytes enviados;
 2. ``_meta.json`` declara exatamente o ``MaterializationSpec`` pinado;
-3. a sidecar criptográfica preserva o SHA-256 dos bytes publicados.
+3. a sidecar criptográfica, lida diretamente, preserva o SHA-256 dos bytes.
 
 Nada aqui faz replace do ZIP. ``UNKNOWN`` e ``MISMATCH`` abortam antes de
-escrita. Uma sidecar ausente pode ser reparada porque ela é auxiliar e nunca
-autoriza reuse sozinha; o ZIP + ``_meta.json`` continuam sendo a fonte da
-semântica.
+escrita. A sidecar também falha fechada: 404 é ausência observada; falha de
+rede/5xx é estado desconhecido e nunca autoriza PUT.
 """
 
 from __future__ import annotations
@@ -30,6 +29,7 @@ from .shard_remote import (
 from .shard_sidecar import (
     ArtifactIdentity,
     ShardSidecar,
+    SidecarObservationError,
     artifact_identity,
     parse_sidecar,
     sidecar_matches,
@@ -37,7 +37,7 @@ from .shard_sidecar import (
     write_sidecar,
 )
 from .sharded_pack import ShardPackSession
-from .upload_identity import LocalIdentity, confirm_remote_identity, files_list, local_identity
+from .upload_identity import LocalIdentity, confirm_remote_identity
 
 log = logging.getLogger(__name__)
 
@@ -47,7 +47,11 @@ SidecarFetch = Callable[[str], object | None]
 RemoteArtifactHash = Callable[[str, int, str], ArtifactIdentity]
 ShardUpload = Callable[[str, Path], None]
 
-_CONFIRM_ATTEMPTS = 12
+# O item real ficha-2026-05 excedeu a antiga janela de ~132 s: um ZIP aceito
+# pelo IA só apareceu no metadata cerca de 5m44s depois. Com backoff linear de
+# 2s*n, 20 observações cobrem 380 s sem usar pending_tasks como gate.
+_CONFIRM_ATTEMPTS = 20
+_CONFIRM_BACKOFF_S = 2.0
 
 
 class ShardPublishAction(enum.StrEnum):
@@ -89,13 +93,6 @@ def _metadata_still_matches(
     return metadata
 
 
-def _file_is_listed(metadata: dict, name: str) -> bool:
-    files = files_list(metadata)
-    if files is None:
-        raise ShardPublishError("metadata perdeu a lista files durante a publicação")
-    return any(entry.get("name") == name for entry in files)
-
-
 def _validate_sidecar_payload(
     payload: object,
     *,
@@ -129,8 +126,6 @@ def _ensure_sidecar(
     artifact_name: str,
     remote_size: int,
     remote_sha1: str,
-    metadata: dict,
-    fetch_metadata: MetadataFetch,
     fetch_sidecar: SidecarFetch,
     hash_remote: RemoteArtifactHash,
     upload: ShardUpload,
@@ -138,9 +133,14 @@ def _ensure_sidecar(
     confirm_attempts: int,
     sleep: Callable[[float], None],
 ) -> tuple[ArtifactIdentity, bool]:
+    """Garante sidecar por observação direta, sem depender de metadata.files."""
     identity_name = sidecar_name(session.geometry, prefix)
-    if _file_is_listed(metadata, identity_name):
-        payload = fetch_sidecar(identity_name)
+
+    # Discovery direto: uma sidecar servível já é observável mesmo que o
+    # catálogo do IA ainda não a tenha indexado. UNKNOWN propaga e aborta antes
+    # de qualquer escrita; somente 404 confirmado (payload=None) permite reparo.
+    payload = fetch_sidecar(identity_name)
+    if payload is not None:
         parsed = _validate_sidecar_payload(
             payload,
             snapshot=session.month,
@@ -176,30 +176,40 @@ def _ensure_sidecar(
     write_sidecar(path, sidecar)
     upload(identity_name, path)
 
-    if not confirm_remote_identity(
-        identity_name,
-        local_identity(path),
-        fetch_metadata=fetch_metadata,
-        attempts=confirm_attempts,
-        sleep=sleep,
-    ):
-        raise ShardPublishError(f"{identity_name}: sidecar enviada mas identidade não confirmou")
+    # Depois do PUT, retentar UNKNOWN/404 é seguro porque não há nova escrita.
+    # O sucesso vem do GET direto + payload exato; a indexação em metadata.files
+    # pode atrasar vários minutos e não é requisito de durabilidade da sidecar.
+    last_detail = "GET direto ainda não observou a sidecar"
+    for attempt in range(1, confirm_attempts + 1):
+        try:
+            payload = fetch_sidecar(identity_name)
+        except SidecarObservationError as exc:
+            last_detail = str(exc)
+        else:
+            if payload is not None:
+                parsed = _validate_sidecar_payload(
+                    payload,
+                    snapshot=session.month,
+                    prefix=prefix,
+                    materialization_id=materialization_id,
+                    artifact_name=artifact_name,
+                    remote_size=remote_size,
+                    remote_sha1=remote_sha1,
+                )
+                if parsed != sidecar:
+                    raise ShardPublishError(
+                        f"{identity_name}: sidecar servida diverge dos bytes acabados de publicar"
+                    )
+                path.unlink(missing_ok=True)
+                return identity, True
+            last_detail = "HTTP 404"
+        if attempt < confirm_attempts:
+            sleep(_CONFIRM_BACKOFF_S * attempt)
 
-    final_metadata = fetch_metadata()
-    if final_metadata is None or not _file_is_listed(final_metadata, identity_name):
-        raise ShardPublishError(f"{identity_name}: sidecar confirmada por bytes mas não listada")
-    payload = fetch_sidecar(identity_name)
-    _validate_sidecar_payload(
-        payload,
-        snapshot=session.month,
-        prefix=prefix,
-        materialization_id=materialization_id,
-        artifact_name=artifact_name,
-        remote_size=remote_size,
-        remote_sha1=remote_sha1,
+    raise ShardPublishError(
+        f"{identity_name}: PUT retornou mas GET direto não confirmou após "
+        f"{confirm_attempts} observações: {last_detail}"
     )
-    path.unlink(missing_ok=True)
-    return identity, True
 
 
 def publish_one_shard(
@@ -244,8 +254,6 @@ def publish_one_shard(
             artifact_name=verdict.name,
             remote_size=verdict.size,
             remote_sha1=verdict.sha1,
-            metadata=metadata,
-            fetch_metadata=fetch_metadata,
             fetch_sidecar=fetch_sidecar,
             hash_remote=hash_remote,
             upload=upload,
@@ -287,8 +295,6 @@ def publish_one_shard(
             artifact_name=pre_upload.name,
             remote_size=pre_upload.size,
             remote_sha1=pre_upload.sha1,
-            metadata=pre_upload_metadata,
-            fetch_metadata=fetch_metadata,
             fetch_sidecar=fetch_sidecar,
             hash_remote=hash_remote,
             upload=upload,
@@ -347,8 +353,6 @@ def publish_one_shard(
         artifact_name=final.name,
         remote_size=final.size,
         remote_sha1=final.sha1,
-        metadata=final_metadata,
-        fetch_metadata=fetch_metadata,
         fetch_sidecar=fetch_sidecar,
         hash_remote=hash_remote,
         upload=upload,

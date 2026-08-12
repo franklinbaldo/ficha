@@ -15,7 +15,12 @@ from ficha_etl.shard_publish import (
     publish_one_shard,
 )
 from ficha_etl.shard_remote import PUBLIC_COMPANIES_GEOMETRY, SHARD_INPUT_NAMES
-from ficha_etl.shard_sidecar import ArtifactIdentity, ShardSidecar, sidecar_name
+from ficha_etl.shard_sidecar import (
+    ArtifactIdentity,
+    ShardSidecar,
+    SidecarObservationError,
+    sidecar_name,
+)
 
 
 def _input_entries() -> list[dict]:
@@ -86,6 +91,16 @@ class _Remote:
         assert identity.size == expected_size
         assert identity.sha1 == expected_sha1
         return identity
+
+
+def _metadata_without_sidecars(remote: _Remote) -> dict:
+    metadata = remote.metadata()
+    metadata["files"] = [
+        entry
+        for entry in metadata["files"]
+        if not str(entry.get("name", "")).endswith(".identity.json")
+    ]
+    return metadata
 
 
 def _expected(session: _Session, prefix: str, pinned: dict[str, str]) -> MaterializationSpec:
@@ -161,6 +176,32 @@ def test_reusable_shard_with_sidecar_skips_without_pack_or_upload(tmp_path):
     assert remote.uploads == []
 
 
+def test_direct_sidecar_skips_even_before_metadata_index(tmp_path):
+    session = _Session()
+    remote = _Remote()
+    pinned = pin_materialization_inputs(remote.metadata)
+    expected_identity = _install_reusable_zip_and_sidecar(remote, session, "07", pinned)
+    spec = _expected(session, "07", pinned)
+
+    result = publish_one_shard(
+        session,
+        "07",
+        tmp_path / "out",
+        pinned_inputs=pinned,
+        fetch_metadata=lambda: _metadata_without_sidecars(remote),
+        fetch_meta=_fetch_meta(remote, spec),
+        fetch_sidecar=remote.fetch_sidecar,
+        hash_remote=remote.hash_remote,
+        upload=remote.upload,
+        sleep=lambda _: None,
+    )
+
+    assert result.action is ShardPublishAction.SKIPPED
+    assert result.sha256 == expected_identity.sha256
+    assert session.pack_calls == []
+    assert remote.uploads == []
+
+
 def test_reusable_zip_without_sidecar_stream_hashes_once_and_repairs_checkpoint(tmp_path):
     session = _Session()
     remote = _Remote()
@@ -185,6 +226,59 @@ def test_reusable_zip_without_sidecar_stream_hashes_once_and_repairs_checkpoint(
     assert session.pack_calls == []
     assert remote.uploads == ["companies-07.identity.json"]
     assert result.sha256 == _identity(b"already durable zip").sha256
+
+
+def test_repaired_sidecar_confirms_directly_before_metadata_index(tmp_path):
+    session = _Session()
+    remote = _Remote()
+    pinned = pin_materialization_inputs(remote.metadata)
+    spec = _expected(session, "07", pinned)
+    remote.files["companies-07.zip"] = b"already durable zip"
+
+    result = publish_one_shard(
+        session,
+        "07",
+        tmp_path / "out",
+        pinned_inputs=pinned,
+        fetch_metadata=lambda: _metadata_without_sidecars(remote),
+        fetch_meta=_fetch_meta(remote, spec),
+        fetch_sidecar=remote.fetch_sidecar,
+        hash_remote=remote.hash_remote,
+        upload=remote.upload,
+        sleep=lambda _: None,
+    )
+
+    assert result.action is ShardPublishAction.SIDECAR_REPAIRED
+    assert remote.uploads == ["companies-07.identity.json"]
+    assert result.sha256 == _identity(b"already durable zip").sha256
+
+
+def test_ambiguous_sidecar_observation_never_authorizes_repair(tmp_path):
+    session = _Session()
+    remote = _Remote()
+    pinned = pin_materialization_inputs(remote.metadata)
+    spec = _expected(session, "07", pinned)
+    remote.files["companies-07.zip"] = b"already durable zip"
+
+    def unavailable(_name: str):
+        raise SidecarObservationError("HTTP 503")
+
+    with pytest.raises(SidecarObservationError, match="503"):
+        publish_one_shard(
+            session,
+            "07",
+            tmp_path / "out",
+            pinned_inputs=pinned,
+            fetch_metadata=remote.metadata,
+            fetch_meta=_fetch_meta(remote, spec),
+            fetch_sidecar=unavailable,
+            hash_remote=remote.hash_remote,
+            upload=remote.upload,
+            sleep=lambda _: None,
+        )
+
+    assert remote.uploads == []
+    assert session.pack_calls == []
 
 
 @pytest.mark.parametrize(
@@ -236,7 +330,7 @@ def test_unconfirmed_zip_upload_fails_before_sidecar_and_keeps_local_shard(tmp_p
     pinned = pin_materialization_inputs(remote.metadata)
     spec = _expected(session, "07", pinned)
 
-    with pytest.raises(ShardPublishError, match="size\+sha1 remoto não confirmou"):
+    with pytest.raises(ShardPublishError, match="size\\+sha1 remoto não confirmou"):
         publish_one_shard(
             session,
             "07",
