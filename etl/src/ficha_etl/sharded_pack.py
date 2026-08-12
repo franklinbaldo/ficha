@@ -65,11 +65,7 @@ class ShardGeometry:
     def validate_prefix(self, prefix: str) -> str:
         if not isinstance(prefix, str):
             raise TypeError("shard prefix must be str")
-        if (
-            len(prefix) != self.prefix_digits
-            or not prefix.isascii()
-            or not prefix.isdigit()
-        ):
+        if len(prefix) != self.prefix_digits or not prefix.isascii() or not prefix.isdigit():
             raise ValueError(
                 f"shard prefix must be exactly {self.prefix_digits} ASCII digits, got {prefix!r}"
             )
@@ -81,9 +77,7 @@ class ShardGeometry:
         suffix = "0" * (8 - self.prefix_digits)
         lower = prefix + suffix
         upper = (
-            f"{value + 1:0{self.prefix_digits}d}{suffix}"
-            if value < self.count - 1
-            else "A0000000"
+            f"{value + 1:0{self.prefix_digits}d}{suffix}" if value < self.count - 1 else "A0000000"
         )
         return lower, upper
 
@@ -101,9 +95,7 @@ class ShardGeometry:
                 )
             normalized = cnpj_base
         else:
-            raise TypeError(
-                f"cnpj_base must be int or str, got {type(cnpj_base).__name__}"
-            )
+            raise TypeError(f"cnpj_base must be int or str, got {type(cnpj_base).__name__}")
         return normalized[: self.prefix_digits]
 
     def shard_name(self, prefix: str) -> str:
@@ -265,10 +257,7 @@ class ShardPackSession:
             raise ValueError(
                 f"materialization snapshot {spec.snapshot!r} != session month {self.month!r}"
             )
-        if (
-            spec.shard_range.kind != "cnpj_base_prefix"
-            or spec.shard_range.value != prefix
-        ):
+        if spec.shard_range.kind != "cnpj_base_prefix" or spec.shard_range.value != prefix:
             raise ValueError(
                 "materialization range does not match shard: "
                 f"{spec.shard_range.as_document()!r} vs {prefix!r}"
@@ -334,9 +323,7 @@ def _pack_rows(
     partial = output_path.with_name(output_path.name + ".part")
     partial.unlink(missing_ok=True)
 
-    with SpoolingZipFile(
-        partial, "w", compression=8, compresslevel=6, allowZip64=True
-    ) as zf:
+    with SpoolingZipFile(partial, "w", compression=8, compresslevel=6, allowZip64=True) as zf:
         zf.writestr(_membro(zf, "_schema.desc", zip_date), schema_desc)
         zf.writestr(_membro(zf, "_schema.proto", zip_date), _schema_proto_text())
         for kind, lookup in lookup_rows.items():
@@ -349,12 +336,8 @@ def _pack_rows(
             company = row_to_company(row)
             if previous is not None and company.cnpj_base <= previous:
                 if company.cnpj_base == previous:
-                    raise ValueError(
-                        f"duplicate cnpj_base in shard input: {company.cnpj_base:08d}"
-                    )
-                raise ValueError(
-                    f"unsorted shard input: {company.cnpj_base:08d} < {previous:08d}"
-                )
+                    raise ValueError(f"duplicate cnpj_base in shard input: {company.cnpj_base:08d}")
+                raise ValueError(f"unsorted shard input: {company.cnpj_base:08d} < {previous:08d}")
             previous = company.cnpj_base
             company.snapshot_yyyymm = snapshot_yyyymm
             zf.writestr(
