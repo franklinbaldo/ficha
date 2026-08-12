@@ -32,17 +32,19 @@ jobs:
       - run: uv python install 3.11
       - run: uv sync --frozen --extra dev
 
-      # Diagnóstico somente-leitura. 05 representa a rodada nova; 28/53/78 já
-      # tinham PUT antigo aceito mas seguem fora do catálogo; 98 é controle
-      # positivo porque já aparece em /metadata.
+      # Diagnóstico somente-leitura do task vermelho que precede a fila de
+      # archive.php criada pelos PUTs dos shards. Nenhum objeto é reenviado.
       - name: Diagnose IA ingest state
         env:
           IA_ACCESS_KEY_ID: ${{ secrets.IA_ACCESS_KEY }}
           IA_SECRET_ACCESS_KEY: ${{ secrets.IA_SECRET_KEY }}
         run: |
           set +e
-          echo '== ia tasks =='
-          uv run ia tasks ficha-2026-05 || true
+          echo '== blocking task 5561680025 =='
+          uv run ia tasks -G 5561680025 -p lines=-120 || true
+          echo
+          echo '== current catalog tasks =='
+          uv run ia tasks ficha-2026-05 | head -n 120 || true
           echo
           for p in 05 28 53 78 98; do
             echo "== companies-${p}.zip =="
@@ -51,11 +53,6 @@ jobs:
               --output /dev/null \
               --write-out 'download HEAD: http=%{http_code} url=%{url_effective}\n' \
               "$IA_BASE/companies-${p}.zip" || true
-            echo 'IAS3 log tail:'
-            curl --silent --show-error --location --max-time 30 \
-              "https://s3.us.archive.org/ficha-2026-05/companies-${p}.zip?log" \
-              | tail -n 40 || true
-            echo
           done
 
       # Fail fast before downloading ~GBs. Uma leitura de /metadata fornece
