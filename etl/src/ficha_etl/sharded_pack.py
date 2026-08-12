@@ -95,11 +95,7 @@ class ShardGeometry:
                 raise ValueError(f"cnpj_base out of 8-digit range: {cnpj_base}")
             normalized = f"{cnpj_base:08d}"
         elif isinstance(cnpj_base, str):
-            if (
-                len(cnpj_base) != 8
-                or not cnpj_base.isascii()
-                or not cnpj_base.isdigit()
-            ):
+            if len(cnpj_base) != 8 or not cnpj_base.isascii() or not cnpj_base.isdigit():
                 raise ValueError(
                     f"cnpj_base string must contain exactly 8 ASCII digits: {cnpj_base!r}"
                 )
@@ -259,11 +255,7 @@ class ShardPackSession:
 
     def _require_open(
         self,
-    ) -> tuple[
-        duckdb.DuckDBPyConnection,
-        dict[str, list[dict]],
-        dict[str, str],
-    ]:
+    ) -> tuple[duckdb.DuckDBPyConnection, dict[str, list[dict]], dict[str, str]]:
         if self._con is None or self._lookups is None or self._urls is None:
             raise RuntimeError("ShardPackSession must be used inside a with block")
         return self._con, self._lookups, self._urls
