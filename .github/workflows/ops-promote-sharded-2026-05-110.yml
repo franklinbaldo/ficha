@@ -41,7 +41,7 @@ jobs:
         run: |
           set +e
           echo '== blocking task 5561680025 =='
-          uv run ia tasks -G 5561680025 -p lines=-120 || true
+          uv run ia tasks -G 5561680025 || true
           echo
           echo '== current catalog tasks =='
           uv run ia tasks ficha-2026-05 | head -n 120 || true
