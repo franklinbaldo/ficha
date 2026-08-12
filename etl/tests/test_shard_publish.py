@@ -213,7 +213,9 @@ def test_remote_appearing_after_pack_must_match_semantics_or_abort(tmp_path):
             pinned_inputs=pinned,
             fetch_metadata=fetch_metadata,
             fetch_meta=lambda _: {"materialization": {"id": "x" * 64, "spec": {}}},
-            upload=lambda name, path: pytest.fail("mismatch surgido após pack não pode ser substituído"),
+            upload=lambda name, path: pytest.fail(
+                "mismatch surgido após pack não pode ser substituído"
+            ),
         )
 
     assert session.pack_calls == ["07"]
