@@ -295,6 +295,48 @@ def build_lookup_pb(kind: str, rows: list[dict]) -> bytes:
 # ---- main entry point ----------------------------------------------
 
 
+def data_canonica_do_snapshot(snapshot_month: str) -> tuple[int, int, int, int, int, int]:
+    """Timestamp canônico da competência, gravado em todo membro do ZIP.
+
+    `YYYY-MM-01 00:00:00` é uma **data civil canônica** que identifica a
+    competência do snapshot. Não é data de release, não é mtime real e não tem
+    semântica de modificação: nenhum membro de `companies.zip` tem data de
+    modificação individual, já que todos são materializados no mesmo ato. O
+    campo existe no formato ZIP e precisa de algum valor; este é o valor que
+    identifica o retrato sem inventar um fato.
+
+    `zipfile.writestr(str, ...)` monta o `ZipInfo` a partir de `time.localtime()`,
+    então dois packs dos mesmos dados produziam artefatos com hash diferente
+    (#151). Trocar o relógio por uma constante resolve isso, mas a constante não
+    é livre: o Internet Archive **renderiza** a data dos membros para o usuário.
+    Verificado em `ficha-2026-04/raw/Cnaes.zip`, cuja listagem de unzip
+    transparente tem uma coluna `timestamp` com `2026-04-12 06:56`. Uma época
+    artificial como 1980-01-01 apareceria em ~68 milhões de linhas dessa
+    listagem sem significar nada.
+
+    A propriedade preservada é:
+
+        mesmos inputs + mesma competência + mesmo ambiente/stack testado
+        → mesmos bytes
+    """
+    ano, mes = snapshot_month.split("-")
+    return (int(ano), int(mes), 1, 0, 0, 0)
+
+
+def _membro(zf: zipfile.ZipFile, nome: str, data: tuple) -> zipfile.ZipInfo:
+    """`ZipInfo` com data canônica e os defaults que `writestr(str, ...)` aplica.
+
+    Passar um `ZipInfo` **desliga** esses defaults: sem repor `compress_type` e
+    `_compresslevel` o membro sairia STORED em vez de DEFLATE, mudando o formato
+    em silêncio.
+    """
+    zi = zipfile.ZipInfo(filename=nome, date_time=data)
+    zi.compress_type = zf.compression
+    zi._compresslevel = zf.compresslevel  # noqa: SLF001 — sem equivalente público
+    zi.external_attr = 0o600 << 16
+    return zi
+
+
 def pack_companies(
     rows: Iterator[dict],
     lookup_rows: dict[str, list[dict]],
@@ -315,6 +357,7 @@ def pack_companies(
     schema_desc = _schema_desc_bytes()
     schema_sha256 = hashlib.sha256(schema_desc).hexdigest()
     snapshot_yyyymm = int(snapshot_month.replace("-", ""))
+    data_zip = data_canonica_do_snapshot(snapshot_month)
 
     # Fail fast if the caller didn't provide every required lookup kind
     # (Codex P2 on PR #41). The package contract is that every published
@@ -346,13 +389,13 @@ def pack_companies(
         parcial, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6, allowZip64=True
     ) as zf:
         # schema artifacts
-        zf.writestr("_schema.desc", schema_desc)
-        zf.writestr("_schema.proto", _schema_proto_text())
+        zf.writestr(_membro(zf, "_schema.desc", data_zip), schema_desc)
+        zf.writestr(_membro(zf, "_schema.proto", data_zip), _schema_proto_text())
 
         # lookups
         for kind, lrows in lookup_rows.items():
             pb_bytes = build_lookup_pb(kind, lrows)
-            zf.writestr(f"_lookups/{kind}.pb", pb_bytes)
+            zf.writestr(_membro(zf, f"_lookups/{kind}.pb", data_zip), pb_bytes)
 
         # company docs
         for row in rows:
@@ -377,7 +420,7 @@ def pack_companies(
             prev_cnpj_base = company.cnpj_base
             company.snapshot_yyyymm = snapshot_yyyymm
             pb_bytes = company.SerializeToString()
-            zf.writestr(cnpjpath(company.cnpj_base), pb_bytes)
+            zf.writestr(_membro(zf, cnpjpath(company.cnpj_base), data_zip), pb_bytes)
             count += 1
 
         # meta (written last so count is accurate)
@@ -387,7 +430,7 @@ def pack_companies(
             "snapshot_month": snapshot_month,
             "count": count,
         }
-        zf.writestr("_meta.json", json.dumps(meta, indent=2))
+        zf.writestr(_membro(zf, "_meta.json", data_zip), json.dumps(meta, indent=2))
 
     # fsync antes do rename: sem isso, uma queda de máquina pode deixar o nome
     # final publicado apontando para dados ainda não persistidos — exatamente a
