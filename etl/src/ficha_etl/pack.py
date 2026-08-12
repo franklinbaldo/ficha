@@ -258,6 +258,31 @@ def build_lookup_pb(kind: str, rows: list[dict]) -> bytes:
 # ---- main entry point ----------------------------------------------
 
 
+ZIP_EPOCA = (1980, 1, 1, 0, 0, 0)
+"""Época canônica gravada em todo membro do ZIP.
+
+`zipfile.writestr(str, ...)` monta o `ZipInfo` a partir de `time.localtime()`,
+então dois packs dos mesmos dados produziam artefatos com hash diferente (#151).
+1980-01-01 é o mínimo representável no campo de data do ZIP e não finge ser
+mtime real — nenhum membro de `companies.zip` tem data de modificação
+significativa, já que todos são materializados no mesmo ato.
+"""
+
+
+def _membro(zf: zipfile.ZipFile, nome: str) -> zipfile.ZipInfo:
+    """`ZipInfo` com data canônica e os defaults que `writestr(str, ...)` aplica.
+
+    Passar um `ZipInfo` **desliga** esses defaults: sem repor `compress_type` e
+    `_compresslevel` o membro sairia STORED em vez de DEFLATE, mudando o formato
+    em silêncio.
+    """
+    zi = zipfile.ZipInfo(filename=nome, date_time=ZIP_EPOCA)
+    zi.compress_type = zf.compression
+    zi._compresslevel = zf.compresslevel  # noqa: SLF001 — sem equivalente público
+    zi.external_attr = 0o600 << 16
+    return zi
+
+
 def pack_companies(
     rows: Iterator[dict],
     lookup_rows: dict[str, list[dict]],
@@ -301,13 +326,13 @@ def pack_companies(
         output_path, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6, allowZip64=True
     ) as zf:
         # schema artifacts
-        zf.writestr("_schema.desc", schema_desc)
-        zf.writestr("_schema.proto", _schema_proto_text())
+        zf.writestr(_membro(zf, "_schema.desc"), schema_desc)
+        zf.writestr(_membro(zf, "_schema.proto"), _schema_proto_text())
 
         # lookups
         for kind, lrows in lookup_rows.items():
             pb_bytes = build_lookup_pb(kind, lrows)
-            zf.writestr(f"_lookups/{kind}.pb", pb_bytes)
+            zf.writestr(_membro(zf, f"_lookups/{kind}.pb"), pb_bytes)
 
         # company docs
         for row in rows:
@@ -332,7 +357,7 @@ def pack_companies(
             prev_cnpj_base = company.cnpj_base
             company.snapshot_yyyymm = snapshot_yyyymm
             pb_bytes = company.SerializeToString()
-            zf.writestr(cnpjpath(company.cnpj_base), pb_bytes)
+            zf.writestr(_membro(zf, cnpjpath(company.cnpj_base)), pb_bytes)
             count += 1
 
         # meta (written last so count is accurate)
@@ -342,7 +367,7 @@ def pack_companies(
             "snapshot_month": snapshot_month,
             "count": count,
         }
-        zf.writestr("_meta.json", json.dumps(meta, indent=2))
+        zf.writestr(_membro(zf, "_meta.json"), json.dumps(meta, indent=2))
 
     size = output_path.stat().st_size
     return {"count": count, "size_bytes": size, "schema_sha256": schema_sha256}
