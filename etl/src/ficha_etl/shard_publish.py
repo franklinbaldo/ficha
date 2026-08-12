@@ -152,8 +152,7 @@ def publish_one_shard(
         )
     if pre_upload.state is not ShardReuseState.ABSENT:
         raise ShardPublishError(
-            f"{pre_upload.name}: estado mudou antes do PUT: "
-            f"{pre_upload.state}: {pre_upload.detail}"
+            f"{pre_upload.name}: estado mudou antes do PUT: {pre_upload.state}: {pre_upload.detail}"
         )
 
     upload(pre_upload.name, artifact.path)
