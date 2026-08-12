@@ -33,11 +33,6 @@ SCHEMA_VERSION = "1.0.0"
 GENERATOR = "ficha-etl"
 
 
-# ---------------------------------------------------------------------------
-# Helpers internos
-# ---------------------------------------------------------------------------
-
-
 def _sha256(path: Path) -> str:
     """SHA-256 hex de um arquivo local (leitura em blocos de 64 KB)."""
     h = hashlib.sha256()
@@ -69,13 +64,7 @@ def _is_lower_hex(value: str, length: int) -> bool:
 
 
 def _companies_sharded_entry(month: str, sidecars: Iterable[ShardSidecar]) -> dict:
-    """Converte 100 sidecars confirmadas no contrato público de companies.
-
-    A sidecar é a ponte entre checkpoint e manifesto: ela preserva o SHA-256
-    dos bytes do ZIP sem confundi-lo com ``materialization_id``. Este helper
-    não consulta rede; a confirmação de que os ZIPs continuam servíveis é feita
-    logo depois por ``verify_snapshot_files``.
-    """
+    """Converte 100 sidecars confirmadas no contrato público de companies."""
     geometry = PUBLIC_COMPANIES_GEOMETRY
     by_prefix: dict[str, ShardSidecar] = {}
     for sidecar in sidecars:
@@ -118,11 +107,6 @@ def _companies_sharded_entry(month: str, sidecars: Iterable[ShardSidecar]) -> di
     }
 
 
-# ---------------------------------------------------------------------------
-# API pública
-# ---------------------------------------------------------------------------
-
-
 def build_snapshot_entry(
     month: str,
     output_dir: Path,
@@ -134,14 +118,9 @@ def build_snapshot_entry(
     Args:
         month: snapshot no formato YYYY-MM.
         output_dir: diretório com todos os parquets produzidos pelo transform
-                    (cnpjs, cnpj_contatos, cnpj_cnaes, raizes, socios,
-                    enderecos, pessoas) e lookups.json + lookups/*.parquet.
+                    e lookups.json + lookups/*.parquet.
         company_sidecars: quando fornecidas, substituem o ``companies.zip``
-                    monolítico pelo conjunto completo de shards 00..99. O
-                    caminho histórico continua sendo o default.
-
-    Returns:
-        dict pronto para ser inserido em manifest["snapshots"].
+                    monolítico pelo conjunto completo de shards 00..99.
     """
     cnpjs = output_dir / "cnpjs.parquet"
     cnpj_contatos = output_dir / "cnpj_contatos.parquet"
@@ -208,9 +187,7 @@ def build_snapshot_entry(
         "lookups": _file_entry(lookups, lookups_url(month)),
     }
     if company_sidecars is None:
-        files["companies_zip"] = _file_entry(
-            companies_zip, raw_file_url(month, "companies.zip")
-        )
+        files["companies_zip"] = _file_entry(companies_zip, raw_file_url(month, "companies.zip"))
     else:
         files["companies"] = _companies_sharded_entry(month, company_sidecars)
 
@@ -223,22 +200,13 @@ def build_snapshot_entry(
         "row_counts": row_counts,
         "files": files,
         "lookups": {
-            kind: {
-                "url": lookup_parquet_url(month, kind),
-            }
-            for kind in _LOOKUP_KINDS
+            kind: {"url": lookup_parquet_url(month, kind)} for kind in _LOOKUP_KINDS
         },
     }
 
 
 def verify_snapshot_files(snapshot_entry: dict) -> list[str]:
-    """HEAD em toda URL declarada no snapshot, incluindo shards de companies.
-
-    Retorna a lista de URLs que falharam (vazia = tudo OK). Para entradas com
-    ``size``, também exige que ``Content-Length`` coincida quando o servidor o
-    fornece. ``files.companies`` é expandido para os 100 objetos declarados;
-    nunca é tratado como um arquivo único.
-    """
+    """HEAD em toda URL declarada no snapshot, incluindo shards de companies."""
     checks: list[tuple[str, int | None]] = []
     for name, entry in snapshot_entry["files"].items():
         if name == "companies":
@@ -285,16 +253,7 @@ def verify_snapshot_files(snapshot_entry: dict) -> list[str]:
 
 
 def update_manifest(manifest_path: Path, snapshot_entry: dict) -> None:
-    """Upserta um snapshot no manifest.json (cria do zero se não existir).
-
-    - Remove entrada prévia do mesmo mês (se houver).
-    - Ordena snapshots por data decrescente.
-    - Atualiza `current` para o snapshot mais recente.
-
-    Args:
-        manifest_path: caminho para web/public/manifest.json.
-        snapshot_entry: dict produzido por build_snapshot_entry().
-    """
+    """Upserta um snapshot no manifest.json (cria do zero se não existir)."""
     month = snapshot_entry["date"]
 
     if manifest_path.exists():
@@ -305,7 +264,6 @@ def update_manifest(manifest_path: Path, snapshot_entry: dict) -> None:
 
     manifest["snapshots"] = [s for s in manifest["snapshots"] if s["date"] != month]
     manifest["snapshots"].append(snapshot_entry)
-
     manifest["snapshots"].sort(key=lambda s: s["date"], reverse=True)
     manifest["current"] = manifest["snapshots"][0]["date"]
 
