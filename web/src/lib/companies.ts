@@ -1,17 +1,16 @@
 /**
- * Per-company `.pb` reader — fetches one Company protobuf from
- * `companies.zip` on Internet Archive via transparent-unzip, decodes it
- * via the protobufjs static module, and adapts it to shapes consumable
- * by existing UI (e.g. EmpresaFicha.svelte) without forcing a refactor.
+ * Per-company `.pb` reader — fetches one Company protobuf from the atomic
+ * companies layer on Internet Archive via transparent-unzip, decodes it via
+ * the protobufjs static module, and adapts it to shapes consumable by existing
+ * UI without forcing a refactor.
  *
- * IA serves any member of a public ZIP at
- *   {item}/companies.zip/{member}
- * — so a per-company fetch is a single HTTP GET of ~1–10 KB rather than
- * a range-read over the multi-GB cnpjs.parquet. See ADR around
- * `pack.py` (etl/src/ficha_etl/pack.py) for the layout contract.
+ * Snapshots históricos podem declarar `companies_zip`; snapshots retomáveis
+ * declaram `companies` com 100 shards de prefixo. Nos dois casos o member path
+ * interno continua `XX/XXX/XXX.pb`.
  */
 
 import { ficha } from '../generated/company.pb.js';
+import type { Snapshot } from '../schemas/v1/manifest';
 
 // The generated `.d.ts` marks I* interfaces as deprecated in favor of
 // the class types, but the class types include private fields that make
@@ -30,13 +29,40 @@ export function cnpjpath(cnpjBase: number | string): string {
   return `${s.slice(0, 2)}/${s.slice(2, 5)}/${s.slice(5, 8)}.pb`;
 }
 
-/** Resolve the companies.zip base URL for a given IA item. */
+/** Resolve the historical monolithic companies.zip URL for a given IA item. */
 export function companiesZipUrl(iaBase: string, identifier: string): string {
   return `${iaBase.replace(/\/$/, '')}/${identifier}/companies.zip`;
 }
 
+type AtomicCompanyFiles = Pick<Snapshot['files'], 'companies' | 'companies_zip'>;
+
+/** Resolve the archive that must contain one cnpj_base. */
+export function companyArchiveUrl(
+  cnpjBase: number | string,
+  options: {
+    iaBase?: string;
+    identifier: string;
+    files?: AtomicCompanyFiles;
+  }
+): string {
+  const { iaBase = 'https://archive.org/download', identifier, files } = options;
+  if (files?.companies) {
+    const prefix = cnpjpath(cnpjBase).slice(0, 2);
+    const shard = files.companies.shards.find((entry) => entry.shard === prefix);
+    if (!shard) {
+      throw new Error(`companyArchiveUrl(${cnpjBase}): shard ${prefix} não declarado`);
+    }
+    return shard.url;
+  }
+  if (files?.companies_zip) return files.companies_zip.url;
+  return companiesZipUrl(iaBase, identifier);
+}
+
 /**
  * Fetch and decode a single Company by cnpj_base.
+ *
+ * Quando `files` vem do manifesto, ele é a fonte de verdade para a URL do
+ * arquivo atômico. Sem `files`, mantém o fallback histórico por identifier.
  *
  * @returns the decoded Company, or `null` if the path returned 404 (the
  *   CNPJ doesn't exist in this snapshot). Other HTTP errors throw.
@@ -46,11 +72,13 @@ export async function fetchCompany(
   options: {
     iaBase?: string;
     identifier: string;
+    files?: AtomicCompanyFiles;
     fetchImpl?: typeof fetch;
   }
 ): Promise<Company | null> {
-  const { iaBase = 'https://archive.org/download', identifier, fetchImpl = fetch } = options;
-  const url = `${companiesZipUrl(iaBase, identifier)}/${cnpjpath(cnpjBase)}`;
+  const { fetchImpl = fetch } = options;
+  const archive = companyArchiveUrl(cnpjBase, options);
+  const url = `${archive}/${cnpjpath(cnpjBase)}`;
   const res = await fetchImpl(url);
   if (res.status === 404) return null;
   if (!res.ok) {

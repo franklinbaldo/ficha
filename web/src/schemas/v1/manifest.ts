@@ -11,6 +11,39 @@ const FileEntrySchema = z.object({
   size: z.number().int().nonnegative(),
 });
 
+const CompanyShardSchema = FileEntrySchema.extend({
+  shard: z.string().regex(/^\d{2}$/),
+});
+
+const CompaniesShardedSchema = z
+  .object({
+    shard_by: z.literal('cnpj_base_prefix_2'),
+    shards: z.array(CompanyShardSchema).length(100),
+  })
+  .superRefine(({ shards }, ctx) => {
+    const seen = new Set<string>();
+    for (const shard of shards) {
+      if (seen.has(shard.shard)) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['shards'],
+          message: `duplicate company shard: ${shard.shard}`,
+        });
+      }
+      seen.add(shard.shard);
+    }
+    for (let value = 0; value < 100; value += 1) {
+      const expected = String(value).padStart(2, '0');
+      if (!seen.has(expected)) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['shards'],
+          message: `missing company shard: ${expected}`,
+        });
+      }
+    }
+  });
+
 export const SnapshotEntrySchema = z.object({
   date: z.string().regex(/^\d{4}-\d{2}$/),
   schema_version: z.string(),
@@ -40,11 +73,13 @@ export const SnapshotEntrySchema = z.object({
     enderecos: FileEntrySchema.extend({ sort: z.array(z.string()) }).optional(),
     pessoas: FileEntrySchema.extend({ sort: z.array(z.string()) }).optional(),
     lookups: FileEntrySchema,
-    // Camada atômica (companies.zip, um protobuf por raiz). Opcional no schema
-    // para compatibilidade com snapshots antigos (2026-04 não a declara), mas
-    // exigida pelo ETL em snapshots novos (build_snapshot_entry). Quando
-    // presente, o frontend pode rotear lookup exato de CNPJ por ela.
+    // Camada atômica histórica: um ZIP monolítico. Continua opcional para
+    // compatibilidade com snapshots que já existem (incluindo 2026-04).
     companies_zip: FileEntrySchema.optional(),
+    // Camada atômica retomável: conjunto completo 00..99. A lista explícita
+    // carrega a URL, o tamanho e o SHA-256 que foram efetivamente verificados;
+    // não existe um template paralelo capaz de divergir do estado publicado.
+    companies: CompaniesShardedSchema.optional(),
   }),
   lookups: z.record(z.string(), z.object({ url: z.string().url() })).optional(),
 });
