@@ -76,12 +76,38 @@ def le_membro(nome_zip: str, membro: str, *, timeout: float = 60.0) -> tuple[int
         return -1, 0, time.time() - t, f"{type(exc).__name__}: {exc}"
 
 
-def pending_tasks() -> bool | None:
+def metadata() -> dict:
     try:
         r = httpx.get(f"https://archive.org/metadata/{ITEM}", follow_redirects=True, timeout=30)
-        return r.json().get("pending_tasks")
+        return r.json()
     except (httpx.HTTPError, ValueError):
-        return None
+        return {}
+
+
+def estado_remoto(nome_zip: str) -> dict:
+    """Os quatro eventos, observados de forma independente.
+
+    Eles podem acontecer em ordens diferentes, e a pergunta do probe e qual
+    deles autoriza chamar o shard de DURAVEL PARA REUSE. Em particular, nao se
+    pode assumir que "o arquivo aparece no metadata" implica "o membro interno
+    ja pode ser lido" — sao duas observacoes distintas e este probe as separa.
+    """
+    md = metadata()
+    arquivos = md.get("files")
+    entrada = None
+    if isinstance(arquivos, list):
+        entrada = next((f for f in arquivos if f.get("name") == nome_zip), None)
+    status, n, dur, _ = le_membro(nome_zip, META_MEMBRO)
+    return {
+        "metadata_do_arquivo_visivel": entrada is not None,
+        "size_declarado": (entrada or {}).get("size"),
+        "sha1_declarado": (entrada or {}).get("sha1"),
+        "membro_legivel": status == 200 and n > 0,
+        "membro_status": status,
+        "membro_bytes": n,
+        "membro_segundos": round(dur, 2),
+        "pending_tasks": md.get("pending_tasks"),
+    }
 
 
 def main() -> int:
@@ -120,29 +146,37 @@ def main() -> int:
                 verify=True,
             )
             subidos.append(nome)
-            registra(t0, "upload concluido", arquivo=nome, bytes=len(dados))
+            registra(t0, "PUT aceito", arquivo=nome, bytes=len(dados))
 
-        registra(t0, "pending_tasks apos upload", valor=pending_tasks())
-
-        # --- 2: quando o membro fica legivel? ---------------------------------
+        # --- 2: quando cada evento acontece, e em que ordem? ------------------
+        # Quatro eventos independentes:
+        #   (1) PUT aceito            — ja registrado acima
+        #   (2) metadata do arquivo aparece
+        #   (3) _meta.json legivel via unzip
+        #   (4) pending_tasks muda
+        marcos: dict[str, float] = {}
         primeira_leitura_ok: float | None = None
+        pending_anterior: object = "<nao observado>"
         espera = 5
         while time.time() - t0 < args.janela:
-            status, n, dur, corpo = le_membro("bom.zip", META_MEMBRO)
-            registra(
-                t0,
-                "GET _meta.json",
-                status=status,
-                bytes=n,
-                segundos=round(dur, 2),
-                pending=pending_tasks(),
-            )
-            if status == 200 and n:
+            est = estado_remoto("bom.zip")
+            registra(t0, "observacao", **est)
+
+            if est["metadata_do_arquivo_visivel"] and "metadata_visivel" not in marcos:
+                marcos["metadata_visivel"] = round(time.time() - t0, 1)
+            if est["pending_tasks"] != pending_anterior:
+                marcos[f"pending_tasks={est['pending_tasks']}"] = round(time.time() - t0, 1)
+                pending_anterior = est["pending_tasks"]
+            if est["membro_legivel"]:
+                marcos["membro_legivel"] = round(time.time() - t0, 1)
                 primeira_leitura_ok = time.time() - t0
                 registra(t0, "MEMBRO LEGIVEL", apos_segundos=round(primeira_leitura_ok, 1))
                 break
+
             time.sleep(espera)
             espera = min(espera * 2, 60)
+
+        registra(t0, "ORDEM DOS EVENTOS", **marcos)
 
         if primeira_leitura_ok is None:
             registra(t0, "MEMBRO NUNCA FICOU LEGIVEL", janela=args.janela)
