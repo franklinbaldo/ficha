@@ -148,7 +148,7 @@ def fetch_remote_sidecar(
     month: str,
     name: str,
     *,
-    attempts: int = 5,
+    attempts: int = 1,
     backoff_s: float = 2.0,
     sleep: Callable[[float], None] = time.sleep,
     client: httpx.Client | None = None,
@@ -159,6 +159,9 @@ def fetch_remote_sidecar(
     429/5xx, erro de rede, resposta vazia ou JSON inválido significa estado
     remoto desconhecido e levanta ``SidecarObservationError``. Assim uma falha
     de observabilidade nunca vira autorização para sobrescrever uma sidecar.
+
+    Uma chamada é uma observação por padrão. Callers que querem reconciliar
+    consistência eventual podem pedir mais ``attempts`` explicitamente.
     """
     if attempts <= 0:
         raise ValueError("attempts must be positive")
