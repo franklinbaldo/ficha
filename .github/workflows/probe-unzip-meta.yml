@@ -59,6 +59,36 @@ jobs:
             exit 1
           fi
 
+      # Workflow manual aceita string livre nos inputs. Sem limite, um dígito a
+      # mais em `membros` cria um ZIP enorme em memória e sobe um objeto grande
+      # por acidente; um dígito a mais em `janela` deixa o job ocioso até o
+      # `timeout-minutes`. Falhar antes de tocar no IA é mais barato que abortar
+      # no meio.
+      - name: Validar inputs
+        env:
+          MEMBROS: ${{ inputs.membros }}
+          JANELA: ${{ inputs.janela }}
+        run: |
+          set -euo pipefail
+          python3 - <<'EOF'
+          import os, sys
+
+          def faixa(nome, minimo, maximo):
+              bruto = os.environ[nome]
+              if not bruto.isdigit():
+                  sys.exit(f"::error::{nome} precisa ser um inteiro, recebi {bruto!r}")
+              valor = int(bruto)
+              if not (minimo <= valor <= maximo):
+                  sys.exit(f"::error::{nome}={valor} fora da faixa [{minimo}, {maximo}]")
+              print(f"{nome}={valor}")
+
+          # 50k membros ~ 100 MB: grande o bastante para o unzip ser realista,
+          # pequeno o bastante para não virar o experimento de upload (#133).
+          faixa("MEMBROS", 1, 50_000)
+          # 1800s cabe no timeout-minutes: 40 com folga para upload e cleanup.
+          faixa("JANELA", 60, 1_800)
+          EOF
+
       - name: Probe
         working-directory: etl
         env:
