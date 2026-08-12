@@ -1,0 +1,25 @@
+name: Probe — ruff format #177
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize]
+
+permissions:
+  contents: read
+
+jobs:
+  diff:
+    if: github.event.pull_request.head.ref == 'fix/sidecar-direct-confirm-176'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: etl
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+      - run: uv python install 3.11
+      - run: uv sync --extra dev
+      - name: Print exact formatter diff
+        run: |
+          uv run ruff format tests/test_shard_sidecar.py
+          git diff -- tests/test_shard_sidecar.py
