@@ -24,7 +24,7 @@ function shards() {
     return {
       shard,
       url: `https://archive.org/download/ficha-2026-05/companies-${shard}.zip`,
-      sha256: 'e'.repeat(64),
+      sha1: 'e'.repeat(40),
       size: value + 1,
     };
   });

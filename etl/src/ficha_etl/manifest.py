@@ -3,7 +3,11 @@
 O manifest é o contrato entre o ETL e o frontend:
   - lista todos os snapshots disponíveis no Internet Archive
   - aponta qual é o mais recente (`current`)
-  - traz URLs, hashes SHA-256 e row counts de cada arquivo
+  - traz URLs, checksums, tamanhos e row counts de cada arquivo
+
+Arquivos históricos continuam usando SHA-256. A camada shardada de ``companies``
+usa o SHA-1 calculado e exposto pelo próprio Internet Archive, porque a sua
+identidade semântica é validada separadamente pelo ``MaterializationSpec``.
 
 Schema: web/src/schemas/v1/manifest.ts (ManifestSchema / SnapshotEntrySchema).
 """
@@ -15,6 +19,7 @@ import hashlib
 import json
 import logging
 from collections.abc import Iterable
+from dataclasses import dataclass
 from pathlib import Path
 
 import duckdb
@@ -22,7 +27,6 @@ import httpx
 
 from .mirror import lookup_parquet_url, lookups_url, parquet_url, raw_file_url
 from .shard_remote import PUBLIC_COMPANIES_GEOMETRY
-from .shard_sidecar import ShardSidecar
 from .transform import _LOOKUP_KINDS
 
 log = logging.getLogger(__name__)
@@ -31,6 +35,16 @@ _HTTP_TIMEOUT = httpx.Timeout(connect=15.0, read=30.0, write=15.0, pool=15.0)
 
 SCHEMA_VERSION = "1.0.0"
 GENERATOR = "ficha-etl"
+
+
+@dataclass(frozen=True)
+class CompanyShardIdentity:
+    """Identidade remota já verificada de um ``companies-NN.zip``."""
+
+    shard: str
+    name: str
+    size: int
+    sha1: str
 
 
 def _sha256(path: Path) -> str:
@@ -63,29 +77,24 @@ def _is_lower_hex(value: str, length: int) -> bool:
     return len(value) == length and all(char in "0123456789abcdef" for char in value)
 
 
-def _companies_sharded_entry(month: str, sidecars: Iterable[ShardSidecar]) -> dict:
-    """Converte 100 sidecars confirmadas no contrato público de companies."""
+def _companies_sharded_entry(month: str, shards: Iterable[CompanyShardIdentity]) -> dict:
+    """Converte 100 identidades remotas confirmadas no contrato público."""
     geometry = PUBLIC_COMPANIES_GEOMETRY
-    by_prefix: dict[str, ShardSidecar] = {}
-    for sidecar in sidecars:
-        prefix = geometry.validate_prefix(sidecar.shard)
+    by_prefix: dict[str, CompanyShardIdentity] = {}
+    for shard in shards:
+        prefix = geometry.validate_prefix(shard.shard)
         if prefix in by_prefix:
-            raise ValueError(f"duplicate companies shard sidecar: {prefix}")
+            raise ValueError(f"duplicate companies shard: {prefix}")
         expected_name = geometry.shard_name(prefix)
-        if sidecar.snapshot != month:
+        if shard.name != expected_name:
             raise ValueError(
-                f"companies shard {prefix}: sidecar snapshot {sidecar.snapshot!r} != {month!r}"
+                f"companies shard {prefix}: artifact name {shard.name!r} != {expected_name!r}"
             )
-        if sidecar.artifact_name != expected_name:
-            raise ValueError(
-                f"companies shard {prefix}: artifact name {sidecar.artifact_name!r} "
-                f"!= {expected_name!r}"
-            )
-        if sidecar.artifact.size <= 0:
+        if shard.size <= 0:
             raise ValueError(f"companies shard {prefix}: artifact size must be positive")
-        if not _is_lower_hex(sidecar.artifact.sha256, 64):
-            raise ValueError(f"companies shard {prefix}: invalid sha256")
-        by_prefix[prefix] = sidecar
+        if not _is_lower_hex(shard.sha1, 40):
+            raise ValueError(f"companies shard {prefix}: invalid sha1")
+        by_prefix[prefix] = shard
 
     expected = list(geometry.prefixes())
     missing = [prefix for prefix in expected if prefix not in by_prefix]
@@ -98,9 +107,9 @@ def _companies_sharded_entry(month: str, sidecars: Iterable[ShardSidecar]) -> di
         "shards": [
             {
                 "shard": prefix,
-                "url": raw_file_url(month, by_prefix[prefix].artifact_name),
-                "sha256": by_prefix[prefix].artifact.sha256,
-                "size": by_prefix[prefix].artifact.size,
+                "url": raw_file_url(month, by_prefix[prefix].name),
+                "sha1": by_prefix[prefix].sha1,
+                "size": by_prefix[prefix].size,
             }
             for prefix in expected
         ],
@@ -111,7 +120,7 @@ def build_snapshot_entry(
     month: str,
     output_dir: Path,
     *,
-    company_sidecars: Iterable[ShardSidecar] | None = None,
+    company_shards: Iterable[CompanyShardIdentity] | None = None,
 ) -> dict:
     """Constrói um SnapshotEntry conforme ManifestSchema.
 
@@ -119,8 +128,9 @@ def build_snapshot_entry(
         month: snapshot no formato YYYY-MM.
         output_dir: diretório com todos os parquets produzidos pelo transform
                     e lookups.json + lookups/*.parquet.
-        company_sidecars: quando fornecidas, substituem o ``companies.zip``
-                    monolítico pelo conjunto completo de shards 00..99.
+        company_shards: quando fornecidos, substituem o ``companies.zip``
+                    monolítico pelo conjunto completo de shards 00..99 já
+                    verificados no Internet Archive.
     """
     cnpjs = output_dir / "cnpjs.parquet"
     cnpj_contatos = output_dir / "cnpj_contatos.parquet"
@@ -146,7 +156,7 @@ def build_snapshot_entry(
         if not path.exists():
             raise FileNotFoundError(f"arquivo ausente para manifest: {path}")
 
-    if company_sidecars is None and not companies_zip.exists():
+    if company_shards is None and not companies_zip.exists():
         raise FileNotFoundError(f"arquivo ausente para manifest: {companies_zip}")
 
     for kind in _LOOKUP_KINDS:
@@ -166,7 +176,7 @@ def build_snapshot_entry(
     }
     log.info("row counts: %s", row_counts)
 
-    log.info("computing SHA-256 hashes")
+    log.info("computing SHA-256 hashes for local snapshot files")
     files: dict[str, object] = {
         "cnpjs": _file_entry(cnpjs, parquet_url(month, "cnpjs")),
         "cnpj_contatos": _file_entry(cnpj_contatos, parquet_url(month, "cnpj_contatos")),
@@ -186,10 +196,10 @@ def build_snapshot_entry(
         },
         "lookups": _file_entry(lookups, lookups_url(month)),
     }
-    if company_sidecars is None:
+    if company_shards is None:
         files["companies_zip"] = _file_entry(companies_zip, raw_file_url(month, "companies.zip"))
     else:
-        files["companies"] = _companies_sharded_entry(month, company_sidecars)
+        files["companies"] = _companies_sharded_entry(month, company_shards)
 
     return {
         "date": month,

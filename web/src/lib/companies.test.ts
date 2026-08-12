@@ -30,7 +30,7 @@ function shardFiles() {
         return {
           shard,
           url: `https://archive.org/download/ficha-2026-05/companies-${shard}.zip`,
-          sha256: shard.repeat(32),
+          sha1: shard.repeat(20),
           size: 100 + value,
         };
       }),
@@ -175,4 +175,3 @@ describe('fetchCompany', () => {
     expect(socio!.cnpj_socio).toBe(cnpjSocio);
   });
 });
-

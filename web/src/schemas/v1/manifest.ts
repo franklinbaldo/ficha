@@ -11,8 +11,12 @@ const FileEntrySchema = z.object({
   size: z.number().int().nonnegative(),
 });
 
-const CompanyShardSchema = FileEntrySchema.extend({
+const CompanyShardSchema = z.object({
   shard: z.string().regex(/^\d{2}$/),
+  url: z.string().url(),
+  // Checksum operacional do IA; autenticidade semântica é validada no ETL.
+  sha1: z.string().regex(/^[0-9a-f]{40}$/),
+  size: z.number().int().positive(),
 });
 
 const CompaniesShardedSchema = z
@@ -76,9 +80,9 @@ export const SnapshotEntrySchema = z.object({
     // Camada atômica histórica: um ZIP monolítico. Continua opcional para
     // compatibilidade com snapshots que já existem (incluindo 2026-04).
     companies_zip: FileEntrySchema.optional(),
-    // Camada atômica retomável: conjunto completo 00..99. A lista explícita
-    // carrega a URL, o tamanho e o SHA-256 que foram efetivamente verificados;
-    // não existe um template paralelo capaz de divergir do estado publicado.
+    // Camada atômica retomável: conjunto completo 00..99. Cada entrada usa o
+    // SHA-1 que o próprio Internet Archive calcula e expõe para o objeto; a
+    // identidade semântica da materialização é validada separadamente no ETL.
     companies: CompaniesShardedSchema.optional(),
   }),
   lookups: z.record(z.string(), z.object({ url: z.string().url() })).optional(),

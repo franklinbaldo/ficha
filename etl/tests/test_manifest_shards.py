@@ -7,7 +7,7 @@ import httpx
 import pytest
 
 from ficha_etl import manifest as manifest_mod
-from ficha_etl.shard_sidecar import ArtifactIdentity, ShardSidecar
+from ficha_etl.manifest import CompanyShardIdentity
 from ficha_etl.transform import _LOOKUP_KINDS
 
 
@@ -38,18 +38,13 @@ def _output_dir(tmp_path: Path) -> Path:
     return root
 
 
-def _sidecars(month: str = "2026-05") -> list[ShardSidecar]:
+def _shards() -> list[CompanyShardIdentity]:
     return [
-        ShardSidecar(
-            snapshot=month,
+        CompanyShardIdentity(
             shard=f"{value:02d}",
-            materialization_id=f"{value + 1:064x}",
-            artifact_name=f"companies-{value:02d}.zip",
-            artifact=ArtifactIdentity(
-                size=value + 100,
-                sha1=f"{value + 1:040x}",
-                sha256=f"{value + 1:064x}",
-            ),
+            name=f"companies-{value:02d}.zip",
+            size=value + 100,
+            sha1=f"{value + 1:040x}",
         )
         for value in range(100)
     ]
@@ -68,7 +63,7 @@ def _patch_client(monkeypatch, handler) -> None:
 
 def test_build_snapshot_entry_accepts_complete_sharded_layer_without_monolith(tmp_path):
     output = _output_dir(tmp_path)
-    entry = manifest_mod.build_snapshot_entry("2026-05", output, company_sidecars=_sidecars())
+    entry = manifest_mod.build_snapshot_entry("2026-05", output, company_shards=_shards())
 
     assert "companies_zip" not in entry["files"]
     companies = entry["files"]["companies"]
@@ -78,49 +73,48 @@ def test_build_snapshot_entry_accepts_complete_sharded_layer_without_monolith(tm
     ]
     assert companies["shards"][7]["url"].endswith("/companies-07.zip")
     assert companies["shards"][7]["size"] == 107
-    assert companies["shards"][7]["sha256"] == f"{8:064x}"
+    assert companies["shards"][7]["sha1"] == f"{8:040x}"
+    assert "sha256" not in companies["shards"][7]
 
 
 def test_build_snapshot_entry_rejects_incomplete_or_duplicate_shards(tmp_path):
     output = _output_dir(tmp_path)
-    incomplete = _sidecars()[:-1]
+    incomplete = _shards()[:-1]
     with pytest.raises(ValueError, match="incomplete companies shards"):
-        manifest_mod.build_snapshot_entry("2026-05", output, company_sidecars=incomplete)
+        manifest_mod.build_snapshot_entry("2026-05", output, company_shards=incomplete)
 
-    duplicate = _sidecars()
+    duplicate = _shards()
     duplicate[-1] = duplicate[-2]
-    with pytest.raises(ValueError, match="duplicate companies shard sidecar"):
-        manifest_mod.build_snapshot_entry("2026-05", output, company_sidecars=duplicate)
+    with pytest.raises(ValueError, match="duplicate companies shard"):
+        manifest_mod.build_snapshot_entry("2026-05", output, company_shards=duplicate)
 
 
-def test_build_snapshot_entry_rejects_sidecar_for_wrong_snapshot_or_name(tmp_path):
+def test_build_snapshot_entry_rejects_wrong_name_or_sha1(tmp_path):
     output = _output_dir(tmp_path)
-    wrong_month = _sidecars()
-    wrong_month[0] = ShardSidecar(
-        snapshot="2026-06",
+    wrong_name = _shards()
+    wrong_name[0] = CompanyShardIdentity(
         shard="00",
-        materialization_id="a" * 64,
-        artifact_name="companies-00.zip",
-        artifact=ArtifactIdentity(size=1, sha1="b" * 40, sha256="c" * 64),
-    )
-    with pytest.raises(ValueError, match="sidecar snapshot"):
-        manifest_mod.build_snapshot_entry("2026-05", output, company_sidecars=wrong_month)
-
-    wrong_name = _sidecars()
-    wrong_name[0] = ShardSidecar(
-        snapshot="2026-05",
-        shard="00",
-        materialization_id="a" * 64,
-        artifact_name="companies-01.zip",
-        artifact=ArtifactIdentity(size=1, sha1="b" * 40, sha256="c" * 64),
+        name="companies-01.zip",
+        size=1,
+        sha1="b" * 40,
     )
     with pytest.raises(ValueError, match="artifact name"):
-        manifest_mod.build_snapshot_entry("2026-05", output, company_sidecars=wrong_name)
+        manifest_mod.build_snapshot_entry("2026-05", output, company_shards=wrong_name)
+
+    wrong_sha1 = _shards()
+    wrong_sha1[0] = CompanyShardIdentity(
+        shard="00",
+        name="companies-00.zip",
+        size=1,
+        sha1="NOT-SHA1",
+    )
+    with pytest.raises(ValueError, match="invalid sha1"):
+        manifest_mod.build_snapshot_entry("2026-05", output, company_shards=wrong_sha1)
 
 
 def test_verify_snapshot_files_heads_all_100_shards_and_checks_size(monkeypatch, tmp_path):
     output = _output_dir(tmp_path)
-    entry = manifest_mod.build_snapshot_entry("2026-05", output, company_sidecars=_sidecars())
+    entry = manifest_mod.build_snapshot_entry("2026-05", output, company_shards=_shards())
     shard_entries = entry["files"]["companies"]["shards"]
     by_url = {shard["url"]: shard for shard in shard_entries}
     seen: set[str] = set()
@@ -142,7 +136,7 @@ def test_verify_snapshot_files_heads_all_100_shards_and_checks_size(monkeypatch,
 
 def test_verify_snapshot_files_reports_one_bad_shard_size(monkeypatch, tmp_path):
     output = _output_dir(tmp_path)
-    entry = manifest_mod.build_snapshot_entry("2026-05", output, company_sidecars=_sidecars())
+    entry = manifest_mod.build_snapshot_entry("2026-05", output, company_shards=_shards())
     shard_entries = entry["files"]["companies"]["shards"]
     by_url = {shard["url"]: shard for shard in shard_entries}
     bad_url = shard_entries[42]["url"]
