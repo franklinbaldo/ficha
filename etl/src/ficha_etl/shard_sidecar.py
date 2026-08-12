@@ -1,4 +1,4 @@
-"""Sidecar de identidade criptográfica para shards publicados (#167).
+"""Sidecar de identidade criptográfica para shards publicados (#167/#176).
 
 ``MaterializationSpec`` identifica a semântica do shard; esta sidecar identifica
 os bytes publicados. Separar as duas coisas evita a autorreferência impossível
@@ -21,7 +21,11 @@ from .sharded_pack import ShardGeometry
 
 SIDECAR_VERSION = 1
 _HTTP_TIMEOUT = httpx.Timeout(connect=15.0, read=60.0, write=15.0, pool=15.0)
-_TRANSIENT_STATUS = frozenset({404, 429, 500, 502, 503, 504})
+_TRANSIENT_STATUS = frozenset({429, 500, 502, 503, 504})
+
+
+class SidecarObservationError(RuntimeError):
+    """A sidecar não pôde ser classificada com segurança como presente/ausente."""
 
 
 @dataclass(frozen=True)
@@ -149,26 +153,54 @@ def fetch_remote_sidecar(
     sleep: Callable[[float], None] = time.sleep,
     client: httpx.Client | None = None,
 ) -> object | None:
-    """Lê sidecar pequena com retry para a consistência eventual do item."""
+    """Observa sidecar por GET direto com semântica fail-closed.
+
+    Retorna ``None`` somente quando **todas** as observações foram 404. Um
+    429/5xx, erro de rede, resposta vazia ou JSON inválido significa estado
+    remoto desconhecido e levanta ``SidecarObservationError``. Assim uma falha
+    de observabilidade nunca vira autorização para sobrescrever uma sidecar.
+    """
+    if attempts <= 0:
+        raise ValueError("attempts must be positive")
+
     url = f"{mirror.item_root(month)}/{name}"
     owns_client = client is None
     client = client or httpx.Client(timeout=_HTTP_TIMEOUT, follow_redirects=True)
+    all_observations_are_404 = True
+    last_detail = "sem observação"
     try:
         for attempt in range(1, attempts + 1):
             try:
                 response = client.get(url)
-                if response.status_code == 200 and response.content:
+            except httpx.HTTPError as exc:
+                all_observations_are_404 = False
+                last_detail = f"erro de rede: {exc}"
+            else:
+                if response.status_code == 200:
+                    if not response.content:
+                        raise SidecarObservationError(f"{name}: GET 200 sem conteúdo")
                     try:
                         return response.json()
-                    except ValueError:
-                        return None
-                if response.status_code not in _TRANSIENT_STATUS:
-                    return None
-            except httpx.HTTPError:
-                pass
+                    except ValueError as exc:
+                        raise SidecarObservationError(f"{name}: JSON remoto inválido") from exc
+                if response.status_code == 404:
+                    last_detail = "HTTP 404"
+                elif response.status_code in _TRANSIENT_STATUS:
+                    all_observations_are_404 = False
+                    last_detail = f"HTTP {response.status_code}"
+                else:
+                    raise SidecarObservationError(
+                        f"{name}: resposta remota não classificável: HTTP {response.status_code}"
+                    )
             if attempt < attempts:
                 sleep(backoff_s * attempt)
-        return None
+
+        if all_observations_are_404:
+            return None
+        raise SidecarObservationError(
+            f"{name}: observação remota permaneceu ambígua após {attempts} tentativa(s): "
+            f"{last_detail}"
+        )
     finally:
         if owns_client:
             client.close()
