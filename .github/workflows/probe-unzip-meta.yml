@@ -1,0 +1,78 @@
+name: Probe — leitura remota de _meta.json pelo unzip do IA
+
+# Workflow OPERACIONAL. Existe para produzir evidência para #147, não para
+# mudar comportamento de produção. Nunca deve ser mergeado num fluxo automático.
+#
+# A pergunta: dá para decidir, ANTES de gerar um shard, se o shard remoto
+# pertence aos inputs atuais — lendo só o `_meta.json` de dentro do ZIP?
+#
+# Segurança: item descartável `ficha-probe-unzip-meta-147`, jamais
+# `ficha-YYYY-MM`. Os objetos são apagados no `finally` do script.
+
+on:
+  workflow_dispatch:
+    inputs:
+      membros:
+        description: Membros no ZIP de teste (tamanho do objeto)
+        required: true
+        default: '2000'
+        type: string
+      janela:
+        description: Segundos observando a disponibilidade do membro
+        required: true
+        default: '900'
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: probe-unzip-meta
+  cancel-in-progress: false
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+
+      - name: Instalar dependências
+        working-directory: etl
+        run: uv sync --frozen
+
+      # Precondição explícita: `pending_tasks` no item descartável significa
+      # que uma execução anterior ainda está sendo processada pelo IA. Medir por
+      # cima disso misturaria duas perguntas, como aconteceu no probe #140.
+      - name: Verificar que o item descartável está quieto
+        run: |
+          set -euo pipefail
+          pending=$(curl -sSL "https://archive.org/metadata/ficha-probe-unzip-meta-147" \
+            | python3 -c "import json,sys; print(json.load(sys.stdin).get('pending_tasks'))")
+          echo "pending_tasks=$pending"
+          if [ "$pending" = "True" ]; then
+            echo "::error::item ainda tem pending_tasks — rode de novo depois"
+            exit 1
+          fi
+
+      - name: Probe
+        working-directory: etl
+        env:
+          IA_ACCESS_KEY: ${{ secrets.IA_ACCESS_KEY }}
+          IA_SECRET_KEY: ${{ secrets.IA_SECRET_KEY }}
+        run: |
+          uv run python bench/probe_unzip_meta.py \
+            --membros '${{ inputs.membros }}' \
+            --janela '${{ inputs.janela }}' \
+            | tee probe-unzip-meta.log
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: probe-unzip-meta-evidencia
+          path: etl/probe-unzip-meta.log
+          retention-days: 30
