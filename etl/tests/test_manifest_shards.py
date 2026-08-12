@@ -68,9 +68,7 @@ def _patch_client(monkeypatch, handler) -> None:
 
 def test_build_snapshot_entry_accepts_complete_sharded_layer_without_monolith(tmp_path):
     output = _output_dir(tmp_path)
-    entry = manifest_mod.build_snapshot_entry(
-        "2026-05", output, company_sidecars=_sidecars()
-    )
+    entry = manifest_mod.build_snapshot_entry("2026-05", output, company_sidecars=_sidecars())
 
     assert "companies_zip" not in entry["files"]
     companies = entry["files"]["companies"]
@@ -122,9 +120,7 @@ def test_build_snapshot_entry_rejects_sidecar_for_wrong_snapshot_or_name(tmp_pat
 
 def test_verify_snapshot_files_heads_all_100_shards_and_checks_size(monkeypatch, tmp_path):
     output = _output_dir(tmp_path)
-    entry = manifest_mod.build_snapshot_entry(
-        "2026-05", output, company_sidecars=_sidecars()
-    )
+    entry = manifest_mod.build_snapshot_entry("2026-05", output, company_sidecars=_sidecars())
     shard_entries = entry["files"]["companies"]["shards"]
     by_url = {shard["url"]: shard for shard in shard_entries}
     seen: set[str] = set()
@@ -146,9 +142,7 @@ def test_verify_snapshot_files_heads_all_100_shards_and_checks_size(monkeypatch,
 
 def test_verify_snapshot_files_reports_one_bad_shard_size(monkeypatch, tmp_path):
     output = _output_dir(tmp_path)
-    entry = manifest_mod.build_snapshot_entry(
-        "2026-05", output, company_sidecars=_sidecars()
-    )
+    entry = manifest_mod.build_snapshot_entry("2026-05", output, company_sidecars=_sidecars())
     shard_entries = entry["files"]["companies"]["shards"]
     by_url = {shard["url"]: shard for shard in shard_entries}
     bad_url = shard_entries[42]["url"]
