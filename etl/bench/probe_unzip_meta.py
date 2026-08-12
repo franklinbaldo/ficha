@@ -193,11 +193,27 @@ def precondicao(md: dict | None) -> tuple[bool, str]:
     return True, "ok"
 
 
-def prepara(sessao, *, limite: float) -> bool:
-    """Deixa o item existente, identificável, quieto e limpo.
+def _residuo(md: dict | None) -> list[str]:
+    if not md or not isinstance(md.get("files"), list):
+        return []
+    return [f.get("name") for f in md["files"] if f.get("name") in PAYLOAD]
 
-    Exige **duas leituras consecutivas** satisfeitas antes de liberar a medição:
-    uma leitura isolada pode pegar o metadata numa janela transitória.
+
+def prepara(sessao, *, limite: float) -> bool:
+    """Deixa o item existente, identificável e quieto — sem curar resíduo.
+
+    Resolve **bootstrap** e **consistência eventual**, que são estados normais:
+    o item pode não existir ainda, e o metadata pode demorar a refletir a
+    realidade. Exige duas leituras consecutivas satisfeitas, porque uma leitura
+    isolada pode pegar uma janela transitória.
+
+    O que ela **não** faz é apagar payload residual. Um `bom.zip` ou
+    `truncado.zip` sobrando é evidência de que a execução anterior não fechou
+    corretamente — quase sempre uma falha de cleanup. Se cada run apagasse isso
+    em silêncio, uma falha recorrente de limpeza ficaria invisível justamente
+    porque o probe a estaria curando. Então aqui a resposta é **falhar fechado**
+    e dizer quais objetos existem; remover é ato deliberado, via
+    `--reparar-residuo`.
     """
     fim = time.time() + limite
     estaveis = 0
@@ -205,8 +221,20 @@ def prepara(sessao, *, limite: float) -> bool:
 
     while time.time() < fim:
         md = metadata()
-        ok, motivo = precondicao(md)
 
+        # Falha fechada e imediata: esperar não resolve resíduo, e insistir até
+        # o timeout só esconderia a causa atrás de "precondição não atingida".
+        sobras = _residuo(md)
+        if sobras:
+            registra(
+                None,
+                "ABORTANDO: payload residual de execucao anterior",
+                objetos=sobras,
+                acao="rode com --reparar-residuo para remover deliberadamente",
+            )
+            return False
+
+        ok, motivo = precondicao(md)
         if ok:
             estaveis += 1
             registra(None, "precondicao satisfeita", leituras_estaveis=estaveis)
@@ -219,25 +247,62 @@ def prepara(sessao, *, limite: float) -> bool:
         registra(None, "precondicao pendente", motivo=motivo)
 
         if md is not None and not md and not criou:
-            # ABSENT precisa ser resolvido ANTES de T0, senão o bootstrap do
-            # item entra na latência do primeiro objeto.
+            # Bootstrap é preparação legítima: o item precisa existir ANTES de
+            # T0, senão sua criação entra na latência do primeiro objeto.
             ok_put, det = sobe(sessao, MARCADOR, b"probe #147 - marcador de existencia\n")
             registra(None, "criando o item pelo marcador", sucesso=ok_put, **det)
             if not ok_put:
                 return False
             criou = True
-        elif md and isinstance(md.get("files"), list):
-            for nome in PAYLOAD:
-                if any(f.get("name") == nome for f in md["files"]):
-                    try:
-                        apaga(sessao, nome)
-                        registra(None, "residuo removido", arquivo=nome)
-                    except Exception as exc:  # noqa: BLE001
-                        registra(None, "residuo NAO removido", arquivo=nome, erro=str(exc)[:200])
 
         time.sleep(15)
 
     registra(None, "PRECONDICAO NAO ATINGIDA", limite_segundos=limite)
+    return False
+
+
+def repara_residuo(sessao, *, limite: float) -> bool:
+    """Remove payload residual de uma execução anterior. **Ato deliberado.**
+
+    Separado de `prepara()` de propósito: apagar resíduo é reparação de uma
+    falha passada, não preparação de um experimento novo. Exige pedido
+    explícito, apaga com identifier explícito, confirma a ausência por polling e
+    espera `pending_tasks` estabilizar.
+    """
+    md = metadata()
+    sobras = _residuo(md)
+    if not sobras:
+        registra(
+            None, "nada a reparar", arquivos=[f.get("name") for f in (md or {}).get("files", [])]
+        )
+        return True
+
+    registra(None, "REPARANDO residuo", objetos=sobras)
+    for nome in sobras:
+        try:
+            apaga(sessao, nome)
+            registra(None, "DELETE emitido", arquivo=nome)
+        except Exception as exc:  # noqa: BLE001
+            registra(None, "DELETE FALHOU", arquivo=nome, erro=str(exc)[:300])
+            return False
+
+    fim = time.time() + limite
+    while time.time() < fim:
+        md = metadata()
+        sobras = _residuo(md)
+        quieto = md is not None and md and md.get("pending_tasks") is not True
+        registra(
+            None,
+            "aguardando ausencia",
+            residuo=sobras,
+            pending_tasks=(md or {}).get("pending_tasks"),
+        )
+        if not sobras and quieto:
+            registra(None, "REPARO CONFIRMADO — item limpo e quieto")
+            return True
+        time.sleep(20)
+
+    registra(None, "REPARO NAO CONFIRMADO no limite", limite_segundos=limite)
     return False
 
 
@@ -360,6 +425,11 @@ def main() -> int:
     ap.add_argument("--membros", type=int, default=2000, help="membros no ZIP de teste")
     ap.add_argument("--janela", type=int, default=900, help="segundos observando disponibilidade")
     ap.add_argument("--preparo", type=int, default=600, help="segundos para a fase de preparação")
+    ap.add_argument(
+        "--reparar-residuo",
+        action="store_true",
+        help="remove deliberadamente payload residual de execução anterior e sai",
+    )
     args = ap.parse_args()
 
     # Defesa em profundidade: o workflow já valida, mas o script também roda a
@@ -377,6 +447,9 @@ def main() -> int:
             "s3": {"access": os.environ["IA_ACCESS_KEY"], "secret": os.environ["IA_SECRET_KEY"]}
         }
     )
+
+    if args.reparar_residuo:
+        return 0 if repara_residuo(sessao, limite=args.preparo) else 1
 
     if not prepara(sessao, limite=args.preparo):
         print("::error::precondicao nao atingida — nada foi medido", flush=True)

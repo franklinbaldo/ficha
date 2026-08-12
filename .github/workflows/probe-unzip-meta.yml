@@ -22,6 +22,14 @@ on:
         required: true
         default: '900'
         type: string
+      reparar:
+        description: >-
+          Remover payload residual de execução anterior e SAIR, sem medir.
+          Resíduo é evidência de falha de cleanup, então removê-lo é ato
+          deliberado — nunca automático.
+        required: false
+        default: false
+        type: boolean
   # Disparo por push restrito a branches descartáveis com este prefixo. Existe
   # porque nem todo operador consegue criar um `workflow_dispatch` pela API —
   # empurrar uma branch é o gatilho manual disponível. NUNCA dispara em `main`,
@@ -47,6 +55,10 @@ jobs:
     env:
       MEMBROS: ${{ inputs.membros || '2000' }}
       JANELA: ${{ inputs.janela || '900' }}
+      # Em evento de `push` não há inputs: o default é NÃO reparar. Reparar por
+      # push exige um commit explícito nesta linha, o que deixa o ato deliberado
+      # registrado na história.
+      REPARAR: ${{ inputs.reparar || 'false' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -60,8 +72,8 @@ jobs:
 
       # A precondição do item deixou de ser um gate de shell e virou a fase de
       # preparação do próprio probe (`prepara()`), que distingue ABSENT de
-      # quieto, cria o item se preciso, limpa resíduo e exige duas leituras
-      # estáveis antes de T0. Duplicar isso aqui produziria duas definições de
+      # quieto, cria o item se preciso, ABORTA se houver resíduo e exige duas
+      # leituras estáveis antes de T0. Duplicar isso aqui produziria duas definições de
       # "pronto" que podem divergir. O que sobra é uma observação registrada
       # no log, sem poder de decisão.
       - name: Registrar o estado inicial do item
@@ -121,9 +133,15 @@ jobs:
           # probe vira step verde. Foi exatamente o que aconteceu no run
           # 31558838717: o script morreu e o job passou.
           set -euo pipefail
+          extra=""
+          if [ "$REPARAR" = "true" ]; then
+            extra="--reparar-residuo"
+            echo "::notice::modo REPARAÇÃO — remove resíduo e sai, sem medir"
+          fi
           uv run python bench/probe_unzip_meta.py \
             --membros "$MEMBROS" \
             --janela "$JANELA" \
+            $extra \
             | tee probe-unzip-meta.log
 
       - uses: actions/upload-artifact@v4
