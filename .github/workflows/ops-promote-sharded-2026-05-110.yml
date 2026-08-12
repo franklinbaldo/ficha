@@ -36,6 +36,9 @@ jobs:
       # tinham PUT antigo aceito mas seguem fora do catálogo; 98 é controle
       # positivo porque já aparece em /metadata.
       - name: Diagnose IA ingest state
+        env:
+          IA_ACCESS_KEY_ID: ${{ secrets.IA_ACCESS_KEY }}
+          IA_SECRET_ACCESS_KEY: ${{ secrets.IA_SECRET_KEY }}
         run: |
           set +e
           echo '== ia tasks =='
@@ -49,7 +52,7 @@ jobs:
               --write-out 'download HEAD: http=%{http_code} url=%{url_effective}\n' \
               "$IA_BASE/companies-${p}.zip" || true
             echo 'IAS3 log tail:'
-            curl --silent --show-error --max-time 30 \
+            curl --silent --show-error --location --max-time 30 \
               "https://s3.us.archive.org/ficha-2026-05/companies-${p}.zip?log" \
               | tail -n 40 || true
             echo
