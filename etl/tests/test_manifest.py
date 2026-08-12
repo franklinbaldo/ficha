@@ -26,8 +26,8 @@ def _write_parquet(path: Path, n_rows: int) -> None:
         con.close()
 
 
-def _sha256(path: Path) -> str:
-    h = hashlib.sha256()
+def _sha1(path: Path) -> str:
+    h = hashlib.sha1()
     with path.open("rb") as f:
         for chunk in iter(lambda: f.read(65_536), b""):
             h.update(chunk)
@@ -88,13 +88,14 @@ def test_build_snapshot_entry_file_hashes(output_dir: Path) -> None:
     entry = manifest_mod.build_snapshot_entry("2026-04", output_dir)
 
     cnpjs_path = output_dir / "cnpjs.parquet"
-    assert entry["files"]["cnpjs"]["sha256"] == _sha256(cnpjs_path)
+    assert entry["files"]["cnpjs"]["sha1"] == _sha1(cnpjs_path)
+    assert "sha256" not in entry["files"]["cnpjs"], "o contrato novo emite só sha1"
     assert entry["files"]["cnpjs"]["size"] == cnpjs_path.stat().st_size
     assert "ficha-2026-04" in entry["files"]["cnpjs"]["url"]
     assert "cnpjs.parquet" in entry["files"]["cnpjs"]["url"]
 
     lookups_path = output_dir / "lookups.json"
-    assert entry["files"]["lookups"]["sha256"] == _sha256(lookups_path)
+    assert entry["files"]["lookups"]["sha1"] == _sha1(lookups_path)
     assert "lookups.json" in entry["files"]["lookups"]["url"]
 
 
@@ -103,7 +104,7 @@ def test_build_snapshot_entry_includes_companies_zip(output_dir: Path) -> None:
     entry = manifest_mod.build_snapshot_entry("2026-04", output_dir)
     zip_path = output_dir / "companies.zip"
     assert "companies_zip" in entry["files"]
-    assert entry["files"]["companies_zip"]["sha256"] == _sha256(zip_path)
+    assert entry["files"]["companies_zip"]["sha1"] == _sha1(zip_path)
     assert entry["files"]["companies_zip"]["size"] == zip_path.stat().st_size
     assert "companies.zip" in entry["files"]["companies_zip"]["url"]
 

@@ -5,11 +5,46 @@ import { z } from 'zod';
  *
  * Ver ADR 0003 (versionamento) e ADR 0008 (estrutura de arquivos por snapshot).
  */
-const FileEntrySchema = z.object({
+/**
+ * Checksum de um arquivo declarado no manifesto.
+ *
+ * O contrato padronizou em **SHA-1**, o mesmo que o Internet Archive calcula e
+ * expõe para cada objeto — o que torna a verificação homogênea com os shards de
+ * `companies` e dispensa o ETL de calcular uma segunda família de hash.
+ *
+ * `sha256` permanece aceito e **opcional** porque snapshots já publicados
+ * (2026-04) só têm ele: tornar `sha1` obrigatório de imediato invalidaria o
+ * manifesto em produção. A migração é declarada, não silenciosa — a remoção de
+ * `sha256` só pode acontecer depois que todo snapshot publicado carregar
+ * `sha1`, e exige bump de `schema_version`.
+ *
+ * Pelo menos um dos dois precisa existir: um arquivo sem checksum nenhum não é
+ * verificável, e o manifesto não deve declará-lo como se fosse.
+ */
+const FileEntryShape = z.object({
   url: z.string().url(),
-  sha256: z.string(),
+  sha1: z
+    .string()
+    .regex(/^[0-9a-f]{40}$/)
+    .optional(),
+  sha256: z.string().optional(),
   size: z.number().int().nonnegative(),
 });
+
+/**
+ * Exige pelo menos um checksum, preservando `.extend()`.
+ *
+ * O refinamento fica num helper porque aplicá-lo direto no schema base o
+ * transformaria num `ZodEffects`, que não expõe `.extend()` — e três entradas
+ * (`cnpj_cnaes`, `enderecos`, `pessoas`) estendem o FileEntry com `sort`.
+ */
+const comChecksum = <T extends typeof FileEntryShape>(shape: T) =>
+  shape.refine((entry) => Boolean(entry.sha1 || entry.sha256), {
+    message: 'file entry precisa de sha1 ou sha256',
+    path: ['sha1'],
+  });
+
+const FileEntrySchema = comChecksum(FileEntryShape);
 
 const CompanyShardSchema = z.object({
   shard: z.string().regex(/^\d{2}$/),
@@ -71,11 +106,11 @@ export const SnapshotEntrySchema = z.object({
     // ausente; o manifest não deve afirmar que um arquivo existe se a URL
     // não responde.
     cnpj_contatos: FileEntrySchema.optional(),
-    cnpj_cnaes: FileEntrySchema.extend({ sort: z.array(z.string()) }).optional(),
+    cnpj_cnaes: comChecksum(FileEntryShape.extend({ sort: z.array(z.string()) })).optional(),
     raizes: FileEntrySchema,
     socios: FileEntrySchema,
-    enderecos: FileEntrySchema.extend({ sort: z.array(z.string()) }).optional(),
-    pessoas: FileEntrySchema.extend({ sort: z.array(z.string()) }).optional(),
+    enderecos: comChecksum(FileEntryShape.extend({ sort: z.array(z.string()) })).optional(),
+    pessoas: comChecksum(FileEntryShape.extend({ sort: z.array(z.string()) })).optional(),
     lookups: FileEntrySchema,
     // Camada atômica histórica: um ZIP monolítico. Continua opcional para
     // compatibilidade com snapshots que já existem (incluindo 2026-04).

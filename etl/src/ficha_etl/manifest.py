@@ -47,9 +47,21 @@ class CompanyShardIdentity:
     sha1: str
 
 
-def _sha256(path: Path) -> str:
-    """SHA-256 hex de um arquivo local (leitura em blocos de 64 KB)."""
-    h = hashlib.sha256()
+def _sha1(path: Path) -> str:
+    """SHA-1 hex de um arquivo local (leitura em blocos de 64 KB).
+
+    O contrato do manifesto passou a declarar SHA-1 em vez de SHA-256, para
+    ficar homogêneo com os shards de `companies` — cujo checksum é o que o
+    próprio Internet Archive calcula e expõe para cada objeto. Antes disso, um
+    snapshot shardado tinha duas famílias de hash e nenhuma afirmação pública
+    simples cobria as duas.
+
+    Ressalva registrada, não escondida: SHA-1 tem colisão prática desde 2017.
+    Isso é adequado para detectar corrupção acidental — o caso dominante aqui,
+    já que os bytes vêm do IA e o transporte é HTTP — e é fraco contra
+    adulteração deliberada. A afirmação pública precisa refletir isso.
+    """
+    h = hashlib.sha1()  # noqa: S324 — checksum de integridade, não uso criptográfico
     with path.open("rb") as f:
         for chunk in iter(lambda: f.read(65_536), b""):
             h.update(chunk)
@@ -68,7 +80,7 @@ def _row_count(parquet_path: Path) -> int:
 def _file_entry(path: Path, url: str) -> dict:
     return {
         "url": url,
-        "sha256": _sha256(path),
+        "sha1": _sha1(path),
         "size": path.stat().st_size,
     }
 
