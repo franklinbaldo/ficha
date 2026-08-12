@@ -356,7 +356,10 @@ def pack_companies(
     # fsync antes do rename: sem isso, uma queda de máquina pode deixar o nome
     # final publicado apontando para dados ainda não persistidos — exatamente a
     # confusão entre "existe" e "está completo" que o `.part` existe para evitar.
-    with open(parcial, "rb") as fp:
+    # Handle de escrita: no Windows, `os.fsync` sobre um descritor somente-leitura
+    # falha com EBADF (`_commit` exige handle gravável). No Linux passaria, o que
+    # tornaria a diferença invisível fora do job de compatibilidade.
+    with open(parcial, "r+b") as fp:
         os.fsync(fp.fileno())
     parcial.replace(output_path)
     size = output_path.stat().st_size
