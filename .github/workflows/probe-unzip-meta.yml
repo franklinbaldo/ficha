@@ -58,7 +58,10 @@ jobs:
       # Em evento de `push` não há inputs: o default é NÃO reparar. Reparar por
       # push exige um commit explícito nesta linha, o que deixa o ato deliberado
       # registrado na história.
-      REPARAR: ${{ inputs.reparar || 'false' }}
+      # ATO DELIBERADO, nesta branch descartável apenas: remove o resíduo
+      # `bom.zip` deixado pelo run 31558838717, cujo cleanup falhou com 403 por
+      # causa do identifier None. Não mede nada — sai depois de confirmar.
+      REPARAR: 'true'
     steps:
       - uses: actions/checkout@v4
 
