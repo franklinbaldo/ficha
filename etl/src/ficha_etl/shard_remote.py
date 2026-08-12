@@ -178,7 +178,10 @@ def classify_remote_shard(
         )
 
     expected_id = expected.materialization_id()
-    if materialization.get("id") != expected_id or materialization.get("spec") != expected.as_document():
+    if (
+        materialization.get("id") != expected_id
+        or materialization.get("spec") != expected.as_document()
+    ):
         return ShardReuseVerdict(
             name,
             ShardReuseState.MISMATCH,
