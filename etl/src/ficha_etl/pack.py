@@ -161,6 +161,43 @@ def _schema_proto_text() -> bytes:
 # ---- row → protobuf ------------------------------------------------
 
 
+ORDEM_ESTABELECIMENTOS = ("cnpj_ordem", "cnpj_dv")
+ORDEM_SOCIOS = (
+    "qualificacao_codigo",
+    "nome_socio_razao_social",
+    "cnpj_socio",
+    "cpf_mascarado",
+    "data_entrada_sociedade",
+    "tipo",
+    "pais_codigo",
+    "faixa_etaria",
+    "representante_legal_cpf",
+    "representante_legal_nome",
+    "representante_legal_qualificacao_codigo",
+)
+
+
+def em_ordem(itens, chaves: tuple[str, ...]) -> list[dict]:
+    """Ordena os filhos de uma raiz reproduzindo `ORDER BY ... ASC NULLS LAST`.
+
+    Até #147 esta ordenação era feita dentro do `list(struct ...)` do
+    `_COMPANIES_SQL`. Medido no bucket 00 de 2026-05, o custo dessa forma vinha
+    da *interação* entre ordenar e materializar um struct largo: struct largo
+    sem ordenar custa 3,7 s, ordenar struct estreito custa 3,7 s, e os dois
+    juntos custam 53,2 s. Como a lista tem 1,12 estabelecimentos em média, o
+    trabalho real de ordenação é desprezível — o que era caro era arrastar 34
+    campos por comparação dentro do agregado.
+
+    `(x is None, x)` replica NULLS LAST: valores não nulos comparam entre si e
+    os nulos vão para o fim. A comparação nunca cai em `None < None`, porque
+    tuplas iguais são resolvidas por igualdade antes de qualquer `<`.
+    """
+    itens = itens or []
+    if len(itens) < 2:
+        return itens
+    return sorted(itens, key=lambda d: tuple((d.get(k) is None, d.get(k)) for k in chaves))
+
+
 def row_to_company(row: dict) -> Company:
     """Convert a joined DuckDB row (cnpjs ⊕ raizes ⊕ socios) to Company."""
     c = Company()
@@ -174,7 +211,7 @@ def row_to_company(row: dict) -> Company:
     c.qtd_estabelecimentos = _int(row.get("qtd_estabelecimentos"))
     c.qtd_estabelecimentos_ativos = _int(row.get("qtd_estabelecimentos_ativos"))
 
-    for estab_dict in row.get("estabelecimentos") or []:
+    for estab_dict in em_ordem(row.get("estabelecimentos"), ORDEM_ESTABELECIMENTOS):
         e = Estabelecimento()
         e.cnpj_ordem = _int(estab_dict.get("cnpj_ordem"))
         e.cnpj_dv = _int(estab_dict.get("cnpj_dv"))
@@ -217,7 +254,7 @@ def row_to_company(row: dict) -> Company:
         e.data_exclusao_mei = _date(estab_dict.get("data_exclusao_mei"))
         c.estabelecimentos.append(e)
 
-    for socio_dict in row.get("socios") or []:
+    for socio_dict in em_ordem(row.get("socios"), ORDEM_SOCIOS):
         s = Socio()
         s.tipo = _tipo_socio(socio_dict.get("tipo"))
         s.nome_socio_razao_social = _str(socio_dict.get("nome_socio_razao_social"))
@@ -258,6 +295,48 @@ def build_lookup_pb(kind: str, rows: list[dict]) -> bytes:
 # ---- main entry point ----------------------------------------------
 
 
+def data_canonica_do_snapshot(snapshot_month: str) -> tuple[int, int, int, int, int, int]:
+    """Timestamp canônico da competência, gravado em todo membro do ZIP.
+
+    `YYYY-MM-01 00:00:00` é uma **data civil canônica** que identifica a
+    competência do snapshot. Não é data de release, não é mtime real e não tem
+    semântica de modificação: nenhum membro de `companies.zip` tem data de
+    modificação individual, já que todos são materializados no mesmo ato. O
+    campo existe no formato ZIP e precisa de algum valor; este é o valor que
+    identifica o retrato sem inventar um fato.
+
+    `zipfile.writestr(str, ...)` monta o `ZipInfo` a partir de `time.localtime()`,
+    então dois packs dos mesmos dados produziam artefatos com hash diferente
+    (#151). Trocar o relógio por uma constante resolve isso, mas a constante não
+    é livre: o Internet Archive **renderiza** a data dos membros para o usuário.
+    Verificado em `ficha-2026-04/raw/Cnaes.zip`, cuja listagem de unzip
+    transparente tem uma coluna `timestamp` com `2026-04-12 06:56`. Uma época
+    artificial como 1980-01-01 apareceria em ~68 milhões de linhas dessa
+    listagem sem significar nada.
+
+    A propriedade preservada é:
+
+        mesmos inputs + mesma competência + mesmo ambiente/stack testado
+        → mesmos bytes
+    """
+    ano, mes = snapshot_month.split("-")
+    return (int(ano), int(mes), 1, 0, 0, 0)
+
+
+def _membro(zf: zipfile.ZipFile, nome: str, data: tuple) -> zipfile.ZipInfo:
+    """`ZipInfo` com data canônica e os defaults que `writestr(str, ...)` aplica.
+
+    Passar um `ZipInfo` **desliga** esses defaults: sem repor `compress_type` e
+    `_compresslevel` o membro sairia STORED em vez de DEFLATE, mudando o formato
+    em silêncio.
+    """
+    zi = zipfile.ZipInfo(filename=nome, date_time=data)
+    zi.compress_type = zf.compression
+    zi._compresslevel = zf.compresslevel  # noqa: SLF001 — sem equivalente público
+    zi.external_attr = 0o600 << 16
+    return zi
+
+
 def pack_companies(
     rows: Iterator[dict],
     lookup_rows: dict[str, list[dict]],
@@ -278,6 +357,7 @@ def pack_companies(
     schema_desc = _schema_desc_bytes()
     schema_sha256 = hashlib.sha256(schema_desc).hexdigest()
     snapshot_yyyymm = int(snapshot_month.replace("-", ""))
+    data_zip = data_canonica_do_snapshot(snapshot_month)
 
     # Fail fast if the caller didn't provide every required lookup kind
     # (Codex P2 on PR #41). The package contract is that every published
@@ -297,17 +377,25 @@ def pack_companies(
     prev_cnpj_base: int | None = None
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
+    # Escreve num `.part` e renomeia só no fim. Assim a existência de
+    # `output_path` passa a significar "artefato completo": um pack interrompido
+    # por OOM, disco cheio ou erro de linha deixa `.part`, que nenhuma retomada
+    # confunde com trabalho durável. O rename é atômico dentro do mesmo
+    # diretório, que é onde o `.part` é criado de propósito.
+    parcial = output_path.with_name(output_path.name + ".part")
+    parcial.unlink(missing_ok=True)
+
     with SpoolingZipFile(
-        output_path, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6, allowZip64=True
+        parcial, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6, allowZip64=True
     ) as zf:
         # schema artifacts
-        zf.writestr("_schema.desc", schema_desc)
-        zf.writestr("_schema.proto", _schema_proto_text())
+        zf.writestr(_membro(zf, "_schema.desc", data_zip), schema_desc)
+        zf.writestr(_membro(zf, "_schema.proto", data_zip), _schema_proto_text())
 
         # lookups
         for kind, lrows in lookup_rows.items():
             pb_bytes = build_lookup_pb(kind, lrows)
-            zf.writestr(f"_lookups/{kind}.pb", pb_bytes)
+            zf.writestr(_membro(zf, f"_lookups/{kind}.pb", data_zip), pb_bytes)
 
         # company docs
         for row in rows:
@@ -332,7 +420,7 @@ def pack_companies(
             prev_cnpj_base = company.cnpj_base
             company.snapshot_yyyymm = snapshot_yyyymm
             pb_bytes = company.SerializeToString()
-            zf.writestr(cnpjpath(company.cnpj_base), pb_bytes)
+            zf.writestr(_membro(zf, cnpjpath(company.cnpj_base), data_zip), pb_bytes)
             count += 1
 
         # meta (written last so count is accurate)
@@ -342,8 +430,19 @@ def pack_companies(
             "snapshot_month": snapshot_month,
             "count": count,
         }
-        zf.writestr("_meta.json", json.dumps(meta, indent=2))
+        zf.writestr(_membro(zf, "_meta.json", data_zip), json.dumps(meta, indent=2))
 
+    # fsync antes do rename: sem isso, uma queda de máquina pode deixar o nome
+    # final publicado apontando para dados ainda não persistidos — exatamente a
+    # confusão entre "existe" e "está completo" que o `.part` existe para evitar.
+    # `close` (feito pelo `with` acima) seguido de rename atômico. Sem fsync:
+    # a garantia desta função é de processo — nunca expor o nome final
+    # parcialmente escrito —, não de durabilidade contra queda de SO ou falta de
+    # energia. Durabilidade exigiria também fsync do diretório, tem semântica
+    # diferente por plataforma, e não teria consumidor: se a máquina cai, o job
+    # cai junto e a retomada redescobre o estado pelo item remoto, que é a fonte
+    # de verdade do checkpoint (#147) — não o disco local.
+    parcial.replace(output_path)
     size = output_path.stat().st_size
     return {"count": count, "size_bytes": size, "schema_sha256": schema_sha256}
 
@@ -410,7 +509,7 @@ LEFT JOIN (
                'opcao_mei': opcao_mei,
                'data_opcao_mei': data_opcao_mei,
                'data_exclusao_mei': data_exclusao_mei
-           } ORDER BY cnpj_ordem, cnpj_dv) AS estabelecimentos
+           }) AS estabelecimentos
     FROM read_parquet(?)
     WHERE cnpj_base >= ? AND cnpj_base < ?
     GROUP BY cnpj_base
@@ -429,17 +528,7 @@ LEFT JOIN (
                'representante_legal_cpf': representante_legal_cpf,
                'representante_legal_nome': representante_legal_nome,
                'representante_legal_qualificacao_codigo': representante_legal_qualificacao_codigo
-           } ORDER BY qualificacao_codigo,
-                      nome_socio_razao_social,
-                      cnpj_socio,
-                      cpf_mascarado,
-                      data_entrada_sociedade,
-                      tipo,
-                      pais_codigo,
-                      faixa_etaria,
-                      representante_legal_cpf,
-                      representante_legal_nome,
-                      representante_legal_qualificacao_codigo) AS socios
+           }) AS socios
     FROM read_parquet(?)
     WHERE cnpj_base >= ? AND cnpj_base < ?
     GROUP BY cnpj_base
@@ -539,11 +628,17 @@ def pack_from_parquets(
         lookup_rows[kind] = [{"codigo": r[0], "descricao": r[1]} for r in rows]
         log.info("  lookup %s: %d entries", kind, len(rows))
 
-    rows = _iter_company_rows(
-        con,
-        raizes_url=raizes_url,
-        cnpjs_url=cnpjs_url,
-        socios_url=socios_url,
-        batch_size=batch_size,
-    )
-    return pack_companies(rows, lookup_rows, output_path, snapshot_month=month)
+    try:
+        rows = _iter_company_rows(
+            con,
+            raizes_url=raizes_url,
+            cnpjs_url=cnpjs_url,
+            socios_url=socios_url,
+            batch_size=batch_size,
+        )
+        return pack_companies(rows, lookup_rows, output_path, snapshot_month=month)
+    finally:
+        # O pack monolítico terminava junto com o processo, então vazar a
+        # conexão não aparecia. Fechar aqui é pré-requisito do modo shardado,
+        # onde a mesma conexão atravessa 100 iterações e um callback de rede.
+        con.close()

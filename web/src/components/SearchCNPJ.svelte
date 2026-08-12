@@ -75,6 +75,10 @@
   let loading = $state(false);
   let snapshotDate = $state<string | null>(null);
   let status = $state('Inicializando…');
+  // Announced to assistive technology on search completion. The visible status
+  // paragraph reports the database lifecycle; this reports the outcome of a
+  // query, which was previously conveyed only by results appearing on screen.
+  let searchAnnouncement = $state('');
 
   /* Proveniência derivada do manifest carregado — nunca afirmada por hardcode.
      Cada campo só é exibido quando o snapshot em uso o sustenta. */
@@ -190,6 +194,7 @@
   async function search() {
     if (!db || !cnpj.trim()) return;
     loading = true;
+    searchAnnouncement = 'Buscando…';
 
     // Strip LIKE wildcard characters from user input — names don't contain % or _,
     // and allowing them would let a single % match the entire table.
@@ -367,8 +372,17 @@
       await conn.close();
     } catch (e) {
       console.error('Erro na busca:', e);
+      searchAnnouncement = 'Erro ao buscar. Tente novamente.';
     } finally {
       loading = false;
+      if (searchAnnouncement === 'Buscando…') {
+        const total =
+          results.length + pessoaResults.length + enderecoResults.length + cnaeResults.length;
+        searchAnnouncement =
+          total === 0
+            ? `Nenhum dado encontrado para ${cnpj}.`
+            : `${total} ${total === 1 ? 'resultado encontrado' : 'resultados encontrados'}.`;
+      }
     }
   }
 </script>
@@ -405,13 +419,16 @@
     {#if searchMode === 'endereco'}
       <div class="endereco-inputs">
         <div class="input-group">
-          <select bind:value={ufFiltro} class="uf-select">
+          <label class="sr-only" for="uf-filtro">Unidade federativa</label>
+          <select id="uf-filtro" bind:value={ufFiltro} class="uf-select">
             <option value="">UF (todas)</option>
             {#each UFS as uf}
               <option value={uf}>{uf}</option>
             {/each}
           </select>
+          <label class="sr-only" for="busca-endereco">Logradouro ou CEP</label>
           <input
+            id="busca-endereco"
             type="text"
             bind:value={cnpj}
             placeholder="Logradouro ou CEP (ex: 01310-100)…"
@@ -431,7 +448,13 @@
       </div>
     {:else}
       <div class="input-group">
+        <label class="sr-only" for="busca-principal">
+          {searchMode === 'pessoa' ? 'Nome da pessoa' :
+           searchMode === 'cnae' ? 'Código ou descrição do CNAE' :
+           'CNPJ ou razão social'}
+        </label>
         <input
+          id="busca-principal"
           type="text"
           bind:value={cnpj}
           placeholder={
@@ -451,8 +474,12 @@
       </div>
     {/if}
 
-    <p class="status {status.startsWith('Erro') ? 'error' : ''}">
+    <p class="status {status.startsWith('Erro') ? 'error' : ''}" role="status" aria-live="polite" aria-atomic="true">
       {status}
+    </p>
+
+    <p class="sr-only" role="status" aria-live="polite" aria-atomic="true">
+      {searchAnnouncement}
     </p>
 
     {#if snapshotDate}
@@ -590,6 +617,20 @@
 </div>
 
 <style>
+  /* Visible to assistive technology only. Labels stay in the accessibility tree
+     regardless of what the field contains, which a placeholder cannot do. */
+  .sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+    border: 0;
+  }
+
   .container {
     max-width: 960px;
     margin: 2rem auto;

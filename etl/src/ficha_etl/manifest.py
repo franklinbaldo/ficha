@@ -3,7 +3,11 @@
 O manifest é o contrato entre o ETL e o frontend:
   - lista todos os snapshots disponíveis no Internet Archive
   - aponta qual é o mais recente (`current`)
-  - traz URLs, hashes SHA-256 e row counts de cada arquivo
+  - traz URLs, checksums, tamanhos e row counts de cada arquivo
+
+Arquivos históricos continuam usando SHA-256. A camada shardada de ``companies``
+usa o SHA-1 calculado e exposto pelo próprio Internet Archive, porque a sua
+identidade semântica é validada separadamente pelo ``MaterializationSpec``.
 
 Schema: web/src/schemas/v1/manifest.ts (ManifestSchema / SnapshotEntrySchema).
 """
@@ -14,12 +18,15 @@ import datetime
 import hashlib
 import json
 import logging
+from collections.abc import Iterable
+from dataclasses import dataclass
 from pathlib import Path
 
 import duckdb
 import httpx
 
 from .mirror import lookup_parquet_url, lookups_url, parquet_url, raw_file_url
+from .shard_remote import PUBLIC_COMPANIES_GEOMETRY
 from .transform import _LOOKUP_KINDS
 
 log = logging.getLogger(__name__)
@@ -30,9 +37,14 @@ SCHEMA_VERSION = "1.0.0"
 GENERATOR = "ficha-etl"
 
 
-# ---------------------------------------------------------------------------
-# Helpers internos
-# ---------------------------------------------------------------------------
+@dataclass(frozen=True)
+class CompanyShardIdentity:
+    """Identidade remota já verificada de um ``companies-NN.zip``."""
+
+    shard: str
+    name: str
+    size: int
+    sha1: str
 
 
 def _sha256(path: Path) -> str:
@@ -61,22 +73,64 @@ def _file_entry(path: Path, url: str) -> dict:
     }
 
 
-# ---------------------------------------------------------------------------
-# API pública
-# ---------------------------------------------------------------------------
+def _is_lower_hex(value: str, length: int) -> bool:
+    return len(value) == length and all(char in "0123456789abcdef" for char in value)
 
 
-def build_snapshot_entry(month: str, output_dir: Path) -> dict:
+def _companies_sharded_entry(month: str, shards: Iterable[CompanyShardIdentity]) -> dict:
+    """Converte 100 identidades remotas confirmadas no contrato público."""
+    geometry = PUBLIC_COMPANIES_GEOMETRY
+    by_prefix: dict[str, CompanyShardIdentity] = {}
+    for shard in shards:
+        prefix = geometry.validate_prefix(shard.shard)
+        if prefix in by_prefix:
+            raise ValueError(f"duplicate companies shard: {prefix}")
+        expected_name = geometry.shard_name(prefix)
+        if shard.name != expected_name:
+            raise ValueError(
+                f"companies shard {prefix}: artifact name {shard.name!r} != {expected_name!r}"
+            )
+        if shard.size <= 0:
+            raise ValueError(f"companies shard {prefix}: artifact size must be positive")
+        if not _is_lower_hex(shard.sha1, 40):
+            raise ValueError(f"companies shard {prefix}: invalid sha1")
+        by_prefix[prefix] = shard
+
+    expected = list(geometry.prefixes())
+    missing = [prefix for prefix in expected if prefix not in by_prefix]
+    extra = sorted(set(by_prefix) - set(expected))
+    if missing or extra:
+        raise ValueError(f"incomplete companies shards: missing={missing} extra={extra}")
+
+    return {
+        "shard_by": "cnpj_base_prefix_2",
+        "shards": [
+            {
+                "shard": prefix,
+                "url": raw_file_url(month, by_prefix[prefix].name),
+                "sha1": by_prefix[prefix].sha1,
+                "size": by_prefix[prefix].size,
+            }
+            for prefix in expected
+        ],
+    }
+
+
+def build_snapshot_entry(
+    month: str,
+    output_dir: Path,
+    *,
+    company_shards: Iterable[CompanyShardIdentity] | None = None,
+) -> dict:
     """Constrói um SnapshotEntry conforme ManifestSchema.
 
     Args:
         month: snapshot no formato YYYY-MM.
         output_dir: diretório com todos os parquets produzidos pelo transform
-                    (cnpjs, cnpj_contatos, cnpj_cnaes, raizes, socios,
-                    enderecos, pessoas) e lookups.json + lookups/*.parquet.
-
-    Returns:
-        dict pronto para ser inserido em manifest["snapshots"].
+                    e lookups.json + lookups/*.parquet.
+        company_shards: quando fornecidos, substituem o ``companies.zip``
+                    monolítico pelo conjunto completo de shards 00..99 já
+                    verificados no Internet Archive.
     """
     cnpjs = output_dir / "cnpjs.parquet"
     cnpj_contatos = output_dir / "cnpj_contatos.parquet"
@@ -86,11 +140,6 @@ def build_snapshot_entry(month: str, output_dir: Path) -> dict:
     enderecos = output_dir / "enderecos.parquet"
     pessoas = output_dir / "pessoas.parquet"
     lookups = output_dir / "lookups.json"
-    # companies.zip é a camada atômica (ADR 0004/README) — parte do contrato
-    # do snapshot, não um extra opcional. Sem exigi-lo aqui, um run podia
-    # publicar todos os parquets, passar na verificação e virar `current`
-    # com a camada atômica ausente ou corrompida em silêncio. O `run` empacota
-    # companies.zip (passo 4/5) antes deste ponto, então exigir é seguro.
     companies_zip = output_dir / "companies.zip"
 
     required = (
@@ -102,11 +151,13 @@ def build_snapshot_entry(month: str, output_dir: Path) -> dict:
         enderecos,
         pessoas,
         lookups,
-        companies_zip,
     )
     for path in required:
         if not path.exists():
             raise FileNotFoundError(f"arquivo ausente para manifest: {path}")
+
+    if company_shards is None and not companies_zip.exists():
+        raise FileNotFoundError(f"arquivo ausente para manifest: {companies_zip}")
 
     for kind in _LOOKUP_KINDS:
         parquet_path = output_dir / "lookups" / f"{kind}.parquet"
@@ -125,7 +176,31 @@ def build_snapshot_entry(month: str, output_dir: Path) -> dict:
     }
     log.info("row counts: %s", row_counts)
 
-    log.info("computing SHA-256 hashes")
+    log.info("computing SHA-256 hashes for local snapshot files")
+    files: dict[str, object] = {
+        "cnpjs": _file_entry(cnpjs, parquet_url(month, "cnpjs")),
+        "cnpj_contatos": _file_entry(cnpj_contatos, parquet_url(month, "cnpj_contatos")),
+        "cnpj_cnaes": {
+            **_file_entry(cnpj_cnaes, parquet_url(month, "cnpj_cnaes")),
+            "sort": ["cnae_codigo", "posicao", "cnpj_base"],
+        },
+        "raizes": _file_entry(raizes, parquet_url(month, "raizes")),
+        "socios": _file_entry(socios, parquet_url(month, "socios")),
+        "enderecos": {
+            **_file_entry(enderecos, parquet_url(month, "enderecos")),
+            "sort": ["uf", "municipio_codigo", "logradouro_normalizado", "numero"],
+        },
+        "pessoas": {
+            **_file_entry(pessoas, parquet_url(month, "pessoas")),
+            "sort": ["cpf_mascarado", "nome_normalizado"],
+        },
+        "lookups": _file_entry(lookups, lookups_url(month)),
+    }
+    if company_shards is None:
+        files["companies_zip"] = _file_entry(companies_zip, raw_file_url(month, "companies.zip"))
+    else:
+        files["companies"] = _companies_sharded_entry(month, company_shards)
+
     return {
         "date": month,
         "schema_version": SCHEMA_VERSION,
@@ -133,52 +208,24 @@ def build_snapshot_entry(month: str, output_dir: Path) -> dict:
         "generated_at": datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "generator": GENERATOR,
         "row_counts": row_counts,
-        "files": {
-            "cnpjs": _file_entry(cnpjs, parquet_url(month, "cnpjs")),
-            "cnpj_contatos": _file_entry(cnpj_contatos, parquet_url(month, "cnpj_contatos")),
-            "cnpj_cnaes": {
-                **_file_entry(cnpj_cnaes, parquet_url(month, "cnpj_cnaes")),
-                "sort": ["cnae_codigo", "posicao", "cnpj_base"],
-            },
-            "raizes": _file_entry(raizes, parquet_url(month, "raizes")),
-            "socios": _file_entry(socios, parquet_url(month, "socios")),
-            "enderecos": {
-                **_file_entry(enderecos, parquet_url(month, "enderecos")),
-                "sort": ["uf", "municipio_codigo", "logradouro_normalizado", "numero"],
-            },
-            "pessoas": {
-                **_file_entry(pessoas, parquet_url(month, "pessoas")),
-                "sort": ["cpf_mascarado", "nome_normalizado"],
-            },
-            "lookups": _file_entry(lookups, lookups_url(month)),
-            "companies_zip": _file_entry(companies_zip, raw_file_url(month, "companies.zip")),
-        },
-        "lookups": {
-            kind: {
-                "url": lookup_parquet_url(month, kind),
-            }
-            for kind in _LOOKUP_KINDS
-        },
+        "files": files,
+        "lookups": {kind: {"url": lookup_parquet_url(month, kind)} for kind in _LOOKUP_KINDS},
     }
 
 
 def verify_snapshot_files(snapshot_entry: dict) -> list[str]:
-    """HEAD em toda URL declarada no snapshot — garante que o que vai pro
-    manifest está de fato baixável no Internet Archive.
+    """HEAD em toda URL declarada no snapshot, incluindo shards de companies."""
+    checks: list[tuple[str, int | None]] = []
+    for name, entry in snapshot_entry["files"].items():
+        if name == "companies":
+            shards = entry.get("shards") if isinstance(entry, dict) else None
+            if not isinstance(shards, list):
+                log.warning("verify_snapshot_files: companies sem lista shards")
+                return ["<manifest:companies>"]
+            checks.extend((shard["url"], shard.get("size")) for shard in shards)
+            continue
+        checks.append((entry["url"], entry.get("size")))
 
-    Local file existence (checada em build_snapshot_entry) e upload bem
-    sucedido (status code checado em upload_outputs) não garantem que o
-    objeto continua servível: IA processa uploads assincronamente
-    (bucket 'derive' pode falhar depois do PUT 200/201), e sem essa
-    checagem um manifest pode acabar publicado com URLs 404 mesmo que
-    cada etapa anterior tenha reportado sucesso. Retorna a lista de URLs
-    que falharam (vazia = tudo OK) — não levanta, quem chama decide.
-    """
-    # (url, tamanho esperado). Entries de `files` trazem `size` (checável);
-    # os lookups por-kind só têm `url` (size=None → só checa o 200).
-    checks: list[tuple[str, int | None]] = [
-        (entry["url"], entry.get("size")) for entry in snapshot_entry["files"].values()
-    ]
     checks += [
         (entry["url"], entry.get("size")) for entry in snapshot_entry.get("lookups", {}).values()
     ]
@@ -189,26 +236,22 @@ def verify_snapshot_files(snapshot_entry: dict) -> list[str]:
             try:
                 r = client.head(url)
             except httpx.HTTPError as exc:
-                log.warning("verify_snapshot_files: %s → %s", url, exc)
+                log.warning("verify_snapshot_files: %s -> %s", url, exc)
                 broken.append(url)
                 continue
             if r.status_code != 200:
-                log.warning("verify_snapshot_files: %s → HTTP %d", url, r.status_code)
+                log.warning("verify_snapshot_files: %s -> HTTP %d", url, r.status_code)
                 broken.append(url)
                 continue
-            # Tamanho remoto == tamanho gravado no manifest: pega upload
-            # truncado / arquivo trocado que um simples 200 não detecta. Só
-            # falha em divergência positiva; Content-Length ausente (IA pode
-            # omitir em item ainda derivando) vira warning, não erro.
             if expected_size is not None:
                 remote_len = r.headers.get("content-length")
                 if remote_len is None:
                     log.warning(
-                        "verify_snapshot_files: %s → sem Content-Length; size não verificado", url
+                        "verify_snapshot_files: %s -> sem Content-Length; size não verificado", url
                     )
                 elif int(remote_len) != expected_size:
                     log.warning(
-                        "verify_snapshot_files: %s → size remoto %s != manifest %d",
+                        "verify_snapshot_files: %s -> size remoto %s != manifest %d",
                         url,
                         remote_len,
                         expected_size,
@@ -218,16 +261,7 @@ def verify_snapshot_files(snapshot_entry: dict) -> list[str]:
 
 
 def update_manifest(manifest_path: Path, snapshot_entry: dict) -> None:
-    """Upserta um snapshot no manifest.json (cria do zero se não existir).
-
-    - Remove entrada prévia do mesmo mês (se houver).
-    - Ordena snapshots por data decrescente.
-    - Atualiza `current` para o snapshot mais recente.
-
-    Args:
-        manifest_path: caminho para web/public/manifest.json.
-        snapshot_entry: dict produzido por build_snapshot_entry().
-    """
+    """Upserta um snapshot no manifest.json (cria do zero se não existir)."""
     month = snapshot_entry["date"]
 
     if manifest_path.exists():
@@ -236,11 +270,8 @@ def update_manifest(manifest_path: Path, snapshot_entry: dict) -> None:
         log.info("manifest.json não existe — criando do zero")
         manifest = {"current": month, "snapshots": []}
 
-    # Upsert: descarta entrada antiga do mesmo mês
     manifest["snapshots"] = [s for s in manifest["snapshots"] if s["date"] != month]
     manifest["snapshots"].append(snapshot_entry)
-
-    # Mais recente primeiro; current aponta pro topo
     manifest["snapshots"].sort(key=lambda s: s["date"], reverse=True)
     manifest["current"] = manifest["snapshots"][0]["date"]
 

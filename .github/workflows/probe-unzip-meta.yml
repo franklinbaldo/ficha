@@ -1,0 +1,152 @@
+name: Probe — leitura remota de _meta.json pelo unzip do IA
+
+# Workflow OPERACIONAL. Existe para produzir evidência para #147, não para
+# mudar comportamento de produção. Nunca deve ser mergeado num fluxo automático.
+#
+# A pergunta: dá para decidir, ANTES de gerar um shard, se o shard remoto
+# pertence aos inputs atuais — lendo só o `_meta.json` de dentro do ZIP?
+#
+# Segurança: item descartável `ficha-probe-unzip-meta-147`, jamais
+# `ficha-YYYY-MM`. Os objetos são apagados no `finally` do script.
+
+on:
+  workflow_dispatch:
+    inputs:
+      membros:
+        description: Membros no ZIP de teste (tamanho do objeto)
+        required: true
+        default: '2000'
+        type: string
+      janela:
+        description: Segundos observando a disponibilidade do membro
+        required: true
+        default: '900'
+        type: string
+      reparar:
+        description: >-
+          Remover payload residual de execução anterior e SAIR, sem medir.
+          Resíduo é evidência de falha de cleanup, então removê-lo é ato
+          deliberado — nunca automático.
+        required: false
+        default: false
+        type: boolean
+  # Disparo por push restrito a branches descartáveis com este prefixo. Existe
+  # porque nem todo operador consegue criar um `workflow_dispatch` pela API —
+  # empurrar uma branch é o gatilho manual disponível. NUNCA dispara em `main`,
+  # em PR ou em qualquer caminho de produção: só neste prefixo de branch, que
+  # existe exclusivamente para disparar o probe e é apagado depois.
+  push:
+    branches:
+      - 'probe/run-unzip-meta*'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: probe-unzip-meta
+  cancel-in-progress: false
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    # Um único lugar define os valores, porque `inputs` não existe em `push`.
+    # Não são secrets — estes ficam restritos ao step do probe.
+    env:
+      MEMBROS: ${{ inputs.membros || '2000' }}
+      JANELA: ${{ inputs.janela || '900' }}
+      # Em evento de `push` não há inputs: o default é NÃO reparar. Reparar por
+      # push exige um commit explícito nesta linha, o que deixa o ato deliberado
+      # registrado na história.
+      REPARAR: ${{ inputs.reparar || 'false' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+
+      - name: Instalar dependências
+        working-directory: etl
+        run: uv sync --frozen
+
+      # A precondição do item deixou de ser um gate de shell e virou a fase de
+      # preparação do próprio probe (`prepara()`), que distingue ABSENT de
+      # quieto, cria o item se preciso, ABORTA se houver resíduo e exige duas
+      # leituras estáveis antes de T0. Duplicar isso aqui produziria duas definições de
+      # "pronto" que podem divergir. O que sobra é uma observação registrada
+      # no log, sem poder de decisão.
+      - name: Registrar o estado inicial do item
+        run: |
+          set -euo pipefail
+          curl -sSL "https://archive.org/metadata/ficha-probe-unzip-meta-147" -o /tmp/md.json || true
+          python3 - <<'EOF'
+          import json
+
+          try:
+              md = json.load(open("/tmp/md.json"))
+          except Exception as exc:
+              print(f"metadata ilegível antes do probe: {exc}")
+          else:
+              if not md:
+                  print("item ABSENT — a fase de preparação vai criá-lo antes de T0")
+              else:
+                  nomes = [f.get("name") for f in md.get("files", []) or []]
+                  print(f"identifier={md.get('metadata', {}).get('identifier')} "
+                        f"pending_tasks={md.get('pending_tasks')} arquivos={nomes}")
+          EOF
+
+      # Workflow manual aceita string livre nos inputs. Sem limite, um dígito a
+      # mais em `membros` cria um ZIP enorme em memória e sobe um objeto grande
+      # por acidente; um dígito a mais em `janela` deixa o job ocioso até o
+      # `timeout-minutes`. Falhar antes de tocar no IA é mais barato que abortar
+      # no meio.
+      - name: Validar inputs
+        run: |
+          set -euo pipefail
+          python3 - <<'EOF'
+          import os, sys
+
+          def faixa(nome, minimo, maximo):
+              bruto = os.environ[nome]
+              if not bruto.isdigit():
+                  sys.exit(f"::error::{nome} precisa ser um inteiro, recebi {bruto!r}")
+              valor = int(bruto)
+              if not (minimo <= valor <= maximo):
+                  sys.exit(f"::error::{nome}={valor} fora da faixa [{minimo}, {maximo}]")
+              print(f"{nome}={valor}")
+
+          # 50k membros ~ 100 MB: grande o bastante para o unzip ser realista,
+          # pequeno o bastante para não virar o experimento de upload (#133).
+          faixa("MEMBROS", 1, 50_000)
+          # 1800s cabe no timeout-minutes: 40 com folga para upload e cleanup.
+          faixa("JANELA", 60, 1_800)
+          EOF
+
+      - name: Probe
+        working-directory: etl
+        env:
+          IA_ACCESS_KEY: ${{ secrets.IA_ACCESS_KEY }}
+          IA_SECRET_KEY: ${{ secrets.IA_SECRET_KEY }}
+        run: |
+          # Sem `pipefail`, `cmd | tee` devolve o status do tee e um crash do
+          # probe vira step verde. Foi exatamente o que aconteceu no run
+          # 31558838717: o script morreu e o job passou.
+          set -euo pipefail
+          extra=""
+          if [ "$REPARAR" = "true" ]; then
+            extra="--reparar-residuo"
+            echo "::notice::modo REPARAÇÃO — remove resíduo e sai, sem medir"
+          fi
+          uv run python bench/probe_unzip_meta.py \
+            --membros "$MEMBROS" \
+            --janela "$JANELA" \
+            $extra \
+            | tee probe-unzip-meta.log
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: probe-unzip-meta-evidencia
+          path: etl/probe-unzip-meta.log
+          retention-days: 30

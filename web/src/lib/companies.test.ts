@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { ficha } from '../generated/company.pb.js';
-import { cnpjpath, companiesZipUrl, fetchCompany } from './companies';
+import { cnpjpath, companiesZipUrl, companyArchiveUrl, fetchCompany } from './companies';
 
 describe('cnpjpath', () => {
   it('zero-pads to 8 digits and slices to XX/XXX/XXX.pb', () => {
@@ -18,6 +18,49 @@ describe('companiesZipUrl', () => {
     expect(companiesZipUrl('https://archive.org/download/', 'ficha-poc-companies-2026-04')).toBe(
       'https://archive.org/download/ficha-poc-companies-2026-04/companies.zip'
     );
+  });
+});
+
+function shardFiles() {
+  return {
+    companies: {
+      shard_by: 'cnpj_base_prefix_2' as const,
+      shards: Array.from({ length: 100 }, (_, value) => {
+        const shard = String(value).padStart(2, '0');
+        return {
+          shard,
+          url: `https://archive.org/download/ficha-2026-05/companies-${shard}.zip`,
+          sha1: shard.repeat(20),
+          size: 100 + value,
+        };
+      }),
+    },
+  };
+}
+
+describe('companyArchiveUrl', () => {
+  it('resolves the declared two-digit shard', () => {
+    expect(
+      companyArchiveUrl(12345678, {
+        identifier: 'ficha-2026-05',
+        files: shardFiles(),
+      })
+    ).toBe('https://archive.org/download/ficha-2026-05/companies-12.zip');
+  });
+
+  it('uses a declared monolithic URL for historical snapshots', () => {
+    expect(
+      companyArchiveUrl(12345678, {
+        identifier: 'ignored',
+        files: {
+          companies_zip: {
+            url: 'https://archive.org/download/ficha-2026-04/companies.zip',
+            sha256: 'a'.repeat(64),
+            size: 123,
+          },
+        },
+      })
+    ).toBe('https://archive.org/download/ficha-2026-04/companies.zip');
   });
 });
 
@@ -72,6 +115,23 @@ describe('fetchCompany', () => {
     );
   });
 
+  it('uses the manifest-declared shard before transparent-unzip', async () => {
+    const bytes = encodeFixture(12345678, 'EMPRESA SHARD');
+    const fetchImpl = vi.fn(async () => bytesResponse(bytes)) as unknown as FetchLike;
+
+    const c = await fetchCompany(12345678, {
+      identifier: 'ficha-2026-05',
+      files: shardFiles(),
+      fetchImpl,
+    });
+
+    expect(c?.razao_social).toBe('EMPRESA SHARD');
+    const mock = fetchImpl as unknown as ReturnType<typeof vi.fn>;
+    expect(String(mock.mock.calls[0]?.[0])).toBe(
+      'https://archive.org/download/ficha-2026-05/companies-12.zip/12/345/678.pb'
+    );
+  });
+
   it('returns null on 404', async () => {
     const fetchImpl = vi.fn(
       async () => new Response('', { status: 404 })
@@ -115,4 +175,3 @@ describe('fetchCompany', () => {
     expect(socio!.cnpj_socio).toBe(cnpjSocio);
   });
 });
-
