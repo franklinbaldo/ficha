@@ -113,9 +113,7 @@ def test_fetch_remote_sidecar_transient_then_404_is_still_unknown():
 
 
 def test_fetch_remote_sidecar_invalid_json_fails_closed():
-    client = _client(
-        lambda request: httpx.Response(200, content=b"not-json", request=request)
-    )
+    client = _client(lambda request: httpx.Response(200, content=b"not-json", request=request))
     try:
         with pytest.raises(SidecarObservationError, match="JSON remoto inválido"):
             fetch_remote_sidecar(
