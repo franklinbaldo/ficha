@@ -1,15 +1,12 @@
-"""Publicação operacional retomável de companies shards para 2026-05 (#110/#171).
+"""Transferência operacional de companies shards para 2026-05 (#110/#171/#189).
 
-Não roda transform e nunca constrói ``companies.zip`` monolítico. Os inputs já
-duráveis são lidos diretamente do Internet Archive via ``ShardPackSession``.
-Cada shard fecha com um único objeto remoto: ``size + sha1`` no metadata e
-``MaterializationSpec`` no ``_meta.json`` interno.
+Não roda transform e nunca constrói ``companies.zip`` monolítico. Cada job
+SUBMIT trata exatamente um prefixo e pode fazer no máximo um PUT. O retorno
+``SUBMITTED`` é deliberadamente provisório: não significa checkpoint completo.
 
-Os runs 31599991817 e 31604659644 provaram que o catálogo do IA pode continuar
-stale por minutos e que ~7 s pós-PUT ainda pode ser cedo para o URL direto. Com
-#185 + #187, esta rotina usa a reconciliação fail-closed antes de qualquer PUT e
-uma janela direta de 75 s depois dele. O catálogo fica com uma única leitura de
-fallback operacional: nenhum caminho autoriza segundo PUT ou overwrite.
+VERIFY é uma fase separada e estritamente read-only. Só aceita um shard quando
+``size + sha1`` dos bytes remotos e o ``MaterializationSpec`` do ``_meta.json``
+concordam exatamente. Apenas resultados VERIFIED podem alimentar o manifesto.
 """
 
 from __future__ import annotations
@@ -18,24 +15,21 @@ import argparse
 import json
 import os
 import sys
-from collections import Counter
+import time
 from pathlib import Path
 
 import internetarchive as ia
 
 from ficha_etl.remote_reuse import fetch_item_metadata
-from ficha_etl.shard_publish import (
-    ShardPublishAction,
-    pin_materialization_inputs,
-    publish_one_shard,
-    publish_shards,
-)
+from ficha_etl.shard_publish import ShardPublishError, pin_materialization_inputs
 from ficha_etl.shard_remote import PUBLIC_COMPANIES_GEOMETRY, fetch_remote_shard_meta
+from ficha_etl.shard_transfer import ShardTransferAction, submit_one_shard, verify_one_shard
 from ficha_etl.sharded_pack import ShardPackSession
 
 MONTH = "2026-05"
 IDENTIFIER = f"ficha-{MONTH}"
 OUTPUT_DIR = Path(".ops-shards-2026-05")
+SUMMARY_PATH = Path("shard-transfer-summary.json")
 
 
 def _require_secret(name: str) -> str:
@@ -100,106 +94,122 @@ def _serialize(result) -> dict:
     }
 
 
-def _write_summary(mode: str, results: list, *, proof_second_action: str | None = None) -> None:
-    counts = Counter(str(result.action) for result in results)
+def _write_summary(mode: str, prefix: str, *, result=None, error: str | None = None) -> None:
     payload = {
         "month": MONTH,
         "mode": mode,
-        "results": [_serialize(result) for result in results],
-        "action_counts": dict(sorted(counts.items())),
-        "proof_second_action": proof_second_action,
+        "prefix": prefix,
+        "result": _serialize(result) if result is not None else None,
+        "error": error,
     }
-    Path("shard-publication-summary.json").write_text(
+    SUMMARY_PATH.write_text(
         json.dumps(payload, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
     print(json.dumps(payload, indent=2, sort_keys=True), flush=True)
 
 
-def _publish_one(session: ShardPackSession, prefix: str, pinned, upload):
-    return publish_one_shard(
-        session,
-        prefix,
-        OUTPUT_DIR,
-        pinned_inputs=pinned,
-        fetch_metadata=_metadata,
-        fetch_meta=_fetch_meta,
-        upload=upload,
-        confirm_attempts=1,
-        post_put_direct_attempts=6,
-    )
+def _prefix(raw: str) -> str:
+    return PUBLIC_COMPANIES_GEOMETRY.validate_prefix(raw)
 
 
-def run_proof(upload) -> None:
+def run_submit(prefix: str) -> None:
+    """Faz no máximo um PUT e nunca espera consistência read-after-write."""
+    access_key = _require_secret("IA_ACCESS_KEY")
+    secret_key = _require_secret("IA_SECRET_KEY")
+    upload = _uploader(access_key, secret_key)
     pinned = pin_materialization_inputs(_metadata)
-    print(f"PINNED {len(pinned)} semantic inputs", flush=True)
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-    with _session() as session:
-        first = _publish_one(session, "99", pinned, upload)
-    print(f"PROOF first session: 99 -> {first.action}", flush=True)
+    try:
+        with _session() as session:
+            result = submit_one_shard(
+                session,
+                prefix,
+                OUTPUT_DIR,
+                pinned_inputs=pinned,
+                fetch_metadata=_metadata,
+                fetch_meta=_fetch_meta,
+                upload=upload,
+            )
+    except Exception as exc:
+        _write_summary("submit", prefix, error=f"{type(exc).__name__}: {exc}")
+        raise
 
-    with _session() as session:
-        second = _publish_one(session, "99", pinned, upload)
-    print(f"PROOF second session: 99 -> {second.action}", flush=True)
-    if second.action is not ShardPublishAction.SKIPPED:
-        raise RuntimeError(
-            f"resume proof failed: second fresh session returned {second.action}, expected skipped"
-        )
-    _write_summary("proof", [first, second], proof_second_action=str(second.action))
-
-
-def _parse_prefixes(raw: str) -> list[str]:
-    values = [value.strip() for value in raw.split(",") if value.strip()]
-    if not values:
-        raise ValueError("--prefixes must contain at least one prefix")
-    validated = [PUBLIC_COMPANIES_GEOMETRY.validate_prefix(value) for value in values]
-    if "99" in validated:
-        raise ValueError("batch mode must not include 99; it belongs to resume proof")
-    if len(set(validated)) != len(validated):
-        raise ValueError("duplicate prefix in --prefixes")
-    return validated
+    if result.action not in (ShardTransferAction.SUBMITTED, ShardTransferAction.VERIFIED):
+        raise RuntimeError(f"unexpected submit action: {result.action}")
+    _write_summary("submit", prefix, result=result)
 
 
-def run_batch(upload, raw_prefixes: str) -> None:
-    prefixes = _parse_prefixes(raw_prefixes)
+def _retryable_verify_error(exc: ShardPublishError) -> bool:
+    text = str(exc).lower()
+    # Mismatch é evidência positiva de divergência e não melhora esperando.
+    if "mismatch" in text or "diverge" in text:
+        return False
+    # ABSENT/UNKNOWN/timeout de observação são exatamente o lag eventual que a
+    # fase read-only pode esperar sem criar risco de nova escrita.
+    return True
+
+
+def run_verify(prefix: str, *, attempts: int, interval_s: float) -> None:
+    """Verifica read-only com retry apenas de estados ainda não observáveis."""
+    if attempts < 1:
+        raise ValueError("--attempts must be >= 1")
+    if interval_s < 0:
+        raise ValueError("--interval-seconds must be >= 0")
+
     pinned = pin_materialization_inputs(_metadata)
-    print(
-        f"BATCH {prefixes[0]}..{prefixes[-1]} count={len(prefixes)} "
-        f"pinned_inputs={len(pinned)}",
-        flush=True,
-    )
-    with _session() as session:
-        results = publish_shards(
-            session,
-            OUTPUT_DIR,
-            pinned_inputs=pinned,
-            fetch_metadata=_metadata,
-            fetch_meta=_fetch_meta,
-            upload=upload,
-            prefixes=prefixes,
-            confirm_attempts=1,
-            post_put_direct_attempts=6,
-        )
-    _write_summary("batch", results)
+    session = _session()  # materialization_spec não requer abrir DuckDB/lookups.
+    last_error: ShardPublishError | None = None
+
+    for attempt in range(1, attempts + 1):
+        try:
+            result = verify_one_shard(
+                session,
+                prefix,
+                pinned_inputs=pinned,
+                fetch_metadata=_metadata,
+                fetch_meta=_fetch_meta,
+            )
+        except ShardPublishError as exc:
+            last_error = exc
+            if not _retryable_verify_error(exc) or attempt == attempts:
+                _write_summary("verify", prefix, error=f"{type(exc).__name__}: {exc}")
+                raise
+            print(
+                f"VERIFY {prefix} attempt {attempt}/{attempts} not ready: {exc}; "
+                f"retrying in {interval_s:.0f}s",
+                flush=True,
+            )
+            time.sleep(interval_s)
+            continue
+
+        if result.action is not ShardTransferAction.VERIFIED:
+            raise RuntimeError(f"verify returned non-final action: {result.action}")
+        _write_summary("verify", prefix, result=result)
+        return
+
+    assert last_error is not None
+    raise last_error
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--proof", action="store_true")
-    parser.add_argument("--prefixes")
+    mode = parser.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--submit")
+    mode.add_argument("--verify")
+    parser.add_argument("--attempts", type=int, default=12)
+    parser.add_argument("--interval-seconds", type=float, default=30.0)
     args = parser.parse_args()
-    if args.proof == bool(args.prefixes):
-        parser.error("choose exactly one of --proof or --prefixes")
 
-    access_key = _require_secret("IA_ACCESS_KEY")
-    secret_key = _require_secret("IA_SECRET_KEY")
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    upload = _uploader(access_key, secret_key)
-
-    if args.proof:
-        run_proof(upload)
+    if args.submit is not None:
+        run_submit(_prefix(args.submit))
     else:
-        run_batch(upload, args.prefixes)
+        run_verify(
+            _prefix(args.verify),
+            attempts=args.attempts,
+            interval_s=args.interval_seconds,
+        )
     return 0
 
 
