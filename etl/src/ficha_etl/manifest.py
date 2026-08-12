@@ -199,9 +199,7 @@ def build_snapshot_entry(
         "generator": GENERATOR,
         "row_counts": row_counts,
         "files": files,
-        "lookups": {
-            kind: {"url": lookup_parquet_url(month, kind)} for kind in _LOOKUP_KINDS
-        },
+        "lookups": {kind: {"url": lookup_parquet_url(month, kind)} for kind in _LOOKUP_KINDS},
     }
 
 
