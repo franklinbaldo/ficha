@@ -161,6 +161,43 @@ def _schema_proto_text() -> bytes:
 # ---- row → protobuf ------------------------------------------------
 
 
+ORDEM_ESTABELECIMENTOS = ("cnpj_ordem", "cnpj_dv")
+ORDEM_SOCIOS = (
+    "qualificacao_codigo",
+    "nome_socio_razao_social",
+    "cnpj_socio",
+    "cpf_mascarado",
+    "data_entrada_sociedade",
+    "tipo",
+    "pais_codigo",
+    "faixa_etaria",
+    "representante_legal_cpf",
+    "representante_legal_nome",
+    "representante_legal_qualificacao_codigo",
+)
+
+
+def em_ordem(itens, chaves: tuple[str, ...]) -> list[dict]:
+    """Ordena os filhos de uma raiz reproduzindo `ORDER BY ... ASC NULLS LAST`.
+
+    Até #147 esta ordenação era feita dentro do `list(struct ...)` do
+    `_COMPANIES_SQL`. Medido no bucket 00 de 2026-05, o custo dessa forma vinha
+    da *interação* entre ordenar e materializar um struct largo: struct largo
+    sem ordenar custa 3,7 s, ordenar struct estreito custa 3,7 s, e os dois
+    juntos custam 53,2 s. Como a lista tem 1,12 estabelecimentos em média, o
+    trabalho real de ordenação é desprezível — o que era caro era arrastar 34
+    campos por comparação dentro do agregado.
+
+    `(x is None, x)` replica NULLS LAST: valores não nulos comparam entre si e
+    os nulos vão para o fim. A comparação nunca cai em `None < None`, porque
+    tuplas iguais são resolvidas por igualdade antes de qualquer `<`.
+    """
+    itens = itens or []
+    if len(itens) < 2:
+        return itens
+    return sorted(itens, key=lambda d: tuple((d.get(k) is None, d.get(k)) for k in chaves))
+
+
 def row_to_company(row: dict) -> Company:
     """Convert a joined DuckDB row (cnpjs ⊕ raizes ⊕ socios) to Company."""
     c = Company()
@@ -174,7 +211,7 @@ def row_to_company(row: dict) -> Company:
     c.qtd_estabelecimentos = _int(row.get("qtd_estabelecimentos"))
     c.qtd_estabelecimentos_ativos = _int(row.get("qtd_estabelecimentos_ativos"))
 
-    for estab_dict in row.get("estabelecimentos") or []:
+    for estab_dict in em_ordem(row.get("estabelecimentos"), ORDEM_ESTABELECIMENTOS):
         e = Estabelecimento()
         e.cnpj_ordem = _int(estab_dict.get("cnpj_ordem"))
         e.cnpj_dv = _int(estab_dict.get("cnpj_dv"))
@@ -217,7 +254,7 @@ def row_to_company(row: dict) -> Company:
         e.data_exclusao_mei = _date(estab_dict.get("data_exclusao_mei"))
         c.estabelecimentos.append(e)
 
-    for socio_dict in row.get("socios") or []:
+    for socio_dict in em_ordem(row.get("socios"), ORDEM_SOCIOS):
         s = Socio()
         s.tipo = _tipo_socio(socio_dict.get("tipo"))
         s.nome_socio_razao_social = _str(socio_dict.get("nome_socio_razao_social"))
@@ -410,7 +447,7 @@ LEFT JOIN (
                'opcao_mei': opcao_mei,
                'data_opcao_mei': data_opcao_mei,
                'data_exclusao_mei': data_exclusao_mei
-           } ORDER BY cnpj_ordem, cnpj_dv) AS estabelecimentos
+           }) AS estabelecimentos
     FROM read_parquet(?)
     WHERE cnpj_base >= ? AND cnpj_base < ?
     GROUP BY cnpj_base
@@ -429,17 +466,7 @@ LEFT JOIN (
                'representante_legal_cpf': representante_legal_cpf,
                'representante_legal_nome': representante_legal_nome,
                'representante_legal_qualificacao_codigo': representante_legal_qualificacao_codigo
-           } ORDER BY qualificacao_codigo,
-                      nome_socio_razao_social,
-                      cnpj_socio,
-                      cpf_mascarado,
-                      data_entrada_sociedade,
-                      tipo,
-                      pais_codigo,
-                      faixa_etaria,
-                      representante_legal_cpf,
-                      representante_legal_nome,
-                      representante_legal_qualificacao_codigo) AS socios
+           }) AS socios
     FROM read_parquet(?)
     WHERE cnpj_base >= ? AND cnpj_base < ?
     GROUP BY cnpj_base
