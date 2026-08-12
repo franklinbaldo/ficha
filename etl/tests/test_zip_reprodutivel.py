@@ -4,13 +4,16 @@ Antes desta correção, `zipfile.writestr(str, ...)` construía cada `ZipInfo` a
 partir de `time.localtime()`, então dois packs dos mesmos dados produziam
 artefatos com `sha256` diferente — em todos os ~68 milhões de membros.
 
-A data gravada é o primeiro dia da competência, e não uma época artificial,
-porque o Internet Archive **renderiza** a data dos membros na listagem de unzip
-transparente (verificado em `ficha-2026-04/raw/Cnaes.zip`).
+A data gravada é o timestamp canônico da competência (`YYYY-MM-01 00:00:00`) e
+não uma época artificial, porque o Internet Archive **renderiza** a data dos
+membros na listagem de unzip transparente (verificado em
+`ficha-2026-04/raw/Cnaes.zip`). É uma data civil canônica que identifica o
+retrato — não uma data de release e sem semântica de mtime real.
 
 A propriedade de regressão **forte** é uma só:
 
-    mesmos inputs → SHA-256 do ZIP idêntico
+    mesmos inputs + mesma competência + mesmo ambiente/stack testado
+    → SHA-256 do ZIP idêntico
 
 Ela é o que protege o artefato, porque cobre qualquer campo do `ZipInfo` e
 qualquer outra fonte de variação que apareça no futuro. Os testes de

@@ -259,21 +259,28 @@ def build_lookup_pb(kind: str, rows: list[dict]) -> bytes:
 
 
 def data_canonica_do_snapshot(snapshot_month: str) -> tuple[int, int, int, int, int, int]:
-    """Data gravada em todo membro do ZIP: o primeiro dia da competência.
+    """Timestamp canônico da competência, gravado em todo membro do ZIP.
+
+    `YYYY-MM-01 00:00:00` é uma **data civil canônica** que identifica a
+    competência do snapshot. Não é data de release, não é mtime real e não tem
+    semântica de modificação: nenhum membro de `companies.zip` tem data de
+    modificação individual, já que todos são materializados no mesmo ato. O
+    campo existe no formato ZIP e precisa de algum valor; este é o valor que
+    identifica o retrato sem inventar um fato.
 
     `zipfile.writestr(str, ...)` monta o `ZipInfo` a partir de `time.localtime()`,
     então dois packs dos mesmos dados produziam artefatos com hash diferente
     (#151). Trocar o relógio por uma constante resolve isso, mas a constante não
     é livre: o Internet Archive **renderiza** a data dos membros para o usuário.
     Verificado em `ficha-2026-04/raw/Cnaes.zip`, cuja listagem de unzip
-    transparente tem uma coluna `timestamp` com `2026-04-12 06:56`.
+    transparente tem uma coluna `timestamp` com `2026-04-12 06:56`. Uma época
+    artificial como 1980-01-01 apareceria em ~68 milhões de linhas dessa
+    listagem sem significar nada.
 
-    Uma época artificial como 1980-01-01 apareceria em ~68 milhões de linhas
-    dessa listagem, sem significar nada. O primeiro dia da competência é
-    determinístico, derivado de um input que já existe antes da geração, e
-    descreve corretamente a que retrato aquele arquivo pertence.
+    A propriedade preservada é:
 
-    A propriedade preservada é: mesmos inputs + mesma competência → mesmos bytes.
+        mesmos inputs + mesma competência + mesmo ambiente/stack testado
+        → mesmos bytes
     """
     ano, mes = snapshot_month.split("-")
     return (int(ano), int(mes), 1, 0, 0, 0)
