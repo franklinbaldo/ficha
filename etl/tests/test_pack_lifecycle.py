@@ -5,6 +5,16 @@ poder decidir se um arquivo local é trabalho aproveitável. Enquanto um pack
 interrompido deixasse um ZIP truncado no nome final, "o arquivo existe" e "o
 artefato está completo" eram indistinguíveis — e o cenário não é hipotético:
 disco cheio é justamente o que o sharding existe para atenuar.
+
+A propriedade prometida é **de processo**, e a distinção importa:
+
+    o nome final nunca é exposto parcialmente escrito
+
+Isso cobre exceção, OOM e disco cheio — o que interrompe um pack na prática.
+**Não** é durabilidade contra queda de SO ou falta de energia: isso exigiria
+fsync do arquivo e do diretório, tem semântica diferente por plataforma, e não
+teria consumidor, porque se a máquina cai o job cai junto e a retomada
+redescobre o estado pelo item remoto, não pelo disco local.
 """
 
 from __future__ import annotations

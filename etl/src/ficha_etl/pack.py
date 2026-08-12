@@ -22,7 +22,6 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-import os
 import re
 import zipfile
 from pathlib import Path
@@ -356,11 +355,13 @@ def pack_companies(
     # fsync antes do rename: sem isso, uma queda de máquina pode deixar o nome
     # final publicado apontando para dados ainda não persistidos — exatamente a
     # confusão entre "existe" e "está completo" que o `.part` existe para evitar.
-    # Handle de escrita: no Windows, `os.fsync` sobre um descritor somente-leitura
-    # falha com EBADF (`_commit` exige handle gravável). No Linux passaria, o que
-    # tornaria a diferença invisível fora do job de compatibilidade.
-    with open(parcial, "r+b") as fp:
-        os.fsync(fp.fileno())
+    # `close` (feito pelo `with` acima) seguido de rename atômico. Sem fsync:
+    # a garantia desta função é de processo — nunca expor o nome final
+    # parcialmente escrito —, não de durabilidade contra queda de SO ou falta de
+    # energia. Durabilidade exigiria também fsync do diretório, tem semântica
+    # diferente por plataforma, e não teria consumidor: se a máquina cai, o job
+    # cai junto e a retomada redescobre o estado pelo item remoto, que é a fonte
+    # de verdade do checkpoint (#147) — não o disco local.
     parcial.replace(output_path)
     size = output_path.stat().st_size
     return {"count": count, "size_bytes": size, "schema_sha256": schema_sha256}
