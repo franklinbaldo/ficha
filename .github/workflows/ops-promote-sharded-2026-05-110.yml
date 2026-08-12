@@ -41,7 +41,11 @@ jobs:
         run: |
           set +e
           echo '== blocking task 5561680025 =='
-          uv run ia tasks -G 5561680025 || true
+          curl --fail --silent --show-error --max-time 30 \
+            --header "Authorization: LOW ${IA_ACCESS_KEY_ID}:${IA_SECRET_ACCESS_KEY}" \
+            --user-agent 'ficha-etl/ops (+https://github.com/franklinbaldo/ficha)' \
+            'https://catalogd.archive.org/services/tasks.php?task_log=5561680025' \
+            | tail -n 160 || true
           echo
           echo '== current catalog tasks =='
           uv run ia tasks ficha-2026-05 | head -n 120 || true
