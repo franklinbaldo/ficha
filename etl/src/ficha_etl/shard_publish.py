@@ -242,7 +242,9 @@ def publish_one_shard(
     expected = session.materialization_spec(prefix, input_sha1s=pinned_inputs)
     expected_id = expected.materialization_id()
     if fetch_direct is None:
-        fetch_direct = lambda name: fetch_direct_artifact_identity(session.month, name)
+
+        def fetch_direct(name: str) -> LocalIdentity | None:
+            return fetch_direct_artifact_identity(session.month, name)
 
     metadata = _metadata_still_matches(pinned_inputs, fetch_metadata)
     verdict = classify_remote_shard(
