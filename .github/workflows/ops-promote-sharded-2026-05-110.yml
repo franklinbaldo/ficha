@@ -1,0 +1,120 @@
+name: Ops — promote verified sharded snapshot 2026-05
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize]
+
+concurrency:
+  group: ficha-promote-sharded-2026-05
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  MONTH: '2026-05'
+  IA_BASE: https://archive.org/download/ficha-2026-05
+
+jobs:
+  candidate:
+    if: github.event.pull_request.head.ref == 'ops/promote-sharded-2026-05-110'
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    defaults:
+      run:
+        working-directory: etl
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+      - run: uv python install 3.11
+      - run: uv sync --frozen --extra dev
+
+      # Fail fast before downloading ~GBs. Uma leitura de /metadata fornece
+      # size+sha1 dos 100 objetos; cada _meta.json pequeno fecha a identidade
+      # semântica. Nenhum companies-NN.zip é baixado novamente nesta fase.
+      - name: Verify all 100 companies shards from IA metadata
+        env:
+          PYTHONIOENCODING: utf-8
+          PYTHONUTF8: '1'
+        run: uv run python .ops_promote_sharded_2026_05.py --verify-shards
+
+      - name: Free runner disk space
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /usr/local/share/powershell /usr/share/swift \
+                      "$AGENT_TOOLSDIRECTORY" || true
+          sudo apt-get clean
+          df -h /
+
+      # Somente os derivados exigidos por build_snapshot_entry(). Nenhum raw
+      # da RFB, nenhum transform e nenhum companies.zip monolítico.
+      - name: Download durable derived outputs from IA
+        run: |
+          set -euo pipefail
+          out=".cache/${MONTH}/output"
+          mkdir -p "$out/lookups"
+
+          for f in \
+            cnpjs.parquet \
+            cnpj_contatos.parquet \
+            cnpj_cnaes.parquet \
+            raizes.parquet \
+            socios.parquet \
+            enderecos.parquet \
+            pessoas.parquet \
+            lookups.json
+          do
+            echo "→ $f"
+            curl --fail --location --silent --show-error \
+              --retry 5 --retry-all-errors --retry-delay 10 \
+              -o "$out/$f" "$IA_BASE/$f"
+            test -s "$out/$f"
+          done
+
+          for kind in cnaes motivos municipios naturezas paises qualificacoes; do
+            echo "→ lookups/$kind.parquet"
+            curl --fail --location --silent --show-error \
+              --retry 5 --retry-all-errors --retry-delay 10 \
+              -o "$out/lookups/$kind.parquet" "$IA_BASE/lookups/$kind.parquet"
+            test -s "$out/lookups/$kind.parquet"
+          done
+
+          du -sh "$out"
+          df -h /
+
+      - name: Build and verify manifest candidate
+        env:
+          PYTHONIOENCODING: utf-8
+          PYTHONUTF8: '1'
+        run: uv run python .ops_promote_sharded_2026_05.py --promote
+
+      - name: Show candidate contract
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          manifest = json.loads(Path('../web/public/manifest.json').read_text())
+          current = next(s for s in manifest['snapshots'] if s['date'] == '2026-05')
+          print('current:', manifest['current'])
+          print('dates:', [s['date'] for s in manifest['snapshots']])
+          print('cnpjs:', current['files']['cnpjs'])
+          print('companies shards:', len(current['files']['companies']['shards']))
+          PY
+
+      # Artifact only. Esta PR operacional nunca é mergeada e o job nunca
+      # escreve em Git. O manifesto exato vira depois uma PR limpa separada.
+      - name: Upload exact manifest candidate and verification evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: manifest-candidate-2026-05-sharded
+          path: |
+            web/public/manifest.json
+            etl/company-shards-verified.json
+            etl/promotion-summary.json
+          if-no-files-found: error
+          retention-days: 14
