@@ -225,7 +225,7 @@ def test_direct_observation_failure_never_packs_or_uploads(tmp_path):
     assert session.pack_calls == []
 
 
-def test_direct_404_allows_pack_and_upload(tmp_path):
+def test_direct_404_allows_pack_and_catalog_confirmation(tmp_path):
     session = _Session()
     remote = _Remote()
     calls: list[str] = []
@@ -245,11 +245,12 @@ def test_direct_404_allows_pack_and_upload(tmp_path):
         fetch_meta=_fetch_meta(remote, spec),
         upload=remote.upload,
         fetch_direct=direct_404,
+        post_put_direct_attempts=1,
         sleep=lambda _: None,
     )
 
     assert result.action is ShardPublishAction.UPLOADED
-    assert calls == ["companies-07.zip", "companies-07.zip"]
+    assert calls == ["companies-07.zip", "companies-07.zip", "companies-07.zip"]
     assert session.pack_calls == ["07"]
     assert remote.uploads == ["companies-07.zip"]
 
@@ -287,7 +288,7 @@ def test_direct_race_after_pack_skips_before_put_and_cleans_local(tmp_path):
     assert not (tmp_path / "out" / "companies-07.zip").exists()
 
 
-def test_post_put_stale_catalog_confirms_directly_in_same_run(tmp_path):
+def test_post_put_stale_catalog_confirms_directly_before_metadata_poll(tmp_path):
     session = _Session()
     remote = _StaleCatalogRemote()
     pinned = pin_materialization_inputs(remote.metadata)
@@ -302,8 +303,7 @@ def test_post_put_stale_catalog_confirms_directly_in_same_run(tmp_path):
         fetch_meta=_fetch_meta(remote, spec),
         upload=remote.upload,
         fetch_direct=remote.direct,
-        confirm_attempts=1,
-        sleep=lambda _: None,
+        sleep=lambda _: pytest.fail("objeto direto imediato não deve esperar catálogo"),
     )
 
     data = remote.files["companies-07.zip"]
@@ -312,6 +312,46 @@ def test_post_put_stale_catalog_confirms_directly_in_same_run(tmp_path):
     assert result.sha1 == _sha1(data)
     assert remote.uploads == ["companies-07.zip"]
     assert session.pack_calls == ["07"]
+    assert not (tmp_path / "out" / "companies-07.zip").exists()
+
+
+def test_post_put_direct_retries_404_then_confirms(tmp_path):
+    session = _Session()
+    remote = _StaleCatalogRemote()
+    pinned = pin_materialization_inputs(remote.metadata)
+    spec = _expected(session, "07", pinned)
+    direct_calls = 0
+    sleeps: list[float] = []
+
+    def delayed_direct(name: str):
+        nonlocal direct_calls
+        direct_calls += 1
+        # 1 = antes do pack; 2 = antes do PUT; 3 = primeira observação pós-PUT.
+        if direct_calls <= 3:
+            return None
+        return remote.direct(name)
+
+    result = publish_one_shard(
+        session,
+        "07",
+        tmp_path / "out",
+        pinned_inputs=pinned,
+        fetch_metadata=remote.metadata,
+        fetch_meta=_fetch_meta(remote, spec),
+        upload=remote.upload,
+        fetch_direct=delayed_direct,
+        confirm_attempts=1,
+        post_put_direct_attempts=2,
+        sleep=sleeps.append,
+    )
+
+    data = remote.files["companies-07.zip"]
+    assert result.action is ShardPublishAction.UPLOADED
+    assert result.size == len(data)
+    assert result.sha1 == _sha1(data)
+    assert direct_calls == 4
+    assert sleeps == [5.0]
+    assert remote.uploads == ["companies-07.zip"]
     assert not (tmp_path / "out" / "companies-07.zip").exists()
 
 
@@ -369,6 +409,7 @@ def test_unconfirmed_zip_upload_fails_and_keeps_local_shard(tmp_path):
             upload=lambda name, path: None,
             fetch_direct=lambda name: None,
             confirm_attempts=1,
+            post_put_direct_attempts=1,
             sleep=lambda _: None,
         )
 
