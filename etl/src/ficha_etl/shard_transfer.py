@@ -153,8 +153,7 @@ def submit_one_shard(
         return _result_from_verified(prefix, expected_id, pre_upload)
     if pre_upload.state is not ShardReuseState.ABSENT:
         raise ShardPublishError(
-            f"{pre_upload.name}: estado mudou antes do PUT: "
-            f"{pre_upload.state}: {pre_upload.detail}"
+            f"{pre_upload.name}: estado mudou antes do PUT: {pre_upload.state}: {pre_upload.detail}"
         )
 
     direct_before_put = _reconcile_catalog_absent(

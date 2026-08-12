@@ -221,8 +221,6 @@ def test_verify_mismatching_materialization_fails_closed():
             "07",
             pinned_inputs=pinned,
             fetch_metadata=remote.metadata,
-            fetch_meta=lambda _: {
-                "materialization": {"id": "f" * 64, "spec": {}}
-            },
+            fetch_meta=lambda _: {"materialization": {"id": "f" * 64, "spec": {}}},
             fetch_direct=remote.direct,
         )
