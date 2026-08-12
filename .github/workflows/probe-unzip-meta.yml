@@ -61,32 +61,30 @@ jobs:
       # Precondição explícita: `pending_tasks` no item descartável significa
       # que uma execução anterior ainda está sendo processada pelo IA. Medir por
       # cima disso misturaria duas perguntas, como aconteceu no probe #140.
-      # No run 31558838717 este gate imprimiu `pending_tasks=None` e passou —
-      # mas `None` não significava "quieto", significava "o item não existe".
-      # Como o primeiro upload também cria o item, T1 e T2 sairiam contaminados
-      # pela latência de criação. Agora os três estados são separados.
-      - name: Verificar que o item descartável está quieto
+      # A precondição do item deixou de ser um gate de shell e virou a fase de
+      # preparação do próprio probe (`prepara()`), que distingue ABSENT de
+      # quieto, cria o item se preciso, limpa resíduo e exige duas leituras
+      # estáveis antes de T0. Duplicar isso aqui produziria duas definições de
+      # "pronto" que podem divergir. O que sobra é uma observação registrada
+      # no log, sem poder de decisão.
+      - name: Registrar o estado inicial do item
         run: |
           set -euo pipefail
-          curl -sSL "https://archive.org/metadata/ficha-probe-unzip-meta-147" -o /tmp/md.json
+          curl -sSL "https://archive.org/metadata/ficha-probe-unzip-meta-147" -o /tmp/md.json || true
           python3 - <<'EOF'
-          import json, sys
+          import json
 
           try:
               md = json.load(open("/tmp/md.json"))
-          except ValueError:
-              sys.exit("::error::metadata ilegível — não dá para saber o estado do item")
-
-          if not md:
-              print("::notice::item ainda não existe — o primeiro upload vai criá-lo, "
-                    "e a latência de criação entra em T1/T2")
-              print("ITEM_PREEXISTIA=nao")
-          elif md.get("pending_tasks") is True:
-              sys.exit("::error::item ainda tem pending_tasks — rode de novo depois")
+          except Exception as exc:
+              print(f"metadata ilegível antes do probe: {exc}")
           else:
-              nomes = [f.get("name") for f in md.get("files", [])]
-              print(f"item existe, pending_tasks={md.get('pending_tasks')}, arquivos={nomes}")
-              print("ITEM_PREEXISTIA=sim")
+              if not md:
+                  print("item ABSENT — a fase de preparação vai criá-lo antes de T0")
+              else:
+                  nomes = [f.get("name") for f in md.get("files", []) or []]
+                  print(f"identifier={md.get('metadata', {}).get('identifier')} "
+                        f"pending_tasks={md.get('pending_tasks')} arquivos={nomes}")
           EOF
 
       # Workflow manual aceita string livre nos inputs. Sem limite, um dígito a

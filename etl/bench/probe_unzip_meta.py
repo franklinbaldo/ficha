@@ -13,10 +13,24 @@ Isso pressupõe três coisas que **não** estão medidas:
 3. que os casos degenerados (membro inexistente, ZIP truncado) falhem de forma
    distinguível de "ainda não indexado".
 
-Se (2) falhar, o checkpoint imediato não existe e o desenho de #147 muda.
+## Duas fases, e por quê
 
-Segurança: item descartável, nome único por execução, nunca `ficha-YYYY-MM`.
-Tudo é apagado no `finally`. Nenhuma escrita em produção.
+O primeiro run (`31558838717`) confundiu três coisas diferentes: **criação do
+item**, **quietude do item** e **legibilidade do membro**. O gate leu
+`pending_tasks=None` e concluiu "quieto", quando `None` ali significava *"o
+item não existe"* — e como o primeiro PUT também cria o item, T1 e T2 sairiam
+contaminados pela latência de bootstrap.
+
+Por isso o probe é explicitamente bifásico:
+
+- **preparação** — garante que o item exista, esteja identificável, esteja
+  quieto e esteja limpo. Nada aqui é cronometrado.
+- **medição** — só então T0 começa, e o que se mede é o comportamento de um
+  **objeto novo dentro de um item já existente**, que é a situação real de um
+  shard sendo publicado.
+
+Segurança: item descartável, nunca `ficha-YYYY-MM`. Os objetos de payload são
+apagados no `finally`. Nenhuma escrita em produção.
 """
 
 from __future__ import annotations
@@ -37,6 +51,14 @@ from requests.exceptions import HTTPError
 ITEM = "ficha-probe-unzip-meta-147"
 BASE = "https://archive.org/download"
 META_MEMBRO = "_meta.json"
+PAYLOAD = ("bom.zip", "truncado.zip")
+MARCADOR = "_probe_marker.txt"
+"""Arquivo mínimo que faz o item existir.
+
+Criar o item é pré-condição, não medição. O marcador **não** é apagado no
+`finally`: ele mantém o item existindo entre execuções, para que runs futuros
+não paguem de novo o bootstrap — que é exatamente o custo que contaminaria T1.
+"""
 
 
 @dataclass
@@ -49,20 +71,28 @@ class Evento:
 EVENTOS: list[Evento] = []
 
 
-def registra(t0: float, o_que: str, **detalhe) -> None:
-    ev = Evento(round(time.time() - t0, 2), o_que, detalhe)
-    EVENTOS.append(ev)
-    print(f"[{ev.momento:8.2f}s] {o_que}: {json.dumps(detalhe, default=str)}", flush=True)
+def registra(t0: float | None, o_que: str, **detalhe) -> None:
+    momento = round(time.time() - t0, 2) if t0 is not None else -1.0
+    EVENTOS.append(Evento(momento, o_que, detalhe))
+    prefixo = f"[{momento:8.2f}s]" if t0 is not None else "[  prep  ]"
+    print(f"{prefixo} {o_que}: {json.dumps(detalhe, default=str)}", flush=True)
 
 
-def zip_de_teste(*, membros: int, meta: dict) -> bytes:
-    """ZIP com a mesma forma de um shard: membros + `_meta.json`."""
-    buf = io.BytesIO()
-    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
-        for i in range(membros):
-            zf.writestr(f"00/000/{i:03d}.pb", bytes(range(256)) * 8)
-        zf.writestr(META_MEMBRO, json.dumps(meta, indent=2))
-    return buf.getvalue()
+# ---- leitura remota ---------------------------------------------------------
+
+
+def metadata() -> dict | None:
+    """Metadata do item, ou `None` se a leitura não for confiável.
+
+    `None` aqui significa **não sei**, e nunca deve ser lido como "quieto" —
+    foi exatamente essa confusão que invalidou o primeiro run.
+    """
+    try:
+        r = httpx.get(f"https://archive.org/metadata/{ITEM}", follow_redirects=True, timeout=30)
+        r.raise_for_status()
+        return r.json()
+    except (httpx.HTTPError, ValueError):
+        return None
 
 
 def le_membro(nome_zip: str, membro: str, *, timeout: float = 60.0) -> tuple[int, int, float, str]:
@@ -71,50 +101,19 @@ def le_membro(nome_zip: str, membro: str, *, timeout: float = 60.0) -> tuple[int
     t = time.time()
     try:
         r = httpx.get(url, follow_redirects=True, timeout=timeout)
-        corpo = r.text[:200]
-        return r.status_code, len(r.content), time.time() - t, corpo
+        return r.status_code, len(r.content), time.time() - t, r.text[:200]
     except httpx.HTTPError as exc:
         return -1, 0, time.time() - t, f"{type(exc).__name__}: {exc}"
 
 
-def apaga(sessao, nome: str) -> str:
-    """Apaga um objeto do item, com o identifier declarado explicitamente.
-
-    `File.identifier` é lido de `item_metadata["metadata"]["identifier"]`
-    (internetarchive 5.8.0, `files.py:80`). Num item recém-criado o metadata
-    ainda é `{}`, então o identifier sai `None` e o DELETE vai parar em
-    `https://s3.us.archive.org/None/<nome>`, que responde 403 — foi o que
-    aconteceu no run 31558838717. Fixar o identifier a partir da constante
-    torna a limpeza imune à latência do metadata.
-    """
-    arquivo = get_item(ITEM, archive_session=sessao).get_file(nome)
-    if arquivo.identifier != ITEM:
-        arquivo.identifier = ITEM
-    arquivo.delete(
-        access_key=os.environ["IA_ACCESS_KEY"],
-        secret_key=os.environ["IA_SECRET_KEY"],
-        cascade_delete=True,
-    )
-    return nome
-
-
-def metadata() -> dict:
-    try:
-        r = httpx.get(f"https://archive.org/metadata/{ITEM}", follow_redirects=True, timeout=30)
-        return r.json()
-    except (httpx.HTTPError, ValueError):
-        return {}
-
-
 def estado_remoto(nome_zip: str) -> dict:
-    """Os quatro eventos, observados de forma independente.
+    """Os eventos observados de forma independente, num único instante.
 
-    Eles podem acontecer em ordens diferentes, e a pergunta do probe e qual
-    deles autoriza chamar o shard de DURAVEL PARA REUSE. Em particular, nao se
-    pode assumir que "o arquivo aparece no metadata" implica "o membro interno
-    ja pode ser lido" — sao duas observacoes distintas e este probe as separa.
+    `metadata do arquivo visível` e `membro legível` são duas observações
+    distintas: a primeira **não** implica a segunda, e descobrir qual delas
+    autoriza `DURÁVEL PARA REUSE` é a pergunta do probe.
     """
-    md = metadata()
+    md = metadata() or {}
     arquivos = md.get("files")
     entrada = None
     if isinstance(arquivos, list):
@@ -132,107 +131,185 @@ def estado_remoto(nome_zip: str) -> dict:
     }
 
 
-def main() -> int:
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--membros", type=int, default=2000, help="membros no ZIP de teste")
-    ap.add_argument("--janela", type=int, default=900, help="segundos observando disponibilidade")
-    args = ap.parse_args()
+# ---- escrita ----------------------------------------------------------------
 
-    # Defesa em profundidade: o workflow já valida, mas o script também roda a
-    # mão. Sem limite, `membros` alto constrói um ZIP enorme em memória antes de
-    # qualquer upload, e `janela` alta deixa o processo ocioso indefinidamente.
-    if not 1 <= args.membros <= 50_000:
-        ap.error(f"--membros={args.membros} fora da faixa [1, 50000]")
-    if not 60 <= args.janela <= 1_800:
-        ap.error(f"--janela={args.janela} fora da faixa [60, 1800]")
 
-    access = os.environ["IA_ACCESS_KEY"]
-    secret = os.environ["IA_SECRET_KEY"]
-    sessao = get_session(config={"s3": {"access": access, "secret": secret}})
+def apaga(sessao, nome: str) -> None:
+    """Apaga um objeto do item, com o identifier declarado explicitamente.
 
+    `File.identifier` é lido de `item_metadata["metadata"]["identifier"]`
+    (internetarchive 5.8.0, `files.py:80`). Num item recém-criado o metadata
+    ainda é `{}`, o identifier sai `None`, e o DELETE vai parar em
+    `https://s3.us.archive.org/None/<nome>` — 403, que foi o que aconteceu no
+    run `31558838717`. Fixar o identifier a partir da constante torna a limpeza
+    imune à latência do metadata.
+    """
+    arquivo = get_item(ITEM, archive_session=sessao).get_file(nome)
+    arquivo.identifier = ITEM
+    arquivo.delete(
+        access_key=os.environ["IA_ACCESS_KEY"],
+        secret_key=os.environ["IA_SECRET_KEY"],
+        cascade_delete=True,
+    )
+
+
+def sobe(sessao, nome: str, dados: bytes) -> tuple[bool, dict]:
+    """PUT de um objeto. A rejeição é resultado, não exceção a propagar."""
+    try:
+        get_item(ITEM, archive_session=sessao).upload(
+            {nome: io.BytesIO(dados)},
+            access_key=os.environ["IA_ACCESS_KEY"],
+            secret_key=os.environ["IA_SECRET_KEY"],
+            retries=3,
+            verify=True,
+        )
+    except HTTPError as exc:
+        resp = getattr(exc, "response", None)
+        return False, {"status": getattr(resp, "status_code", None), "motivo": str(exc)[:300]}
+    return True, {}
+
+
+# ---- fase 1: preparação (não cronometrada) ----------------------------------
+
+
+def precondicao(md: dict | None) -> tuple[bool, str]:
+    """As condições que tornam o item mensurável.
+
+    `ABSENT` é estado próprio: a ausência do item não é quietude.
+    """
+    if md is None:
+        return False, "metadata ilegível"
+    if not md:
+        return False, "ABSENT — o item não existe"
+    if md.get("metadata", {}).get("identifier") != ITEM:
+        return False, f"identifier inesperado: {md.get('metadata', {}).get('identifier')!r}"
+    if not isinstance(md.get("files"), list):
+        return False, "files não é uma lista válida"
+    if md.get("pending_tasks") is True:
+        return False, "pending_tasks=True"
+    residuo = [f.get("name") for f in md["files"] if f.get("name") in PAYLOAD]
+    if residuo:
+        return False, f"resíduo de payload presente: {residuo}"
+    return True, "ok"
+
+
+def prepara(sessao, *, limite: float) -> bool:
+    """Deixa o item existente, identificável, quieto e limpo.
+
+    Exige **duas leituras consecutivas** satisfeitas antes de liberar a medição:
+    uma leitura isolada pode pegar o metadata numa janela transitória.
+    """
+    fim = time.time() + limite
+    estaveis = 0
+    criou = False
+
+    while time.time() < fim:
+        md = metadata()
+        ok, motivo = precondicao(md)
+
+        if ok:
+            estaveis += 1
+            registra(None, "precondicao satisfeita", leituras_estaveis=estaveis)
+            if estaveis >= 2:
+                return True
+            time.sleep(10)
+            continue
+
+        estaveis = 0
+        registra(None, "precondicao pendente", motivo=motivo)
+
+        if md is not None and not md and not criou:
+            # ABSENT precisa ser resolvido ANTES de T0, senão o bootstrap do
+            # item entra na latência do primeiro objeto.
+            ok_put, det = sobe(sessao, MARCADOR, b"probe #147 - marcador de existencia\n")
+            registra(None, "criando o item pelo marcador", sucesso=ok_put, **det)
+            if not ok_put:
+                return False
+            criou = True
+        elif md and isinstance(md.get("files"), list):
+            for nome in PAYLOAD:
+                if any(f.get("name") == nome for f in md["files"]):
+                    try:
+                        apaga(sessao, nome)
+                        registra(None, "residuo removido", arquivo=nome)
+                    except Exception as exc:  # noqa: BLE001
+                        registra(None, "residuo NAO removido", arquivo=nome, erro=str(exc)[:200])
+
+        time.sleep(15)
+
+    registra(None, "PRECONDICAO NAO ATINGIDA", limite_segundos=limite)
+    return False
+
+
+# ---- fase 2: medição --------------------------------------------------------
+
+
+def zip_de_teste(*, membros: int, meta: dict) -> bytes:
+    """ZIP com a mesma forma de um shard: membros + `_meta.json`."""
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
+        for i in range(membros):
+            zf.writestr(f"00/000/{i:03d}.pb", bytes(range(256)) * 8)
+        zf.writestr(META_MEMBRO, json.dumps(meta, indent=2))
+    return buf.getvalue()
+
+
+def mede(sessao, *, membros: int, janela: int) -> int:
     identidade = {
         "packer_format_version": 1,
         "month": "2026-05",
         "shard": {"prefix": "00", "prefix_len": 2},
         "probe": True,
     }
-    bom = zip_de_teste(membros=args.membros, meta=identidade)
+    bom = zip_de_teste(membros=membros, meta=identidade)
     # ZIP truncado: os primeiros 60% dos bytes. O central directory fica no fim,
     # então o arquivo é irrecuperável — é o que um upload interrompido produz.
     truncado = bom[: int(len(bom) * 0.6)]
 
-    t0 = time.time()
-    registra(t0, "inicio", zip_bytes=len(bom), membros=args.membros)
-
-    subidos: list[str] = []
-    # Estado do caso degenerado, preservado separadamente: o IA pode rejeitar o
-    # PUT, aceitar e servir um objeto ilegível, ou — o que seria surpreendente —
-    # aceitar e servir o membro. São conclusões diferentes sobre discovery.
     truncado_estado = "nao_testado"
     truncado_detalhe: dict = {}
+    subidos: list[str] = []
+
+    t0 = time.time()
+    registra(t0, "T0 — inicio da medicao", zip_bytes=len(bom), membros=membros)
+
     try:
-        item = get_item(ITEM, archive_session=sessao)
-
-        def sobe(nome: str, dados: bytes) -> bool:
-            try:
-                item.upload(
-                    {nome: io.BytesIO(dados)},
-                    access_key=access,
-                    secret_key=secret,
-                    retries=3,
-                    verify=True,
-                )
-            except HTTPError as exc:
-                resp = getattr(exc, "response", None)
-                registra(
-                    t0,
-                    "PUT REJEITADO",
-                    arquivo=nome,
-                    bytes=len(dados),
-                    status=getattr(resp, "status_code", None),
-                    motivo=str(exc)[:300],
-                )
-                return False
-            subidos.append(nome)
-            registra(t0, "PUT aceito", arquivo=nome, bytes=len(dados))
-            return True
-
-        # `bom.zip` é a medição principal: se o PUT dele falhar, não há o que medir.
-        if not sobe("bom.zip", bom):
-            registra(t0, "ABORTANDO: o PUT de bom.zip falhou")
+        ok, det = sobe(sessao, "bom.zip", bom)
+        if not ok:
+            registra(t0, "ABORTANDO: PUT de bom.zip rejeitado", **det)
             return 1
+        subidos.append("bom.zip")
+        registra(t0, "T0 — PUT de bom.zip aceito", bytes=len(bom))
 
         # O truncado é caso degenerado e NÃO pode bloquear a medição principal.
-        # A rejeição no PUT já é resultado empírico válido: um ZIP truncado não
-        # se passa silenciosamente por objeto válido no caminho testado.
-        if sobe("truncado.zip", truncado):
+        # A rejeição no PUT já é resultado empírico: um ZIP truncado não se passa
+        # silenciosamente por objeto válido no caminho testado.
+        ok_t, det_t = sobe(sessao, "truncado.zip", truncado)
+        if ok_t:
+            subidos.append("truncado.zip")
             truncado_estado = "aceito_no_put"
+            registra(t0, "T0b — PUT de truncado.zip aceito", bytes=len(truncado))
         else:
             truncado_estado = "rejeitado_no_put"
+            truncado_detalhe = det_t
+            registra(t0, "T0b — PUT de truncado.zip REJEITADO", bytes=len(truncado), **det_t)
 
-        # --- 2: quando cada evento acontece, e em que ordem? ------------------
-        # Quatro eventos independentes:
-        #   (1) PUT aceito            — ja registrado acima
-        #   (2) metadata do arquivo aparece
-        #   (3) _meta.json legivel via unzip
-        #   (4) pending_tasks muda
         marcos: dict[str, float] = {}
-        primeira_leitura_ok: float | None = None
+        legivel_em: float | None = None
         pending_anterior: object = "<nao observado>"
         espera = 5
-        while time.time() - t0 < args.janela:
+        while time.time() - t0 < janela:
             est = estado_remoto("bom.zip")
             registra(t0, "observacao", **est)
 
-            if est["metadata_do_arquivo_visivel"] and "metadata_visivel" not in marcos:
-                marcos["metadata_visivel"] = round(time.time() - t0, 1)
+            if est["metadata_do_arquivo_visivel"] and "T1_metadata_visivel" not in marcos:
+                marcos["T1_metadata_visivel"] = round(time.time() - t0, 1)
             if est["pending_tasks"] != pending_anterior:
                 marcos[f"pending_tasks={est['pending_tasks']}"] = round(time.time() - t0, 1)
                 pending_anterior = est["pending_tasks"]
             if est["membro_legivel"]:
-                marcos["membro_legivel"] = round(time.time() - t0, 1)
-                primeira_leitura_ok = time.time() - t0
-                registra(t0, "MEMBRO LEGIVEL", apos_segundos=round(primeira_leitura_ok, 1))
+                marcos["T2_membro_legivel"] = round(time.time() - t0, 1)
+                legivel_em = time.time() - t0
                 break
 
             time.sleep(espera)
@@ -240,10 +317,9 @@ def main() -> int:
 
         registra(t0, "ORDEM DOS EVENTOS", **marcos)
 
-        if primeira_leitura_ok is None:
-            registra(t0, "MEMBRO NUNCA FICOU LEGIVEL", janela=args.janela)
+        if legivel_em is None:
+            registra(t0, "T2 NUNCA ACONTECEU", janela=janela)
         else:
-            # --- 1: ler o membro baixa o ZIP inteiro? -------------------------
             status, n, dur, corpo = le_membro("bom.zip", META_MEMBRO)
             registra(
                 t0,
@@ -253,30 +329,60 @@ def main() -> int:
                 fracao=round(n / len(bom), 5),
                 segundos=round(dur, 2),
                 conteudo_bate=corpo.strip().startswith("{"),
+                status=status,
             )
-
-            # --- 3: casos degenerados ----------------------------------------
             registra(t0, "membro inexistente", resultado=le_membro("bom.zip", "_nao_existe.json"))
             registra(t0, "zip inexistente", resultado=le_membro("nao_existe.zip", META_MEMBRO))
 
             if truncado_estado == "aceito_no_put":
-                status, n, dur, corpo = le_membro("truncado.zip", META_MEMBRO)
+                st, nb, dt, _ = le_membro("truncado.zip", META_MEMBRO)
                 truncado_estado = (
-                    "aceito_e_legivel" if (status == 200 and n > 0) else "aceito_mas_ilegivel"
+                    "aceito_e_legivel" if (st == 200 and nb > 0) else "aceito_mas_ilegivel"
                 )
-                truncado_detalhe = {"status": status, "bytes": n, "segundos": round(dur, 2)}
-            registra(t0, "ZIP TRUNCADO", estado=truncado_estado, **truncado_detalhe)
+                truncado_detalhe = {"status": st, "bytes": nb, "segundos": round(dt, 2)}
 
+        registra(t0, "ZIP TRUNCADO", estado=truncado_estado, **truncado_detalhe)
         print("\n=== RESUMO ===", flush=True)
         print(json.dumps([ev.__dict__ for ev in EVENTOS], indent=2, default=str), flush=True)
         return 0
     finally:
+        # O marcador NÃO é apagado: mantém o item existindo para o próximo run.
         for nome in subidos:
             try:
                 apaga(sessao, nome)
-                print(f"limpeza: {nome} removido", flush=True)
+                registra(t0, "limpeza: removido", arquivo=nome)
             except Exception as exc:  # noqa: BLE001 — limpeza é best-effort
-                print(f"limpeza FALHOU para {nome}: {exc}", flush=True)
+                registra(t0, "limpeza FALHOU", arquivo=nome, erro=str(exc)[:200])
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--membros", type=int, default=2000, help="membros no ZIP de teste")
+    ap.add_argument("--janela", type=int, default=900, help="segundos observando disponibilidade")
+    ap.add_argument("--preparo", type=int, default=600, help="segundos para a fase de preparação")
+    args = ap.parse_args()
+
+    # Defesa em profundidade: o workflow já valida, mas o script também roda a
+    # mão. Sem limite, `membros` alto constrói um ZIP enorme em memória antes de
+    # qualquer upload, e `janela` alta deixa o processo ocioso indefinidamente.
+    if not 1 <= args.membros <= 50_000:
+        ap.error(f"--membros={args.membros} fora da faixa [1, 50000]")
+    if not 60 <= args.janela <= 1_800:
+        ap.error(f"--janela={args.janela} fora da faixa [60, 1800]")
+    if not 60 <= args.preparo <= 1_800:
+        ap.error(f"--preparo={args.preparo} fora da faixa [60, 1800]")
+
+    sessao = get_session(
+        config={
+            "s3": {"access": os.environ["IA_ACCESS_KEY"], "secret": os.environ["IA_SECRET_KEY"]}
+        }
+    )
+
+    if not prepara(sessao, limite=args.preparo):
+        print("::error::precondicao nao atingida — nada foi medido", flush=True)
+        return 1
+
+    return mede(sessao, membros=args.membros, janela=args.janela)
 
 
 if __name__ == "__main__":
