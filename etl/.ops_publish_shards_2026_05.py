@@ -11,11 +11,14 @@ import argparse
 import json
 import os
 import sys
+import time
 from collections import Counter
 from pathlib import Path
 
+import httpx
 import internetarchive as ia
 
+from ficha_etl.mirror import raw_file_url
 from ficha_etl.remote_reuse import fetch_item_metadata
 from ficha_etl.shard_publish import (
     ShardPublishAction,
@@ -29,10 +32,12 @@ from ficha_etl.shard_remote import (
 )
 from ficha_etl.shard_sidecar import fetch_remote_sidecar, hash_remote_artifact
 from ficha_etl.sharded_pack import ShardPackSession
+from ficha_etl.upload_identity import files_list
 
 MONTH = "2026-05"
 IDENTIFIER = f"ficha-{MONTH}"
 OUTPUT_DIR = Path(".ops-shards-2026-05")
+CONFIRM_ATTEMPTS = 20
 
 
 def _require_secret(name: str) -> str:
@@ -129,10 +134,63 @@ def _write_summary(mode: str, results: list, *, proof_second_action: str | None 
     print(json.dumps(payload, indent=2, sort_keys=True), flush=True)
 
 
+def _listed(name: str) -> bool | None:
+    metadata = _metadata()
+    if metadata is None:
+        return None
+    files = files_list(metadata)
+    if files is None:
+        return None
+    return any(entry.get("name") == name for entry in files)
+
+
+def _reconcile_previous_attempt(prefix: str) -> None:
+    """Espera propagação de um PUT anterior antes de permitir nova escrita.
+
+    O primeiro run real aceitou o PUT de ``99`` mas o metadata ainda o tratava
+    como ausente após ~135 s. Repetir o PUT nesse estado seria exatamente a
+    sobrescrita otimista que o desenho proíbe. Pollamos por até 6 min; se ainda
+    não estiver listado, uma sonda HEAD direta precisa responder 404 antes de
+    considerarmos o nome realmente ausente.
+    """
+    name = PUBLIC_COMPANIES_GEOMETRY.shard_name(prefix)
+    for attempt in range(1, 13):
+        state = _listed(name)
+        if state is True:
+            print(f"RECONCILED {name}: now listed in metadata", flush=True)
+            return
+        if state is None:
+            print(f"RECONCILE {name}: metadata ambiguous ({attempt}/12)", flush=True)
+        else:
+            print(f"RECONCILE {name}: still absent ({attempt}/12)", flush=True)
+        if attempt < 12:
+            time.sleep(30)
+
+    url = raw_file_url(MONTH, name)
+    try:
+        with httpx.Client(timeout=30.0, follow_redirects=True) as client:
+            response = client.head(url)
+    except httpx.HTTPError as exc:
+        raise RuntimeError(f"cannot prove {name} absent after reconciliation: {exc}") from exc
+    if response.status_code == 200:
+        raise RuntimeError(
+            f"{name} is directly readable but missing from metadata; refusing another PUT"
+        )
+    if response.status_code != 404:
+        raise RuntimeError(
+            f"cannot prove {name} absent after reconciliation: HEAD returned {response.status_code}"
+        )
+    print(f"RECONCILED {name}: metadata absent and direct HEAD 404", flush=True)
+
+
 def run_proof(upload) -> None:
     """Publica/garante 99 e prova resume numa sessão DuckDB nova."""
     pinned = pin_materialization_inputs(_metadata)
     print(f"PINNED {len(pinned)} semantic inputs", flush=True)
+
+    # O run anterior terminou num PUT aceito porém não confirmado. Esta espera é
+    # somente para o shard de prova; não toca estado remoto.
+    _reconcile_previous_attempt("99")
 
     with _session() as session:
         first = publish_one_shard(
@@ -145,6 +203,7 @@ def run_proof(upload) -> None:
             fetch_sidecar=_fetch_sidecar,
             hash_remote=_hash_remote,
             upload=upload,
+            confirm_attempts=CONFIRM_ATTEMPTS,
         )
     print(f"PROOF first session: 99 -> {first.action}", flush=True)
 
@@ -160,6 +219,7 @@ def run_proof(upload) -> None:
             fetch_sidecar=_fetch_sidecar,
             hash_remote=_hash_remote,
             upload=upload,
+            confirm_attempts=CONFIRM_ATTEMPTS,
         )
     print(f"PROOF second session: 99 -> {second.action}", flush=True)
     if second.action is not ShardPublishAction.SKIPPED:
@@ -200,6 +260,7 @@ def run_batch(upload, raw_prefixes: str) -> None:
             hash_remote=_hash_remote,
             upload=upload,
             prefixes=prefixes,
+            confirm_attempts=CONFIRM_ATTEMPTS,
         )
     _write_summary("batch", results)
 
