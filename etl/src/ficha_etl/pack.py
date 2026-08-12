@@ -22,6 +22,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 import re
 import zipfile
 from pathlib import Path
@@ -297,8 +298,16 @@ def pack_companies(
     prev_cnpj_base: int | None = None
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
+    # Escreve num `.part` e renomeia só no fim. Assim a existência de
+    # `output_path` passa a significar "artefato completo": um pack interrompido
+    # por OOM, disco cheio ou erro de linha deixa `.part`, que nenhuma retomada
+    # confunde com trabalho durável. O rename é atômico dentro do mesmo
+    # diretório, que é onde o `.part` é criado de propósito.
+    parcial = output_path.with_name(output_path.name + ".part")
+    parcial.unlink(missing_ok=True)
+
     with SpoolingZipFile(
-        output_path, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6, allowZip64=True
+        parcial, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6, allowZip64=True
     ) as zf:
         # schema artifacts
         zf.writestr("_schema.desc", schema_desc)
@@ -344,6 +353,12 @@ def pack_companies(
         }
         zf.writestr("_meta.json", json.dumps(meta, indent=2))
 
+    # fsync antes do rename: sem isso, uma queda de máquina pode deixar o nome
+    # final publicado apontando para dados ainda não persistidos — exatamente a
+    # confusão entre "existe" e "está completo" que o `.part` existe para evitar.
+    with open(parcial, "rb") as fp:
+        os.fsync(fp.fileno())
+    parcial.replace(output_path)
     size = output_path.stat().st_size
     return {"count": count, "size_bytes": size, "schema_sha256": schema_sha256}
 
@@ -539,11 +554,17 @@ def pack_from_parquets(
         lookup_rows[kind] = [{"codigo": r[0], "descricao": r[1]} for r in rows]
         log.info("  lookup %s: %d entries", kind, len(rows))
 
-    rows = _iter_company_rows(
-        con,
-        raizes_url=raizes_url,
-        cnpjs_url=cnpjs_url,
-        socios_url=socios_url,
-        batch_size=batch_size,
-    )
-    return pack_companies(rows, lookup_rows, output_path, snapshot_month=month)
+    try:
+        rows = _iter_company_rows(
+            con,
+            raizes_url=raizes_url,
+            cnpjs_url=cnpjs_url,
+            socios_url=socios_url,
+            batch_size=batch_size,
+        )
+        return pack_companies(rows, lookup_rows, output_path, snapshot_month=month)
+    finally:
+        # O pack monolítico terminava junto com o processo, então vazar a
+        # conexão não aparecia. Fechar aqui é pré-requisito do modo shardado,
+        # onde a mesma conexão atravessa 100 iterações e um callback de rede.
+        con.close()
