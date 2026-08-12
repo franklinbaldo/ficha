@@ -10,7 +10,6 @@ permissions:
 
 jobs:
   format:
-    if: ${{ !startsWith(github.event.head_commit.message, 'style(etl): apply ruff format') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
