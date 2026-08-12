@@ -32,6 +32,7 @@ from dataclasses import dataclass, field
 
 import httpx
 from internetarchive import get_item, get_session
+from requests.exceptions import HTTPError
 
 ITEM = "ficha-probe-unzip-meta-147"
 BASE = "https://archive.org/download"
@@ -74,6 +75,27 @@ def le_membro(nome_zip: str, membro: str, *, timeout: float = 60.0) -> tuple[int
         return r.status_code, len(r.content), time.time() - t, corpo
     except httpx.HTTPError as exc:
         return -1, 0, time.time() - t, f"{type(exc).__name__}: {exc}"
+
+
+def apaga(sessao, nome: str) -> str:
+    """Apaga um objeto do item, com o identifier declarado explicitamente.
+
+    `File.identifier` é lido de `item_metadata["metadata"]["identifier"]`
+    (internetarchive 5.8.0, `files.py:80`). Num item recém-criado o metadata
+    ainda é `{}`, então o identifier sai `None` e o DELETE vai parar em
+    `https://s3.us.archive.org/None/<nome>`, que responde 403 — foi o que
+    aconteceu no run 31558838717. Fixar o identifier a partir da constante
+    torna a limpeza imune à latência do metadata.
+    """
+    arquivo = get_item(ITEM, archive_session=sessao).get_file(nome)
+    if arquivo.identifier != ITEM:
+        arquivo.identifier = ITEM
+    arquivo.delete(
+        access_key=os.environ["IA_ACCESS_KEY"],
+        secret_key=os.environ["IA_SECRET_KEY"],
+        cascade_delete=True,
+    )
+    return nome
 
 
 def metadata() -> dict:
@@ -143,18 +165,50 @@ def main() -> int:
     registra(t0, "inicio", zip_bytes=len(bom), membros=args.membros)
 
     subidos: list[str] = []
+    # Estado do caso degenerado, preservado separadamente: o IA pode rejeitar o
+    # PUT, aceitar e servir um objeto ilegível, ou — o que seria surpreendente —
+    # aceitar e servir o membro. São conclusões diferentes sobre discovery.
+    truncado_estado = "nao_testado"
+    truncado_detalhe: dict = {}
     try:
         item = get_item(ITEM, archive_session=sessao)
-        for nome, dados in (("bom.zip", bom), ("truncado.zip", truncado)):
-            item.upload(
-                {nome: io.BytesIO(dados)},
-                access_key=access,
-                secret_key=secret,
-                retries=3,
-                verify=True,
-            )
+
+        def sobe(nome: str, dados: bytes) -> bool:
+            try:
+                item.upload(
+                    {nome: io.BytesIO(dados)},
+                    access_key=access,
+                    secret_key=secret,
+                    retries=3,
+                    verify=True,
+                )
+            except HTTPError as exc:
+                resp = getattr(exc, "response", None)
+                registra(
+                    t0,
+                    "PUT REJEITADO",
+                    arquivo=nome,
+                    bytes=len(dados),
+                    status=getattr(resp, "status_code", None),
+                    motivo=str(exc)[:300],
+                )
+                return False
             subidos.append(nome)
             registra(t0, "PUT aceito", arquivo=nome, bytes=len(dados))
+            return True
+
+        # `bom.zip` é a medição principal: se o PUT dele falhar, não há o que medir.
+        if not sobe("bom.zip", bom):
+            registra(t0, "ABORTANDO: o PUT de bom.zip falhou")
+            return 1
+
+        # O truncado é caso degenerado e NÃO pode bloquear a medição principal.
+        # A rejeição no PUT já é resultado empírico válido: um ZIP truncado não
+        # se passa silenciosamente por objeto válido no caminho testado.
+        if sobe("truncado.zip", truncado):
+            truncado_estado = "aceito_no_put"
+        else:
+            truncado_estado = "rejeitado_no_put"
 
         # --- 2: quando cada evento acontece, e em que ordem? ------------------
         # Quatro eventos independentes:
@@ -203,8 +257,15 @@ def main() -> int:
 
             # --- 3: casos degenerados ----------------------------------------
             registra(t0, "membro inexistente", resultado=le_membro("bom.zip", "_nao_existe.json"))
-            registra(t0, "zip truncado", resultado=le_membro("truncado.zip", META_MEMBRO))
             registra(t0, "zip inexistente", resultado=le_membro("nao_existe.zip", META_MEMBRO))
+
+            if truncado_estado == "aceito_no_put":
+                status, n, dur, corpo = le_membro("truncado.zip", META_MEMBRO)
+                truncado_estado = (
+                    "aceito_e_legivel" if (status == 200 and n > 0) else "aceito_mas_ilegivel"
+                )
+                truncado_detalhe = {"status": status, "bytes": n, "segundos": round(dur, 2)}
+            registra(t0, "ZIP TRUNCADO", estado=truncado_estado, **truncado_detalhe)
 
         print("\n=== RESUMO ===", flush=True)
         print(json.dumps([ev.__dict__ for ev in EVENTOS], indent=2, default=str), flush=True)
@@ -212,9 +273,7 @@ def main() -> int:
     finally:
         for nome in subidos:
             try:
-                get_item(ITEM, archive_session=sessao).get_file(nome).delete(
-                    access_key=access, secret_key=secret, cascade_delete=True
-                )
+                apaga(sessao, nome)
                 print(f"limpeza: {nome} removido", flush=True)
             except Exception as exc:  # noqa: BLE001 — limpeza é best-effort
                 print(f"limpeza FALHOU para {nome}: {exc}", flush=True)
