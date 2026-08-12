@@ -116,6 +116,14 @@ def main() -> int:
     ap.add_argument("--janela", type=int, default=900, help="segundos observando disponibilidade")
     args = ap.parse_args()
 
+    # Defesa em profundidade: o workflow já valida, mas o script também roda a
+    # mão. Sem limite, `membros` alto constrói um ZIP enorme em memória antes de
+    # qualquer upload, e `janela` alta deixa o processo ocioso indefinidamente.
+    if not 1 <= args.membros <= 50_000:
+        ap.error(f"--membros={args.membros} fora da faixa [1, 50000]")
+    if not 60 <= args.janela <= 1_800:
+        ap.error(f"--janela={args.janela} fora da faixa [60, 1800]")
+
     access = os.environ["IA_ACCESS_KEY"]
     secret = os.environ["IA_SECRET_KEY"]
     sessao = get_session(config={"s3": {"access": access, "secret": secret}})
