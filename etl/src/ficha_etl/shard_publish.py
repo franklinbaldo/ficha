@@ -274,8 +274,7 @@ def _confirm_direct_after_put(
                     f"{name}: materialização direta após PUT divergiu: {verdict.detail}"
                 )
             log.warning(
-                "%s bytes diretos confirmados, mas materialização ainda %s; "
-                "voltando ao catálogo",
+                "%s bytes diretos confirmados, mas materialização ainda %s; voltando ao catálogo",
                 name,
                 verdict.state,
             )
