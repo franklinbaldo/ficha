@@ -1,0 +1,25 @@
+name: Probe — ruff format #174
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize]
+
+permissions:
+  contents: read
+
+jobs:
+  diff:
+    if: github.event.pull_request.head.ref == 'feat/sharded-manifest-173'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: etl
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+      - run: uv python install 3.11
+      - run: uv sync --extra dev
+      - name: Print exact formatter diff
+        run: |
+          uv run ruff format src/ficha_etl/manifest.py tests/test_manifest_shards.py
+          git diff -- src/ficha_etl/manifest.py tests/test_manifest_shards.py
