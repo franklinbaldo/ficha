@@ -8,6 +8,7 @@ do IA via httpfs e publica apenas os prefixos pedidos.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import sys
@@ -24,13 +25,12 @@ from ficha_etl.shard_publish import (
     ShardPublishAction,
     pin_materialization_inputs,
     publish_one_shard,
-    publish_shards,
 )
 from ficha_etl.shard_remote import (
     PUBLIC_COMPANIES_GEOMETRY,
     fetch_remote_shard_meta,
 )
-from ficha_etl.shard_sidecar import fetch_remote_sidecar, hash_remote_artifact
+from ficha_etl.shard_sidecar import fetch_remote_sidecar, hash_remote_artifact, sidecar_name
 from ficha_etl.sharded_pack import ShardPackSession
 from ficha_etl.upload_identity import files_list
 
@@ -96,8 +96,6 @@ def _uploader(access_key: str, secret_key: str):
 
 
 def _session() -> ShardPackSession:
-    # Default parquets_base resolves directly to ia:ficha-2026-05. That is
-    # deliberate: four matrix workers must not each download ~9.5 GiB first.
     return ShardPackSession(
         MONTH,
         PUBLIC_COMPANIES_GEOMETRY,
@@ -134,6 +132,55 @@ def _write_summary(mode: str, results: list, *, proof_second_action: str | None 
     print(json.dumps(payload, indent=2, sort_keys=True), flush=True)
 
 
+def _direct_sidecar_entry(prefix: str) -> dict | None:
+    """Observa a sidecar no endpoint público sem depender de metadata.files.
+
+    404 é ausência observada. Qualquer outro estado não-200 é ambíguo e aborta,
+    porque não pode autorizar um PUT que talvez sobrescreva uma sidecar existente.
+    """
+    name = sidecar_name(PUBLIC_COMPANIES_GEOMETRY, prefix)
+    url = raw_file_url(MONTH, name)
+    try:
+        with httpx.Client(timeout=30.0, follow_redirects=True) as client:
+            response = client.get(url)
+    except httpx.HTTPError as exc:
+        raise RuntimeError(f"cannot observe {name} directly: {exc}") from exc
+    if response.status_code == 404:
+        return None
+    if response.status_code != 200 or not response.content:
+        raise RuntimeError(
+            f"cannot classify {name} directly: HTTP {response.status_code}, "
+            f"bytes={len(response.content)}"
+        )
+    digest = hashlib.sha1(response.content, usedforsecurity=False).hexdigest()
+    return {"name": name, "size": str(len(response.content)), "sha1": digest}
+
+
+def _metadata_for(prefix: str) -> dict | None:
+    """Metadata do item enriquecido com sidecar diretamente observável.
+
+    O IA pode servir o objeto muito antes de incluí-lo em ``metadata.files``.
+    Para a sidecar pequena, GET + bytes exatos são prova mais direta do que a
+    indexação eventual do catálogo. O ZIP continua dependendo do metadata real.
+    """
+    metadata = _metadata()
+    if metadata is None:
+        return None
+    files = files_list(metadata)
+    if files is None:
+        return metadata
+    identity_name = sidecar_name(PUBLIC_COMPANIES_GEOMETRY, prefix)
+    if any(entry.get("name") == identity_name for entry in files):
+        return metadata
+    direct = _direct_sidecar_entry(prefix)
+    if direct is None:
+        return metadata
+    enriched = dict(metadata)
+    enriched["files"] = [*files, direct]
+    print(f"DIRECT {identity_name}: readable before metadata index", flush=True)
+    return enriched
+
+
 def _listed(name: str) -> bool | None:
     metadata = _metadata()
     if metadata is None:
@@ -145,14 +192,6 @@ def _listed(name: str) -> bool | None:
 
 
 def _reconcile_previous_attempt(prefix: str) -> None:
-    """Espera propagação de um PUT anterior antes de permitir nova escrita.
-
-    O primeiro run real aceitou o PUT de ``99`` mas o metadata ainda o tratava
-    como ausente após ~135 s. Repetir o PUT nesse estado seria exatamente a
-    sobrescrita otimista que o desenho proíbe. Pollamos por até 6 min; se ainda
-    não estiver listado, uma sonda HEAD direta precisa responder 404 antes de
-    considerarmos o nome realmente ausente.
-    """
     name = PUBLIC_COMPANIES_GEOMETRY.shard_name(prefix)
     for attempt in range(1, 13):
         state = _listed(name)
@@ -183,44 +222,32 @@ def _reconcile_previous_attempt(prefix: str) -> None:
     print(f"RECONCILED {name}: metadata absent and direct HEAD 404", flush=True)
 
 
+def _publish_one(session, prefix: str, pinned, upload):
+    return publish_one_shard(
+        session,
+        prefix,
+        OUTPUT_DIR,
+        pinned_inputs=pinned,
+        fetch_metadata=lambda: _metadata_for(prefix),
+        fetch_meta=_fetch_meta,
+        fetch_sidecar=_fetch_sidecar,
+        hash_remote=_hash_remote,
+        upload=upload,
+        confirm_attempts=CONFIRM_ATTEMPTS,
+    )
+
+
 def run_proof(upload) -> None:
-    """Publica/garante 99 e prova resume numa sessão DuckDB nova."""
     pinned = pin_materialization_inputs(_metadata)
     print(f"PINNED {len(pinned)} semantic inputs", flush=True)
-
-    # O run anterior terminou num PUT aceito porém não confirmado. Esta espera é
-    # somente para o shard de prova; não toca estado remoto.
     _reconcile_previous_attempt("99")
 
     with _session() as session:
-        first = publish_one_shard(
-            session,
-            "99",
-            OUTPUT_DIR,
-            pinned_inputs=pinned,
-            fetch_metadata=_metadata,
-            fetch_meta=_fetch_meta,
-            fetch_sidecar=_fetch_sidecar,
-            hash_remote=_hash_remote,
-            upload=upload,
-            confirm_attempts=CONFIRM_ATTEMPTS,
-        )
+        first = _publish_one(session, "99", pinned, upload)
     print(f"PROOF first session: 99 -> {first.action}", flush=True)
 
-    # Nova conexão DuckDB e nenhuma memória de estado local do primeiro pack.
     with _session() as session:
-        second = publish_one_shard(
-            session,
-            "99",
-            OUTPUT_DIR,
-            pinned_inputs=pinned,
-            fetch_metadata=_metadata,
-            fetch_meta=_fetch_meta,
-            fetch_sidecar=_fetch_sidecar,
-            hash_remote=_hash_remote,
-            upload=upload,
-            confirm_attempts=CONFIRM_ATTEMPTS,
-        )
+        second = _publish_one(session, "99", pinned, upload)
     print(f"PROOF second session: 99 -> {second.action}", flush=True)
     if second.action is not ShardPublishAction.SKIPPED:
         raise RuntimeError(
@@ -249,19 +276,10 @@ def run_batch(upload, raw_prefixes: str) -> None:
         f"pinned_inputs={len(pinned)}",
         flush=True,
     )
+    results = []
     with _session() as session:
-        results = publish_shards(
-            session,
-            OUTPUT_DIR,
-            pinned_inputs=pinned,
-            fetch_metadata=_metadata,
-            fetch_meta=_fetch_meta,
-            fetch_sidecar=_fetch_sidecar,
-            hash_remote=_hash_remote,
-            upload=upload,
-            prefixes=prefixes,
-            confirm_attempts=CONFIRM_ATTEMPTS,
-        )
+        for prefix in prefixes:
+            results.append(_publish_one(session, prefix, pinned, upload))
     _write_summary("batch", results)
 
 
