@@ -1,0 +1,73 @@
+name: Ops — rerun blocking IA VirusCheck
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize]
+
+concurrency:
+  group: ficha-rerun-ia-viruscheck-110
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  rerun:
+    if: github.event.pull_request.head.ref == 'ops/promote-sharded-2026-05-110'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Preflight and rerun exact blocking task
+        env:
+          IA_ACCESS_KEY_ID: ${{ secrets.IA_ACCESS_KEY }}
+          IA_SECRET_ACCESS_KEY: ${{ secrets.IA_SECRET_KEY }}
+        run: |
+          set -euo pipefail
+          task_id=5561680025
+          auth="Authorization: LOW ${IA_ACCESS_KEY_ID}:${IA_SECRET_ACCESS_KEY}"
+
+          curl --fail --silent --show-error \
+            --header "$auth" \
+            "https://archive.org/services/tasks.php?catalog=1&summary=0&task_id=${task_id}" \
+            > task.json
+
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          payload = json.loads(Path('task.json').read_text())
+          tasks = payload.get('value', {}).get('catalog', [])
+          if len(tasks) != 1:
+              raise SystemExit(f'expected exactly one catalog task, got {len(tasks)}')
+          task = tasks[0]
+          expected = {
+              'task_id': 5561680025,
+              'identifier': 'ficha-2026-05',
+              'cmd': 'book_op.php',
+              'wait_admin': 2,
+          }
+          for key, value in expected.items():
+              if task.get(key) != value:
+                  raise SystemExit(f'preflight refused: {key}={task.get(key)!r}, expected {value!r}')
+          if task.get('args', {}).get('op0') != 'VirusCheck':
+              raise SystemExit(f"preflight refused: op0={task.get('args', {}).get('op0')!r}")
+          print('preflight ok: exact red VirusCheck task confirmed')
+          PY
+
+          curl --fail --silent --show-error \
+            --request PUT \
+            --header "$auth" \
+            --header 'Content-Type: application/json' \
+            --data '{"op":"rerun","task_id":5561680025}' \
+            'https://archive.org/services/tasks.php' \
+            | tee rerun-response.json
+
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          payload = json.loads(Path('rerun-response.json').read_text())
+          if payload.get('success') is not True:
+              raise SystemExit(f'rerun failed: {payload}')
+          print('rerun accepted:', payload.get('value'))
+          PY
