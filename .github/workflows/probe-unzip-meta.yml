@@ -58,9 +58,6 @@ jobs:
         working-directory: etl
         run: uv sync --frozen
 
-      # Precondição explícita: `pending_tasks` no item descartável significa
-      # que uma execução anterior ainda está sendo processada pelo IA. Medir por
-      # cima disso misturaria duas perguntas, como aconteceu no probe #140.
       # A precondição do item deixou de ser um gate de shell e virou a fase de
       # preparação do próprio probe (`prepara()`), que distingue ABSENT de
       # quieto, cria o item se preciso, limpa resíduo e exige duas leituras
