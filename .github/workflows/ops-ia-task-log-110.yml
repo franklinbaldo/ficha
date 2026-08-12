@@ -1,0 +1,31 @@
+name: Ops — probe blocking IA task log
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize]
+
+concurrency:
+  group: ficha-ia-task-log-110
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    if: github.event.pull_request.head.ref == 'ops/promote-sharded-2026-05-110'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Read tail of blocking task log
+        env:
+          IA_ACCESS_KEY_ID: ${{ secrets.IA_ACCESS_KEY }}
+          IA_SECRET_ACCESS_KEY: ${{ secrets.IA_SECRET_KEY }}
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --location --max-time 60 \
+            --range '-65536' \
+            --header "Authorization: LOW ${IA_ACCESS_KEY_ID}:${IA_SECRET_ACCESS_KEY}" \
+            --user-agent 'ficha-etl/ops (+https://github.com/franklinbaldo/ficha)' \
+            'https://catalogd.archive.org/services/tasks.php?task_log=5561680025' \
+            | tail -n 200
