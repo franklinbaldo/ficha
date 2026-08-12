@@ -1,0 +1,86 @@
+name: Ops — publish 2026-05 companies shards with SHA-1
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize]
+
+concurrency:
+  group: ficha-publish-sha1-shards-2026-05
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  resume-proof:
+    if: github.event.pull_request.head.ref == 'ops/publish-sha1-shards-2026-05-110'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    defaults:
+      run:
+        working-directory: etl
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+      - run: uv python install 3.11
+      - run: uv sync --frozen --extra dev
+      - name: Prove shard 99 resumes across fresh sessions
+        env:
+          IA_ACCESS_KEY: ${{ secrets.IA_ACCESS_KEY }}
+          IA_SECRET_KEY: ${{ secrets.IA_SECRET_KEY }}
+          PYTHONIOENCODING: utf-8
+          PYTHONUTF8: '1'
+        run: uv run python .ops_publish_sha1_shards_2026_05.py --proof
+      - name: Preserve resume proof
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sha1-shard-resume-proof-2026-05
+          path: etl/shard-publication-summary.json
+          if-no-files-found: ignore
+          retention-days: 14
+
+  shards:
+    needs: resume-proof
+    if: needs.resume-proof.result == 'success'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - group: 00-24
+            prefixes: 00,01,02,03,04,05,06,07,08,09,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24
+          - group: 25-49
+            prefixes: 25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49
+          - group: 50-74
+            prefixes: 50,51,52,53,54,55,56,57,58,59,60,61,62,63,64,65,66,67,68,69,70,71,72,73,74
+          - group: 75-98
+            prefixes: 75,76,77,78,79,80,81,82,83,84,85,86,87,88,89,90,91,92,93,94,95,96,97,98
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    defaults:
+      run:
+        working-directory: etl
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+      - run: uv python install 3.11
+      - run: uv sync --frozen --extra dev
+      - name: Publish shard group ${{ matrix.group }}
+        env:
+          IA_ACCESS_KEY: ${{ secrets.IA_ACCESS_KEY }}
+          IA_SECRET_KEY: ${{ secrets.IA_SECRET_KEY }}
+          PYTHONIOENCODING: utf-8
+          PYTHONUTF8: '1'
+        run: uv run python .ops_publish_sha1_shards_2026_05.py --prefixes '${{ matrix.prefixes }}'
+      - name: Preserve group evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sha1-shards-${{ matrix.group }}-2026-05
+          path: etl/shard-publication-summary.json
+          if-no-files-found: ignore
+          retention-days: 14
