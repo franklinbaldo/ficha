@@ -32,6 +32,29 @@ jobs:
       - run: uv python install 3.11
       - run: uv sync --frozen --extra dev
 
+      # Diagnóstico somente-leitura. 05 representa a rodada nova; 28/53/78 já
+      # tinham PUT antigo aceito mas seguem fora do catálogo; 98 é controle
+      # positivo porque já aparece em /metadata.
+      - name: Diagnose IA ingest state
+        run: |
+          set +e
+          echo '== ia tasks =='
+          uv run ia tasks ficha-2026-05 || true
+          echo
+          for p in 05 28 53 78 98; do
+            echo "== companies-${p}.zip =="
+            curl --silent --show-error --location --head \
+              --max-time 30 \
+              --output /dev/null \
+              --write-out 'download HEAD: http=%{http_code} url=%{url_effective}\n' \
+              "$IA_BASE/companies-${p}.zip" || true
+            echo 'IAS3 log tail:'
+            curl --silent --show-error --max-time 30 \
+              "https://s3.us.archive.org/ficha-2026-05/companies-${p}.zip?log" \
+              | tail -n 40 || true
+            echo
+          done
+
       # Fail fast before downloading ~GBs. Uma leitura de /metadata fornece
       # size+sha1 dos 100 objetos; cada _meta.json pequeno fecha a identidade
       # semântica. Nenhum companies-NN.zip é baixado novamente nesta fase.
