@@ -4,6 +4,12 @@ Não roda transform e nunca constrói ``companies.zip`` monolítico. Os inputs j
 duráveis são lidos diretamente do Internet Archive via ``ShardPackSession``.
 Cada shard fecha com um único objeto remoto: ``size + sha1`` no metadata e
 ``MaterializationSpec`` no ``_meta.json`` interno.
+
+O run 31599991817 provou que o catálogo do IA pode continuar stale por mais de
+seis minutos após um PUT aceito. Com o reconciliador direto do #185, esta rotina
+faz só uma leitura pós-PUT do catálogo e então observa o ZIP diretamente. Isso
+não relaxa a prova e não autoriza segundo PUT: 404/ambiguidade continuam
+fail-closed e um rerun redescobre o objeto antes de qualquer escrita.
 """
 
 from __future__ import annotations
@@ -119,6 +125,7 @@ def _publish_one(session: ShardPackSession, prefix: str, pinned, upload):
         fetch_metadata=_metadata,
         fetch_meta=_fetch_meta,
         upload=upload,
+        confirm_attempts=1,
     )
 
 
@@ -169,6 +176,7 @@ def run_batch(upload, raw_prefixes: str) -> None:
             fetch_meta=_fetch_meta,
             upload=upload,
             prefixes=prefixes,
+            confirm_attempts=1,
         )
     _write_summary("batch", results)
 
