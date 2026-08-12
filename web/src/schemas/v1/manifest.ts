@@ -14,6 +14,7 @@ const FileEntrySchema = z.object({
 const CompanyShardSchema = z.object({
   shard: z.string().regex(/^\d{2}$/),
   url: z.string().url(),
+  // Checksum operacional do IA; autenticidade semântica é validada no ETL.
   sha1: z.string().regex(/^[0-9a-f]{40}$/),
   size: z.number().int().positive(),
 });
