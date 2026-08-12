@@ -1,19 +1,20 @@
-"""Publicação retomável de shards de ``companies`` (#165/#167/#175/#176).
+"""Publicação retomável de shards de ``companies`` (#165/#175/#180).
 
-Um checkpoint só é completo quando três identidades concordam:
+Um checkpoint é completo quando duas identidades independentes concordam:
 
 1. ``size + sha1`` do ZIP remoto são iguais aos bytes enviados;
-2. ``_meta.json`` declara exatamente o ``MaterializationSpec`` pinado;
-3. a sidecar criptográfica, lida diretamente, preserva o SHA-256 dos bytes.
+2. ``_meta.json`` declara exatamente o ``MaterializationSpec`` pinado.
 
-Nada aqui faz replace do ZIP. ``UNKNOWN`` e ``MISMATCH`` abortam antes de
-escrita. A sidecar também falha fechada: 404 é ausência observada; falha de
-rede/5xx é estado desconhecido e nunca autoriza PUT.
+O SHA-1 aqui é checksum operacional fornecido pelo próprio Internet Archive,
+não assinatura criptográfica. O ``materialization_id`` identifica a semântica;
+``size + sha1`` identificam os bytes observados. Nada aqui faz replace do ZIP.
+``UNKNOWN`` e ``MISMATCH`` abortam antes de escrita.
 """
 
 from __future__ import annotations
 
 import enum
+import hashlib
 import logging
 import time
 from collections.abc import Callable, Iterable, Mapping
@@ -26,16 +27,6 @@ from .shard_remote import (
     classify_remote_shard,
     materialization_input_sha1s,
 )
-from .shard_sidecar import (
-    ArtifactIdentity,
-    ShardSidecar,
-    SidecarObservationError,
-    artifact_identity,
-    parse_sidecar,
-    sidecar_matches,
-    sidecar_name,
-    write_sidecar,
-)
 from .sharded_pack import ShardPackSession
 from .upload_identity import LocalIdentity, confirm_remote_identity
 
@@ -43,21 +34,17 @@ log = logging.getLogger(__name__)
 
 MetadataFetch = Callable[[], dict | None]
 RemoteMetaFetch = Callable[[str], object | None]
-SidecarFetch = Callable[[str], object | None]
-RemoteArtifactHash = Callable[[str, int, str], ArtifactIdentity]
 ShardUpload = Callable[[str, Path], None]
 
 # O item real ficha-2026-05 excedeu a antiga janela de ~132 s: um ZIP aceito
 # pelo IA só apareceu no metadata cerca de 5m44s depois. Com backoff linear de
 # 2s*n, 20 observações cobrem 380 s sem usar pending_tasks como gate.
 _CONFIRM_ATTEMPTS = 20
-_CONFIRM_BACKOFF_S = 2.0
 
 
 class ShardPublishAction(enum.StrEnum):
     SKIPPED = "skipped"
     UPLOADED = "uploaded"
-    SIDECAR_REPAIRED = "sidecar-repaired"
 
 
 @dataclass(frozen=True)
@@ -68,7 +55,6 @@ class ShardPublishResult:
     materialization_id: str
     size: int
     sha1: str
-    sha256: str
 
 
 class ShardPublishError(RuntimeError):
@@ -93,122 +79,24 @@ def _metadata_still_matches(
     return metadata
 
 
-def _validate_sidecar_payload(
-    payload: object,
-    *,
-    snapshot: str,
-    prefix: str,
-    materialization_id: str,
-    artifact_name: str,
-    remote_size: int,
-    remote_sha1: str,
-) -> ShardSidecar:
-    parsed = parse_sidecar(payload)
-    if parsed is None or not sidecar_matches(
-        parsed,
-        snapshot=snapshot,
+def _local_identity(path: Path) -> LocalIdentity:
+    sha1 = hashlib.sha1(usedforsecurity=False)
+    size = 0
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            size += len(chunk)
+            sha1.update(chunk)
+    return LocalIdentity(size=size, sha1=sha1.hexdigest())
+
+
+def _reuse_result(prefix: str, name: str, materialization_id: str, size: int, sha1: str):
+    return ShardPublishResult(
         prefix=prefix,
+        name=name,
+        action=ShardPublishAction.SKIPPED,
         materialization_id=materialization_id,
-        artifact_name=artifact_name,
-        remote_size=remote_size,
-        remote_sha1=remote_sha1,
-    ):
-        raise ShardPublishError(f"{artifact_name}: sidecar ausente, inválida ou divergente")
-    return parsed
-
-
-def _ensure_sidecar(
-    session: ShardPackSession,
-    prefix: str,
-    output_dir: Path,
-    *,
-    materialization_id: str,
-    artifact_name: str,
-    remote_size: int,
-    remote_sha1: str,
-    fetch_sidecar: SidecarFetch,
-    hash_remote: RemoteArtifactHash,
-    upload: ShardUpload,
-    local_artifact: ArtifactIdentity | None,
-    confirm_attempts: int,
-    sleep: Callable[[float], None],
-) -> tuple[ArtifactIdentity, bool]:
-    """Garante sidecar por observação direta, sem depender de metadata.files."""
-    identity_name = sidecar_name(session.geometry, prefix)
-
-    # Discovery direto: uma sidecar servível já é observável mesmo que o
-    # catálogo do IA ainda não a tenha indexado. UNKNOWN propaga e aborta antes
-    # de qualquer escrita; somente 404 confirmado (payload=None) permite reparo.
-    payload = fetch_sidecar(identity_name)
-    if payload is not None:
-        parsed = _validate_sidecar_payload(
-            payload,
-            snapshot=session.month,
-            prefix=prefix,
-            materialization_id=materialization_id,
-            artifact_name=artifact_name,
-            remote_size=remote_size,
-            remote_sha1=remote_sha1,
-        )
-        return parsed.artifact, False
-
-    if (
-        local_artifact is not None
-        and local_artifact.size == remote_size
-        and local_artifact.sha1 == remote_sha1
-    ):
-        identity = local_artifact
-    else:
-        identity = hash_remote(artifact_name, remote_size, remote_sha1)
-        if identity.size != remote_size or identity.sha1 != remote_sha1:
-            raise ShardPublishError(
-                f"{artifact_name}: hash remoto recuperado não bate com metadata"
-            )
-
-    sidecar = ShardSidecar(
-        snapshot=session.month,
-        shard=prefix,
-        materialization_id=materialization_id,
-        artifact_name=artifact_name,
-        artifact=identity,
-    )
-    path = output_dir / identity_name
-    write_sidecar(path, sidecar)
-    upload(identity_name, path)
-
-    # Depois do PUT, retentar UNKNOWN/404 é seguro porque não há nova escrita.
-    # O sucesso vem do GET direto + payload exato; a indexação em metadata.files
-    # pode atrasar vários minutos e não é requisito de durabilidade da sidecar.
-    last_detail = "GET direto ainda não observou a sidecar"
-    for attempt in range(1, confirm_attempts + 1):
-        try:
-            payload = fetch_sidecar(identity_name)
-        except SidecarObservationError as exc:
-            last_detail = str(exc)
-        else:
-            if payload is not None:
-                parsed = _validate_sidecar_payload(
-                    payload,
-                    snapshot=session.month,
-                    prefix=prefix,
-                    materialization_id=materialization_id,
-                    artifact_name=artifact_name,
-                    remote_size=remote_size,
-                    remote_sha1=remote_sha1,
-                )
-                if parsed != sidecar:
-                    raise ShardPublishError(
-                        f"{identity_name}: sidecar servida diverge dos bytes acabados de publicar"
-                    )
-                path.unlink(missing_ok=True)
-                return identity, True
-            last_detail = "HTTP 404"
-        if attempt < confirm_attempts:
-            sleep(_CONFIRM_BACKOFF_S * attempt)
-
-    raise ShardPublishError(
-        f"{identity_name}: PUT retornou mas GET direto não confirmou após "
-        f"{confirm_attempts} observações: {last_detail}"
+        size=size,
+        sha1=sha1,
     )
 
 
@@ -220,8 +108,6 @@ def publish_one_shard(
     pinned_inputs: Mapping[str, str],
     fetch_metadata: MetadataFetch,
     fetch_meta: RemoteMetaFetch,
-    fetch_sidecar: SidecarFetch,
-    hash_remote: RemoteArtifactHash,
     upload: ShardUpload,
     confirm_attempts: int = _CONFIRM_ATTEMPTS,
     sleep: Callable[[float], None] = time.sleep,
@@ -246,37 +132,16 @@ def publish_one_shard(
 
     if verdict.state is ShardReuseState.REUSABLE:
         assert verdict.size is not None and verdict.sha1 is not None
-        identity, repaired = _ensure_sidecar(
-            session,
-            prefix,
-            output_dir,
-            materialization_id=expected_id,
-            artifact_name=verdict.name,
-            remote_size=verdict.size,
-            remote_sha1=verdict.sha1,
-            fetch_sidecar=fetch_sidecar,
-            hash_remote=hash_remote,
-            upload=upload,
-            local_artifact=None,
-            confirm_attempts=confirm_attempts,
-            sleep=sleep,
-        )
-        return ShardPublishResult(
-            prefix,
-            verdict.name,
-            ShardPublishAction.SIDECAR_REPAIRED if repaired else ShardPublishAction.SKIPPED,
-            expected_id,
-            identity.size,
-            identity.sha1,
-            identity.sha256,
-        )
+        return _reuse_result(prefix, verdict.name, expected_id, verdict.size, verdict.sha1)
     if verdict.state is not ShardReuseState.ABSENT:
         raise ShardPublishError(f"{verdict.name}: {verdict.state}: {verdict.detail}")
 
     artifact = session.pack(prefix, output_dir, materialization=expected)
-    local_artifact = artifact_identity(artifact.path)
-    local = LocalIdentity(size=local_artifact.size, sha1=local_artifact.sha1)
+    local = _local_identity(artifact.path)
 
+    # Segunda observação imediatamente antes do PUT: outra execução pode ter
+    # publicado o mesmo shard enquanto fazíamos o pack. Se já for exatamente a
+    # materialização esperada, descartamos o arquivo local e reutilizamos.
     pre_upload_metadata = _metadata_still_matches(pinned_inputs, fetch_metadata)
     pre_upload = classify_remote_shard(
         prefix,
@@ -287,31 +152,8 @@ def publish_one_shard(
     )
     if pre_upload.state is ShardReuseState.REUSABLE:
         assert pre_upload.size is not None and pre_upload.sha1 is not None
-        identity, repaired = _ensure_sidecar(
-            session,
-            prefix,
-            output_dir,
-            materialization_id=expected_id,
-            artifact_name=pre_upload.name,
-            remote_size=pre_upload.size,
-            remote_sha1=pre_upload.sha1,
-            fetch_sidecar=fetch_sidecar,
-            hash_remote=hash_remote,
-            upload=upload,
-            local_artifact=local_artifact,
-            confirm_attempts=confirm_attempts,
-            sleep=sleep,
-        )
         artifact.path.unlink(missing_ok=True)
-        return ShardPublishResult(
-            prefix,
-            pre_upload.name,
-            ShardPublishAction.SIDECAR_REPAIRED if repaired else ShardPublishAction.SKIPPED,
-            expected_id,
-            identity.size,
-            identity.sha1,
-            identity.sha256,
-        )
+        return _reuse_result(prefix, pre_upload.name, expected_id, pre_upload.size, pre_upload.sha1)
     if pre_upload.state is not ShardReuseState.ABSENT:
         raise ShardPublishError(
             f"{pre_upload.name}: estado mudou antes do PUT: {pre_upload.state}: {pre_upload.detail}"
@@ -330,6 +172,9 @@ def publish_one_shard(
             f"{pre_upload.name}: PUT retornou mas size+sha1 remoto não confirmou"
         )
 
+    # A confirmação dos bytes não basta: `_meta.json` também deve declarar a
+    # materialização esperada. Isso impede reutilizar bytes de outro conjunto
+    # de inputs mesmo que o nome do shard seja o mesmo.
     final_metadata = _metadata_still_matches(pinned_inputs, fetch_metadata)
     final = classify_remote_shard(
         prefix,
@@ -344,31 +189,20 @@ def publish_one_shard(
             f"{final.state}: {final.detail}"
         )
     assert final.size is not None and final.sha1 is not None
+    if final.size != local.size or final.sha1 != local.sha1:
+        raise ShardPublishError(
+            f"{pre_upload.name}: identidade final divergiu após confirmação: "
+            f"size={final.size}/{local.size} sha1={final.sha1}/{local.sha1}"
+        )
 
-    identity, _ = _ensure_sidecar(
-        session,
-        prefix,
-        output_dir,
-        materialization_id=expected_id,
-        artifact_name=final.name,
-        remote_size=final.size,
-        remote_sha1=final.sha1,
-        fetch_sidecar=fetch_sidecar,
-        hash_remote=hash_remote,
-        upload=upload,
-        local_artifact=local_artifact,
-        confirm_attempts=confirm_attempts,
-        sleep=sleep,
-    )
     artifact.path.unlink(missing_ok=True)
     return ShardPublishResult(
-        prefix,
-        final.name,
-        ShardPublishAction.UPLOADED,
-        expected_id,
-        identity.size,
-        identity.sha1,
-        identity.sha256,
+        prefix=prefix,
+        name=final.name,
+        action=ShardPublishAction.UPLOADED,
+        materialization_id=expected_id,
+        size=final.size,
+        sha1=final.sha1,
     )
 
 
@@ -379,8 +213,6 @@ def publish_shards(
     pinned_inputs: Mapping[str, str],
     fetch_metadata: MetadataFetch,
     fetch_meta: RemoteMetaFetch,
-    fetch_sidecar: SidecarFetch,
-    hash_remote: RemoteArtifactHash,
     upload: ShardUpload,
     prefixes: Iterable[str] | None = None,
     confirm_attempts: int = _CONFIRM_ATTEMPTS,
@@ -396,19 +228,17 @@ def publish_shards(
             pinned_inputs=pinned_inputs,
             fetch_metadata=fetch_metadata,
             fetch_meta=fetch_meta,
-            fetch_sidecar=fetch_sidecar,
-            hash_remote=hash_remote,
             upload=upload,
             confirm_attempts=confirm_attempts,
             sleep=sleep,
         )
         results.append(result)
         log.info(
-            "shard %s %s — %d bytes sha1=%s sha256=%s",
+            "shard %s %s — %d bytes sha1=%s materialization=%s",
             result.prefix,
             result.action,
             result.size,
             result.sha1,
-            result.sha256,
+            result.materialization_id,
         )
     return results
