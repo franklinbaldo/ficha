@@ -1,4 +1,4 @@
-"""Publicação retomável de shards de ``companies`` (#165/#175/#180/#185).
+"""Publicação retomável de shards de ``companies`` (#165/#175/#180/#185/#187).
 
 Um checkpoint é completo quando duas identidades independentes concordam:
 
@@ -13,8 +13,9 @@ não assinatura criptográfica. O ``materialization_id`` identifica a semântica
 O catálogo ``/metadata`` do IA é eventualmente consistente e já permaneceu
 stale por mais de seis minutos após um PUT aceito. Quando ele diz que o shard
 está ausente, fazemos uma reconciliação direta e somente-leitura do URL do ZIP:
-404 prova ausência; 200 é hasheado em streaming e cotejado com o ``_meta.json``.
-Qualquer outra resposta ou falha de rede é ambiguidade e falha fechado.
+404 prova ausência antes de uma escrita; 200 é hasheado em streaming e cotejado
+com o ``_meta.json``. Depois de um PUT, 404 significa apenas "ainda não visível"
+e recebe uma janela curta de retry direto antes do fallback ao catálogo.
 """
 
 from __future__ import annotations
@@ -49,8 +50,14 @@ DirectArtifactFetch = Callable[[str], LocalIdentity | None]
 
 # O item real ficha-2026-05 excedeu a antiga janela de ~132 s: um ZIP aceito
 # pelo IA só apareceu no metadata cerca de 5m44s depois. Com backoff linear de
-# 2s*n, 20 observações cobrem 380 s sem usar pending_tasks como gate.
+# 2s*n, 20 observações cobrem 380 s como fallback final.
 _CONFIRM_ATTEMPTS = 20
+# O run 31604659644 provou que ~7 s após o PUT ainda pode devolver 404 direto.
+# Tentamos por 75 s (5+10+15+20+25) antes de recorrer ao catálogo longo. Uma vez
+# que o ZIP aparece, fetch_remote_shard_meta() tem sua própria janela para o
+# `_meta.json` transparente do IA, preservando as duas provas do checkpoint.
+_POST_PUT_DIRECT_ATTEMPTS = 6
+_POST_PUT_DIRECT_BACKOFF_S = 5.0
 _HTTP_TIMEOUT = httpx.Timeout(connect=15.0, read=60.0, write=15.0, pool=15.0)
 _TRANSIENT_DIRECT_STATUS = frozenset({429, 500, 502, 503, 504})
 
@@ -209,6 +216,82 @@ def _reconcile_catalog_absent(
     return verdict
 
 
+def _confirm_direct_after_put(
+    prefix: str,
+    expected,
+    metadata: dict,
+    local: LocalIdentity,
+    *,
+    fetch_meta: RemoteMetaFetch,
+    fetch_direct: DirectArtifactFetch,
+    geometry=PUBLIC_COMPANIES_GEOMETRY,
+    attempts: int = _POST_PUT_DIRECT_ATTEMPTS,
+    sleep: Callable[[float], None] = time.sleep,
+) -> ShardReuseVerdict | None:
+    """Tenta fechar a pós-condição pelo objeto real antes do catálogo longo.
+
+    Depois que o PUT já ocorreu, uma observação temporariamente indisponível não
+    pode causar nova escrita: apenas esperamos e, esgotada a janela curta,
+    devolvemos ``None`` para o caminho de confirmação por metadata. Divergência
+    conhecida de bytes ou materialização continua sendo erro imediato.
+    """
+    if attempts < 1:
+        raise ValueError("attempts must be >= 1")
+
+    name = geometry.shard_name(prefix)
+    for attempt in range(1, attempts + 1):
+        try:
+            direct = fetch_direct(name)
+        except ShardPublishError as exc:
+            log.warning(
+                "%s ainda não observável diretamente após PUT (%d/%d): %s",
+                name,
+                attempt,
+                attempts,
+                exc,
+            )
+            direct = None
+
+        if direct is not None:
+            if direct.size != local.size or direct.sha1 != local.sha1:
+                raise ShardPublishError(
+                    f"{name}: objeto direto após PUT divergiu dos bytes locais: "
+                    f"size={direct.size}/{local.size} sha1={direct.sha1}/{local.sha1}"
+                )
+
+            projected = _metadata_with_direct_identity(metadata, name, direct)
+            verdict = classify_remote_shard(
+                prefix,
+                expected,
+                projected,
+                geometry=geometry,
+                fetch_meta=fetch_meta,
+            )
+            if verdict.state is ShardReuseState.REUSABLE:
+                return verdict
+            if verdict.state is ShardReuseState.MISMATCH:
+                raise ShardPublishError(
+                    f"{name}: materialização direta após PUT divergiu: {verdict.detail}"
+                )
+            log.warning(
+                "%s bytes diretos confirmados, mas materialização ainda %s; "
+                "voltando ao catálogo",
+                name,
+                verdict.state,
+            )
+            return None
+
+        if attempt < attempts:
+            sleep(_POST_PUT_DIRECT_BACKOFF_S * attempt)
+
+    log.warning(
+        "%s não apareceu no URL direto após %d tentativas; voltando ao catálogo",
+        name,
+        attempts,
+    )
+    return None
+
+
 def _reuse_result(prefix: str, name: str, materialization_id: str, size: int, sha1: str):
     return ShardPublishResult(
         prefix=prefix,
@@ -231,6 +314,7 @@ def publish_one_shard(
     upload: ShardUpload,
     fetch_direct: DirectArtifactFetch | None = None,
     confirm_attempts: int = _CONFIRM_ATTEMPTS,
+    post_put_direct_attempts: int = _POST_PUT_DIRECT_ATTEMPTS,
     sleep: Callable[[float], None] = time.sleep,
 ) -> ShardPublishResult:
     if session.geometry != PUBLIC_COMPANIES_GEOMETRY:
@@ -323,6 +407,29 @@ def publish_one_shard(
 
     upload(pre_upload.name, artifact.path)
 
+    direct_after_upload = _confirm_direct_after_put(
+        prefix,
+        expected,
+        pre_upload_metadata,
+        local,
+        fetch_meta=fetch_meta,
+        fetch_direct=fetch_direct,
+        geometry=session.geometry,
+        attempts=post_put_direct_attempts,
+        sleep=sleep,
+    )
+    if direct_after_upload is not None:
+        assert direct_after_upload.size is not None and direct_after_upload.sha1 is not None
+        artifact.path.unlink(missing_ok=True)
+        return ShardPublishResult(
+            prefix=prefix,
+            name=direct_after_upload.name,
+            action=ShardPublishAction.UPLOADED,
+            materialization_id=expected_id,
+            size=direct_after_upload.size,
+            sha1=direct_after_upload.sha1,
+        )
+
     if not confirm_remote_identity(
         pre_upload.name,
         local,
@@ -331,8 +438,9 @@ def publish_one_shard(
         sleep=sleep,
     ):
         # O PUT pode ter sido aceito mesmo que o catálogo continue stale. Antes
-        # de declarar falha, observamos os bytes reais. Isso não autoriza novo
-        # PUT: só converte a pós-condição em sucesso quando bytes + spec batem.
+        # de declarar falha, observamos os bytes reais uma última vez. Isso não
+        # autoriza novo PUT: só converte a pós-condição em sucesso quando bytes
+        # + spec batem.
         stale_metadata = _metadata_still_matches(pinned_inputs, fetch_metadata)
         stale_verdict = classify_remote_shard(
             prefix,
@@ -416,6 +524,7 @@ def publish_shards(
     fetch_direct: DirectArtifactFetch | None = None,
     prefixes: Iterable[str] | None = None,
     confirm_attempts: int = _CONFIRM_ATTEMPTS,
+    post_put_direct_attempts: int = _POST_PUT_DIRECT_ATTEMPTS,
     sleep: Callable[[float], None] = time.sleep,
 ) -> list[ShardPublishResult]:
     selected = prefixes if prefixes is not None else session.geometry.prefixes()
@@ -431,6 +540,7 @@ def publish_shards(
             upload=upload,
             fetch_direct=fetch_direct,
             confirm_attempts=confirm_attempts,
+            post_put_direct_attempts=post_put_direct_attempts,
             sleep=sleep,
         )
         results.append(result)
