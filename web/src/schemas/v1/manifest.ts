@@ -5,11 +5,23 @@ import { z } from 'zod';
  *
  * Ver ADR 0003 (versionamento) e ADR 0008 (estrutura de arquivos por snapshot).
  */
-const FileEntrySchema = z.object({
+const CurrentFileEntrySchema = z.object({
   url: z.string().url(),
-  sha256: z.string(),
+  // SHA-1 é o checksum operacional comparável diretamente com o catálogo do IA.
+  sha1: z.string().regex(/^[0-9a-f]{40}$/),
+  // SHA-256 continua disponível como digest forte para consumidores.
+  sha256: z.string().regex(/^[0-9a-f]{64}$/),
   size: z.number().int().nonnegative(),
 });
+
+// Compatibilidade de leitura com snapshots já publicados antes do contrato dual.
+const LegacySha256FileEntrySchema = z.object({
+  url: z.string().url(),
+  sha256: z.string().regex(/^[0-9a-f]{64}$/),
+  size: z.number().int().nonnegative(),
+});
+
+const FileEntrySchema = z.union([CurrentFileEntrySchema, LegacySha256FileEntrySchema]);
 
 const CompanyShardSchema = z.object({
   shard: z.string().regex(/^\d{2}$/),
@@ -71,11 +83,11 @@ export const SnapshotEntrySchema = z.object({
     // ausente; o manifest não deve afirmar que um arquivo existe se a URL
     // não responde.
     cnpj_contatos: FileEntrySchema.optional(),
-    cnpj_cnaes: FileEntrySchema.extend({ sort: z.array(z.string()) }).optional(),
+    cnpj_cnaes: FileEntrySchema.and(z.object({ sort: z.array(z.string()) })).optional(),
     raizes: FileEntrySchema,
     socios: FileEntrySchema,
-    enderecos: FileEntrySchema.extend({ sort: z.array(z.string()) }).optional(),
-    pessoas: FileEntrySchema.extend({ sort: z.array(z.string()) }).optional(),
+    enderecos: FileEntrySchema.and(z.object({ sort: z.array(z.string()) })).optional(),
+    pessoas: FileEntrySchema.and(z.object({ sort: z.array(z.string()) })).optional(),
     lookups: FileEntrySchema,
     // Camada atômica histórica: um ZIP monolítico. Continua opcional para
     // compatibilidade com snapshots que já existem (incluindo 2026-04).
