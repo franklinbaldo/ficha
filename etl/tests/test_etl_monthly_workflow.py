@@ -7,7 +7,8 @@ fronteiras que importam para correção/retomada:
 - descriptor de produção é persistido antes do upload dos derivados;
 - métricas continuam sobrevivendo a falhas do job de produção;
 - promoção só existe depois do gate de shards;
-- o manifest candidato é preservado antes do push em ``main``.
+- o manifest candidato é preservado antes do push em ``main``;
+- o modo automático resolve uma competência por vez, sem saltar para o latest.
 """
 
 from pathlib import Path
@@ -45,6 +46,22 @@ def test_workflow_is_valid_yaml_and_has_explicit_publication_phases() -> None:
 def test_produce_job_is_gated_by_resolved_freshness() -> None:
     condition = _job("produce")["if"]
     assert "needs.resolve.outputs.should_run == 'true'" in condition
+
+
+def test_auto_resolver_is_sequential_not_latest_upstream() -> None:
+    step = _step("resolve", "Resolve target month")
+    script = step["run"]
+    assert "python -m ficha_etl.publication_schedule" in script
+    assert "list-snapshots" in script
+    assert "sort | tail -n 1" not in script
+    assert '--current "$CURRENT"' in script
+    assert "--available-file .available-snapshots.txt" in script
+
+
+def test_workflow_documents_2026_06_as_automatic_baseline() -> None:
+    text = WORKFLOW_PATH.read_text(encoding="utf-8")
+    assert "baseline 2026-06" in text
+    assert "próxima competência publicável" in text
 
 
 def test_dry_run_stops_before_output_upload_and_promotion() -> None:

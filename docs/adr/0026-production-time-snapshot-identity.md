@@ -59,7 +59,21 @@ Reexecuções de submissão são fail-closed: se o nome remoto já existir, ele 
 pode ser reutilizado quando a identidade semântica e `size + sha1` forem
 exatamente iguais ao receipt local. Divergência nunca autoriza overwrite.
 
-## Primeiro uso
+## Primeiro uso e ordem de publicação
 
 `2026-06` é o primeiro snapshot que deve usar este fluxo integralmente. O
 retrofit de `2026-05` não é requisito para validar a arquitetura nova.
+
+No modo automático, `2026-06` também é o **baseline de publicação**. Enquanto o
+manifest público estiver em uma competência anterior, o único alvo permitido é
+`2026-06`. Depois disso, o alvo é sempre a competência imediatamente posterior
+a `current`.
+
+A existência de snapshots mais novos no upstream não autoriza saltos. Se o mês
+esperado ainda não existir, o workflow não faz nada. Se o mês esperado estiver
+ausente mas houver meses posteriores disponíveis, o resolver falha
+explicitamente: um buraco upstream não pode ser interpretado como autorização
+para mudar a sequência pública.
+
+Um `workflow_dispatch` com `month` explícito continua sendo uma operação manual
+e não usa essa seleção automática.
