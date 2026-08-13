@@ -3,10 +3,10 @@ import { fetchManifest, currentSnapshot } from './manifest';
 import type { Manifest } from '../schemas/v1/manifest';
 
 const SAMPLE_SNAPSHOT = {
-  date: '2026-04',
+  date: '2026-05',
   schema_version: '1.0.0',
   rfb_layout_date: null,
-  generated_at: '2026-04-27T03:00:00Z',
+  generated_at: '2026-05-27T03:00:00Z',
   generator: 'ficha-etl',
   row_counts: {
     cnpjs: 60_000_000,
@@ -16,27 +16,32 @@ const SAMPLE_SNAPSHOT = {
   },
   files: {
     cnpjs: {
-      url: 'https://archive.org/download/ficha-2026-04/cnpjs.parquet',
+      url: 'https://archive.org/download/ficha-2026-05/cnpjs.parquet',
+      sha1: '1'.repeat(40),
       sha256: 'a'.repeat(64),
       size: 3_000_000_000,
     },
     cnpj_contatos: {
-      url: 'https://archive.org/download/ficha-2026-04/cnpj_contatos.parquet',
+      url: 'https://archive.org/download/ficha-2026-05/cnpj_contatos.parquet',
+      sha1: '2'.repeat(40),
       sha256: 'e'.repeat(64),
       size: 200_000_000,
     },
     raizes: {
-      url: 'https://archive.org/download/ficha-2026-04/raizes.parquet',
+      url: 'https://archive.org/download/ficha-2026-05/raizes.parquet',
+      sha1: '3'.repeat(40),
       sha256: 'b'.repeat(64),
       size: 150_000_000,
     },
     socios: {
-      url: 'https://archive.org/download/ficha-2026-04/socios.parquet',
+      url: 'https://archive.org/download/ficha-2026-05/socios.parquet',
+      sha1: '4'.repeat(40),
       sha256: 'c'.repeat(64),
       size: 500_000_000,
     },
     lookups: {
-      url: 'https://archive.org/download/ficha-2026-04/lookups.json',
+      url: 'https://archive.org/download/ficha-2026-05/lookups.json',
+      sha1: '5'.repeat(40),
       sha256: 'd'.repeat(64),
       size: 50_000,
     },
@@ -44,8 +49,20 @@ const SAMPLE_SNAPSHOT = {
 };
 
 const SAMPLE_MANIFEST = {
-  current: '2026-04',
+  current: '2026-05',
   snapshots: [SAMPLE_SNAPSHOT],
+};
+
+const LEGACY_2026_04 = {
+  ...SAMPLE_SNAPSHOT,
+  date: '2026-04',
+  generated_at: '2026-04-27T03:00:00Z',
+  files: Object.fromEntries(
+    Object.entries(SAMPLE_SNAPSHOT.files).map(([name, entry]) => {
+      const { sha1: _sha1, ...legacy } = entry;
+      return [name, legacy];
+    })
+  ),
 };
 
 describe('fetchManifest', () => {
@@ -55,14 +72,27 @@ describe('fetchManifest', () => {
     globalThis.fetch = originalFetch;
   });
 
-  it('parses a valid manifest', async () => {
+  it('parses current entries with sha1 + sha256', async () => {
     globalThis.fetch = vi.fn(async () =>
       new Response(JSON.stringify(SAMPLE_MANIFEST), { status: 200 })
     ) as typeof fetch;
     const m = await fetchManifest();
     expect(m).not.toBeNull();
-    expect(m!.current).toBe('2026-04');
+    expect(m!.current).toBe('2026-05');
     expect(m!.snapshots.length).toBe(1);
+    expect(m!.snapshots[0].files.cnpjs).toMatchObject({
+      sha1: '1'.repeat(40),
+      sha256: 'a'.repeat(64),
+    });
+  });
+
+  it('temporarily accepts sha256-only legacy snapshots', async () => {
+    const legacyManifest = { current: '2026-04', snapshots: [LEGACY_2026_04] };
+    globalThis.fetch = vi.fn(async () =>
+      new Response(JSON.stringify(legacyManifest), { status: 200 })
+    ) as typeof fetch;
+    const m = await fetchManifest();
+    expect(m?.current).toBe('2026-04');
   });
 
   it('returns null on 404 (manifest não publicado ainda)', async () => {
@@ -82,7 +112,7 @@ describe('fetchManifest', () => {
   });
 
   it('throws when schema validation fails', async () => {
-    const broken = { current: '2026-04', snapshots: [{ date: 'oops' }] };
+    const broken = { current: '2026-05', snapshots: [{ date: 'oops' }] };
     globalThis.fetch = vi.fn(async () =>
       new Response(JSON.stringify(broken), { status: 200 })
     ) as typeof fetch;
@@ -100,7 +130,7 @@ describe('fetchManifest', () => {
 describe('currentSnapshot', () => {
   it('returns the snapshot matching `current`', () => {
     const m: Manifest = SAMPLE_MANIFEST as Manifest;
-    expect(currentSnapshot(m)?.date).toBe('2026-04');
+    expect(currentSnapshot(m)?.date).toBe('2026-05');
   });
 
   it('returns null when current points to a non-existent snapshot', () => {
