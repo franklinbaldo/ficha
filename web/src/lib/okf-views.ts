@@ -1,10 +1,27 @@
 import type * as duckdb from '@duckdb/duckdb-wasm';
 import { okfConvenienceViews } from '../generated/ficha-okf.views';
+import { getOkfParquetRowSchema } from './okf-row-schemas';
 
 export function getOkfConvenienceView(name: string) {
   const view = okfConvenienceViews.find((item) => item.name === name);
   if (!view) throw new Error(`Unknown OKF convenience view: ${name}`);
   return view;
+}
+
+export function validateOkfConvenienceViewRows(name: string, rows: readonly unknown[]) {
+  const view = getOkfConvenienceView(name);
+  const schema = getOkfParquetRowSchema(view.output);
+  return rows.map((row, index) => {
+    const parsed = schema.safeParse(row);
+    if (!parsed.success) {
+      const detail = parsed.error.issues
+        .slice(0, 3)
+        .map((issue) => `${issue.path.join('.') || '<row>'}: ${issue.message}`)
+        .join('; ');
+      throw new Error(`OKF view ${name} returned invalid ${view.output} row ${index}: ${detail}`);
+    }
+    return parsed.data;
+  });
 }
 
 export async function queryOkfConvenienceView(db: duckdb.AsyncDuckDB, name: string) {
