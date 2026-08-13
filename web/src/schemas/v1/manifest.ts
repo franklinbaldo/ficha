@@ -5,21 +5,23 @@ import { z } from 'zod';
  *
  * Ver ADR 0003 (versionamento) e ADR 0008 (estrutura de arquivos por snapshot).
  */
-const Sha1FileEntrySchema = z.object({
+const CurrentFileEntrySchema = z.object({
   url: z.string().url(),
+  // SHA-1 é o checksum operacional comparável diretamente com o catálogo do IA.
   sha1: z.string().regex(/^[0-9a-f]{40}$/),
+  // SHA-256 continua disponível como digest forte para consumidores.
+  sha256: z.string().regex(/^[0-9a-f]{64}$/),
   size: z.number().int().nonnegative(),
 });
 
-// Compatibilidade de leitura com snapshots já publicados antes da migração para
-// SHA-1. O gerador atual só produz Sha1FileEntrySchema.
+// Compatibilidade de leitura com snapshots já publicados antes do contrato dual.
 const LegacySha256FileEntrySchema = z.object({
   url: z.string().url(),
   sha256: z.string().regex(/^[0-9a-f]{64}$/),
   size: z.number().int().nonnegative(),
 });
 
-const FileEntrySchema = z.union([Sha1FileEntrySchema, LegacySha256FileEntrySchema]);
+const FileEntrySchema = z.union([CurrentFileEntrySchema, LegacySha256FileEntrySchema]);
 
 const CompanyShardSchema = z.object({
   shard: z.string().regex(/^\d{2}$/),
