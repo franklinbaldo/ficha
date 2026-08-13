@@ -48,19 +48,27 @@ Padrões adicionais ficam em `experiments/` como hipóteses até a UI demandar:
 
 ## Manifest
 
-`web/public/manifest.json` registra os três Parquets + lookups por snapshot:
+`web/public/manifest.json` registra os arquivos por snapshot com **duas identidades de bytes**:
+
+- `sha1`: checksum operacional calculado na produção e comparável diretamente com o catálogo do Internet Archive;
+- `sha256`: digest forte preservado para consumidores e verificações independentes;
+- `size`: tamanho exato em bytes.
+
+A identidade nasce junto com a produção do snapshot, antes do upload. A promoção posterior não deve redescobrir hashes: ela compara o objeto remoto com a identidade já fechada e, quando tudo estiver observável, promove a mesma entrada ao manifesto público.
+
+Snapshots históricos produzidos antes desta decisão podem permanecer temporariamente `sha256`-only até serem regenerados; isso é compatibilidade de leitura, não o contrato desejado para novas competências.
 
 ```json
 {
-  "current": "2026-01",
+  "current": "2026-05",
   "snapshots": [{
-    "date": "2026-01",
+    "date": "2026-05",
     "schema_version": "1.0.0",
     "files": {
-      "cnpjs":   { "url": "...cnpjs.parquet",   "sha256": "...", "size": 3000000000 },
-      "raizes":  { "url": "...raizes.parquet",  "sha256": "...", "size": 150000000 },
-      "socios":  { "url": "...socios.parquet",  "sha256": "...", "size": 500000000 },
-      "lookups": { "url": "...lookups.json",    "sha256": "...", "size": 50000 }
+      "cnpjs":   { "url": "...cnpjs.parquet",   "sha1": "...", "sha256": "...", "size": 3000000000 },
+      "raizes":  { "url": "...raizes.parquet",  "sha1": "...", "sha256": "...", "size": 150000000 },
+      "socios":  { "url": "...socios.parquet",  "sha1": "...", "sha256": "...", "size": 500000000 },
+      "lookups": { "url": "...lookups.json",    "sha1": "...", "sha256": "...", "size": 50000 }
     }
   }]
 }
@@ -68,6 +76,8 @@ Padrões adicionais ficam em `experiments/` como hipóteses até a UI demandar:
 
 ## Alternativas consideradas e rejeitadas
 
+- **SHA-256 como único hash de publicação** — não é comparável diretamente com o checksum nativo que o Internet Archive expõe no catálogo; obrigaria reler bytes remotos apenas para provar identidade.
+- **SHA-1 como único hash** — facilitaria a reconciliação com o Internet Archive, mas removeria o digest forte já útil aos consumidores.
 - **Partitioning por UF / por raiz_prefix** — ver [ADR 0011](0011-no-partitioning.md).
 - **Parquet único monolítico** — força full-scan da coluna `razao_social` (~200MB+) em qualquer busca por nome.
 - **Tabela única por entidade RFB (mesmo layout do dump)** — força joins no client, performance pior que denormalizado.
