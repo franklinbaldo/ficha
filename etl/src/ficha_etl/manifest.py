@@ -1,21 +1,21 @@
-"""Geração e atualização de web/public/manifest.json.
+"""Geração do descriptor de produção e do manifest público.
 
-O manifest é o contrato entre o ETL e o frontend:
-  - lista todos os snapshots disponíveis no Internet Archive
-  - aponta qual é o mais recente (`current`)
-  - traz URLs, checksums, tamanhos e row counts de cada arquivo
+A identidade de um snapshot nasce enquanto os bytes ainda são locais. O
+``production descriptor`` registra ``size + sha1 + sha256`` e row counts antes
+de qualquer upload. A promoção posterior só acrescenta os shards de
+``companies`` já produzidos/verificados e publica exatamente essa identidade.
 
-Novas entradas de arquivo preservam SHA-256 e também registram SHA-1. O SHA-1
-é o checksum operacional usado para comparação direta com o catálogo do
+O SHA-1 é o checksum operacional comparável diretamente com o catálogo do
 Internet Archive; o SHA-256 continua disponível como digest forte para
-consumidores. A identidade semântica dos shards de ``companies`` segue
-validada separadamente pelo ``MaterializationSpec``.
+consumidores. A identidade semântica dos shards segue validada separadamente
+pelo ``MaterializationSpec``.
 
-Schema: web/src/schemas/v1/manifest.ts (ManifestSchema / SnapshotEntrySchema).
+Schema público: web/src/schemas/v1/manifest.ts.
 """
 
 from __future__ import annotations
 
+import copy
 import datetime
 import hashlib
 import json
@@ -27,7 +27,13 @@ from pathlib import Path
 import duckdb
 import httpx
 
-from .mirror import lookup_parquet_url, lookups_url, parquet_url, raw_file_url
+from .mirror import (
+    companies_shard_url,
+    lookup_parquet_url,
+    lookups_url,
+    parquet_url,
+    raw_file_url,
+)
 from .shard_remote import PUBLIC_COMPANIES_GEOMETRY
 from .transform import _LOOKUP_KINDS
 
@@ -41,7 +47,7 @@ GENERATOR = "ficha-etl"
 
 @dataclass(frozen=True)
 class CompanyShardIdentity:
-    """Identidade remota já verificada de um ``companies-NN.zip``."""
+    """Identidade de bytes já fechada de um ``companies-NN.zip``."""
 
     shard: str
     name: str
@@ -90,7 +96,7 @@ def _is_lower_hex(value: str, length: int) -> bool:
 
 
 def _companies_sharded_entry(month: str, shards: Iterable[CompanyShardIdentity]) -> dict:
-    """Converte 100 identidades remotas confirmadas no contrato público."""
+    """Converte 100 identidades fechadas no contrato público."""
     geometry = PUBLIC_COMPANIES_GEOMETRY
     by_prefix: dict[str, CompanyShardIdentity] = {}
     for shard in shards:
@@ -119,7 +125,7 @@ def _companies_sharded_entry(month: str, shards: Iterable[CompanyShardIdentity])
         "shards": [
             {
                 "shard": prefix,
-                "url": raw_file_url(month, by_prefix[prefix].name),
+                "url": companies_shard_url(month, by_prefix[prefix].name),
                 "sha1": by_prefix[prefix].sha1,
                 "size": by_prefix[prefix].size,
             }
@@ -128,21 +134,13 @@ def _companies_sharded_entry(month: str, shards: Iterable[CompanyShardIdentity])
     }
 
 
-def build_snapshot_entry(
-    month: str,
-    output_dir: Path,
-    *,
-    company_shards: Iterable[CompanyShardIdentity] | None = None,
-) -> dict:
-    """Constrói um SnapshotEntry conforme ManifestSchema.
+def build_production_descriptor(month: str, output_dir: Path) -> dict:
+    """Fecha a identidade dos outputs locais antes de qualquer upload.
 
-    Args:
-        month: snapshot no formato YYYY-MM.
-        output_dir: diretório com todos os parquets produzidos pelo transform
-                    e lookups.json + lookups/*.parquet.
-        company_shards: quando fornecidos, substituem o ``companies.zip``
-                    monolítico pelo conjunto completo de shards 00..99 já
-                    verificados no Internet Archive.
+    O resultado já contém tudo que é imutável no snapshot exceto os shards de
+    ``companies``, cuja identidade nasce individualmente quando cada ZIP é
+    materializado. Ele deve ser persistido imediatamente pela orquestração.
+    Nenhuma etapa posterior deve recalcular o SHA esperado a partir do remoto.
     """
     cnpjs = output_dir / "cnpjs.parquet"
     cnpj_contatos = output_dir / "cnpj_contatos.parquet"
@@ -152,7 +150,6 @@ def build_snapshot_entry(
     enderecos = output_dir / "enderecos.parquet"
     pessoas = output_dir / "pessoas.parquet"
     lookups = output_dir / "lookups.json"
-    companies_zip = output_dir / "companies.zip"
 
     required = (
         cnpjs,
@@ -166,15 +163,12 @@ def build_snapshot_entry(
     )
     for path in required:
         if not path.exists():
-            raise FileNotFoundError(f"arquivo ausente para manifest: {path}")
-
-    if company_shards is None and not companies_zip.exists():
-        raise FileNotFoundError(f"arquivo ausente para manifest: {companies_zip}")
+            raise FileNotFoundError(f"arquivo ausente para descriptor: {path}")
 
     for kind in _LOOKUP_KINDS:
         parquet_path = output_dir / "lookups" / f"{kind}.parquet"
         if not parquet_path.exists():
-            raise FileNotFoundError(f"arquivo ausente para manifest: {parquet_path}")
+            raise FileNotFoundError(f"arquivo ausente para descriptor: {parquet_path}")
 
     log.info("computing row counts for %s", month)
     row_counts = {
@@ -208,11 +202,6 @@ def build_snapshot_entry(
         },
         "lookups": _file_entry(lookups, lookups_url(month)),
     }
-    if company_shards is None:
-        files["companies_zip"] = _file_entry(companies_zip, raw_file_url(month, "companies.zip"))
-    else:
-        files["companies"] = _companies_sharded_entry(month, company_shards)
-
     lookup_files = {
         kind: _file_entry(
             output_dir / "lookups" / f"{kind}.parquet",
@@ -231,6 +220,58 @@ def build_snapshot_entry(
         "files": files,
         "lookups": lookup_files,
     }
+
+
+def finalize_sharded_snapshot_entry(
+    production_descriptor: dict,
+    company_shards: Iterable[CompanyShardIdentity],
+) -> dict:
+    """Acrescenta shards ao descriptor sem recalcular identidade já produzida."""
+    entry = copy.deepcopy(production_descriptor)
+    month = entry.get("date")
+    if not isinstance(month, str):
+        raise ValueError("production descriptor missing date")
+    files = entry.get("files")
+    if not isinstance(files, dict):
+        raise ValueError("production descriptor missing files")
+    if "companies" in files or "companies_zip" in files:
+        raise ValueError("production descriptor already contains companies artifact")
+    files["companies"] = _companies_sharded_entry(month, company_shards)
+    return entry
+
+
+def write_production_descriptor(path: Path, descriptor: dict) -> None:
+    """Persiste o recibo de produção em JSON canônico legível."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(descriptor, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+
+def build_snapshot_entry(
+    month: str,
+    output_dir: Path,
+    *,
+    company_shards: Iterable[CompanyShardIdentity] | None = None,
+) -> dict:
+    """Constrói um SnapshotEntry conforme ManifestSchema.
+
+    Mantém o caminho monolítico apenas para compatibilidade. Publicações novas
+    devem usar ``build_production_descriptor`` durante a produção e
+    ``finalize_sharded_snapshot_entry`` depois da verificação dos shards.
+    """
+    descriptor = build_production_descriptor(month, output_dir)
+    if company_shards is not None:
+        return finalize_sharded_snapshot_entry(descriptor, company_shards)
+
+    companies_zip = output_dir / "companies.zip"
+    if not companies_zip.exists():
+        raise FileNotFoundError(f"arquivo ausente para manifest: {companies_zip}")
+    descriptor["files"]["companies_zip"] = _file_entry(
+        companies_zip, raw_file_url(month, "companies.zip")
+    )
+    return descriptor
 
 
 def verify_snapshot_files(snapshot_entry: dict) -> list[str]:

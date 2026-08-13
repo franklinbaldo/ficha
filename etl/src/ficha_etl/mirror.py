@@ -9,6 +9,7 @@ Cada snapshot mensal vive num item `ficha-YYYY-MM` no IA. Estrutura interna:
         Socios0.zip ... Socios9.zip
         Simples.zip Cnaes.zip Motivos.zip Municipios.zip
         Naturezas.zip Paises.zip Qualificacoes.zip
+      companies-00.zip ... companies-99.zip
       cnpjs.parquet
       raizes.parquet
       socios.parquet
@@ -53,6 +54,15 @@ def item_root(month: str) -> str:
 def raw_file_url(month: str, filename: str) -> str:
     """URL do ZIP cru (mirror RFB) dentro do item."""
     return f"{item_root(month)}/raw/{filename}"
+
+
+def companies_shard_url(month: str, filename: str) -> str:
+    """URL de um shard ``companies-NN.zip`` na raiz do item IA.
+
+    Shards derivados não pertencem a ``raw/``: esse prefixo é reservado aos
+    37 ZIPs originais espelhados da Receita Federal.
+    """
+    return f"{item_root(month)}/{filename}"
 
 
 def parquet_url(month: str, name: str) -> str:
