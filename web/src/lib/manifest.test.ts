@@ -80,7 +80,9 @@ describe('fetchManifest', () => {
     expect(m).not.toBeNull();
     expect(m!.current).toBe('2026-05');
     expect(m!.snapshots.length).toBe(1);
-    expect(m!.snapshots[0].files.cnpjs).toMatchObject({
+    const snapshot = m!.snapshots[0];
+    expect(snapshot).toBeDefined();
+    expect(snapshot!.files.cnpjs).toMatchObject({
       sha1: '1'.repeat(40),
       sha256: 'a'.repeat(64),
     });
