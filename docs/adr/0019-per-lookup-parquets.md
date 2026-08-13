@@ -35,6 +35,16 @@ leitura.
 síncrono; os parquets servem composição SQL (`JOIN lookup_<kind>`). Custo de
 duplicação é irrelevante (< 1 MB no total).
 
+Como qualquer outro artefato publicado do snapshot, cada lookup parquet nasce
+com identidade de bytes completa no manifest:
+
+- `size` — tamanho exato;
+- `sha1` — checksum operacional para comparação direta com o catálogo do Internet Archive;
+- `sha256` — digest forte preservado para consumidores e auditoria independente.
+
+Entradas históricas URL-only continuam legíveis apenas como compatibilidade.
+Novas competências não devem produzir lookup parquet sem os dois hashes.
+
 ## Frontend
 
 `attachLookups(db, manifest)` (`web/src/lib/analytical.ts:47`) registra os
@@ -48,10 +58,15 @@ WHERE m.descricao_normalizada LIKE 'BRAS%'
 LIMIT 50
 ```
 
+O frontend continua consumindo `info.url`; os campos de identidade ampliam o
+contrato de publicação sem alterar o caminho de query.
+
 ## Consequências
 
 - ✅ Filtro/agregação por descrição sem tradução client-side prévia.
 - ✅ `lookups.json` mantido — nenhuma mudança no caminho de render existente.
+- ✅ Lookup parquet pode ser reconciliado com o IA por `size + sha1`, sem reler bytes remotos.
+- ✅ SHA-256 continua disponível aos consumidores.
 - ⚠️ +6 writes no phase 3 do ETL, cada um trivial (poucas centenas de linhas).
 - Manifest ganha o mapa `lookups: {cnaes: {...}, motivos: {...}, ...}`
   (`manifest.py`), separado da entrada `files.lookups` (o JSON).
