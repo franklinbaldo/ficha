@@ -12,7 +12,7 @@ import { okfConvenienceViews } from '../generated/ficha-okf.views';
     <main>
       <p class="eyebrow">Experimento OKF + DuckDB-WASM</p>
       <h1>Views declaradas</h1>
-      <p class="intro">Estas queries vêm do bundle OKF. A página executa apenas uma amostra de cinco linhas; os Parquets publicados continuam sendo os dados consultados.</p>
+      <p class="intro">Estas queries vêm do bundle OKF. A página executa apenas uma amostra de cinco linhas; os Parquets publicados continuam sendo os dados consultados. Cada linha retornada é validada contra o Zod projetado do mesmo contrato OKF.</p>
       <p id="status" role="status">Preparando relações…</p>
 
       <section class="views" aria-label="Views disponíveis">
@@ -35,7 +35,10 @@ import { okfConvenienceViews } from '../generated/ficha-okf.views';
     <script>
       // @ts-nocheck -- página experimental; as fronteiras de dados ficam tipadas em lib/.
       import { createOkfLab } from '../lib/okf-lab';
-      import { previewOkfConvenienceView } from '../lib/okf-views';
+      import {
+        previewOkfConvenienceView,
+        validateOkfConvenienceViewRows,
+      } from '../lib/okf-views';
 
       const status = document.getElementById('status');
       const error = document.getElementById('error');
@@ -49,9 +52,10 @@ import { okfConvenienceViews } from '../generated/ficha-okf.views';
         return String(value);
       }
 
-      function render(table) {
+      function render(name, table) {
         const columns = table.schema.fields.slice(0, 5).map((field) => field.name);
-        const rows = table.toArray().map((row) => row.toJSON());
+        const rawRows = table.toArray().map((row) => row.toJSON());
+        const rows = validateOkfConvenienceViewRows(name, rawRows);
         if (rows.length === 0) {
           result.textContent = 'A amostra não retornou linhas.';
           return;
@@ -82,10 +86,10 @@ import { okfConvenienceViews } from '../generated/ficha-okf.views';
             const name = button.dataset.view;
             if (!name) return;
             error.hidden = true;
-            result.textContent = 'Consultando…';
+            result.textContent = 'Consultando e validando…';
             for (const item of buttons) item.disabled = true;
             try {
-              render(await previewOkfConvenienceView(db, name, 5));
+              render(name, await previewOkfConvenienceView(db, name, 5));
             } catch (cause) {
               error.textContent = cause instanceof Error ? cause.message : String(cause);
               error.hidden = false;
