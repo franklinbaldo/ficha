@@ -213,6 +213,14 @@ def build_snapshot_entry(
     else:
         files["companies"] = _companies_sharded_entry(month, company_shards)
 
+    lookup_files = {
+        kind: _file_entry(
+            output_dir / "lookups" / f"{kind}.parquet",
+            lookup_parquet_url(month, kind),
+        )
+        for kind in _LOOKUP_KINDS
+    }
+
     return {
         "date": month,
         "schema_version": SCHEMA_VERSION,
@@ -221,7 +229,7 @@ def build_snapshot_entry(
         "generator": GENERATOR,
         "row_counts": row_counts,
         "files": files,
-        "lookups": {kind: {"url": lookup_parquet_url(month, kind)} for kind in _LOOKUP_KINDS},
+        "lookups": lookup_files,
     }
 
 
