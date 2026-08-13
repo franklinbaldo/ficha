@@ -5,11 +5,11 @@ O manifest é o contrato entre o ETL e o frontend:
   - aponta qual é o mais recente (`current`)
   - traz URLs, checksums, tamanhos e row counts de cada arquivo
 
-Novas entradas de arquivo usam SHA-1 de forma uniforme, alinhada ao checksum que
-o Internet Archive calcula e expõe no catálogo. Isso permite fechar a identidade
-de publicação por comparação direta ``size + sha1`` sem rebaixar arquivos para
-um contrato distinto dos shards de ``companies``. A identidade semântica dos
-shards continua validada separadamente pelo ``MaterializationSpec``.
+Novas entradas de arquivo preservam SHA-256 e também registram SHA-1. O SHA-1
+é o checksum operacional usado para comparação direta com o catálogo do
+Internet Archive; o SHA-256 continua disponível como digest forte para
+consumidores. A identidade semântica dos shards de ``companies`` segue
+validada separadamente pelo ``MaterializationSpec``.
 
 Schema: web/src/schemas/v1/manifest.ts (ManifestSchema / SnapshotEntrySchema).
 """
@@ -58,6 +58,15 @@ def _sha1(path: Path) -> str:
     return h.hexdigest()
 
 
+def _sha256(path: Path) -> str:
+    """SHA-256 hex de um arquivo local (leitura em blocos de 64 KB)."""
+    h = hashlib.sha256()
+    with path.open("rb") as f:
+        for chunk in iter(lambda: f.read(65_536), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
 def _row_count(parquet_path: Path) -> int:
     """Conta linhas de um Parquet via DuckDB (leitura local, sem copiar)."""
     con = duckdb.connect()
@@ -71,6 +80,7 @@ def _file_entry(path: Path, url: str) -> dict:
     return {
         "url": url,
         "sha1": _sha1(path),
+        "sha256": _sha256(path),
         "size": path.stat().st_size,
     }
 
@@ -178,7 +188,7 @@ def build_snapshot_entry(
     }
     log.info("row counts: %s", row_counts)
 
-    log.info("computing SHA-1 hashes for local snapshot files")
+    log.info("computing SHA-1 + SHA-256 hashes for local snapshot files")
     files: dict[str, object] = {
         "cnpjs": _file_entry(cnpjs, parquet_url(month, "cnpjs")),
         "cnpj_contatos": _file_entry(cnpj_contatos, parquet_url(month, "cnpj_contatos")),
