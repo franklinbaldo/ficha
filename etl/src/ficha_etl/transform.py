@@ -1444,41 +1444,72 @@ def write_cnpj_contatos_parquet(
     )
 
 
+def _has_lookup_table(con: duckdb.DuckDBPyConnection, table: str) -> bool:
+    """Return whether an optional lookup table is available.
+
+    Production loads all lookups before analytical writes. Standalone callers
+    may exercise a writer without them; those calls still emit the description
+    column as NULL instead of failing the whole materialization.
+    """
+    row = con.execute(
+        "SELECT 1 FROM duckdb_tables() WHERE table_name = ? LIMIT 1", [table]
+    ).fetchone()
+    return row is not None
+
+
 def write_cnpj_cnaes_parquet(
     con: duckdb.DuckDBPyConnection,
     output_path: Path,
 ) -> None:
-    """Produz `cnpj_cnaes.parquet`: tabela associativa para buscas reversas por CNAE."""
+    """Produz `cnpj_cnaes.parquet`: índice reverso autocontido por CNAE.
+
+    O lookup parquet de CNAE continua existindo como projeção auxiliar barata,
+    mas cada associação carrega também a descrição para que consumidores não
+    precisem de join só para interpretar/renderizar o resultado.
+    """
     output_path.parent.mkdir(parents=True, exist_ok=True)
     log.info("writing %s", output_path.name)
 
+    has_lookup = _has_lookup_table(con, "lookup_cnaes")
+    description_sql = "l.descricao" if has_lookup else "NULL::VARCHAR"
+    join_sql = "LEFT JOIN lookup_cnaes l ON l.codigo = a.cnae_codigo" if has_lookup else ""
     con.execute(f"""
         COPY (
+          WITH associations AS (
+            SELECT
+              cnpj_basico || cnpj_ordem || cnpj_dv AS cnpj,
+              cnpj_basico AS cnpj_base,
+              cnae_fiscal_principal AS cnae_codigo,
+              0::INTEGER AS posicao
+            FROM estabelecimento
+            WHERE cnae_fiscal_principal IS NOT NULL
+              AND cnae_fiscal_principal <> ''
+            UNION ALL
+            SELECT
+              cnpj_basico || cnpj_ordem || cnpj_dv,
+              cnpj_basico,
+              trim(s.value) AS cnae_codigo,
+              s.idx::INTEGER AS posicao
+            FROM estabelecimento,
+                 LATERAL (
+                   SELECT idx, unnest AS value
+                   FROM (
+                     SELECT generate_subscripts(arr, 1) AS idx, unnest(arr) AS unnest
+                     FROM (SELECT str_split(cnae_fiscal_secundaria, ',') AS arr) t
+                   )
+                 ) s
+            WHERE cnae_fiscal_secundaria IS NOT NULL
+              AND cnae_fiscal_secundaria <> ''
+          )
           SELECT
-            cnpj_basico || cnpj_ordem || cnpj_dv AS cnpj,
-            cnpj_basico AS cnpj_base,
-            cnae_fiscal_principal AS cnae_codigo,
-            0::INTEGER AS posicao
-          FROM estabelecimento
-          WHERE cnae_fiscal_principal IS NOT NULL
-            AND cnae_fiscal_principal <> ''
-          UNION ALL
-          SELECT
-            cnpj_basico || cnpj_ordem || cnpj_dv,
-            cnpj_basico,
-            trim(s.value) AS cnae_codigo,
-            s.idx::INTEGER AS posicao
-          FROM estabelecimento,
-               LATERAL (
-                 SELECT idx, unnest AS value
-                 FROM (
-                   SELECT generate_subscripts(arr, 1) AS idx, unnest(arr) AS unnest
-                   FROM (SELECT str_split(cnae_fiscal_secundaria, ',') AS arr) t
-                 )
-               ) s
-          WHERE cnae_fiscal_secundaria IS NOT NULL
-            AND cnae_fiscal_secundaria <> ''
-          ORDER BY cnae_codigo, posicao, cnpj_base
+            a.cnpj,
+            a.cnpj_base,
+            a.cnae_codigo,
+            {description_sql} AS cnae_descricao,
+            a.posicao
+          FROM associations a
+          {join_sql}
+          ORDER BY a.cnae_codigo, a.posicao, a.cnpj_base
         ) TO '{output_path}' (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 200000)
     """)
 
@@ -1502,10 +1533,12 @@ def write_enderecos_parquet(
     con: duckdb.DuckDBPyConnection,
     output_path: Path,
 ) -> None:
-    """Produz `enderecos.parquet`: reverse lookup por endereço e município.
+    """Produz `enderecos.parquet`: reverse lookup autocontido por endereço e município.
 
     Ordenado por (uf, municipio_codigo, logradouro_normalizado, numero) para que
     buscas por UF+município e logradouro usem min/max row-group pruning.
+    `municipio_nome` é denormalizado do lookup pequeno; o lookup parquet continua
+    auxiliar e nunca é necessário só para interpretar uma linha de endereço.
     Ver docs/perf-plan-2026-05.md §7 e ADR 0023.
 
     Normalização vetorizada: CTE computa a base normalizada uma vez por linha
@@ -1515,9 +1548,12 @@ def write_enderecos_parquet(
     """
     output_path.parent.mkdir(parents=True, exist_ok=True)
     log.info("    writing enderecos.parquet...")
-    # Build MAP literal: MAP {'R': 'RUA ', 'AV': 'AVENIDA ', ...}
-    # Trailing space in values avoids re-adding a separator on concatenation.
     abbrev_map = "MAP {" + ", ".join(f"'{k}': '{v} '" for k, v in _LOGRADOURO_ABBREVS.items()) + "}"
+    has_lookup = _has_lookup_table(con, "lookup_municipios")
+    municipio_name_sql = "mun.descricao" if has_lookup else "NULL::VARCHAR"
+    municipio_join_sql = (
+        "LEFT JOIN lookup_municipios mun ON mun.codigo = est.municipio" if has_lookup else ""
+    )
     con.execute(
         rf"""
         COPY (
@@ -1525,6 +1561,7 @@ def write_enderecos_parquet(
                 SELECT
                     est.uf,
                     est.municipio AS municipio_codigo,
+                    {municipio_name_sql} AS municipio_nome,
                     UPPER(strip_accents(TRIM(
                         regexp_replace(est.logradouro, '\s+', ' ', 'g')
                     ))) AS _logr,
@@ -1533,12 +1570,14 @@ def write_enderecos_parquet(
                     est.bairro,
                     est.cnpj_basico || est.cnpj_ordem || est.cnpj_dv AS cnpj
                 FROM estabelecimento est
+                {municipio_join_sql}
                 WHERE est.logradouro IS NOT NULL AND est.logradouro <> ''
                   AND est.uf IS NOT NULL AND est.uf <> ''
             )
             SELECT
                 uf,
                 municipio_codigo,
+                municipio_nome,
                 COALESCE(
                     {abbrev_map}[regexp_extract(_logr, '^([A-Z]+)\.?\s+', 1)]
                     || regexp_replace(_logr, '^[A-Z]+\.?\s+', ''),
@@ -1559,27 +1598,32 @@ def write_pessoas_parquet(
     con: duckdb.DuckDBPyConnection,
     output_path: Path,
 ) -> None:
-    """Produz `pessoas.parquet`: reverse lookup PF por CPF mascarado + nome.
+    """Produz `pessoas.parquet`: reverse lookup PF autocontido por pessoa.
 
-    Grain: (cpf_mascarado, nome_normalizado, faixa_etaria, cnpj_base, papel) — uma
-    linha por vínculo pessoa×empresa×papel. A mesma pessoa aparece N vezes se for
-    sócia em N empresas; o sort por (cpf_mascarado, nome_normalizado) agrupa
-    todas as linhas de uma pessoa para leitura eficiente.
-
-    faixa_etaria é atributo da pessoa (não do vínculo) e serve para desambiguar
-    homônimos com o mesmo CPF mascarado e nome. NULL para representantes (a RFB
-    não publica esse campo em representante_legal_*).
-
-    data_entrada_sociedade é do vínculo e permanece em socios.parquet.
-
-    Ver ADR 0024.
+    Grain: (cpf_mascarado, nome_normalizado, faixa_etaria, cnpj_base, papel).
+    `qualificacao_descricao` é denormalizada do lookup pequeno para evitar join
+    de interpretação/renderização; o lookup parquet permanece projeção auxiliar.
+    faixa_etaria é NULL para representantes porque a RFB não publica o campo.
+    data_entrada_sociedade permanece em socios.parquet. Ver ADR 0024.
     """
     output_path.parent.mkdir(parents=True, exist_ok=True)
     log.info("    writing pessoas.parquet...")
+    has_lookup = _has_lookup_table(con, "lookup_qualificacoes")
+    socio_description_sql = "q.descricao" if has_lookup else "NULL::VARCHAR"
+    socio_join_sql = (
+        "LEFT JOIN lookup_qualificacoes q ON q.codigo = soc.qualificacao_socio"
+        if has_lookup
+        else ""
+    )
+    representante_description_sql = "q.descricao" if has_lookup else "NULL::VARCHAR"
+    representante_join_sql = (
+        "LEFT JOIN lookup_qualificacoes q ON q.codigo = soc.qualificacao_representante_legal"
+        if has_lookup
+        else ""
+    )
     con.execute(
-        """
+        f"""
         COPY (
-            -- Sócios PF brasileiros: identificador_socio = '2'
             SELECT
                 soc.cnpj_cpf_socio                                      AS cpf_mascarado,
                 UPPER(strip_accents(TRIM(soc.nome_socio_razao_social)))  AS nome_normalizado,
@@ -1587,15 +1631,13 @@ def write_pessoas_parquet(
                 'socio_pf'                                              AS papel,
                 soc.cnpj_basico                                         AS cnpj_base,
                 soc.qualificacao_socio                                  AS qualificacao_codigo,
+                {socio_description_sql}                                  AS qualificacao_descricao,
                 soc.faixa_etaria
             FROM socio soc
+            {socio_join_sql}
             WHERE soc.identificador_socio = '2'
               AND soc.cnpj_cpf_socio IS NOT NULL AND soc.cnpj_cpf_socio <> ''
             UNION ALL
-            -- Representantes legais: embutidos como colunas em qualquer linha de socio.
-            -- DISTINCT por (cnpj_basico, representante_legal) porque o mesmo representante
-            -- pode assinar múltiplos registros da mesma empresa.
-            -- faixa_etaria NULL: a RFB não publica esse campo para representante_legal_*.
             SELECT DISTINCT
                 soc.representante_legal                                 AS cpf_mascarado,
                 UPPER(strip_accents(TRIM(soc.nome_representante_legal))) AS nome_normalizado,
@@ -1603,8 +1645,10 @@ def write_pessoas_parquet(
                 'representante'                                         AS papel,
                 soc.cnpj_basico                                         AS cnpj_base,
                 soc.qualificacao_representante_legal                    AS qualificacao_codigo,
+                {representante_description_sql}                          AS qualificacao_descricao,
                 NULL                                                    AS faixa_etaria
             FROM socio soc
+            {representante_join_sql}
             WHERE soc.representante_legal IS NOT NULL AND soc.representante_legal <> ''
             ORDER BY cpf_mascarado, nome_normalizado
         ) TO ? (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 200000)

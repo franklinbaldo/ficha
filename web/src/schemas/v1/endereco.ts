@@ -5,12 +5,15 @@ import { z } from 'zod';
  *
  * Parquet ordenado por (uf, municipio_codigo, logradouro_normalizado, numero)
  * para que buscas prefix e range usem min/max row-group pruning sem scan total.
+ * A partir do contrato novo, `municipio_nome` viaja inline; ele permanece
+ * opcional na leitura para snapshots históricos já produzidos.
  *
  * Ver ADR 0023.
  */
 export const EnderecoSchema = z.object({
   uf: z.string().length(2),
   municipio_codigo: z.string(),
+  municipio_nome: z.string().nullable().optional(),
 
   // Logradouro normalizado: UPPER + strip_accents + abreviações expandidas
   // (R → RUA, AV → AVENIDA, etc.). Usado para buscas consistentes.

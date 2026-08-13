@@ -16,24 +16,29 @@ CNPJs com CNAE 5611-2 (restaurantes), seja principal ou secundário" exige
 
 ## Decisão
 
-Produzir `cnpj_cnaes.parquet` (`write_cnpj_cnaes_parquet`,
-`transform.py:1056`), uma linha por associação CNPJ↔CNAE:
+Produzir `cnpj_cnaes.parquet` (`write_cnpj_cnaes_parquet`), uma linha por
+associação CNPJ↔CNAE:
 
 | Coluna | Tipo | Notas |
 |--------|------|-------|
 | `cnpj` | VARCHAR(14) | CNPJ completo |
 | `cnpj_base` | VARCHAR(8) | raiz do CNPJ |
 | `cnae_codigo` | VARCHAR | código do CNAE |
+| `cnae_descricao` | VARCHAR | descrição denormalizada do lookup CNAE |
 | `posicao` | INTEGER | `0` = principal; `1, 2, …` = secundário, na ordem de registro |
 
-Construído via `UNION ALL` de duas SELECTs sobre `estabelecimento` (principal
-+ secundários explodidos via `generate_subscripts`/`unnest` de
-`cnae_fiscal_secundaria`), sem joins.
+As associações continuam construídas via `UNION ALL` das linhas de
+`estabelecimento` (principal + secundários explodidos). Depois, um `LEFT JOIN`
+com o minúsculo `lookup_cnaes` acrescenta a descrição antes da escrita.
+
+Esse join acontece **uma vez no ETL**, não no consumo. O lookup parquet de CNAE
+continua existindo como relação auxiliar barata (ADR 0019), mas uma linha de
+`cnpj_cnaes.parquet` já é interpretável/renderizável sozinha. A repetição da
+descrição é deliberada: Parquet comprime bem valores categóricos repetidos.
 
 **Sort:** `(cnae_codigo, posicao, cnpj_base)` — registrado no manifest em
-`files.cnpj_cnaes.sort` (`manifest.py`). A ordenação mantém as linhas
-`posicao=0` de cada CNAE contíguas, permitindo pruning por min/max mesmo em
-queries "só principal" sem precisar de uma coluna booleana separada.
+`files.cnpj_cnaes.sort`. A ordenação mantém as linhas `posicao=0` de cada CNAE
+contíguas, permitindo pruning por min/max mesmo em queries "só principal".
 
 Os arrays denormalizados em `cnpjs.parquet` **permanecem** — atendem a lâmina
 sem join; `cnpj_cnaes.parquet` é o índice inverso, mesmo padrão de
@@ -42,11 +47,9 @@ sem join; `cnpj_cnaes.parquet` é o índice inverso, mesmo padrão de
 
 ## Consequências
 
-- ✅ "CNPJs com CNAE X, em qualquer posição" e "só como principal" viram
-  lookups por sort prefix em vez de full scan.
-- ✅ Construído só a partir de `estabelecimento` — sem joins, baixo custo de
-  memória no phase 3.
-- ⚠️ ~1 linha por (CNPJ × CNAE), então o parquet é maior que `cnpjs.parquet`
-  em contagem de linhas (múltiplos CNAEs por estabelecimento).
-- Frontend usa `attachCnpjCnaes(db, url)`
-  (`web/src/lib/analytical.ts:134`).
+- ✅ consultas por código continuam usando sort-prefix/pruning;
+- ✅ resultado já traz a descrição do CNAE, sem join de renderização;
+- ✅ `lookups/cnaes.parquet` permanece útil para consultas sobre o vocabulário;
+- ✅ o único join novo fica no ETL e usa uma relação minúscula;
+- ⚠️ `cnae_descricao` aumenta o payload lógico, mas a repetição é altamente compressível;
+- ⚠️ mudança aditiva de schema: snapshots históricos sem a coluna continuam legíveis.
