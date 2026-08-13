@@ -12,7 +12,7 @@ import { okfConvenienceViews } from '../generated/ficha-okf.views';
     <main>
       <p class="eyebrow">Experimento OKF + DuckDB-WASM</p>
       <h1>Views declaradas</h1>
-      <p class="intro">Estas queries vêm do bundle OKF. A página executa apenas uma amostra de cinco linhas; os Parquets publicados continuam sendo os dados consultados. Cada linha retornada é validada contra o Zod projetado do mesmo contrato OKF.</p>
+      <p class="intro">Queries versionadas no bundle OKF, executadas sobre os Parquets publicados. Os previews têm cinco linhas e são validados contra o Zod gerado do mesmo contrato.</p>
       <p id="status" role="status">Preparando relações…</p>
 
       <section class="views" aria-label="Views disponíveis">
@@ -23,7 +23,10 @@ import { okfConvenienceViews } from '../generated/ficha-okf.views';
               <p>{view.purpose}</p>
               <small>{view.inputs.join(' + ')} → {view.output}</small>
             </div>
-            <button type="button" data-view={view.name} disabled>Ver 5 linhas</button>
+            <div class="actions">
+              <button type="button" data-view={view.name} data-action="preview" disabled>Ver 5 linhas</button>
+              <button type="button" data-view={view.name} data-action="bench" disabled>Medir 3×</button>
+            </div>
           </article>
         ))}
       </section>
@@ -33,29 +36,30 @@ import { okfConvenienceViews } from '../generated/ficha-okf.views';
     </main>
 
     <script>
-      // @ts-nocheck -- página experimental; as fronteiras de dados ficam tipadas em lib/.
+      // @ts-nocheck -- página experimental; fronteiras de dados ficam tipadas em lib/.
       import { createOkfLab } from '../lib/okf-lab';
-      import {
-        previewOkfConvenienceView,
-        validateOkfConvenienceViewRows,
-      } from '../lib/okf-views';
+      import { benchmarkOkfConvenienceView } from '../lib/okf-benchmark';
+      import { previewOkfConvenienceView, validateOkfConvenienceViewRows } from '../lib/okf-views';
 
       const status = document.getElementById('status');
       const error = document.getElementById('error');
       const result = document.getElementById('result');
       const buttons = Array.from(document.querySelectorAll('button[data-view]'));
 
-      function text(value) {
+      const setBusy = (busy) => {
+        for (const button of buttons) button.disabled = busy;
+      };
+
+      const text = (value) => {
         if (value == null) return '—';
         if (typeof value === 'bigint') return value.toString();
         if (typeof value === 'object') return JSON.stringify(value);
         return String(value);
-      }
+      };
 
       function render(name, table) {
         const columns = table.schema.fields.slice(0, 5).map((field) => field.name);
-        const rawRows = table.toArray().map((row) => row.toJSON());
-        const rows = validateOkfConvenienceViewRows(name, rawRows);
+        const rows = validateOkfConvenienceViewRows(name, table.toArray().map((row) => row.toJSON()));
         if (rows.length === 0) {
           result.textContent = 'A amostra não retornou linhas.';
           return;
@@ -71,8 +75,7 @@ import { okfConvenienceViews } from '../generated/ficha-okf.views';
         for (const row of rows) {
           const tr = body.insertRow();
           for (const column of columns) {
-            const td = tr.insertCell();
-            td.textContent = text(row[column]);
+            tr.insertCell().textContent = text(row[column]);
           }
         }
         result.replaceChildren(element);
@@ -80,25 +83,33 @@ import { okfConvenienceViews } from '../generated/ficha-okf.views';
 
       createOkfLab().then(({ db, snapshotDate }) => {
         status.textContent = `Relações prontas — competência ${snapshotDate}.`;
+        setBusy(false);
         for (const button of buttons) {
-          button.disabled = false;
           button.addEventListener('click', async () => {
             const name = button.dataset.view;
-            if (!name) return;
+            const action = button.dataset.action;
+            if (!name || !action) return;
             error.hidden = true;
-            result.textContent = 'Consultando e validando…';
-            for (const item of buttons) item.disabled = true;
-            const startedAt = performance.now();
+            setBusy(true);
             try {
-              render(name, await previewOkfConvenienceView(db, name, 5));
-              const elapsed = performance.now() - startedAt;
-              status.textContent = `${name}: preview + validação em ${elapsed.toFixed(0)} ms · competência ${snapshotDate}.`;
+              if (action === 'bench') {
+                result.textContent = 'Medindo três execuções…';
+                const bench = await benchmarkOkfConvenienceView(db, name, 3);
+                result.textContent = `${name}: primeira ${bench.firstMs.toFixed(0)} ms · média warm ${bench.warmMeanMs.toFixed(0)} ms.`;
+                status.textContent = `Benchmark local concluído · competência ${snapshotDate}.`;
+              } else {
+                result.textContent = 'Consultando e validando…';
+                const startedAt = performance.now();
+                const table = await previewOkfConvenienceView(db, name, 5);
+                render(name, table);
+                status.textContent = `${name}: preview + validação em ${(performance.now() - startedAt).toFixed(0)} ms · competência ${snapshotDate}.`;
+              }
             } catch (cause) {
               error.textContent = cause instanceof Error ? cause.message : String(cause);
               error.hidden = false;
               result.textContent = '';
             } finally {
-              for (const item of buttons) item.disabled = false;
+              setBusy(false);
             }
           });
         }
@@ -123,6 +134,7 @@ import { okfConvenienceViews } from '../generated/ficha-okf.views';
   article p { margin: 0.25rem 0; }
   article small { color: #6b7280; }
   code { font-weight: 700; }
+  .actions { display: flex; gap: 0.45rem; flex-wrap: wrap; }
   button { padding: 0.55rem 0.8rem; border: 1px solid #555; background: transparent; cursor: pointer; }
   button:disabled { opacity: 0.45; cursor: wait; }
   #error { color: #b91c1c; }
