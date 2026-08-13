@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       month:
-        description: 'Snapshot alvo (YYYY-MM). Vazio = snapshot mais recente disponível no upstream.'
+        description: 'Snapshot alvo (YYYY-MM). Vazio = próxima competência publicável, sem saltos (baseline 2026-06).'
         required: false
         type: string
       skip_upload:
@@ -50,44 +50,42 @@ jobs:
           CNPJ_SHARE_TOKEN: ${{ secrets.CNPJ_SHARE_TOKEN }}
         run: |
           set -euo pipefail
+          SHOULD_RUN=true
+
           if [ -n "$INPUT_MONTH" ]; then
             MONTH="$INPUT_MONTH"
           else
-            MONTH=""
+            SNAPSHOTS=""
             for attempt in 1 2 3; do
               if SNAPSHOTS=$(uv run ficha-etl list-snapshots); then
-                MONTH=$(printf '%s\n' "$SNAPSHOTS" | sort | tail -n 1)
                 break
               fi
               sleep $((attempt * 30))
             done
-            if [ -z "$MONTH" ]; then
-              echo "::error::Could not resolve latest snapshot from RFB upstream"
+            if [ -z "$SNAPSHOTS" ]; then
+              echo "::error::Could not list snapshots from RFB upstream"
               exit 1
             fi
+
+            CURRENT=$(jq -r '.current // ""' ../web/public/manifest.json 2>/dev/null || echo "")
+            printf '%s\n' "$SNAPSHOTS" > .available-snapshots.txt
+            MONTH=$(uv run python -m ficha_etl.publication_schedule \
+              --current "$CURRENT" \
+              --available-file .available-snapshots.txt)
+
+            if [ -z "$MONTH" ]; then
+              echo "::notice::Nenhuma próxima competência sequencial disponível no upstream ainda."
+              SHOULD_RUN=false
+            else
+              echo "::notice::Próxima competência sequencial: $MONTH (current=${CURRENT:-<none>}; baseline 2026-06)."
+            fi
           fi
-          if ! [[ "$MONTH" =~ ^[0-9]{4}-(0[1-9]|1[0-2])$ ]]; then
+
+          if [ -n "$MONTH" ] && ! [[ "$MONTH" =~ ^[0-9]{4}-(0[1-9]|1[0-2])$ ]]; then
             echo "::error::Invalid month '$MONTH' - expected YYYY-MM"
             exit 1
           fi
 
-          SHOULD_RUN=true
-          if [ -z "$INPUT_MONTH" ]; then
-            CURRENT=$(jq -r '.current // ""' ../web/public/manifest.json 2>/dev/null || echo "")
-            if [ -n "$CURRENT" ] && [ "$MONTH" = "$CURRENT" ]; then
-              echo "::notice::Nenhum snapshot novo publicado pela RFB ainda ($CURRENT)."
-              SHOULD_RUN=false
-            elif [ -n "$CURRENT" ] && ! [[ "$MONTH" > "$CURRENT" ]]; then
-              echo "::error::Upstream month '$MONTH' older than manifest current '$CURRENT'"
-              exit 1
-            fi
-            if [ "$SHOULD_RUN" = "true" ] && [ -n "$CURRENT" ]; then
-              EXPECTED=$(date -d "${CURRENT}-01 +1 month" +%Y-%m)
-              if [[ "$MONTH" > "$EXPECTED" ]]; then
-                echo "::warning::Gap histórico: current=$CURRENT, alvo=$MONTH; faça backfill explícito dos intermediários."
-              fi
-            fi
-          fi
           echo "value=$MONTH" >> "$GITHUB_OUTPUT"
           echo "should_run=$SHOULD_RUN" >> "$GITHUB_OUTPUT"
 
