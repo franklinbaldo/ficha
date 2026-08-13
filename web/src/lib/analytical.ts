@@ -24,17 +24,23 @@ export async function createDuckDB(): Promise<duckdb.AsyncDuckDB> {
   return db;
 }
 
-/**
- * Registra a URL do `cnpjs.parquet` e cria a VIEW `cnpjs` apontando pra ela.
- *
- * DuckDB-WASM lê via HTTP range requests — só baixa as colunas/row groups
- * que cada query precisa, não o arquivo inteiro.
- */
+/** Registra `cnpjs.parquet` como a relação lógica `cnpjs`. */
 export async function attachCnpjs(db: duckdb.AsyncDuckDB, url: string): Promise<void> {
   await db.registerFileURL('cnpjs.parquet', url, duckdb.DuckDBDataProtocol.HTTP, false);
   const conn = await db.connect();
   try {
     await conn.query(`CREATE OR REPLACE VIEW cnpjs AS SELECT * FROM 'cnpjs.parquet'`);
+  } finally {
+    await conn.close();
+  }
+}
+
+/** Registra `raizes.parquet` como a relação lógica `raizes`. */
+export async function attachRaizes(db: duckdb.AsyncDuckDB, url: string): Promise<void> {
+  await db.registerFileURL('raizes.parquet', url, duckdb.DuckDBDataProtocol.HTTP, false);
+  const conn = await db.connect();
+  try {
+    await conn.query(`CREATE OR REPLACE VIEW raizes AS SELECT * FROM 'raizes.parquet'`);
   } finally {
     await conn.close();
   }
@@ -61,10 +67,6 @@ export async function attachLookups(db: duckdb.AsyncDuckDB, manifest: Snapshot):
  * Registra `enderecos.parquet` e cria a VIEW `enderecos`.
  *
  * Parquet ordenado por (uf, municipio_codigo, logradouro_normalizado, numero).
- * DuckDB-WASM usa min/max por row-group para pular seções irrelevantes —
- * queries prefix como `WHERE uf='SP' AND municipio_codigo='7107'` baixam
- * apenas os row-groups do município em vez do arquivo completo (~1 GB).
- * Ver ADR 0023.
  */
 export async function attachEnderecos(db: duckdb.AsyncDuckDB, url: string): Promise<void> {
   await db.registerFileURL('enderecos.parquet', url, duckdb.DuckDBDataProtocol.HTTP, false);
@@ -76,13 +78,7 @@ export async function attachEnderecos(db: duckdb.AsyncDuckDB, url: string): Prom
   }
 }
 
-/**
- * Registra `pessoas.parquet` e cria a VIEW `pessoas`.
- *
- * Parquet ordenado por (cpf_mascarado, nome_normalizado) — todas as linhas
- * de uma pessoa ficam num único row-group, tornando lookups por CPF mascarado
- * e/ou nome muito eficientes. Ver ADR 0024.
- */
+/** Registra `pessoas.parquet` e cria a VIEW `pessoas`. */
 export async function attachPessoas(db: duckdb.AsyncDuckDB, url: string): Promise<void> {
   await db.registerFileURL('pessoas.parquet', url, duckdb.DuckDBDataProtocol.HTTP, false);
   const conn = await db.connect();
@@ -93,12 +89,7 @@ export async function attachPessoas(db: duckdb.AsyncDuckDB, url: string): Promis
   }
 }
 
-/**
- * Registra `socios.parquet` e cria a VIEW `socios`.
- *
- * Bloom filter em cnpj_base torna lookup por empresa eficiente mesmo sem
- * ordenação física. Ver write_socios_parquet em transform.py.
- */
+/** Registra `socios.parquet` e cria a VIEW `socios`. */
 export async function attachSocios(db: duckdb.AsyncDuckDB, url: string): Promise<void> {
   await db.registerFileURL('socios.parquet', url, duckdb.DuckDBDataProtocol.HTTP, false);
   const conn = await db.connect();
@@ -109,12 +100,7 @@ export async function attachSocios(db: duckdb.AsyncDuckDB, url: string): Promise
   }
 }
 
-/**
- * Registra `cnpj_contatos.parquet` e cria a VIEW `cnpj_contatos`.
- *
- * Parquet ordenado por (tipo, valor, cnpj) — lookup por CNPJ completo via
- * prepared statement é eficiente porque cnpj está no row-group metadata.
- */
+/** Registra `cnpj_contatos.parquet` e cria a VIEW `cnpj_contatos`. */
 export async function attachCnpjContatos(db: duckdb.AsyncDuckDB, url: string): Promise<void> {
   await db.registerFileURL('cnpj_contatos.parquet', url, duckdb.DuckDBDataProtocol.HTTP, false);
   const conn = await db.connect();
@@ -125,12 +111,7 @@ export async function attachCnpjContatos(db: duckdb.AsyncDuckDB, url: string): P
   }
 }
 
-/**
- * Registra `cnpj_cnaes.parquet` e cria a VIEW `cnpj_cnaes`.
- *
- * Parquet ordenado por (cnae_codigo, posicao, cnpj_base) — todas as empresas
- * de um CNAE ficam contíguas, tornando buscas por código CNAE muito eficientes.
- */
+/** Registra `cnpj_cnaes.parquet` e cria a VIEW `cnpj_cnaes`. */
 export async function attachCnpjCnaes(db: duckdb.AsyncDuckDB, url: string): Promise<void> {
   await db.registerFileURL('cnpj_cnaes.parquet', url, duckdb.DuckDBDataProtocol.HTTP, false);
   const conn = await db.connect();
