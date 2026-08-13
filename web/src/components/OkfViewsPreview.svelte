@@ -5,6 +5,7 @@
   let { db }: { db: duckdb.AsyncDuckDB } = $props();
 
   let active = $state<string | null>(null);
+  let loadingView = $state<string | null>(null);
   let columns = $state<string[]>([]);
   let rows = $state<Record<string, unknown>[]>([]);
   let error = $state<string | null>(null);
@@ -18,17 +19,21 @@
 
   async function preview(name: string) {
     active = name;
+    loadingView = name;
     columns = [];
     rows = [];
     error = null;
     try {
       const table = await previewOkfConvenienceView(db, name, 5);
       columns = table.schema.fields.slice(0, 5).map((field) => field.name);
-      rows = table.toArray().map((row) =>
-        Object.fromEntries(columns.map((column) => [column, row[column]]))
-      );
+      rows = table.toArray().map((row) => {
+        const record = row.toJSON() as Record<string, unknown>;
+        return Object.fromEntries(columns.map((column) => [column, record[column]]));
+      });
     } catch (e) {
       error = (e as Error).message;
+    } finally {
+      loadingView = null;
     }
   }
 </script>
@@ -50,8 +55,8 @@
           <p>{view.purpose}</p>
           <small>{view.inputs.join(' + ')} → {view.output}</small>
         </div>
-        <button type="button" onclick={() => preview(view.name)} disabled={active === view.name && rows.length === 0 && !error}>
-          {active === view.name && rows.length === 0 && !error ? 'Consultando…' : 'Ver 5 linhas'}
+        <button type="button" onclick={() => preview(view.name)} disabled={loadingView !== null}>
+          {loadingView === view.name ? 'Consultando…' : 'Ver 5 linhas'}
         </button>
       </article>
     {/each}
@@ -59,6 +64,10 @@
 
   {#if error}
     <p class="view-error" role="alert">Não foi possível executar a view: {error}</p>
+  {/if}
+
+  {#if active && !loadingView && !error && rows.length === 0}
+    <p class="view-empty">A amostra não retornou linhas.</p>
   {/if}
 
   {#if rows.length > 0}
@@ -112,6 +121,7 @@
   th, td { padding: 0.45rem 0.6rem; border-bottom: 1px solid #e5e7eb; text-align: left; white-space: nowrap; }
   th { font-weight: 600; }
   .view-error { color: #b91c1c; }
+  .view-empty { color: #6b7280; }
   @media (max-width: 700px) {
     .heading { grid-template-columns: 1fr; }
     article { align-items: flex-start; flex-direction: column; }
