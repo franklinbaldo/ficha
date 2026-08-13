@@ -11,7 +11,7 @@ CREATE TABLE "Raiz" (
   qtd_estabelecimentos_ativos BIGINT,
   ufs_atuacao VARCHAR[],
   cnaes_principais_distintos VARCHAR[],
-  data_inicio_atividade_matriz DATE,
+  data_inicio_atividade_matriz VARCHAR,
   uf_matriz VARCHAR,
   municipio_matriz_codigo VARCHAR,
   municipio_matriz_nome VARCHAR,
