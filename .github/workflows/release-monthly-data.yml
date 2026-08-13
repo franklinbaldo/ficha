@@ -1,0 +1,50 @@
+name: Release monthly data
+
+on:
+  workflow_run:
+    workflows: ["ETL — monthly snapshot"]
+    types: [completed]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    if: github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 1
+
+      - name: Resolve published month
+        id: month
+        run: |
+          set -euo pipefail
+          month=$(jq -r '.current // empty' web/public/manifest.json)
+          test -n "$month"
+          test "$month" != "null"
+          echo "value=$month" >> "$GITHUB_OUTPUT"
+
+      - name: Create monthly data release if absent
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MONTH: ${{ steps.month.outputs.value }}
+          SOURCE_RUN: ${{ github.event.workflow_run.id }}
+        run: |
+          set -euo pipefail
+          tag="data-$MONTH"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "Release $tag already exists — nothing to do"
+            exit 0
+          fi
+
+          current=$(jq -r '.current' web/public/manifest.json)
+          test "$current" = "$MONTH"
+          sha=$(git rev-parse HEAD)
+
+          gh release create "$tag" \
+            --target "$sha" \
+            --title "Dados $MONTH" \
+            --notes "Snapshot mensal $MONTH publicado e verificado automaticamente pelo pipeline ETL. Source workflow run: $SOURCE_RUN."
