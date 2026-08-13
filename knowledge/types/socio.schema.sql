@@ -7,7 +7,7 @@ CREATE TABLE "Socio" (
   cnpj_socio VARCHAR,
   qualificacao_codigo VARCHAR,
   qualificacao_descricao VARCHAR,
-  data_entrada_sociedade DATE,
+  data_entrada_sociedade VARCHAR,
   pais_codigo VARCHAR,
   pais_nome VARCHAR,
   representante_legal_cpf VARCHAR,
