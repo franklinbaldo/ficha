@@ -72,6 +72,7 @@ def test_build_snapshot_entry_accepts_complete_sharded_layer_without_monolith(tm
         f"{value:02d}" for value in range(100)
     ]
     assert companies["shards"][7]["url"].endswith("/companies-07.zip")
+    assert "/raw/companies-" not in companies["shards"][7]["url"]
     assert companies["shards"][7]["size"] == 107
     assert companies["shards"][7]["sha1"] == f"{8:040x}"
     assert "sha256" not in companies["shards"][7]

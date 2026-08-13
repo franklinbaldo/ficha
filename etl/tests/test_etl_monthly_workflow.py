@@ -1,9 +1,13 @@
-"""Testes estáticos para .github/workflows/etl-monthly.yml.
+"""Testes estáticos para o workflow mensal shardado.
 
-Cobre a relação entre `inputs.skip_upload` e o step que comita/publica o
-manifest em `main`: skip_upload evita o upload pro IA, mas sozinho não
-impede que o manifest resultante (apontando pra arquivos nunca enviados)
-seja comitado — ver discussão nos PRs #53/#54.
+A publicação agora é uma sequência explícita de jobs. Estes testes protegem as
+fronteiras que importam para correção/retomada:
+
+- dry-run para antes de qualquer upload/promoção;
+- descriptor de produção é persistido antes do upload dos derivados;
+- métricas continuam sobrevivendo a falhas do job de produção;
+- promoção só existe depois do gate de shards;
+- o manifest candidato é preservado antes do push em ``main``.
 """
 
 from pathlib import Path
@@ -17,78 +21,117 @@ def _load_workflow() -> dict:
     return yaml.safe_load(WORKFLOW_PATH.read_text(encoding="utf-8"))
 
 
-def _step(name: str) -> dict:
-    for step in _load_workflow()["jobs"]["run"]["steps"]:
+def _job(name: str) -> dict:
+    jobs = _load_workflow()["jobs"]
+    assert name in jobs, f"job {name!r} não encontrado em {WORKFLOW_PATH.name}"
+    return jobs[name]
+
+
+def _step(job_name: str, name: str) -> dict:
+    for step in _job(job_name)["steps"]:
         if step.get("name") == name:
             return step
-    raise AssertionError(f"step {name!r} não encontrado em {WORKFLOW_PATH.name}")
+    raise AssertionError(f"step {name!r} não encontrado no job {job_name!r}")
 
 
-def test_workflow_is_valid_yaml() -> None:
+def test_workflow_is_valid_yaml_and_has_explicit_publication_phases() -> None:
     workflow = _load_workflow()
-    assert workflow["jobs"]["run"]["steps"], "job 'run' sem steps"
+    jobs = workflow["jobs"]
+    assert list(jobs) == ["resolve", "produce", "inputs-visible", "shards", "finalize"]
+    for name in jobs:
+        assert jobs[name]["steps"], f"job {name!r} sem steps"
 
 
-def test_commit_step_requires_should_run_and_not_skip_upload() -> None:
-    step = _step("Commit updated manifest")
-    condition = step["if"]
-    assert "steps.month.outputs.should_run == 'true'" in condition
-    assert "inputs.skip_upload != true" in condition
-    # Sanity: garante que ainda é o step que de fato publica em main —
-    # se o nome do step mudar sem atualizar este teste, isto falha alto.
-    assert "git commit" in step["run"]
-    assert "git push origin HEAD:main" in step["run"]
+def test_produce_job_is_gated_by_resolved_freshness() -> None:
+    condition = _job("produce")["if"]
+    assert "needs.resolve.outputs.should_run == 'true'" in condition
 
 
-def test_dry_run_summary_step_is_mutually_exclusive_with_commit() -> None:
-    step = _step("Dry-run summary")
-    condition = step["if"]
-    assert "steps.month.outputs.should_run == 'true'" in condition
-    assert "inputs.skip_upload == true" in condition
-    assert "git commit" not in step.get("run", "")
-    assert "git push" not in step.get("run", "")
-
-
-def test_skip_upload_input_documents_manifest_behavior() -> None:
+def test_dry_run_stops_before_output_upload_and_promotion() -> None:
     text = WORKFLOW_PATH.read_text(encoding="utf-8")
-    assert "Dry-run local: não faz upload nem publica o manifesto" in text
+    assert "Dry-run: produz descriptor local, sem upload/shards/promoção" in text
+
+    upload_step = _step("produce", "Upload derived outputs exactly as produced")
+    assert "inputs.skip_upload != true" in upload_step["if"]
+
+    dry_step = _step("produce", "Dry-run summary")
+    assert "inputs.skip_upload == true" in dry_step["if"]
+    assert "git commit" not in dry_step.get("run", "")
+    assert "git push" not in dry_step.get("run", "")
+
+    inputs_visible = _job("inputs-visible")
+    assert "inputs.skip_upload != true" in inputs_visible["if"]
 
 
-# -----------------------------------------------------------------------------
-# Finding D do review do owner na PR #70: transform_metrics.json (RFC 0001
-# §16/19 — baseline por estágio, RSS, pico de disco/filesystem, chunks)
-# nunca saía do runner. Sem um step de artifact, os dados mais valiosos pra
-# diagnosticar um incidente (métricas parciais de uma falha no meio do
-# pipeline) desapareciam junto com o runner ao fim do job.
-# -----------------------------------------------------------------------------
+def test_production_descriptor_is_persisted_before_output_upload() -> None:
+    steps = _job("produce")["steps"]
+    names = [step.get("name") for step in steps]
+    assert names.index("Persist production descriptor before upload") < names.index(
+        "Upload derived outputs exactly as produced"
+    )
+
+    artifact = _step("produce", "Persist production descriptor before upload")
+    assert artifact["uses"].startswith("actions/upload-artifact@")
+    with_block = artifact["with"]
+    assert with_block["name"] == "production-descriptor-${{ needs.resolve.outputs.month }}"
+    assert with_block["if-no-files-found"] == "error"
+    assert with_block["retention-days"] == 90
 
 
 def test_upload_transform_metrics_step_exists_and_runs_always() -> None:
-    step = _step("Upload transform metrics")
-    # always() precisa estar presente -- é justamente quando o pipeline
-    # falha no meio que as métricas parciais mais importam pro diagnóstico.
+    step = _step("produce", "Upload transform metrics")
     assert "always()" in step["if"]
-    assert "steps.month.outputs.should_run == 'true'" in step["if"]
-
-
-def test_upload_transform_metrics_step_uses_upload_artifact_with_expected_shape() -> None:
-    step = _step("Upload transform metrics")
     assert step["uses"].startswith("actions/upload-artifact@")
     with_block = step["with"]
-    assert with_block["name"] == "transform-metrics-${{ steps.month.outputs.value }}"
+    assert with_block["name"] == "transform-metrics-${{ needs.resolve.outputs.month }}"
     assert with_block["path"] == (
-        "etl/.cache/${{ steps.month.outputs.value }}/metrics/transform_metrics.json"
+        "etl/.cache/${{ needs.resolve.outputs.month }}/metrics/transform_metrics.json"
     )
-    # warn, não error: uma falha cedo o bastante pra nem criar o diretório
-    # de métricas não pode reprovar o job só por causa deste step.
     assert with_block["if-no-files-found"] == "warn"
 
 
-def test_upload_transform_metrics_step_runs_before_manifest_commit() -> None:
-    """Ordem importa só por higiene de leitura do workflow (não há
-    dependência de dado entre os dois steps) -- upload de métricas antes do
-    commit do manifest, ambos após "Run pipeline"."""
-    steps = _load_workflow()["jobs"]["run"]["steps"]
-    names = [s.get("name") for s in steps]
-    assert names.index("Run pipeline") < names.index("Upload transform metrics")
-    assert names.index("Upload transform metrics") < names.index("Commit updated manifest")
+def test_metrics_and_descriptor_are_persisted_before_output_upload() -> None:
+    names = [step.get("name") for step in _job("produce")["steps"]]
+    upload_index = names.index("Upload derived outputs exactly as produced")
+    assert names.index("Persist production descriptor before upload") < upload_index
+    assert names.index("Upload transform metrics") < upload_index
+
+
+def test_finalize_requires_successful_shards_and_preserves_candidate_before_push() -> None:
+    job = _job("finalize")
+    assert job["needs"] == ["resolve", "shards"]
+    assert "needs.shards.result == 'success'" in job["if"]
+
+    steps = job["steps"]
+    names = [step.get("name") for step in steps]
+    assert names.index(
+        "Verify remote bytes against production receipts and build candidate"
+    ) < names.index("Persist exact promoted candidate and evidence")
+    assert names.index("Persist exact promoted candidate and evidence") < names.index(
+        "Publish verified manifest"
+    )
+
+    publish = _step("finalize", "Publish verified manifest")
+    assert "git commit" in publish["run"]
+    assert "git push origin HEAD:main" in publish["run"]
+
+
+def test_shard_rerun_compares_receipt_before_overwriting_artifact_or_put() -> None:
+    steps = _job("shards")["steps"]
+    names = [step.get("name") for step in steps]
+    assert names.index("Restore previous receipt on job rerun") < names.index(
+        "Produce shard bytes and receipt — no remote write"
+    )
+    assert names.index("Produce shard bytes and receipt — no remote write") < names.index(
+        "Require receipt stability across attempts"
+    )
+    assert names.index("Require receipt stability across attempts") < names.index(
+        "Persist shard production receipt before PUT"
+    )
+    assert names.index("Persist shard production receipt before PUT") < names.index(
+        "Submit exactly the receipted bytes"
+    )
+    artifact = _step("shards", "Persist shard production receipt before PUT")
+    assert artifact["with"]["overwrite"] is True
+    compare = _step("shards", "Require receipt stability across attempts")["run"]
+    assert "cmp -s" in compare
