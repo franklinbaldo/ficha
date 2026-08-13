@@ -5,9 +5,11 @@ O manifest é o contrato entre o ETL e o frontend:
   - aponta qual é o mais recente (`current`)
   - traz URLs, checksums, tamanhos e row counts de cada arquivo
 
-Arquivos históricos continuam usando SHA-256. A camada shardada de ``companies``
-usa o SHA-1 calculado e exposto pelo próprio Internet Archive, porque a sua
-identidade semântica é validada separadamente pelo ``MaterializationSpec``.
+Novas entradas de arquivo usam SHA-1 de forma uniforme, alinhada ao checksum que
+o Internet Archive calcula e expõe no catálogo. Isso permite fechar a identidade
+de publicação por comparação direta ``size + sha1`` sem rebaixar arquivos para
+um contrato distinto dos shards de ``companies``. A identidade semântica dos
+shards continua validada separadamente pelo ``MaterializationSpec``.
 
 Schema: web/src/schemas/v1/manifest.ts (ManifestSchema / SnapshotEntrySchema).
 """
@@ -47,9 +49,9 @@ class CompanyShardIdentity:
     sha1: str
 
 
-def _sha256(path: Path) -> str:
-    """SHA-256 hex de um arquivo local (leitura em blocos de 64 KB)."""
-    h = hashlib.sha256()
+def _sha1(path: Path) -> str:
+    """SHA-1 hex operacional de um arquivo local (leitura em blocos de 64 KB)."""
+    h = hashlib.sha1(usedforsecurity=False)
     with path.open("rb") as f:
         for chunk in iter(lambda: f.read(65_536), b""):
             h.update(chunk)
@@ -68,7 +70,7 @@ def _row_count(parquet_path: Path) -> int:
 def _file_entry(path: Path, url: str) -> dict:
     return {
         "url": url,
-        "sha256": _sha256(path),
+        "sha1": _sha1(path),
         "size": path.stat().st_size,
     }
 
@@ -176,7 +178,7 @@ def build_snapshot_entry(
     }
     log.info("row counts: %s", row_counts)
 
-    log.info("computing SHA-256 hashes for local snapshot files")
+    log.info("computing SHA-1 hashes for local snapshot files")
     files: dict[str, object] = {
         "cnpjs": _file_entry(cnpjs, parquet_url(month, "cnpjs")),
         "cnpj_contatos": _file_entry(cnpj_contatos, parquet_url(month, "cnpj_contatos")),
