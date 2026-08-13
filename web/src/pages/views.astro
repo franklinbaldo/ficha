@@ -88,8 +88,11 @@ import { okfConvenienceViews } from '../generated/ficha-okf.views';
             error.hidden = true;
             result.textContent = 'Consultando e validando…';
             for (const item of buttons) item.disabled = true;
+            const startedAt = performance.now();
             try {
               render(name, await previewOkfConvenienceView(db, name, 5));
+              const elapsed = performance.now() - startedAt;
+              status.textContent = `${name}: preview + validação em ${elapsed.toFixed(0)} ms · competência ${snapshotDate}.`;
             } catch (cause) {
               error.textContent = cause instanceof Error ? cause.message : String(cause);
               error.hidden = false;
