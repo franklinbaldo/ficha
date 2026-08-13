@@ -23,6 +23,14 @@ const LegacySha256FileEntrySchema = z.object({
 
 const FileEntrySchema = z.union([CurrentFileEntrySchema, LegacySha256FileEntrySchema]);
 
+// Os lookups históricos (incluindo 2026-04) foram publicados apenas com URL.
+// Novos snapshots usam CurrentFileEntrySchema; URL-only é ponte de leitura.
+const LookupEntrySchema = z.union([
+  CurrentFileEntrySchema,
+  LegacySha256FileEntrySchema,
+  z.object({ url: z.string().url() }),
+]);
+
 const CompanyShardSchema = z.object({
   shard: z.string().regex(/^\d{2}$/),
   url: z.string().url(),
@@ -97,7 +105,7 @@ export const SnapshotEntrySchema = z.object({
     // identidade semântica da materialização é validada separadamente no ETL.
     companies: CompaniesShardedSchema.optional(),
   }),
-  lookups: z.record(z.string(), z.object({ url: z.string().url() })).optional(),
+  lookups: z.record(z.string(), LookupEntrySchema).optional(),
 });
 
 export const ManifestSchema = z.object({
