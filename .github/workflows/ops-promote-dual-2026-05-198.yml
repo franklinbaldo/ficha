@@ -1,0 +1,115 @@
+name: Ops — build dual-hash snapshot candidate 2026-05
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize]
+
+concurrency:
+  group: ficha-promote-dual-2026-05
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  MONTH: '2026-05'
+  IA_BASE: https://archive.org/download/ficha-2026-05
+
+jobs:
+  candidate:
+    if: github.event.pull_request.head.ref == 'ops/promote-dual-2026-05-198'
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    defaults:
+      run:
+        working-directory: etl
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+      - run: uv python install 3.11
+      - run: uv sync --frozen --extra dev
+
+      - name: Verify all 100 company shards
+        env:
+          PYTHONIOENCODING: utf-8
+          PYTHONUTF8: '1'
+        run: uv run python .ops_promote_dual_2026_05.py --verify-shards
+
+      - name: Download durable derived outputs
+        run: |
+          set -euo pipefail
+          out=".cache/${MONTH}/output"
+          mkdir -p "$out/lookups"
+
+          for f in \
+            cnpjs.parquet \
+            cnpj_contatos.parquet \
+            cnpj_cnaes.parquet \
+            raizes.parquet \
+            socios.parquet \
+            enderecos.parquet \
+            pessoas.parquet \
+            lookups.json
+          do
+            echo "→ $f"
+            curl --fail --location --silent --show-error \
+              --retry 5 --retry-all-errors --retry-delay 10 \
+              -o "$out/$f" "$IA_BASE/$f"
+            test -s "$out/$f"
+          done
+
+          for kind in cnaes motivos municipios naturezas paises qualificacoes; do
+            echo "→ lookups/$kind.parquet"
+            curl --fail --location --silent --show-error \
+              --retry 5 --retry-all-errors --retry-delay 10 \
+              -o "$out/lookups/$kind.parquet" "$IA_BASE/lookups/$kind.parquet"
+            test -s "$out/lookups/$kind.parquet"
+          done
+
+          du -sh "$out"
+          df -h /
+
+      - name: Build current dual-hash manifest candidate
+        env:
+          PYTHONIOENCODING: utf-8
+          PYTHONUTF8: '1'
+        run: uv run python .ops_promote_dual_2026_05.py --promote
+
+      - name: Validate candidate contract
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          manifest = json.loads(Path('../web/public/manifest.json').read_text())
+          entry = next(s for s in manifest['snapshots'] if s['date'] == '2026-05')
+          assert manifest['current'] == '2026-05'
+          assert any(s['date'] == '2026-04' for s in manifest['snapshots'])
+          assert len(entry['files']['companies']['shards']) == 100
+          assert all('/raw/companies-' not in s['url'] for s in entry['files']['companies']['shards'])
+          for name, value in entry['files'].items():
+              if name == 'companies':
+                  continue
+              assert value['size'] > 0
+              assert len(value['sha1']) == 40
+              assert len(value['sha256']) == 64
+          assert len(entry['lookups']) == 6
+          for value in entry['lookups'].values():
+              assert value['size'] > 0
+              assert len(value['sha1']) == 40
+              assert len(value['sha256']) == 64
+          print('dual contract: OK')
+          print('row_counts:', entry['row_counts'])
+          print('cnpjs:', entry['files']['cnpjs'])
+          PY
+
+      - name: Upload exact candidate and evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: manifest-candidate-2026-05-dual
+          path: |
+            web/public/manifest.json
+            etl/company-shards-verified.json
+            etl/promotion-summary-dual.json
+          if-no-files-found: error
+          retention-days: 14
