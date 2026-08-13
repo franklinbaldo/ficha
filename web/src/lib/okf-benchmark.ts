@@ -28,11 +28,13 @@ export async function benchmarkOkfConvenienceView(
     samplesMs.push(performance.now() - startedAt);
   }
 
+  const firstMs = samplesMs[0];
+  if (firstMs === undefined) throw new Error('OKF view benchmark produced no samples');
   const warm = samplesMs.slice(1);
   return {
     name,
     samplesMs,
-    firstMs: samplesMs[0],
+    firstMs,
     warmMeanMs: warm.reduce((sum, value) => sum + value, 0) / warm.length,
   };
 }
