@@ -18,24 +18,32 @@ Produzir `pessoas.parquet` como índice inverso de pessoas físicas:
 
 | Coluna | Tipo | Notas |
 |--------|------|-------|
-| `cpf_mascarado` | VARCHAR | Formato RFB: `***.<middle6>-**` |
+| `cpf_mascarado` | VARCHAR | Formato RFB: CPF mascarado |
 | `nome_normalizado` | VARCHAR | UPPER + strip_accents + TRIM |
 | `nome_original` | VARCHAR | Nome como publicado pela RFB |
 | `papel` | ENUM | `socio_pf` ou `representante` |
 | `cnpj_base` | VARCHAR(8) | Raiz do CNPJ |
 | `qualificacao_codigo` | VARCHAR | Qualificação RFB |
-| `faixa_etaria` | VARCHAR | Código 0-9 (atributo da pessoa); NULL para representantes |
+| `qualificacao_descricao` | VARCHAR | descrição denormalizada da qualificação |
+| `faixa_etaria` | VARCHAR | Código 0-9; NULL para representantes |
 
 **Grão:** `(cpf_mascarado, nome_normalizado, faixa_etaria, cnpj_base, papel)` — uma linha por pessoa × empresa × papel.  
-**Sort:** `(cpf_mascarado, nome_normalizado)`  
-**Fonte:** tabela `socio` — duas queries: `WHERE identificador_socio = '2'` para sócios PF, e `WHERE representante_legal IS NOT NULL` (DISTINCT por cnpj_basico) para representantes.
+**Sort:** `(cpf_mascarado, nome_normalizado)`.
 
-`faixa_etaria` é atributo da **pessoa** (não do vínculo) e serve para desambiguar homônimos:
-duas linhas com o mesmo CPF mascarado e nome mas `faixa_etaria` diferentes são quase certamente
-pessoas distintas. É NULL para representantes porque a RFB não publica esse campo em `representante_legal_*`.
+A fonte continua sendo `socio`. `qualificacao_descricao` é acrescentada no ETL
+por `LEFT JOIN` com o minúsculo `lookup_qualificacoes`, tanto para o papel de
+sócio PF quanto para representante legal.
 
-`data_entrada_sociedade` foi **removido** do parquet: é propriedade do vínculo sócio×empresa
-(quando a pessoa entrou naquela empresa), não da pessoa em si. Permanece disponível em `socios.parquet`.
+O lookup parquet de qualificações continua existindo como projeção auxiliar
+barata (ADR 0019), mas não é necessário para interpretar/renderizar uma linha
+de `pessoas.parquet`. Essa é a mesma regra já usada por `socios.parquet`.
+
+`faixa_etaria` é atributo da pessoa e ajuda a desambiguar homônimos. É NULL para
+representantes porque a RFB não publica esse campo em
+`representante_legal_*`.
+
+`data_entrada_sociedade` permanece em `socios.parquet`, pois é propriedade do
+vínculo sócio×empresa.
 
 ## Inclusão e exclusão
 
@@ -48,36 +56,25 @@ pessoas distintas. É NULL para representantes porque a RFB não publica esse ca
 
 ## Chave composta e taxa de colisão
 
-A RFB expõe apenas os dígitos do meio do CPF (`***.123.456-**`), gerando
-~1M valores distintos para ~200M CPFs brasileiros (~200× colisão por CPF só).
-Nome só também colide massivamente ("JOSÉ DA SILVA").
-
-O **par `(cpf_mascarado, nome_normalizado)` é a chave composta** do parquet:
-a probabilidade de dois indivíduos distintos compartilharem ambos é < 1 em 10⁶
-para nomes comuns. Residual de falsos positivos é aceitável e documentado
-("aparece em 7 empresas — pode incluir homônimos com mesmo CPF mascarado").
+O par `(cpf_mascarado, nome_normalizado)` continua sendo a chave composta do
+índice. `faixa_etaria` fornece sinal adicional de desambiguação quando
+presente. Nenhum enriquecimento ou desmascaramento é realizado.
 
 ## Relação com `socios.parquet`
-
-Não depreca `socios.parquet`. As duas visões são complementares:
 
 | Parquet | Pergunta servida |
 |---------|-----------------|
 | `socios.parquet` | "Quais são os sócios da empresa X?" (forward) |
 | `pessoas.parquet` | "Em quais empresas aparece a pessoa Y?" (reverse) |
 
-Analogia com `cnpjs.parquet` + `raizes.parquet` (ADR 0008): redundância
-barata que serve padrões de acesso genuinamente distintos.
-
-## Postura de privacidade
-
-Dados publicados diretamente pela RFB no dump público de CNPJ — sem enriquecimento,
-sem desmascaramento de CPF. Aplica-se ADR 0004 e ADR 0006.
+As duas projeções são deliberadamente redundantes para servir padrões de acesso
+distintos; ambas carregam descrições necessárias à interpretação de suas
+próprias linhas.
 
 ## Consequências
 
-- +1 write no phase 3 do ETL (~5-10 min, ~6 GB peak — entrada pequena)
-- Tabela `socio` é liberada da memória após o write de `pessoas`
-- Manifest ganha entrada `pessoas` com metadata de sort
-- Frontend usa `attachPessoas(db, url)` para registrar e criar VIEW
-- Schema Zod em `web/src/schemas/v1/pessoa.ts`
+- +1 write no ETL para o índice inverso;
+- tabela `socio` continua podendo ser liberada após `pessoas`;
+- manifest mantém entrada `pessoas` com metadata de sort;
+- schema Zod aceita ausência de `qualificacao_descricao` apenas para snapshots históricos;
+- `lookups/qualificacoes.parquet` continua útil para consultas sobre o vocabulário.

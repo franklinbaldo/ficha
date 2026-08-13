@@ -21,32 +21,29 @@ Produzir `enderecos.parquet` com o seguinte shape:
 |--------|------|-------|
 | `uf` | VARCHAR | Código UF (2 chars) |
 | `municipio_codigo` | VARCHAR | Código RFB do município |
+| `municipio_nome` | VARCHAR | descrição denormalizada do município |
 | `logradouro_normalizado` | VARCHAR | UPPER + strip_accents + expansão de abreviações |
 | `numero` | VARCHAR | Número do logradouro (nullable) |
 | `cep` | VARCHAR | CEP (nullable) |
 | `bairro` | VARCHAR | Bairro (nullable) |
 | `cnpj` | VARCHAR(14) | CNPJ completo sem formatação |
 
-**Sort:** `(uf, municipio_codigo, logradouro_normalizado, numero)`  
-**Fonte:** `estabelecimento` only — sem joins, ~10 min / ~2 GB peak.
+**Sort:** `(uf, municipio_codigo, logradouro_normalizado, numero)`.
+
+`municipio_nome` é acrescentado no ETL por `LEFT JOIN` com o minúsculo
+`lookup_municipios`. O lookup parquet continua disponível como projeção
+auxiliar (ADR 0019), mas não é necessário para interpretar/renderizar uma linha
+de endereço. A repetição do nome é deliberada e altamente compressível em
+Parquet.
 
 ## Normalização de logradouro
 
 Abordagem **vetorizada**: CTE computa a base normalizada uma vez por linha
-(`UPPER(strip_accents(TRIM(regexp_replace(logradouro, '\s+', ' ', 'g'))))`) e
-depois uma única extração de prefixo + lookup em MAP DuckDB expande abreviações:
+(`UPPER(strip_accents(descricao))` e normalização do logradouro) e uma extração
+de prefixo + MAP DuckDB expande abreviações comuns.
 
-```sql
-COALESCE(
-  MAP {'R': 'RUA ', 'AV': 'AVENIDA ', ...}[regexp_extract(_logr, '^([A-Z]+)\.?\s+', 1)]
-  || regexp_replace(_logr, '^[A-Z]+\.?\s+', ''),
-  _logr
-)
-```
-
-Os top-10 prefixos cobrem ≥90% da variação (R, AV, TV, AL, PCA, PC, EST, ROD, VL, LG).
-Não são feitas deduplicações fuzzy em v1 — "R DAS FLORES" e "RUA DAS FLORES" colapsam;
-grafias genuinamente distintas permanecem distintas.
+Os top-10 prefixos cobrem ≥90% da variação (R, AV, TV, AL, PCA, PC, EST, ROD,
+VL, LG). Não são feitas deduplicações fuzzy em v1.
 
 ## Padrões de acesso servidos
 
@@ -58,8 +55,8 @@ grafias genuinamente distintas permanecem distintas.
 
 ## Consequências
 
-- +1 write no phase 3 do ETL (~10 min, ~2 GB peak — menor que `cnpjs`)
-- Manifest ganha entrada `enderecos` com metadata de sort
-- Frontend usa `attachEnderecos(db, url)` para registrar e criar VIEW
-- Schema Zod em `web/src/schemas/v1/endereco.ts`
-- **Não depreca** `cnpjs.parquet` — padrões de acesso complementares
+- +1 write no ETL para o parquet especializado;
+- manifest mantém entrada `enderecos` com metadata de sort;
+- frontend usa `attachEnderecos(db, url)` para registrar e criar VIEW;
+- schema Zod em `web/src/schemas/v1/endereco.ts` aceita ausência de `municipio_nome` apenas para snapshots históricos;
+- **não depreca** `cnpjs.parquet` nem `lookups/municipios.parquet` — são projeções complementares.
