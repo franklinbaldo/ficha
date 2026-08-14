@@ -1,0 +1,17 @@
+name: _tmp IA range
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/_tmp-ia-range.yml'
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: HEAD
+        run: |
+          curl -sSIL --max-time 60 -H "Origin: https://franklinbaldo.github.io" "https://archive.org/download/ficha-2026-05/cnpjs.parquet"
+      - name: Range
+        run: |
+          curl -sSL --max-time 60 -D - -o /tmp/one -H "Origin: https://franklinbaldo.github.io" -H "Range: bytes=0-0" "https://archive.org/download/ficha-2026-05/cnpjs.parquet"
+          wc -c /tmp/one
