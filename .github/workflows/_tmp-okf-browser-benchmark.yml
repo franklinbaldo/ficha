@@ -1,0 +1,64 @@
+name: _tmp OKF browser benchmark
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/_tmp-okf-browser-benchmark.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install Playwright
+        run: |
+          npm install --no-save playwright
+          npx playwright install --with-deps chromium
+
+      - name: Benchmark deployed OKF views
+        run: |
+          node <<'NODE'
+          const { chromium } = require('playwright');
+
+          (async () => {
+            const browser = await chromium.launch({ headless: true });
+            const page = await browser.newPage();
+            page.on('console', (message) => console.log('browser:', message.text()));
+
+            await page.goto('https://franklinbaldo.github.io/ficha/views/', {
+              waitUntil: 'domcontentloaded',
+              timeout: 120000,
+            });
+
+            await page.waitForFunction(() => {
+              const button = document.querySelector('button[data-action="bench"]');
+              return Boolean(button && !button.disabled);
+            }, { timeout: 120000 });
+
+            const names = await page.locator('button[data-action="bench"]').evaluateAll((buttons) =>
+              buttons.map((button) => button.dataset.view).filter(Boolean)
+            );
+
+            for (const name of names) {
+              const button = page.locator(`button[data-action="bench"][data-view="${name}"]`);
+              await button.click();
+              await page.waitForFunction((viewName) => {
+                const status = document.querySelector('#status')?.textContent || '';
+                return status.includes(viewName) && status.includes('warm');
+              }, name, { timeout: 180000 });
+              console.log(`RESULT ${name}: ${await page.locator('#status').textContent()}`);
+            }
+
+            await browser.close();
+          })().catch((error) => {
+            console.error(error);
+            process.exit(1);
+          });
+          NODE
