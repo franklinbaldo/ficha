@@ -1,0 +1,64 @@
+name: Visual capture
+
+on:
+  pull_request:
+    paths:
+      - 'web/**'
+      - '.github/workflows/visual-capture.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  capture:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+
+      - name: Install web dependencies
+        working-directory: web
+        run: bun install --frozen-lockfile
+
+      - name: Build site
+        working-directory: web
+        run: bun run build
+
+      - name: Install Chromium for capture
+        run: bunx playwright@1.54.2 install chromium --with-deps
+
+      - name: Prepare project-pages mount
+        run: |
+          mkdir -p .capture-root/ficha
+          cp -a web/dist/. .capture-root/ficha/
+
+      - name: Serve built artifact
+        run: |
+          python3 -m http.server 4321 --directory .capture-root > /tmp/ficha-capture-server.log 2>&1 &
+          echo $! > /tmp/ficha-capture-server.pid
+          for i in {1..20}; do
+            curl --fail --silent http://127.0.0.1:4321/ficha/ >/dev/null && exit 0
+            sleep 1
+          done
+          cat /tmp/ficha-capture-server.log
+          exit 1
+
+      - name: Capture first fold
+        run: |
+          mkdir -p visual-evidence
+          bunx playwright@1.54.2 screenshot \
+            --viewport-size='1280,900' \
+            --wait-for-timeout=2500 \
+            http://127.0.0.1:4321/ficha/ \
+            visual-evidence/home-1280x900.png
+
+      - name: Upload visual evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: ficha-home-visual-${{ github.sha }}
+          path: visual-evidence/home-1280x900.png
+          if-no-files-found: error
+          retention-days: 30
