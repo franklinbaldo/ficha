@@ -23,8 +23,11 @@ jobs:
         working-directory: web
         run: bun install --frozen-lockfile
 
-      - name: Build site
+      - name: Build site as GitHub Project Pages
         working-directory: web
+        env:
+          SITE: https://franklinbaldo.github.io
+          BASE_PATH: /ficha/
         run: bun run build
 
       - name: Install Chromium for capture
