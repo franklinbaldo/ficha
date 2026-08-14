@@ -1,0 +1,145 @@
+---
+import { okfConvenienceViews } from '../generated/ficha-okf.views';
+---
+
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width" />
+    <title>Views declaradas — Ficha</title>
+  </head>
+  <body>
+    <main>
+      <p class="eyebrow">Experimento OKF + DuckDB-WASM</p>
+      <h1>Views declaradas</h1>
+      <p class="intro">Queries versionadas no bundle OKF, executadas sobre os Parquets publicados. Os previews têm cinco linhas e são validados contra o Zod gerado do mesmo contrato.</p>
+      <p id="status" role="status">Preparando relações…</p>
+
+      <section class="views" aria-label="Views disponíveis">
+        {okfConvenienceViews.map((view) => (
+          <article>
+            <div>
+              <code>{view.name}</code>
+              <p>{view.purpose}</p>
+              <small>{view.inputs.join(' + ')} → {view.output}</small>
+            </div>
+            <div class="actions">
+              <button type="button" data-view={view.name} data-action="preview" disabled>Ver 5 linhas</button>
+              <button type="button" data-view={view.name} data-action="bench" disabled>Medir 3×</button>
+            </div>
+          </article>
+        ))}
+      </section>
+
+      <p id="error" role="alert" hidden></p>
+      <div id="result" class="result" aria-live="polite"></div>
+    </main>
+
+    <script>
+      // @ts-nocheck -- página experimental; fronteiras de dados ficam tipadas em lib/.
+      import { createOkfLab } from '../lib/okf-lab';
+      import { benchmarkOkfConvenienceView } from '../lib/okf-benchmark';
+      import { previewOkfConvenienceView, validateOkfConvenienceViewRows } from '../lib/okf-views';
+
+      const status = document.getElementById('status');
+      const error = document.getElementById('error');
+      const result = document.getElementById('result');
+      const buttons = Array.from(document.querySelectorAll('button[data-view]'));
+
+      const setBusy = (busy) => {
+        for (const button of buttons) button.disabled = busy;
+      };
+
+      const text = (value) => {
+        if (value == null) return '—';
+        if (typeof value === 'bigint') return value.toString();
+        if (typeof value === 'object') return JSON.stringify(value);
+        return String(value);
+      };
+
+      function render(name, table) {
+        const columns = table.schema.fields.slice(0, 5).map((field) => field.name);
+        const rows = validateOkfConvenienceViewRows(name, table.toArray().map((row) => row.toJSON()));
+        if (rows.length === 0) {
+          result.textContent = 'A amostra não retornou linhas.';
+          return;
+        }
+        const element = document.createElement('table');
+        const head = element.createTHead().insertRow();
+        for (const column of columns) {
+          const th = document.createElement('th');
+          th.textContent = column;
+          head.appendChild(th);
+        }
+        const body = element.createTBody();
+        for (const row of rows) {
+          const tr = body.insertRow();
+          for (const column of columns) {
+            tr.insertCell().textContent = text(row[column]);
+          }
+        }
+        result.replaceChildren(element);
+      }
+
+      createOkfLab().then(({ db, snapshotDate }) => {
+        status.textContent = `Relações prontas — competência ${snapshotDate}.`;
+        setBusy(false);
+        for (const button of buttons) {
+          button.addEventListener('click', async () => {
+            const name = button.dataset.view;
+            const action = button.dataset.action;
+            if (!name || !action) return;
+            error.hidden = true;
+            setBusy(true);
+            try {
+              if (action === 'bench') {
+                result.textContent = 'Medindo três execuções…';
+                const bench = await benchmarkOkfConvenienceView(db, name, 3);
+                result.textContent = `${name}: primeira ${bench.firstMs.toFixed(0)} ms · média warm ${bench.warmMeanMs.toFixed(0)} ms.`;
+                status.textContent = `Benchmark local concluído · competência ${snapshotDate}.`;
+              } else {
+                result.textContent = 'Consultando e validando…';
+                const startedAt = performance.now();
+                const table = await previewOkfConvenienceView(db, name, 5);
+                render(name, table);
+                status.textContent = `${name}: preview + validação em ${(performance.now() - startedAt).toFixed(0)} ms · competência ${snapshotDate}.`;
+              }
+            } catch (cause) {
+              error.textContent = cause instanceof Error ? cause.message : String(cause);
+              error.hidden = false;
+              result.textContent = '';
+            } finally {
+              setBusy(false);
+            }
+          });
+        }
+      }).catch((cause) => {
+        status.textContent = 'Não foi possível preparar as relações.';
+        error.textContent = cause instanceof Error ? cause.message : String(cause);
+        error.hidden = false;
+      });
+    </script>
+  </body>
+</html>
+
+<style>
+  :global(body) { margin: 0; background: #f8f7f3; color: #202124; font-family: system-ui, sans-serif; }
+  main { max-width: 960px; margin: 0 auto; padding: 3rem 1rem 5rem; }
+  .eyebrow { margin: 0 0 0.4rem; text-transform: uppercase; letter-spacing: 0.12em; font-size: 0.72rem; color: #6b7280; }
+  h1 { margin: 0; font-size: clamp(2rem, 5vw, 3.5rem); }
+  .intro { max-width: 700px; line-height: 1.55; color: #4b5563; }
+  #status { margin: 1.5rem 0; color: #6b7280; }
+  .views { border-bottom: 1px solid #cfd2d6; }
+  article { display: flex; justify-content: space-between; align-items: center; gap: 1rem; padding: 1rem 0; border-top: 1px solid #cfd2d6; }
+  article p { margin: 0.25rem 0; }
+  article small { color: #6b7280; }
+  code { font-weight: 700; }
+  .actions { display: flex; gap: 0.45rem; flex-wrap: wrap; }
+  button { padding: 0.55rem 0.8rem; border: 1px solid #555; background: transparent; cursor: pointer; }
+  button:disabled { opacity: 0.45; cursor: wait; }
+  #error { color: #b91c1c; }
+  .result { margin-top: 1.5rem; overflow-x: auto; }
+  .result :global(table) { width: 100%; border-collapse: collapse; background: white; font-size: 0.82rem; }
+  .result :global(th), .result :global(td) { padding: 0.5rem 0.65rem; border-bottom: 1px solid #e5e7eb; text-align: left; white-space: nowrap; }
+  @media (max-width: 650px) { article { align-items: flex-start; flex-direction: column; } }
+</style>

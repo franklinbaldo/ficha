@@ -40,6 +40,17 @@ export async function attachCnpjs(db: duckdb.AsyncDuckDB, url: string): Promise<
   }
 }
 
+/** Registra `raizes.parquet` e cria a VIEW `raizes`. */
+export async function attachRaizes(db: duckdb.AsyncDuckDB, url: string): Promise<void> {
+  await db.registerFileURL('raizes.parquet', url, duckdb.DuckDBDataProtocol.HTTP, false);
+  const conn = await db.connect();
+  try {
+    await conn.query(`CREATE OR REPLACE VIEW raizes AS SELECT * FROM 'raizes.parquet'`);
+  } finally {
+    await conn.close();
+  }
+}
+
 /**
  * Registra cada parquet de lookup definido no manifest como file URL
  * no DuckDB e cria a respectiva VIEW `lookup_{kind}`.
