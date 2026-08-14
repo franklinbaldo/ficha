@@ -2,6 +2,8 @@
 import FICHAHeader from '../components/Header.svelte';
 import SearchCNPJ from '../components/SearchCNPJ.svelte';
 import { withBase } from '../lib/base';
+
+const manifestHref = withBase('manifest.json');
 ---
 
 <html lang="pt-br">
@@ -27,6 +29,22 @@ import { withBase } from '../lib/base';
 				</p>
 			</div>
 			<SearchCNPJ client:load />
+			<section class="access-paths" aria-labelledby="access-title">
+				<p class="access-kicker" id="access-title">Duas formas de acesso</p>
+				<div class="access-grid">
+					<div class="access-path">
+						<h2>Consultar aqui</h2>
+						<p>Use a busca acima para ler uma empresa, seus vínculos e atividades na competência publicada.</p>
+					</div>
+					<div class="access-path">
+						<h2>Levar a base</h2>
+						<p>
+							O contrato público descreve o snapshot vigente e aponta para os arquivos preservados no Internet Archive.
+							<a href={manifestHref}>Abrir manifest.json</a>
+						</p>
+					</div>
+				</div>
+			</section>
 		</main>
 	</body>
 </html>
@@ -59,5 +77,51 @@ import { withBase } from '../lib/base';
 		margin: 0;
 		color: #6b7280;
 		font-size: 0.95rem;
+	}
+	.access-paths {
+		margin: 0 1rem 1.5rem;
+		padding-top: 1.1rem;
+		border-top: 1px solid #d8d8d8;
+		text-align: left;
+	}
+	.access-kicker {
+		margin: 0 0 0.65rem;
+		font-size: 0.64rem;
+		font-weight: 600;
+		letter-spacing: 0.13em;
+		text-transform: uppercase;
+		color: #6b7280;
+	}
+	.access-grid {
+		display: grid;
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+		gap: 1rem 2rem;
+	}
+	.access-path h2 {
+		margin: 0 0 0.25rem;
+		font-size: 1rem;
+		color: #2c3e50;
+	}
+	.access-path p {
+		margin: 0;
+		font-size: 0.88rem;
+		line-height: 1.5;
+		color: #4b5563;
+	}
+	.access-path a {
+		display: inline-block;
+		margin-left: 0.2rem;
+		font-weight: 600;
+		color: #1d4ed8;
+		text-underline-offset: 0.16em;
+	}
+	.access-path a:focus-visible {
+		outline: 3px solid currentColor;
+		outline-offset: 3px;
+	}
+	@media (max-width: 600px) {
+		.access-grid {
+			grid-template-columns: 1fr;
+		}
 	}
 </style>
