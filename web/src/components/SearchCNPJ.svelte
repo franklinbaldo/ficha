@@ -495,7 +495,7 @@
         <div class="prov-item">
           <dt>Competência</dt>
           <dd>
-            {formatMonth(snapshotDate)}
+            <time datetime={snapshotDate}>{formatMonth(snapshotDate)}</time>
             {#if generatedAt}<span class="prov-nota">· snapshot gerado em {generatedAt}</span>{/if}
           </dd>
         </div>
