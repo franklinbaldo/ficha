@@ -3,6 +3,8 @@
   import type * as duckdb from '@duckdb/duckdb-wasm';
   import { strip as stripCNPJ } from '../lib/cnpj';
   import { fetchManifest, currentSnapshot } from '../lib/manifest';
+  import { archiveItemFrom, formatDay, verificationClaim } from '../lib/provenance';
+  import type { VerificationClaim } from '../lib/provenance';
   import { createDuckDB, attachCnpjs, attachLookups, attachEnderecos, attachPessoas, attachSocios, attachCnpjContatos, attachCnpjCnaes } from '../lib/analytical';
   import EmpresaFicha from './EmpresaFicha.svelte';
 
@@ -79,6 +81,12 @@
   // query, which was previously conveyed only by results appearing on screen.
   let searchAnnouncement = $state('');
 
+  /* Proveniência derivada do manifest carregado — nunca afirmada por hardcode.
+     Cada campo só é exibido quando o snapshot em uso o sustenta. */
+  let generatedAt = $state<string | null>(null);
+  let archiveItem = $state<string | null>(null);
+  let verification = $state<VerificationClaim | null>(null);
+
   /** "2026-04" → "abril de 2026" */
   function formatMonth(date: string): string {
     const [y, m] = date.split('-').map(Number);
@@ -118,6 +126,11 @@
         return;
       }
       snapshotDate = snap.date;
+      generatedAt = snap.generated_at ? formatDay(snap.generated_at) : null;
+      archiveItem = archiveItemFrom(snap.files.cnpjs.url);
+      // A afirmação depende do contrato: snapshots shardados verificam os
+      // arquivos por SHA-256 e os 100 shards pelo SHA-1 do Internet Archive.
+      verification = verificationClaim(snap.files);
 
       status = 'Preparando o mecanismo de consulta…';
       const duckDB = await createDuckDB();
@@ -472,10 +485,41 @@
     </p>
 
     {#if snapshotDate}
-      <p class="snapshot-info">
-        Dados públicos da Receita Federal — referência:
-        <strong>{formatMonth(snapshotDate)}</strong>
-      </p>
+      <!-- Faixa de proveniência: enquadra a consulta em vez de rodapeá-la.
+           Funciona sem cor — posição, alinhamento, inscrições e ritmo. -->
+      <dl class="proveniencia">
+        <div class="prov-item">
+          <dt>Origem</dt>
+          <dd>Receita Federal do Brasil</dd>
+        </div>
+        <div class="prov-item">
+          <dt>Competência</dt>
+          <dd>
+            {formatMonth(snapshotDate)}
+            {#if generatedAt}<span class="prov-nota">· snapshot gerado em {generatedAt}</span>{/if}
+          </dd>
+        </div>
+        {#if archiveItem}
+          <div class="prov-item">
+            <dt>Preservação</dt>
+            <dd>Internet Archive <span class="prov-nota">· {archiveItem}</span></dd>
+          </div>
+        {/if}
+        {#if verification}
+          <div class="prov-item">
+            <dt>Verificação</dt>
+            <dd>
+              {verification === 'sha256'
+                ? 'SHA-256 por arquivo'
+                : 'SHA-256 por arquivo · SHA-1 nos shards'}
+            </dd>
+          </div>
+        {/if}
+        <div class="prov-item">
+          <dt>Estado</dt>
+          <dd>{isStale ? 'Desatualizada' : 'Atual'}</dd>
+        </div>
+      </dl>
       {#if isStale}
         <p class="stale-warning">
           ⚠️ Esta base está desatualizada: o snapshot mais recente é de
@@ -671,20 +715,54 @@
     color: #dc2626;
   }
 
-  .snapshot-info {
-    font-size: 0.8rem;
-    margin-top: 0.25rem;
-    color: #9ca3af;
+  /* Faixa de proveniência (#141 G2). Regra estrutural: a relação
+     origem/competência/preservação/estado tem que sobreviver ao "teste sem
+     cor" — nada aqui depende de fundo ou cor para funcionar. O que organiza é
+     posição (faixa horizontal), alinhamento (grade), tipografia (inscrição
+     acima do valor) e ritmo (mesma ordem em todo item). */
+  .proveniencia {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+    gap: 0.6rem 1.25rem;
+    margin: 1.25rem 0 0;
+    padding: 0.7rem 0;
+    border-top: 1px solid #d8d8d8;
+    border-bottom: 1px solid #d8d8d8;
+    text-align: left;
+  }
+
+  .prov-item {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+  }
+
+  /* Inscrição: texto curto em posição estrutural. Sem ela, o valor ao lado
+     fica ambíguo — que é exatamente o teste do corpus. */
+  .proveniencia dt {
+    font-size: 0.64rem;
+    letter-spacing: 0.13em;
+    text-transform: uppercase;
+    color: #6b7280;
+  }
+
+  .proveniencia dd {
+    margin: 0;
+    font-size: 0.87rem;
+    font-weight: 600;
+    color: #2c3e50;
+  }
+
+  .prov-nota {
+    font-weight: 400;
+    color: #6b7280;
   }
 
   .stale-warning {
     font-size: 0.85rem;
-    margin: 0.5rem auto 0;
-    max-width: 560px;
-    padding: 0.5rem 0.75rem;
-    background: #fef3c7;
-    border: 1px solid #fcd34d;
-    border-radius: 8px;
+    margin: 0.7rem 0 0;
+    padding: 0 0 0 0.75rem;
+    border-left: 3px solid #b45309;
     color: #92400e;
     text-align: left;
   }
