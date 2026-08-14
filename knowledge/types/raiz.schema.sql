@@ -1,0 +1,20 @@
+CREATE TABLE "Raiz" (
+  cnpj_base VARCHAR,
+  razao_social VARCHAR,
+  razao_social_normalizada VARCHAR,
+  natureza_juridica_codigo VARCHAR,
+  natureza_juridica_descricao VARCHAR,
+  capital_social DOUBLE,
+  porte_empresa VARCHAR,
+  ente_federativo_responsavel VARCHAR,
+  qtd_estabelecimentos INTEGER,
+  qtd_estabelecimentos_ativos INTEGER,
+  ufs_atuacao VARCHAR[],
+  cnaes_principais_distintos VARCHAR[],
+  data_inicio_atividade_matriz VARCHAR,
+  uf_matriz VARCHAR,
+  municipio_matriz_codigo VARCHAR,
+  municipio_matriz_nome VARCHAR,
+  cnae_principal_matriz_codigo VARCHAR,
+  cnae_principal_matriz_descricao VARCHAR
+);
