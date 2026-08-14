@@ -45,4 +45,9 @@
 	a:hover {
 		text-decoration: underline;
 	}
+	a:focus-visible {
+		outline: 3px solid currentColor;
+		outline-offset: 4px;
+		text-decoration: underline;
+	}
 </style>
