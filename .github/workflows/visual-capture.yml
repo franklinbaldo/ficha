@@ -21,7 +21,9 @@ jobs:
 
       - name: Install web dependencies
         working-directory: web
-        run: bun install --frozen-lockfile
+        run: |
+          bun install --frozen-lockfile
+          bun add --no-save playwright@1.54.2
 
       - name: Build site as GitHub Project Pages
         working-directory: web
@@ -31,7 +33,8 @@ jobs:
         run: bun run build
 
       - name: Install Chromium for capture
-        run: bunx playwright@1.54.2 install chromium --with-deps
+        working-directory: web
+        run: bunx playwright install chromium --with-deps
 
       - name: Prepare project-pages mount
         run: |
@@ -49,19 +52,17 @@ jobs:
           cat /tmp/ficha-capture-server.log
           exit 1
 
-      - name: Capture first fold
+      - name: Capture first fold with hydration evidence
+        working-directory: web
         run: |
-          mkdir -p visual-evidence
-          bunx playwright@1.54.2 screenshot \
-            --viewport-size='1280,900' \
-            --wait-for-timeout=2500 \
+          bun run scripts/capture-home.mjs \
             http://127.0.0.1:4321/ficha/ \
-            visual-evidence/home-1280x900.png
+            ../visual-evidence
 
       - name: Upload visual evidence
         uses: actions/upload-artifact@v4
         with:
           name: ficha-home-visual-${{ github.sha }}
-          path: visual-evidence/home-1280x900.png
+          path: visual-evidence/
           if-no-files-found: error
           retention-days: 30
