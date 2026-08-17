@@ -3,7 +3,7 @@ name: _tmp O Vigia First Story canonical probe
 on:
   push:
     branches:
-      - ops/ovigia-first-story-probe
+      - ops/ovigia-first-story-probe-http-retry
     paths:
       - .github/workflows/_tmp-ovigia-first-story-probe.yml
   workflow_dispatch:
@@ -69,6 +69,13 @@ jobs:
               'uf': UF,
               'municipio_codigo': MUNICIPIO,
               'status': 'error',
+              'httpfs': {
+                  'http_timeout_seconds': 120,
+                  'http_retries': 8,
+                  'http_retry_wait_ms': 1000,
+                  'http_retry_backoff': 2.0,
+                  'http_keep_alive': False,
+              },
           }
           exit_code = 1
           try:
@@ -85,6 +92,11 @@ jobs:
               con = duckdb.connect(database=':memory:')
               con.execute('INSTALL httpfs')
               con.execute('LOAD httpfs')
+              con.execute("SET http_timeout = 120")
+              con.execute("SET http_retries = 8")
+              con.execute("SET http_retry_wait_ms = 1000")
+              con.execute("SET http_retry_backoff = 2")
+              con.execute("SET http_keep_alive = false")
               prev_rows = con.execute(
                   """
                   SELECT CAST(cnpj AS VARCHAR)
