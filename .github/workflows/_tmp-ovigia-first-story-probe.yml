@@ -152,12 +152,44 @@ jobs:
                       'identificador_matriz_filial': rec.get('identificador_matriz_filial'),
                   })
               leads.sort(key=lambda item: item['cnpj_raw'])
+
+              # Auxiliary, deterministic candidate selection for the next editorial gate.
+              # This is not editorial approval and does not replace O Vigia's canonical run.
+              def low_sensitivity_candidate(item: dict) -> bool:
+                  start = str(item.get('data_inicio_atividade') or '')
+                  matrix = str(item.get('identificador_matriz_filial') or '').strip()
+                  trade_name = str(item.get('nome_fantasia') or '').strip()
+                  cnae = ''.join(ch for ch in str(item.get('cnae_principal_codigo') or '') if ch.isdigit())
+                  return (
+                      start.startswith('2026-05')
+                      and matrix == '1'
+                      and bool(trade_name)
+                      and (cnae.startswith('47') or cnae.startswith('56'))
+                  )
+
+              eligible = [item for item in leads if low_sensitivity_candidate(item)]
+              eligible.sort(key=lambda item: item['cnpj_raw'])
+              selected_candidate = eligible[0] if eligible else None
+
               result.update({
                   'status': 'ok',
                   'previous_porto_velho_count': len(previous_cnpjs),
                   'current_active_porto_velho_count': len(current_rows),
                   'lead_count': len(leads),
                   'leads': leads,
+                  'candidate_selection': {
+                      'policy': 'first-sorted-current-month-matrix-with-trade-name-retail-or-food-v1',
+                      'purpose': 'auxiliary low-sensitivity candidate discovery; not editorial approval',
+                      'criteria': {
+                          'data_inicio_atividade_prefix': '2026-05',
+                          'identificador_matriz_filial': '1',
+                          'nome_fantasia_required': True,
+                          'cnae_prefixes': ['47', '56'],
+                          'tie_breaker': 'cnpj_raw ascending',
+                      },
+                      'eligible_count': len(eligible),
+                      'selected': selected_candidate,
+                  },
                   'detector_contract': 'ficha-new-active-establishment-v1-equivalent-probe',
                   'note': 'Independent deterministic probe mirroring O Vigia PureDetector; artifact is evidence, not canonical O Vigia state.',
               })
