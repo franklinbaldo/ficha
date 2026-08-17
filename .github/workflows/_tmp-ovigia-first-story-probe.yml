@@ -3,6 +3,7 @@ name: _tmp O Vigia First Story canonical probe
 on:
   push:
     branches:
+      - main
       - ops/ovigia-first-story-probe-http-retry
     paths:
       - .github/workflows/_tmp-ovigia-first-story-probe.yml
