@@ -4,7 +4,7 @@
 	let { title = "FICHA" } = $props();
 </script>
 
-<header>
+<header data-cobogo-inverted>
 	<nav>
 		<div class="logo">{title}</div>
 		<ul>
@@ -16,8 +16,8 @@
 
 <style>
 	header {
-		background: #2c3e50;
-		color: white;
+		background: var(--cobogo-text);
+		color: var(--cobogo-surface);
 		padding: 1rem;
 	}
 	nav {
@@ -39,15 +39,11 @@
 		padding: 0;
 	}
 	a {
-		color: white;
+		color: var(--cobogo-surface);
 		text-decoration: none;
 	}
-	a:hover {
-		text-decoration: underline;
-	}
+	a:hover,
 	a:focus-visible {
-		outline: 3px solid currentColor;
-		outline-offset: 4px;
 		text-decoration: underline;
 	}
 </style>
