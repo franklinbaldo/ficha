@@ -1,0 +1,14 @@
+:root {
+  /* Ficha owns its concrete palette; Cobogó owns the semantic foundation contract. */
+  --cobogo-canvas: #f4f4f4;
+  --cobogo-surface: #ffffff;
+  --cobogo-text: #2c3e50;
+  --cobogo-text-muted: #6b7280;
+  --cobogo-border: #d8d8d8;
+  --cobogo-accent: #1d4ed8;
+  --cobogo-focus: #1d4ed8;
+  --cobogo-focus-contrast: #ffffff;
+  --cobogo-focus-inverted: #ffffff;
+  --cobogo-focus-contrast-inverted: #2c3e50;
+  --cobogo-radius-surface: 8px;
+}
