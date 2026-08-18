@@ -8,6 +8,7 @@
     "build": "astro build",
     "preview": "astro preview",
     "check": "astro check",
+    "check:cobogo-core": "node scripts/check-cobogo-core.mjs",
     "test": "vitest run",
     "astro": "astro",
     "gen-proto": "node scripts/gen-proto.mjs"
