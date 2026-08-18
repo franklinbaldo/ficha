@@ -9,7 +9,7 @@
     "preview": "astro preview",
     "check": "astro check",
     "check:cobogo-core": "node scripts/check-cobogo-core.mjs",
-    "test": "vitest run",
+    "test": "node scripts/check-cobogo-core.mjs && vitest run",
     "astro": "astro",
     "gen-proto": "node scripts/gen-proto.mjs"
   },
