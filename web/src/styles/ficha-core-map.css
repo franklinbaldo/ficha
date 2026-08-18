@@ -1,5 +1,6 @@
 :root {
   /* Ficha owns its concrete palette; Cobogó owns the semantic foundation contract. */
+  color-scheme: light;
   --cobogo-canvas: #f4f4f4;
   --cobogo-surface: #ffffff;
   --cobogo-text: #2c3e50;
