@@ -1,5 +1,6 @@
 name: _tmp O Vigia status transition probe
 
+# Retriggered after the first status-transition probe commit emitted no observable run.
 on:
   push:
     branches:
