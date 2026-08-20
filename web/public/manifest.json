@@ -1,6 +1,730 @@
 {
-  "current": "2026-06",
+  "current": "2026-07",
   "snapshots": [
+    {
+      "date": "2026-07",
+      "files": {
+        "cnpj_cnaes": {
+          "sha1": "b94fba74655482a28787cae8237b79452abd57e0",
+          "sha256": "12bcda3e22598c2aff019d1dcc2ad8f2c73bdc0ed7609d30f2ba960a52c5e4d6",
+          "size": 1889583658,
+          "sort": [
+            "cnae_codigo",
+            "posicao",
+            "cnpj_base"
+          ],
+          "url": "https://archive.org/download/ficha-2026-07/cnpj_cnaes.parquet"
+        },
+        "cnpj_contatos": {
+          "sha1": "0bdc513a322f8154959e9ff3196145c0fc4c98df",
+          "sha256": "4daede67e864c6c4a37e781e072a32a08883898b3b26b609863485fdf5accb41",
+          "size": 1757954682,
+          "url": "https://archive.org/download/ficha-2026-07/cnpj_contatos.parquet"
+        },
+        "cnpjs": {
+          "sha1": "8acf3992d08ec88f113427b794cd0e6187f0d8bd",
+          "sha256": "3290b53d97196f52c21f672497717332263c3d0a26128c63c184505655f7d277",
+          "size": 6076313170,
+          "url": "https://archive.org/download/ficha-2026-07/cnpjs.parquet"
+        },
+        "enderecos": {
+          "sha1": "bf4cc500b1cc22a20013fee042910087985598d6",
+          "sha256": "7218af78168caafc93d2175d8a96d9bb4b815416be0cb2f571a6ac3d019a3f28",
+          "size": 739853517,
+          "sort": [
+            "uf",
+            "municipio_codigo",
+            "logradouro_normalizado",
+            "numero"
+          ],
+          "url": "https://archive.org/download/ficha-2026-07/enderecos.parquet"
+        },
+        "lookups": {
+          "sha1": "03b5e99682dde7fa9315b219118f704465d00cc1",
+          "sha256": "7aa3600629f533e1a468fa6400de48c9d42f1919139235529dc4230b8c25307a",
+          "size": 272145,
+          "url": "https://archive.org/download/ficha-2026-07/lookups.json"
+        },
+        "pessoas": {
+          "sha1": "c2f36fb32e3aa928bd71a91a20c51fddbd3f4ca7",
+          "sha256": "f328bc0494590e4258666e43050f4c7dfcb4364c9f971f69ff53cb1767347137",
+          "size": 659089217,
+          "sort": [
+            "cpf_mascarado",
+            "nome_normalizado"
+          ],
+          "url": "https://archive.org/download/ficha-2026-07/pessoas.parquet"
+        },
+        "raizes": {
+          "sha1": "1a0f2621f4026a5f1cdf0166a22429377a8f95b2",
+          "sha256": "9332506c1072d2d1006aab1a50009ac4b043c66e29025502639447b9f7311afe",
+          "size": 3034630672,
+          "url": "https://archive.org/download/ficha-2026-07/raizes.parquet"
+        },
+        "socios": {
+          "sha1": "526a271d6d2ddd7f6924c18c71eb9876f413e191",
+          "sha256": "cf40206e4ffe79acd29607fded667deb538114d1e2dafc3a7be70105efe21933",
+          "size": 547975845,
+          "url": "https://archive.org/download/ficha-2026-07/socios.parquet"
+        },
+        "companies": {
+          "shard_by": "cnpj_base_prefix_2",
+          "shards": [
+            {
+              "shard": "00",
+              "url": "https://archive.org/download/ficha-2026-07/companies-00.zip",
+              "sha1": "9fe2cdc2afe9112a37d1de207994497a01208fe1",
+              "size": 285646667
+            },
+            {
+              "shard": "01",
+              "url": "https://archive.org/download/ficha-2026-07/companies-01.zip",
+              "sha1": "d04c68b48053cf402cc0aa476bb5ae68451774cb",
+              "size": 299654495
+            },
+            {
+              "shard": "02",
+              "url": "https://archive.org/download/ficha-2026-07/companies-02.zip",
+              "sha1": "2dbf12b6d220fb3568bd6a86ed45d62208127ee0",
+              "size": 314319908
+            },
+            {
+              "shard": "03",
+              "url": "https://archive.org/download/ficha-2026-07/companies-03.zip",
+              "sha1": "663c5c4a56191eed7009f745bdc6a464411dd225",
+              "size": 320909742
+            },
+            {
+              "shard": "04",
+              "url": "https://archive.org/download/ficha-2026-07/companies-04.zip",
+              "sha1": "b3e84d58f859541fd14526726a7955d64b74747a",
+              "size": 328952984
+            },
+            {
+              "shard": "05",
+              "url": "https://archive.org/download/ficha-2026-07/companies-05.zip",
+              "sha1": "7b23474acdca3baebadf8abebfad87cf1fa485ca",
+              "size": 325761875
+            },
+            {
+              "shard": "06",
+              "url": "https://archive.org/download/ficha-2026-07/companies-06.zip",
+              "sha1": "ceb72784e5f588dcdf2dcc6975d6d677566149ae",
+              "size": 289280374
+            },
+            {
+              "shard": "07",
+              "url": "https://archive.org/download/ficha-2026-07/companies-07.zip",
+              "sha1": "e583f8ad13b8f8799f9fcc422389318e8e68c5a1",
+              "size": 341180656
+            },
+            {
+              "shard": "08",
+              "url": "https://archive.org/download/ficha-2026-07/companies-08.zip",
+              "sha1": "f45cc60aa2fa6f2469ec766bc0de65b8d0378e93",
+              "size": 350491853
+            },
+            {
+              "shard": "09",
+              "url": "https://archive.org/download/ficha-2026-07/companies-09.zip",
+              "sha1": "aa59c8a6b19bc4e8858d91dfb239ec4fc9df6318",
+              "size": 327094687
+            },
+            {
+              "shard": "10",
+              "url": "https://archive.org/download/ficha-2026-07/companies-10.zip",
+              "sha1": "a4f5c8f410050da63a08fdb8b690a7e5e3ea3036",
+              "size": 343637535
+            },
+            {
+              "shard": "11",
+              "url": "https://archive.org/download/ficha-2026-07/companies-11.zip",
+              "sha1": "69c53c7bc6460cdc5c9c9ede69bf0f9638ba6e9c",
+              "size": 345375265
+            },
+            {
+              "shard": "12",
+              "url": "https://archive.org/download/ficha-2026-07/companies-12.zip",
+              "sha1": "6dec187b4e39fcba352ed73b9097440b7679ab4a",
+              "size": 334655832
+            },
+            {
+              "shard": "13",
+              "url": "https://archive.org/download/ficha-2026-07/companies-13.zip",
+              "sha1": "bf8d23f5b93793b5f0767388cf69f563072263d0",
+              "size": 335528307
+            },
+            {
+              "shard": "14",
+              "url": "https://archive.org/download/ficha-2026-07/companies-14.zip",
+              "sha1": "5b288b11cad781ae92d231bb132755b489501bc8",
+              "size": 333723225
+            },
+            {
+              "shard": "15",
+              "url": "https://archive.org/download/ficha-2026-07/companies-15.zip",
+              "sha1": "11537c2b10117eff232e7da9da4955970db99a15",
+              "size": 328335655
+            },
+            {
+              "shard": "16",
+              "url": "https://archive.org/download/ficha-2026-07/companies-16.zip",
+              "sha1": "58dcc63f5e971048c51a9d988f8ad04fa6c9d7c1",
+              "size": 310513550
+            },
+            {
+              "shard": "17",
+              "url": "https://archive.org/download/ficha-2026-07/companies-17.zip",
+              "sha1": "4a0ea843a6272a9e9accca33c44e76ebf4d019de",
+              "size": 336526688
+            },
+            {
+              "shard": "18",
+              "url": "https://archive.org/download/ficha-2026-07/companies-18.zip",
+              "sha1": "2ae1e3c83bfd980f61a5052e8d9d687f1e39d47a",
+              "size": 330733959
+            },
+            {
+              "shard": "19",
+              "url": "https://archive.org/download/ficha-2026-07/companies-19.zip",
+              "sha1": "4b8777cd2c2803b2b56f3d9bc8c47b93c71dc8e4",
+              "size": 337178104
+            },
+            {
+              "shard": "20",
+              "url": "https://archive.org/download/ficha-2026-07/companies-20.zip",
+              "sha1": "94591d98a0b0ec161a283a08f7dc294a781cdfcb",
+              "size": 336325777
+            },
+            {
+              "shard": "21",
+              "url": "https://archive.org/download/ficha-2026-07/companies-21.zip",
+              "sha1": "3a83d7ac01640403acaadc781c8ef4315d83fbe2",
+              "size": 336727157
+            },
+            {
+              "shard": "22",
+              "url": "https://archive.org/download/ficha-2026-07/companies-22.zip",
+              "sha1": "c67a9d9d038cd034d81d567dbf3e0d72ca02c3fe",
+              "size": 336293833
+            },
+            {
+              "shard": "23",
+              "url": "https://archive.org/download/ficha-2026-07/companies-23.zip",
+              "sha1": "51133012ea49b0f941a00b4aa10e6810e15d185d",
+              "size": 334670863
+            },
+            {
+              "shard": "24",
+              "url": "https://archive.org/download/ficha-2026-07/companies-24.zip",
+              "sha1": "8fc1e2691e66f087abf4e3d5ade625180c5e4805",
+              "size": 336345820
+            },
+            {
+              "shard": "25",
+              "url": "https://archive.org/download/ficha-2026-07/companies-25.zip",
+              "sha1": "a9a38e469bb78d21cfac853062df62a83a2b6677",
+              "size": 323405289
+            },
+            {
+              "shard": "26",
+              "url": "https://archive.org/download/ficha-2026-07/companies-26.zip",
+              "sha1": "2e43337eaa85da66b1c4cb49f203d523cf3192bf",
+              "size": 338221250
+            },
+            {
+              "shard": "27",
+              "url": "https://archive.org/download/ficha-2026-07/companies-27.zip",
+              "sha1": "7dd10f21fc0434c8892b3b39c91100be3b956a19",
+              "size": 335261986
+            },
+            {
+              "shard": "28",
+              "url": "https://archive.org/download/ficha-2026-07/companies-28.zip",
+              "sha1": "81584fdfa5fc319db30cc8cc39e1145b678e2c42",
+              "size": 333735937
+            },
+            {
+              "shard": "29",
+              "url": "https://archive.org/download/ficha-2026-07/companies-29.zip",
+              "sha1": "158705552fe7313438f5999aff9bf8fda7e6e27a",
+              "size": 328078718
+            },
+            {
+              "shard": "30",
+              "url": "https://archive.org/download/ficha-2026-07/companies-30.zip",
+              "sha1": "e53d5655835d88819d3ff5cc2978da946385c041",
+              "size": 333796698
+            },
+            {
+              "shard": "31",
+              "url": "https://archive.org/download/ficha-2026-07/companies-31.zip",
+              "sha1": "cc3bf34997a197e1c93b68061ab44707f57e00ca",
+              "size": 335959053
+            },
+            {
+              "shard": "32",
+              "url": "https://archive.org/download/ficha-2026-07/companies-32.zip",
+              "sha1": "6e2159d9b1a85513af75c687bda6202db6872f2d",
+              "size": 335030772
+            },
+            {
+              "shard": "33",
+              "url": "https://archive.org/download/ficha-2026-07/companies-33.zip",
+              "sha1": "7ec8771e582c641c02e59e0a742e7387b9543628",
+              "size": 335525513
+            },
+            {
+              "shard": "34",
+              "url": "https://archive.org/download/ficha-2026-07/companies-34.zip",
+              "sha1": "40019401743596e482f67be88f09868eb0cdc941",
+              "size": 336464666
+            },
+            {
+              "shard": "35",
+              "url": "https://archive.org/download/ficha-2026-07/companies-35.zip",
+              "sha1": "2df93a25f59f97a55518077fb3a596b7e269678f",
+              "size": 332822726
+            },
+            {
+              "shard": "36",
+              "url": "https://archive.org/download/ficha-2026-07/companies-36.zip",
+              "sha1": "3f9aefb28c8e1ec4a17c57c8c4a0bde4872294af",
+              "size": 328625909
+            },
+            {
+              "shard": "37",
+              "url": "https://archive.org/download/ficha-2026-07/companies-37.zip",
+              "sha1": "76ea52c6cf012ea45fd6ee6bcfe9748953ab0df8",
+              "size": 331457707
+            },
+            {
+              "shard": "38",
+              "url": "https://archive.org/download/ficha-2026-07/companies-38.zip",
+              "sha1": "a6f0ed0f3dce9403a110f791f003f0f3becffcec",
+              "size": 315602753
+            },
+            {
+              "shard": "39",
+              "url": "https://archive.org/download/ficha-2026-07/companies-39.zip",
+              "sha1": "f8310b2488c4f8594a65b3620ec4c1338695bb73",
+              "size": 321463346
+            },
+            {
+              "shard": "40",
+              "url": "https://archive.org/download/ficha-2026-07/companies-40.zip",
+              "sha1": "4678d8aa0965f226782056a3b9f0a6e975a79f7c",
+              "size": 330937825
+            },
+            {
+              "shard": "41",
+              "url": "https://archive.org/download/ficha-2026-07/companies-41.zip",
+              "sha1": "6018943354d80d77d96159c6dd663caba05e3f2a",
+              "size": 337924277
+            },
+            {
+              "shard": "42",
+              "url": "https://archive.org/download/ficha-2026-07/companies-42.zip",
+              "sha1": "07a5df0f9ea93e3cb4d8b9d004f54a64983f06f1",
+              "size": 331098062
+            },
+            {
+              "shard": "43",
+              "url": "https://archive.org/download/ficha-2026-07/companies-43.zip",
+              "sha1": "f07bf996cdeb99181d3c8de911007a25bd37d2ec",
+              "size": 330181745
+            },
+            {
+              "shard": "44",
+              "url": "https://archive.org/download/ficha-2026-07/companies-44.zip",
+              "sha1": "01dc5df59028585683bfe48061525e01c54db97f",
+              "size": 327787888
+            },
+            {
+              "shard": "45",
+              "url": "https://archive.org/download/ficha-2026-07/companies-45.zip",
+              "sha1": "f2b17b9feb041163346e24e16682b8b563266b53",
+              "size": 329275524
+            },
+            {
+              "shard": "46",
+              "url": "https://archive.org/download/ficha-2026-07/companies-46.zip",
+              "sha1": "496618a29832c3121bc06baf487e099b4870415a",
+              "size": 327401229
+            },
+            {
+              "shard": "47",
+              "url": "https://archive.org/download/ficha-2026-07/companies-47.zip",
+              "sha1": "dc83ae7229191ffeed60d40e699b7fca9abfbf25",
+              "size": 328280268
+            },
+            {
+              "shard": "48",
+              "url": "https://archive.org/download/ficha-2026-07/companies-48.zip",
+              "sha1": "c8f0edc903adaaacb0f1bdf8e4916fe8e4f1467e",
+              "size": 336375204
+            },
+            {
+              "shard": "49",
+              "url": "https://archive.org/download/ficha-2026-07/companies-49.zip",
+              "sha1": "cc17d94585834f99bfa49a2e04b21a5f11099a56",
+              "size": 335228179
+            },
+            {
+              "shard": "50",
+              "url": "https://archive.org/download/ficha-2026-07/companies-50.zip",
+              "sha1": "b6dacfea520fc8935ce93fa61ea00d7fbcb3fb0a",
+              "size": 336757049
+            },
+            {
+              "shard": "51",
+              "url": "https://archive.org/download/ficha-2026-07/companies-51.zip",
+              "sha1": "04b54c351985462233fa9ac0fec408b59adec4d6",
+              "size": 336549594
+            },
+            {
+              "shard": "52",
+              "url": "https://archive.org/download/ficha-2026-07/companies-52.zip",
+              "sha1": "52c2d92e620383982e17ab2e8c75639e05bc196c",
+              "size": 335218842
+            },
+            {
+              "shard": "53",
+              "url": "https://archive.org/download/ficha-2026-07/companies-53.zip",
+              "sha1": "80e948f8f4123097b59d345e45671c407897da97",
+              "size": 328689966
+            },
+            {
+              "shard": "54",
+              "url": "https://archive.org/download/ficha-2026-07/companies-54.zip",
+              "sha1": "a0f83deecbe65ea7b298bfc41943da0595b0ddf8",
+              "size": 334701173
+            },
+            {
+              "shard": "55",
+              "url": "https://archive.org/download/ficha-2026-07/companies-55.zip",
+              "sha1": "8542719b74e27a5c721369f2b615a1b7b9a4ebe2",
+              "size": 333943613
+            },
+            {
+              "shard": "56",
+              "url": "https://archive.org/download/ficha-2026-07/companies-56.zip",
+              "sha1": "5797936d6119116b90bc443cd467a48582f98a7a",
+              "size": 317930457
+            },
+            {
+              "shard": "57",
+              "url": "https://archive.org/download/ficha-2026-07/companies-57.zip",
+              "sha1": "91716bf3bf94f2a4d61bf3dc97f46d48eb587376",
+              "size": 333279587
+            },
+            {
+              "shard": "58",
+              "url": "https://archive.org/download/ficha-2026-07/companies-58.zip",
+              "sha1": "9c877ca5caa30f4df25dfd42129f6e722f9ebcf7",
+              "size": 331295803
+            },
+            {
+              "shard": "59",
+              "url": "https://archive.org/download/ficha-2026-07/companies-59.zip",
+              "sha1": "7f38aeb58d6071c65cdb9d3242b13aa739e19456",
+              "size": 332865384
+            },
+            {
+              "shard": "60",
+              "url": "https://archive.org/download/ficha-2026-07/companies-60.zip",
+              "sha1": "01dd939e9d655fe78c6fff7029a23353c6fa90f1",
+              "size": 332526240
+            },
+            {
+              "shard": "61",
+              "url": "https://archive.org/download/ficha-2026-07/companies-61.zip",
+              "sha1": "833995e263a07e6f4677538e169e597b37dbff00",
+              "size": 331513199
+            },
+            {
+              "shard": "62",
+              "url": "https://archive.org/download/ficha-2026-07/companies-62.zip",
+              "sha1": "b8fd05f8c8fd4d08e8b52f1cf213d7a381bc5a33",
+              "size": 328802759
+            },
+            {
+              "shard": "63",
+              "url": "https://archive.org/download/ficha-2026-07/companies-63.zip",
+              "sha1": "0c381147bb35f858f7946966467ef26ac6dbabdd",
+              "size": 329878530
+            },
+            {
+              "shard": "64",
+              "url": "https://archive.org/download/ficha-2026-07/companies-64.zip",
+              "sha1": "bcd938d165ede17154f84d9bcbd8d536c73a6d51",
+              "size": 330726709
+            },
+            {
+              "shard": "65",
+              "url": "https://archive.org/download/ficha-2026-07/companies-65.zip",
+              "sha1": "29eb8a3e5e0b6a92b8d0b530f70f3ecc543cbf38",
+              "size": 331817935
+            },
+            {
+              "shard": "66",
+              "url": "https://archive.org/download/ficha-2026-07/companies-66.zip",
+              "sha1": "b9098f06f0bb4e88a6c713b55c5bd1b12967a877",
+              "size": 331357571
+            },
+            {
+              "shard": "67",
+              "url": "https://archive.org/download/ficha-2026-07/companies-67.zip",
+              "sha1": "5d35a3eead364f1e7e1c489e499ab96e5525a54c",
+              "size": 267018416
+            },
+            {
+              "shard": "68",
+              "url": "https://archive.org/download/ficha-2026-07/companies-68.zip",
+              "sha1": "a3c227b28b1e24bbfb528a4532709b5dc15d42e0",
+              "size": 28910428
+            },
+            {
+              "shard": "69",
+              "url": "https://archive.org/download/ficha-2026-07/companies-69.zip",
+              "sha1": "79fdd5023726bac6c350294f182ec0b118e4a8ef",
+              "size": 17091689
+            },
+            {
+              "shard": "70",
+              "url": "https://archive.org/download/ficha-2026-07/companies-70.zip",
+              "sha1": "7e74d348bd05ca37beb98e616f494c94376c1e0d",
+              "size": 10231593
+            },
+            {
+              "shard": "71",
+              "url": "https://archive.org/download/ficha-2026-07/companies-71.zip",
+              "sha1": "f4700bd08cc884f20cee78a14636e217ca93970a",
+              "size": 26026085
+            },
+            {
+              "shard": "72",
+              "url": "https://archive.org/download/ficha-2026-07/companies-72.zip",
+              "sha1": "781fecb85bfa48d7979d63e5d2dd6c4428bd1a70",
+              "size": 27776194
+            },
+            {
+              "shard": "73",
+              "url": "https://archive.org/download/ficha-2026-07/companies-73.zip",
+              "sha1": "c6a0fd35b22e931dd2286206b5ad56f6be93eb16",
+              "size": 29349254
+            },
+            {
+              "shard": "74",
+              "url": "https://archive.org/download/ficha-2026-07/companies-74.zip",
+              "sha1": "354ede791ed9a765c4c9f116469f2df2102a20a6",
+              "size": 23214941
+            },
+            {
+              "shard": "75",
+              "url": "https://archive.org/download/ficha-2026-07/companies-75.zip",
+              "sha1": "9b732a9a17cd39ef4f5ff3d1166b75f461cbd986",
+              "size": 19924010
+            },
+            {
+              "shard": "76",
+              "url": "https://archive.org/download/ficha-2026-07/companies-76.zip",
+              "sha1": "cae6f30e1c1a8388fb9c40b9e16e08b2ac4a7944",
+              "size": 20921622
+            },
+            {
+              "shard": "77",
+              "url": "https://archive.org/download/ficha-2026-07/companies-77.zip",
+              "sha1": "034223f2f849f531119e12f493978a414a141ff3",
+              "size": 22976648
+            },
+            {
+              "shard": "78",
+              "url": "https://archive.org/download/ficha-2026-07/companies-78.zip",
+              "sha1": "8ebb7995ad46aaba36a4e418bcaa46c1c0aad4dd",
+              "size": 27176028
+            },
+            {
+              "shard": "79",
+              "url": "https://archive.org/download/ficha-2026-07/companies-79.zip",
+              "sha1": "09a637a84d5e5f0d6a47f554752ba30ba37f1cf2",
+              "size": 27061236
+            },
+            {
+              "shard": "80",
+              "url": "https://archive.org/download/ficha-2026-07/companies-80.zip",
+              "sha1": "88779780f5fa0e0db325bcb3475a0e939ad13d91",
+              "size": 27062610
+            },
+            {
+              "shard": "81",
+              "url": "https://archive.org/download/ficha-2026-07/companies-81.zip",
+              "sha1": "0a0420115b1cd4ce4e9a04eb95d39dc8d0065793",
+              "size": 24125659
+            },
+            {
+              "shard": "82",
+              "url": "https://archive.org/download/ficha-2026-07/companies-82.zip",
+              "sha1": "889b9d441e4e3c6cc51b4bdf11abe076a32f5fed",
+              "size": 24569363
+            },
+            {
+              "shard": "83",
+              "url": "https://archive.org/download/ficha-2026-07/companies-83.zip",
+              "sha1": "c1211c45966f9c5cd17e1ea97360708250f2a9d7",
+              "size": 23209555
+            },
+            {
+              "shard": "84",
+              "url": "https://archive.org/download/ficha-2026-07/companies-84.zip",
+              "sha1": "7c8bf070fa4176841cef06afe067a2a190f2e166",
+              "size": 18824996
+            },
+            {
+              "shard": "85",
+              "url": "https://archive.org/download/ficha-2026-07/companies-85.zip",
+              "sha1": "3b1d9c55ca9d502b1dd9a466024659da08911fe2",
+              "size": 13986688
+            },
+            {
+              "shard": "86",
+              "url": "https://archive.org/download/ficha-2026-07/companies-86.zip",
+              "sha1": "33efd3c1917c4cb13d4c5cb342ec445e3aa19827",
+              "size": 19052604
+            },
+            {
+              "shard": "87",
+              "url": "https://archive.org/download/ficha-2026-07/companies-87.zip",
+              "sha1": "85d8d9c70d5439b675a92ea1ba082022d60510aa",
+              "size": 19213855
+            },
+            {
+              "shard": "88",
+              "url": "https://archive.org/download/ficha-2026-07/companies-88.zip",
+              "sha1": "06253ea133018448eeb4c0d9e9842082c21d5a19",
+              "size": 19886761
+            },
+            {
+              "shard": "89",
+              "url": "https://archive.org/download/ficha-2026-07/companies-89.zip",
+              "sha1": "4ef01632b263d1a3a1b8119ad4867cf9023747ae",
+              "size": 25604124
+            },
+            {
+              "shard": "90",
+              "url": "https://archive.org/download/ficha-2026-07/companies-90.zip",
+              "sha1": "88cfe2c6d6a47744eace95a463250c6b3788945c",
+              "size": 25187710
+            },
+            {
+              "shard": "91",
+              "url": "https://archive.org/download/ficha-2026-07/companies-91.zip",
+              "sha1": "ac80e1d1b86d93f137b041b626664e64c9d11623",
+              "size": 26762031
+            },
+            {
+              "shard": "92",
+              "url": "https://archive.org/download/ficha-2026-07/companies-92.zip",
+              "sha1": "667c6307f4a85805bfcce4e38d498ccd05c46548",
+              "size": 25112061
+            },
+            {
+              "shard": "93",
+              "url": "https://archive.org/download/ficha-2026-07/companies-93.zip",
+              "sha1": "ec46eab26c33dff4565ef2742f245a2f147b6a0c",
+              "size": 26915040
+            },
+            {
+              "shard": "94",
+              "url": "https://archive.org/download/ficha-2026-07/companies-94.zip",
+              "sha1": "5c6ae925ee32dcc15063b44ccfd9d105b28ff76e",
+              "size": 27063034
+            },
+            {
+              "shard": "95",
+              "url": "https://archive.org/download/ficha-2026-07/companies-95.zip",
+              "sha1": "55ff0edcc14c9b2be8b5bc07a447c6037ea8b564",
+              "size": 14388404
+            },
+            {
+              "shard": "96",
+              "url": "https://archive.org/download/ficha-2026-07/companies-96.zip",
+              "sha1": "0e01d234f71b4ebca6fc57dce82e19da266200d6",
+              "size": 18733642
+            },
+            {
+              "shard": "97",
+              "url": "https://archive.org/download/ficha-2026-07/companies-97.zip",
+              "sha1": "866ab62ebd576756e0c8ea40745a861687042701",
+              "size": 26616010
+            },
+            {
+              "shard": "98",
+              "url": "https://archive.org/download/ficha-2026-07/companies-98.zip",
+              "sha1": "83518e4524f2a61c86a123434546a0e6c51b7150",
+              "size": 853041
+            },
+            {
+              "shard": "99",
+              "url": "https://archive.org/download/ficha-2026-07/companies-99.zip",
+              "sha1": "85de1e068ae0d319c51c9e20c9c261dfd1f24796",
+              "size": 89763
+            }
+          ]
+        }
+      },
+      "generated_at": "2026-08-20T05:35:11Z",
+      "generator": "ficha-etl",
+      "lookups": {
+        "cnaes": {
+          "sha1": "7960a5ff4cb82848a0337a99f3c5cec0142d8e30",
+          "sha256": "8fe52ef5ed359bca593649c97eba4701d1f6f9a04be9b1b16f04a174c580b282",
+          "size": 42184,
+          "url": "https://archive.org/download/ficha-2026-07/lookups/cnaes.parquet"
+        },
+        "motivos": {
+          "sha1": "c5df1c92581d256ea41761fa1de6895135dc0052",
+          "sha256": "2904f963ff24fa9ffe4b4579bd6d86fb97471608d06707fd949af1b9a6fecc9a",
+          "size": 2743,
+          "url": "https://archive.org/download/ficha-2026-07/lookups/motivos.parquet"
+        },
+        "municipios": {
+          "sha1": "1209806ceb5d01f030c0c53060f46d8e43ab9aba",
+          "sha256": "cee36fbb2e95ff10d29e1c72a30d610510f7d7029d14cdc58e0a2ddbb402d3fc",
+          "size": 71122,
+          "url": "https://archive.org/download/ficha-2026-07/lookups/municipios.parquet"
+        },
+        "naturezas": {
+          "sha1": "512d3b1ef29f5f6398e9422d3419d56c1564eb6b",
+          "sha256": "852a67fae6b574de2dd9a30c0a77a8487ce18a1d216f15f8c2ffe46f0f921d8d",
+          "size": 3228,
+          "url": "https://archive.org/download/ficha-2026-07/lookups/naturezas.parquet"
+        },
+        "paises": {
+          "sha1": "e111bb60dc8e58221e27d5abe1a1ae802c41e3f6",
+          "sha256": "402738c0081fd1692cff309035dafc939bec9881f0e1f2693e59c0f7b2246de3",
+          "size": 5261,
+          "url": "https://archive.org/download/ficha-2026-07/lookups/paises.parquet"
+        },
+        "qualificacoes": {
+          "sha1": "fe8391f0ba8d14bb8266011f9d601fcd6bebe35a",
+          "sha256": "112ea59db943013d073e63dafa48c68b2afcc859afc6fc18ee4956c779132016",
+          "size": 2150,
+          "url": "https://archive.org/download/ficha-2026-07/lookups/qualificacoes.parquet"
+        }
+      },
+      "rfb_layout_date": null,
+      "row_counts": {
+        "cnpj_cnaes": 195136593,
+        "cnpj_contatos": 124318301,
+        "cnpjs": 72318968,
+        "enderecos": 72318968,
+        "pessoas": 44567736,
+        "raizes": 69062849,
+        "socios": 27992378
+      },
+      "schema_version": "1.0.0"
+    },
     {
       "date": "2026-06",
       "files": {
