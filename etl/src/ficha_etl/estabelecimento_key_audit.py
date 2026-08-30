@@ -75,7 +75,7 @@ log = logging.getLogger(__name__)
 _RAW_TABLE = "_raw_estabelecimento_key_audit"
 _KEY_COLUMNS = ("cnpj_basico", "cnpj_ordem", "cnpj_dv")
 _FORMAT_VERSION = 1
-_TOOL_VERSION = "2026-07-v1"
+_TOOL_VERSION = "2026-08-v2"
 _PARTS: tuple[int, ...] = tuple(range(10))
 _CODEC = "ZSTD"
 _EVIDENCE_SAMPLE_LIMIT = 20
@@ -298,6 +298,7 @@ def _code_fingerprints() -> dict[str, str]:
     modules = {
         "estabelecimento_key_audit": Path(__file__).resolve(),
         "registry": Path(registry.__file__).resolve(),
+        "transform": Path(transform.__file__).resolve(),
     }
     return {name: canonical_history._sha256(path) for name, path in modules.items()}  # noqa: SLF001
 
@@ -309,14 +310,23 @@ def _reusable_part_manifest(
     part: int,
     remote: Any,
     code: dict[str, str],
+    allow_local_override: bool = False,
 ) -> dict[str, Any] | None:
-    required = (paths["raw_dir"] / remote.name, paths["output"], paths["report"], paths["manifest"])
+    required = (
+        paths["raw_dir"] / remote.name,
+        paths["output"],
+        paths["report"],
+        paths["metrics"],
+        paths["manifest"],
+    )
     if not all(path.is_file() for path in required):
         return None
     try:
         payload = canonical_history._load_json(paths["manifest"])  # noqa: SLF001
         expected_zip = canonical_history._sha256(paths["raw_dir"] / remote.name)  # noqa: SLF001
         expected_output = canonical_history._sha256(paths["output"])  # noqa: SLF001
+        expected_report = canonical_history._sha256(paths["report"])  # noqa: SLF001
+        expected_metrics = canonical_history._sha256(paths["metrics"])  # noqa: SLF001
         matches = (
             payload.get("format_version") == _FORMAT_VERSION
             and payload.get("tool_version") == _TOOL_VERSION
@@ -326,8 +336,11 @@ def _reusable_part_manifest(
             and payload.get("code") == code
             and payload["source"]["name"] == remote.name
             and payload["source"]["url"] == remote.url
+            and (allow_local_override or payload["source"]["acquisition"] != "local-override")
             and payload["source"]["zip"]["sha256"] == expected_zip
             and payload["output"]["sha256"] == expected_output
+            and payload["report"]["sha256"] == expected_report
+            and payload["metrics"]["sha256"] == expected_metrics
         )
     except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
         return None
@@ -352,7 +365,14 @@ def run_part_checkpoint(
     code = _code_fingerprints()
 
     if not force:
-        reusable = _reusable_part_manifest(paths, month=month, part=part, remote=remote, code=code)
+        reusable = _reusable_part_manifest(
+            paths,
+            month=month,
+            part=part,
+            remote=remote,
+            code=code,
+            allow_local_override=zip_override is not None,
+        )
         if reusable is not None:
             return PartCheckpointResult(
                 root, paths["output"], paths["report"], paths["manifest"], True, reusable
@@ -394,6 +414,7 @@ def run_part_checkpoint(
             },
             "output": canonical_history._checked_file(paths["output"]),  # noqa: SLF001
             "report": canonical_history._checked_file(paths["report"]),  # noqa: SLF001
+            "metrics": canonical_history._checked_file(paths["metrics"]),  # noqa: SLF001
         }
         canonical_history._write_json_atomic(paths["manifest"], manifest)  # noqa: SLF001
         return PartCheckpointResult(
