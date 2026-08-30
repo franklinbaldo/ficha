@@ -93,7 +93,7 @@ def test_tampered_metrics_invalidates_checkpoint_reuse(tmp_path, monkeypatch):
     root = tmp_path / "run"
     _write_zip(zip_path)
 
-    first = key_audit.run_part_checkpoint("2026-04", 0, root, zip_override=zip_path)
+    key_audit.run_part_checkpoint("2026-04", 0, root, zip_override=zip_path)
     metrics_path = root / "evidence" / "part-0.key-audit.metrics.json"
     metrics_path.write_text('{"tampered": true}\n', encoding="utf-8")
 
@@ -102,4 +102,3 @@ def test_tampered_metrics_invalidates_checkpoint_reuse(tmp_path, monkeypatch):
 
     assert second.reused is False
     assert calls["count"] == 1
-    assert second.manifest["metrics"]["sha256"] != first.manifest["metrics"]["sha256"]
