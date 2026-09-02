@@ -5,6 +5,12 @@ on:
     paths:
       - 'web/**'
       - '.github/workflows/visual-capture.yml'
+  push:
+    branches:
+      - main
+    paths:
+      - 'web/**'
+      - '.github/workflows/visual-capture.yml'
   workflow_dispatch:
 
 permissions:
