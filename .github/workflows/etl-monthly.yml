@@ -22,6 +22,7 @@ on:
 
 permissions:
   contents: write
+  pull-requests: write
 
 concurrency:
   group: ficha-monthly-${{ inputs.month || 'auto' }}
@@ -459,16 +460,20 @@ jobs:
           git config user.name "ficha-etl-bot"
           git config user.email "ficha-etl-bot@users.noreply.github.com"
           git commit -m "chore(etl): publish verified snapshot $MONTH"
-          for attempt in 1 2 3; do
-            git fetch origin main
-            git rebase origin/main || {
-              git rebase --abort || true
-              exit 1
-            }
-            if git push origin HEAD:main; then
-              exit 0
-            fi
-            sleep $((attempt * 5))
-          done
-          echo "::error::failed to push manifest after 3 attempts"
-          exit 1
+          # A main exige head atualizado antes do merge, e a regra tambem vale
+          # para push. O rebase-com-retry existia para lidar com a main andando;
+          # a branch de automacao e recriada a cada execucao, entao ele sai.
+          git fetch origin main
+          git rebase origin/main
+          BRANCH=automation/etl-manifest
+          git checkout -B "$BRANCH"
+          git push -f origin "$BRANCH"
+          NUM=$(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number // empty')
+          if [ -z "$NUM" ]; then
+            CORPO="Manifesto do snapshot verificado, gerado pelo workflow etl-monthly."
+            URL=$(gh pr create --base main --head "$BRANCH" --title "chore(etl): publish verified snapshot" --body "$CORPO")
+            NUM="${URL##*/}"
+          fi
+          gh pr merge "$NUM" --auto --squash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
