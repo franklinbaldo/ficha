@@ -114,7 +114,7 @@ def test_metrics_and_descriptor_are_persisted_before_output_upload() -> None:
     assert names.index("Upload transform metrics") < upload_index
 
 
-def test_finalize_requires_successful_shards_and_preserves_candidate_before_push() -> None:
+def test_finalize_requires_successful_shards_and_preserves_candidate_before_publish() -> None:
     job = _job("finalize")
     assert job["needs"] == ["resolve", "shards"]
     assert "needs.shards.result == 'success'" in job["if"]
@@ -130,7 +130,11 @@ def test_finalize_requires_successful_shards_and_preserves_candidate_before_push
 
     publish = _step("finalize", "Publish verified manifest")
     assert "git commit" in publish["run"]
-    assert "git push origin HEAD:main" in publish["run"]
+    # O manifesto chega na main por PR, nao por push: a branch default exige
+    # head atualizado antes do merge e essa regra tambem vale para push.
+    assert "gh pr create --base main" in publish["run"]
+    assert "gh pr merge" in publish["run"]
+    assert "--auto" in publish["run"]
 
 
 def test_shard_rerun_compares_receipt_before_overwriting_artifact_or_put() -> None:
