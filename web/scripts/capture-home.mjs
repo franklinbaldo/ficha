@@ -20,56 +20,77 @@ const states = [
   },
 ];
 
+const viewports = [
+  { id: 'desktop', width: 1280, height: 900 },
+  { id: 'narrow', width: 390, height: 844 },
+];
+
 await mkdir(outputDir, { recursive: true });
 const browser = await chromium.launch({ headless: true });
-const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
-const consoleMessages = [];
-const pageErrors = [];
+const captures = [];
 
-page.on('console', (message) => consoleMessages.push(`${message.type()}: ${message.text()}`));
-page.on('pageerror', (error) => pageErrors.push(error.message));
+for (const viewport of viewports) {
+  const page = await browser.newPage({ viewport: { width: viewport.width, height: viewport.height } });
+  const consoleMessages = [];
+  const pageErrors = [];
 
-await page.goto(url, { waitUntil: 'domcontentloaded' });
+  page.on('console', (message) => consoleMessages.push(`${message.type()}: ${message.text()}`));
+  page.on('pageerror', (error) => pageErrors.push(error.message));
 
-const startedAt = Date.now();
-let state = 'incomplete';
-let bodyText = '';
-while (Date.now() - startedAt < deadlineMs) {
-  bodyText = await page.locator('body').innerText();
-  const match = states.find((candidate) => candidate.test(bodyText));
-  if (match) {
-    state = match.id;
-    break;
+  await page.goto(url, { waitUntil: 'domcontentloaded' });
+
+  const startedAt = Date.now();
+  let state = 'incomplete';
+  let bodyText = '';
+  while (Date.now() - startedAt < deadlineMs) {
+    bodyText = await page.locator('body').innerText();
+    const match = states.find((candidate) => candidate.test(bodyText));
+    if (match) {
+      state = match.id;
+      break;
+    }
+    await page.waitForTimeout(pollMs);
   }
-  await page.waitForTimeout(pollMs);
-}
 
-const filename = `home-${state}-1280x900.png`;
-await page.screenshot({ path: `${outputDir}/${filename}`, fullPage: false });
+  const filename = `home-${state}-${viewport.width}x${viewport.height}.png`;
+  await page.screenshot({ path: `${outputDir}/${filename}`, fullPage: false });
+
+  captures.push({
+    viewport,
+    url,
+    state,
+    screenshot: filename,
+    waited_ms: Date.now() - startedAt,
+    final_status_excerpt: bodyText
+      .split('\n')
+      .map((line) => line.trim())
+      .find((line) =>
+        line.includes('Pronto para consultas') ||
+        line.startsWith('Erro:') ||
+        line.includes('Os dados ainda não foram publicados') ||
+        line.includes('Manifest inválido') ||
+        line.includes('Preparando o mecanismo de consulta') ||
+        line.includes('Carregando dados de')
+      ) ?? null,
+    page_errors: pageErrors,
+    console_tail: consoleMessages.slice(-20),
+  });
+
+  await page.close();
+}
 
 const evidence = {
   url,
-  state,
-  screenshot: filename,
-  waited_ms: Date.now() - startedAt,
-  final_status_excerpt: bodyText
-    .split('\n')
-    .map((line) => line.trim())
-    .find((line) =>
-      line.includes('Pronto para consultas') ||
-      line.startsWith('Erro:') ||
-      line.includes('Os dados ainda não foram publicados') ||
-      line.includes('Manifest inválido') ||
-      line.includes('Preparando o mecanismo de consulta') ||
-      line.includes('Carregando dados de')
-    ) ?? null,
-  page_errors: pageErrors,
-  console_tail: consoleMessages.slice(-20),
+  commit: process.env.GITHUB_SHA ?? null,
+  captures,
 };
 
 await writeFile(`${outputDir}/capture-state.json`, `${JSON.stringify(evidence, null, 2)}\n`);
-console.log(`capture_state=${state}`);
-console.log(`capture_screenshot=${filename}`);
-if (evidence.final_status_excerpt) console.log(`capture_status=${evidence.final_status_excerpt}`);
+for (const capture of captures) {
+  console.log(`capture_viewport=${capture.viewport.id}:${capture.viewport.width}x${capture.viewport.height}`);
+  console.log(`capture_state=${capture.state}`);
+  console.log(`capture_screenshot=${capture.screenshot}`);
+  if (capture.final_status_excerpt) console.log(`capture_status=${capture.final_status_excerpt}`);
+}
 
 await browser.close();
