@@ -13,3 +13,29 @@
   --cobogo-focus-contrast-inverted: #2c3e50;
   --cobogo-radius-surface: 8px;
 }
+
+/* Surface-quality rule: the primary search action must stay fully visible in
+   a narrow viewport. This is intentionally consumer-local layout behavior;
+   Cobogó supplies the invariant, Ficha keeps its own composition. */
+@media (max-width: 480px) {
+  .input-group {
+    flex-wrap: wrap !important;
+  }
+
+  .input-group input {
+    min-width: 0 !important;
+    flex: 1 1 calc(100% - 128px) !important;
+  }
+
+  .input-group > button {
+    min-width: 112px !important;
+    padding-inline: 1rem !important;
+  }
+
+  .endereco-inputs .uf-select {
+    flex: 1 1 100% !important;
+    min-width: 0 !important;
+    border-right: 0 !important;
+    border-bottom: 1px solid #e5e7eb !important;
+  }
+}
