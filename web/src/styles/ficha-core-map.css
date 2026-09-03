@@ -1,41 +1,343 @@
 :root {
-  /* Ficha owns its concrete palette; Cobogó owns the semantic foundation contract. */
+  /* Ficha owns its concrete identity; Cobogó owns only the semantic roles. */
   color-scheme: light;
-  --cobogo-canvas: #f4f4f4;
-  --cobogo-surface: #ffffff;
-  --cobogo-text: #2c3e50;
-  --cobogo-text-muted: #6b7280;
-  --cobogo-border: #d8d8d8;
-  --cobogo-accent: #1d4ed8;
-  --cobogo-focus: #1d4ed8;
-  --cobogo-focus-contrast: #ffffff;
-  --cobogo-focus-inverted: #ffffff;
-  --cobogo-focus-contrast-inverted: #2c3e50;
-  --cobogo-radius-surface: 8px;
+  --cobogo-canvas: #efe8da;
+  --cobogo-surface: #fbf8f0;
+  --cobogo-surface-muted: #e7dece;
+  --cobogo-text: #18252f;
+  --cobogo-text-muted: #665f55;
+  --cobogo-border: #b8ad9a;
+  --cobogo-accent: #275c5a;
+  --cobogo-accent-strong: #a33f2b;
+  --cobogo-accent-warm: #d99a42;
+  --cobogo-focus: #0b68a0;
+  --cobogo-focus-contrast: #fbf8f0;
+  --cobogo-focus-inverted: #fbf8f0;
+  --cobogo-focus-contrast-inverted: #18252f;
+  --cobogo-radius-control: 0;
+  --cobogo-radius-surface: 0;
+  --cobogo-font-display: Georgia, "Times New Roman", serif;
+  --cobogo-font-inscription: ui-monospace, "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  --cobogo-font-data: ui-monospace, "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+
+  /* EmpresaFicha already exposes these consumer-local roles. Defining them here
+     makes the result object belong to the same public-file language as the home. */
+  --color-concreto-bg: #fbf8f0;
+  --color-concreto-bg-alt: #f4eddf;
+  --color-concreto-bg-footer: #e9dfcf;
+  --color-concreto-border: #b8ad9a;
+  --color-concreto-text: #18252f;
+  --color-concreto-text-strong: #101a21;
+  --color-concreto-text-alt: #303a3f;
+  --color-concreto-text-muted: #746b5f;
+  --color-concreto-text-muted2: #5e584f;
+  --color-concreto-hover: #e4dac9;
+  --font-concreto: var(--cobogo-font-data);
+  --font-curva: var(--cobogo-font-body);
+  --radius-0: 0;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  background:
+    linear-gradient(90deg, rgb(24 37 47 / 0.035) 1px, transparent 1px),
+    var(--cobogo-canvas);
+  background-size: 48px 100%;
+}
+
+::selection {
+  background: var(--cobogo-accent-warm);
+  color: var(--cobogo-text);
+}
+
+/* Search is the working surface of the archive, not a floating SaaS card. */
+.container {
+  max-width: none !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  font-family: var(--cobogo-font-body) !important;
+}
+
+.search-box {
+  margin-bottom: 2.5rem !important;
+  text-align: left !important;
+}
+
+.mode-tabs {
+  justify-content: flex-start !important;
+  gap: 0 !important;
+  margin-bottom: 0 !important;
+  overflow-x: auto;
+  border-bottom: 2px solid var(--cobogo-text);
+}
+
+.mode-tabs .tab {
+  min-width: auto !important;
+  padding: 0.65rem 1rem !important;
+  background: transparent !important;
+  color: var(--cobogo-text-muted) !important;
+  border: 0 !important;
+  border-top: 1px solid var(--cobogo-border) !important;
+  border-left: 1px solid var(--cobogo-border) !important;
+  border-radius: 0 !important;
+  font-family: var(--cobogo-font-inscription) !important;
+  font-size: 0.72rem !important;
+  font-weight: 800 !important;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  transform: none !important;
+}
+
+.mode-tabs .tab:last-child {
+  border-right: 1px solid var(--cobogo-border) !important;
+}
+
+.mode-tabs .tab:hover:not(:disabled) {
+  background: var(--cobogo-surface-muted) !important;
+  color: var(--cobogo-text) !important;
+}
+
+.mode-tabs .tab.active {
+  background: var(--cobogo-text) !important;
+  color: var(--cobogo-canvas) !important;
+  border-color: var(--cobogo-text) !important;
+}
+
+.input-group {
+  gap: 0 !important;
+  padding: 0 !important;
+  background: var(--cobogo-surface) !important;
+  border: 2px solid var(--cobogo-text) !important;
+  border-radius: 0 !important;
+  box-shadow: 7px 7px 0 var(--cobogo-accent-warm) !important;
+}
+
+.input-group input {
+  padding: 1rem 1.15rem !important;
+  color: var(--cobogo-text) !important;
+  font-size: 1.05rem !important;
+}
+
+.input-group input::placeholder {
+  color: #81786b;
+}
+
+.input-group .uf-select {
+  min-width: 112px !important;
+  padding: 1rem 0.85rem !important;
+  color: var(--cobogo-text) !important;
+  border-right: 1px solid var(--cobogo-border) !important;
+  background: var(--cobogo-surface) !important;
+  border-radius: 0 !important;
+}
+
+.input-group > button {
+  min-width: 132px !important;
+  padding: 0.9rem 1.6rem !important;
+  background: var(--cobogo-accent-strong) !important;
+  color: #fffaf2 !important;
+  border: 0 !important;
+  border-left: 2px solid var(--cobogo-text) !important;
+  border-radius: 0 !important;
+  font-family: var(--cobogo-font-inscription) !important;
+  font-size: 0.76rem !important;
+  font-weight: 900 !important;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  transform: none !important;
+}
+
+.input-group > button:hover:not(:disabled) {
+  background: #84301f !important;
+  transform: none !important;
+}
+
+.status,
+.hint {
+  text-align: left !important;
+  color: var(--cobogo-text-muted) !important;
+}
+
+.status {
+  margin: 1rem 0 0 !important;
+  font-family: var(--cobogo-font-inscription);
+  font-size: 0.76rem !important;
+  letter-spacing: 0.02em;
+}
+
+.status.error {
+  color: var(--cobogo-danger) !important;
+}
+
+.proveniencia {
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)) !important;
+  gap: 0 !important;
+  margin: 1.5rem 0 0 !important;
+  padding: 0 !important;
+  border-top: 2px solid var(--cobogo-text) !important;
+  border-bottom: 1px solid var(--cobogo-text) !important;
+  text-align: left !important;
+}
+
+.prov-item {
+  min-height: 4.8rem;
+  padding: 0.85rem 1rem 0.8rem 0 !important;
+  border-right: 1px solid var(--cobogo-border);
+}
+
+.prov-item + .prov-item {
+  padding-left: 1rem !important;
+}
+
+.prov-item:last-child {
+  border-right: 0;
+}
+
+.proveniencia dt {
+  color: var(--cobogo-accent) !important;
+  font-family: var(--cobogo-font-inscription) !important;
+  font-size: 0.64rem !important;
+  font-weight: 800;
+  letter-spacing: 0.12em !important;
+}
+
+.proveniencia dd {
+  margin-top: 0.3rem !important;
+  color: var(--cobogo-text) !important;
+  font-family: var(--cobogo-font-body);
+  font-size: 0.86rem !important;
+}
+
+.prov-nota {
+  color: var(--cobogo-text-muted) !important;
+}
+
+.stale-warning {
+  margin-top: 0.9rem !important;
+  padding: 0.8rem 0 0.8rem 1rem !important;
+  border-left: 5px solid var(--cobogo-accent-warm) !important;
+  color: #67420c !important;
+  background: rgb(217 154 66 / 0.09);
+}
+
+/* The result is literally the project's namesake object: a public file. */
+.ficha-card {
+  border: 2px solid var(--cobogo-text) !important;
+  border-radius: 0 !important;
+  box-shadow: 8px 8px 0 rgb(24 37 47 / 0.13) !important;
+  margin-bottom: 2rem !important;
+  transform: none !important;
+}
+
+.ficha-card::before {
+  background: var(--cobogo-accent-strong) !important;
+  border-bottom: 0 !important;
+}
+
+.ficha-card:hover {
+  transform: none !important;
+  box-shadow: 8px 8px 0 rgb(24 37 47 / 0.13) !important;
+}
+
+.ficha-header {
+  background: var(--color-concreto-bg-alt) !important;
+  border-bottom: 1px solid var(--cobogo-text) !important;
+}
+
+.pessoa-results,
+.endereco-results,
+.cnae-results {
+  overflow-x: auto;
+  border: 1px solid var(--cobogo-text) !important;
+  border-top-width: 3px !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+}
+
+.pessoa-results table,
+.endereco-results table,
+.cnae-results table {
+  background: var(--cobogo-surface) !important;
+}
+
+.pessoa-results th,
+.endereco-results th,
+.cnae-results th {
+  background: var(--cobogo-surface-muted) !important;
+  color: var(--cobogo-text) !important;
+  font-family: var(--cobogo-font-inscription);
+  font-size: 0.68rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.pessoa-results td,
+.endereco-results td,
+.cnae-results td {
+  color: var(--cobogo-text) !important;
+  border-bottom-color: var(--cobogo-border) !important;
+}
+
+.no-results {
+  padding: 2rem 0 !important;
+  background: transparent !important;
+  border-top: 1px solid var(--cobogo-border);
+  border-bottom: 1px solid var(--cobogo-border);
+  border-radius: 0 !important;
+  color: var(--cobogo-text-muted) !important;
+  text-align: left !important;
+}
+
+.badge {
+  border-radius: 0 !important;
 }
 
 /* Surface-quality rule: the primary search action must stay fully visible in
-   a narrow viewport. This is intentionally consumer-local layout behavior;
-   Cobogó supplies the invariant, Ficha keeps its own composition. */
+   a narrow viewport. Cobogó supplies the invariant; Ficha owns the composition. */
 @media (max-width: 480px) {
+  body {
+    background-size: 32px 100%;
+  }
+
   .input-group {
     flex-wrap: wrap !important;
+    box-shadow: 4px 4px 0 var(--cobogo-accent-warm) !important;
   }
 
   .input-group input {
     min-width: 0 !important;
-    flex: 1 1 calc(100% - 128px) !important;
+    flex: 1 1 calc(100% - 122px) !important;
+    padding-inline: 0.8rem !important;
+    font-size: 0.95rem !important;
   }
 
   .input-group > button {
-    min-width: 112px !important;
-    padding-inline: 1rem !important;
+    min-width: 108px !important;
+    padding-inline: 0.75rem !important;
   }
 
   .endereco-inputs .uf-select {
     flex: 1 1 100% !important;
     min-width: 0 !important;
     border-right: 0 !important;
-    border-bottom: 1px solid #e5e7eb !important;
+    border-bottom: 1px solid var(--cobogo-border) !important;
+  }
+
+  .prov-item,
+  .prov-item + .prov-item {
+    padding: 0.72rem 0 !important;
+    border-right: 0;
+    border-bottom: 1px solid var(--cobogo-border);
+  }
+
+  .prov-item:last-child {
+    border-bottom: 0;
+  }
+
+  .ficha-card {
+    box-shadow: 4px 4px 0 rgb(24 37 47 / 0.13) !important;
   }
 }
