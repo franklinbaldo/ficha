@@ -20,7 +20,7 @@ const manifestHref = withBase('manifest.json');
 		/>
 		<title>FICHA — o fichário aberto das empresas brasileiras</title>
 	</head>
-	<body>
+	<body data-manifest-href={manifestHref}>
 		<FICHAHeader client:load />
 		<main>
 			<div class="hero">
@@ -48,6 +48,50 @@ const manifestHref = withBase('manifest.json');
 				</div>
 			</section>
 		</main>
+
+		<script>
+			const recoveryMessage = 'A consulta está temporariamente indisponível.';
+			const recoverySelector = '[data-remote-recovery]';
+			const main = document.querySelector('main');
+
+			function reconcileRemoteFailure() {
+				const status = document.querySelector('.status.error');
+				const existing = document.querySelector(recoverySelector);
+
+				if (!status) {
+					existing?.remove();
+					return;
+				}
+
+				if (status.textContent?.trim() !== recoveryMessage) {
+					status.textContent = recoveryMessage;
+				}
+
+				if (existing) return;
+
+				const guidance = document.createElement('p');
+				guidance.dataset.remoteRecovery = 'true';
+				guidance.className = 'remote-recovery';
+				guidance.append('Você ainda pode consultar o contrato público da base em ');
+
+				const link = document.createElement('a');
+				link.href = document.body.dataset.manifestHref ?? './manifest.json';
+				link.textContent = 'manifest.json';
+				guidance.append(link, '.');
+				status.insertAdjacentElement('afterend', guidance);
+			}
+
+			if (main) {
+				new MutationObserver(reconcileRemoteFailure).observe(main, {
+					subtree: true,
+					childList: true,
+					characterData: true,
+					attributes: true,
+					attributeFilter: ['class'],
+				});
+			}
+			reconcileRemoteFailure();
+		</script>
 	</body>
 </html>
 
@@ -73,6 +117,19 @@ const manifestHref = withBase('manifest.json');
 		margin: 0;
 		color: var(--cobogo-text-muted);
 		font-size: 0.95rem;
+	}
+	:global(.remote-recovery) {
+		margin: -0.35rem auto 0.9rem;
+		max-width: 38rem;
+		font-size: 0.84rem;
+		line-height: 1.5;
+		color: var(--cobogo-text-muted);
+		text-align: center;
+	}
+	:global(.remote-recovery a) {
+		font-weight: 600;
+		color: var(--cobogo-accent);
+		text-underline-offset: 0.16em;
 	}
 	.access-paths {
 		margin: 0 1rem 1.5rem;
