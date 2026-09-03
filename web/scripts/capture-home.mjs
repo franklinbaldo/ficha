@@ -5,6 +5,7 @@ const url = process.argv[2] ?? 'http://127.0.0.1:4321/ficha/';
 const outputDir = process.argv[3] ?? '../visual-evidence';
 const deadlineMs = 45_000;
 const pollMs = 500;
+const friendlyRemoteMessage = 'A consulta está temporariamente indisponível.';
 
 const states = [
   {
@@ -14,7 +15,7 @@ const states = [
   {
     id: 'remote-data-unavailable',
     test: (text) =>
-      text.includes('Erro:') ||
+      text.includes(friendlyRemoteMessage) ||
       text.includes('Os dados ainda não foram publicados') ||
       text.includes('Manifest inválido'),
   },
@@ -52,6 +53,21 @@ for (const viewport of viewports) {
     await page.waitForTimeout(pollMs);
   }
 
+  if (bodyText.split('\n').some((line) => line.trim().startsWith('Erro:'))) {
+    throw new Error('raw initialization error remains visible in the page');
+  }
+
+  if (state === 'remote-data-unavailable' && bodyText.includes(friendlyRemoteMessage)) {
+    for (const forbidden of ['NetworkError', 'XMLHttpRequest']) {
+      if (bodyText.includes(forbidden)) {
+        throw new Error(`technical error leaked into the visible recovery state: ${forbidden}`);
+      }
+    }
+    if (!bodyText.includes('manifest.json')) {
+      throw new Error('recovery state does not expose the public manifest.json alternative');
+    }
+  }
+
   const filename = `home-${state}-${viewport.width}x${viewport.height}.png`;
   await page.screenshot({ path: `${outputDir}/${filename}`, fullPage: false });
 
@@ -66,7 +82,7 @@ for (const viewport of viewports) {
       .map((line) => line.trim())
       .find((line) =>
         line.includes('Pronto para consultas') ||
-        line.startsWith('Erro:') ||
+        line.includes(friendlyRemoteMessage) ||
         line.includes('Os dados ainda não foram publicados') ||
         line.includes('Manifest inválido') ||
         line.includes('Preparando o mecanismo de consulta') ||
