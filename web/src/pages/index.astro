@@ -22,30 +22,77 @@ const manifestHref = withBase('manifest.json');
 	</head>
 	<body data-manifest-href={manifestHref}>
 		<FICHAHeader client:load />
-		<main>
-			<div class="hero">
-				<h1>Entenda uma empresa e suas conexões públicas</h1>
-				<p>
-					Dados abertos de CNPJ da Receita Federal — empresas, sócios, filiais e
-					atividades econômicas, consultados direto no seu navegador.
-				</p>
-			</div>
-			<SearchCNPJ client:load />
-			<section class="access-paths" aria-labelledby="access-title">
-				<p class="access-kicker" id="access-title">Duas formas de acesso</p>
-				<div class="access-grid">
-					<div class="access-path">
-						<h2>Consultar aqui</h2>
-						<p>Use a busca acima para ler uma empresa, seus vínculos e atividades na competência publicada.</p>
-					</div>
-					<div class="access-path">
-						<h2>Levar a base</h2>
-						<p>
-							O contrato público descreve o snapshot vigente e aponta para os arquivos preservados no Internet Archive.
-							<a href={manifestHref}>Abrir manifest.json</a>
-						</p>
-					</div>
+
+		<main class="page-shell">
+			<section class="hero" aria-labelledby="page-title">
+				<div class="hero-copy">
+					<p class="eyebrow">Dados públicos · Receita Federal · série mensal</p>
+					<h1 id="page-title">Uma empresa brasileira,<br /><em>ficha por ficha.</em></h1>
+					<p class="hero-lead">
+						Consulte CNPJ, sócios, endereços e atividades econômicas sem depender de um
+						backend do Ficha. Cada resultado é lido dentro da competência publicada e
+						aponta de volta para sua origem e preservação.
+					</p>
 				</div>
+
+				<aside class="hero-index" aria-label="Como o Ficha organiza a consulta">
+					<p class="hero-index-label">FICHA / arquivo público</p>
+					<ol>
+						<li><span>01</span><strong>Procure</strong> uma empresa ou vínculo.</li>
+						<li><span>02</span><strong>Leia</strong> a informação na competência certa.</li>
+						<li><span>03</span><strong>Leve</strong> os dados públicos se precisar ir além da tela.</li>
+					</ol>
+				</aside>
+			</section>
+
+			<section id="consulta" class="consulta" aria-labelledby="consulta-title">
+				<div class="section-heading">
+					<p>Consulta pública</p>
+					<h2 id="consulta-title">Abra uma ficha</h2>
+				</div>
+				<SearchCNPJ client:load />
+			</section>
+
+			<section class="access-paths" aria-labelledby="access-title">
+				<div class="section-heading compact">
+					<p>Dois caminhos, o mesmo dado</p>
+					<h2 id="access-title">Consulte aqui ou leve a base com você</h2>
+				</div>
+
+				<div class="access-grid">
+					<article class="access-path">
+						<p class="access-number">01</p>
+						<div>
+							<h3>Consultar uma empresa</h3>
+							<p>
+								Use a busca para ler empresas, vínculos e atividades dentro da competência
+								publicada, com a origem do dado visível junto da consulta.
+							</p>
+							<a class="access-link" href="#consulta">Ir para a consulta <span aria-hidden="true">↗</span></a>
+						</div>
+					</article>
+
+					<article class="access-path">
+						<p class="access-number">02</p>
+						<div>
+							<h3>Levar os dados abertos</h3>
+							<p>
+								O contrato público descreve o snapshot vigente e aponta para os arquivos
+								preservados no Internet Archive. A interface não é um pedágio para os dados.
+							</p>
+							<a class="access-link" href={manifestHref}>Abrir manifest.json <span aria-hidden="true">↗</span></a>
+						</div>
+					</article>
+				</div>
+			</section>
+
+			<section class="closing-note" aria-label="Princípio do Ficha">
+				<p class="closing-mark">F</p>
+				<p>
+					<strong>Uma ficha é um estado no tempo.</strong>
+					O Ficha preserva competências mensais para que uma consulta pública continue
+					fazendo sentido depois que o cadastro muda.
+				</p>
 			</section>
 		</main>
 
@@ -96,81 +143,253 @@ const manifestHref = withBase('manifest.json');
 </html>
 
 <style>
-	main {
-		max-width: 800px;
-		margin: 2rem auto;
-		padding: 1rem;
-		background: var(--cobogo-surface);
-		border-radius: var(--cobogo-radius-surface);
-		box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+	.page-shell {
+		max-width: 1180px;
+		margin: 0 auto;
+		padding: 0 2rem 5rem;
 	}
+
 	.hero {
-		text-align: center;
-		padding: 1.5rem 1rem 0;
+		display: grid;
+		grid-template-columns: minmax(0, 1.55fr) minmax(260px, 0.65fr);
+		gap: clamp(3rem, 7vw, 7rem);
+		align-items: end;
+		padding: clamp(4.5rem, 10vw, 8rem) 0 clamp(3.5rem, 8vw, 6rem);
+		border-bottom: 2px solid var(--cobogo-text);
 	}
-	.hero h1 {
-		margin: 0 0 0.5rem;
-		font-size: 1.5rem;
-		color: var(--cobogo-text);
-	}
-	.hero p {
-		margin: 0;
-		color: var(--cobogo-text-muted);
-		font-size: 0.95rem;
-	}
-	:global(.remote-recovery) {
-		margin: -0.35rem auto 0.9rem;
-		max-width: 38rem;
-		font-size: 0.84rem;
-		line-height: 1.5;
-		color: var(--cobogo-text-muted);
-		text-align: center;
-	}
-	:global(.remote-recovery a) {
-		font-weight: 600;
-		color: var(--cobogo-accent);
-		text-underline-offset: 0.16em;
-	}
-	.access-paths {
-		margin: 0 1rem 1.5rem;
-		padding-top: 1.1rem;
-		border-top: 1px solid var(--cobogo-border);
-		text-align: left;
-	}
-	.access-kicker {
-		margin: 0 0 0.65rem;
-		font-size: 0.64rem;
-		font-weight: 600;
-		letter-spacing: 0.13em;
+
+	.eyebrow,
+	.section-heading > p,
+	.hero-index-label {
+		margin: 0 0 1rem;
+		font-family: var(--cobogo-font-inscription);
+		font-size: 0.72rem;
+		font-weight: 700;
+		letter-spacing: 0.16em;
 		text-transform: uppercase;
+		color: var(--cobogo-accent);
+	}
+
+	.hero h1 {
+		max-width: 780px;
+		margin: 0;
+		font-size: clamp(3.2rem, 7.4vw, 6.7rem);
+		font-weight: 700;
+		letter-spacing: -0.055em;
+		line-height: 0.9;
+	}
+
+	.hero h1 em {
+		font-weight: 400;
+		color: var(--cobogo-accent-strong);
+	}
+
+	.hero-lead {
+		max-width: 720px;
+		margin: 2rem 0 0;
+		font-size: clamp(1.05rem, 1.8vw, 1.3rem);
+		line-height: 1.62;
 		color: var(--cobogo-text-muted);
 	}
+
+	.hero-index {
+		padding: 1.25rem 0 0;
+		border-top: 6px solid var(--cobogo-accent-strong);
+	}
+
+	.hero-index ol {
+		list-style: none;
+		margin: 0;
+		padding: 0;
+		border-bottom: 1px solid var(--cobogo-border);
+	}
+
+	.hero-index li {
+		display: grid;
+		grid-template-columns: 2.5rem 1fr;
+		gap: 0.8rem;
+		padding: 0.85rem 0;
+		border-top: 1px solid var(--cobogo-border);
+		font-size: 0.92rem;
+		line-height: 1.4;
+	}
+
+	.hero-index li span {
+		font-family: var(--cobogo-font-data);
+		font-size: 0.72rem;
+		color: var(--cobogo-text-muted);
+	}
+
+	.hero-index strong {
+		font-family: var(--cobogo-font-inscription);
+		text-transform: uppercase;
+		letter-spacing: 0.04em;
+	}
+
+	.consulta {
+		padding: clamp(3.5rem, 7vw, 5.5rem) 0 1rem;
+	}
+
+	.section-heading {
+		display: grid;
+		grid-template-columns: minmax(140px, 0.34fr) minmax(0, 1fr);
+		gap: 1.5rem;
+		align-items: baseline;
+		margin-bottom: 1.5rem;
+	}
+
+	.section-heading > p {
+		margin: 0;
+	}
+
+	.section-heading h2 {
+		margin: 0;
+		font-size: clamp(2rem, 4vw, 3.6rem);
+		letter-spacing: -0.035em;
+	}
+
+	.section-heading.compact {
+		margin-bottom: 2rem;
+	}
+
+	.section-heading.compact h2 {
+		max-width: 720px;
+		font-size: clamp(1.8rem, 3.4vw, 3rem);
+	}
+
+	.access-paths {
+		margin-top: 4rem;
+		padding: 4rem 0;
+		border-top: 2px solid var(--cobogo-text);
+		border-bottom: 1px solid var(--cobogo-text);
+	}
+
 	.access-grid {
 		display: grid;
 		grid-template-columns: repeat(2, minmax(0, 1fr));
-		gap: 1rem 2rem;
+		gap: 0;
+		border-top: 1px solid var(--cobogo-border);
 	}
-	.access-path h2 {
-		margin: 0 0 0.25rem;
+
+	.access-path {
+		display: grid;
+		grid-template-columns: 4.5rem 1fr;
+		gap: 1.25rem;
+		padding: 2rem 2rem 2.25rem 0;
+		border-bottom: 1px solid var(--cobogo-border);
+	}
+
+	.access-path + .access-path {
+		padding-left: 2rem;
+		border-left: 1px solid var(--cobogo-border);
+	}
+
+	.access-number {
+		margin: 0;
+		font-family: var(--cobogo-font-data);
+		font-size: 2rem;
+		line-height: 1;
+		color: var(--cobogo-accent-strong);
+	}
+
+	.access-path h3 {
+		margin: 0 0 0.65rem;
+		font-size: 1.35rem;
+	}
+
+	.access-path p:not(.access-number) {
+		margin: 0;
+		line-height: 1.62;
+		color: var(--cobogo-text-muted);
+	}
+
+	.access-link {
+		display: inline-block;
+		margin-top: 1.25rem;
+		font-family: var(--cobogo-font-inscription);
+		font-size: 0.78rem;
+		font-weight: 800;
+		letter-spacing: 0.07em;
+		text-transform: uppercase;
+		text-decoration-thickness: 1px;
+	}
+
+	.closing-note {
+		display: grid;
+		grid-template-columns: 5rem minmax(0, 620px);
+		gap: 2rem;
+		align-items: start;
+		padding: 3rem 0 0;
+	}
+
+	.closing-mark {
+		margin: 0;
+		font-family: var(--cobogo-font-display);
+		font-size: 4.5rem;
+		font-weight: 700;
+		line-height: 0.85;
+		color: var(--cobogo-accent-strong);
+	}
+
+	.closing-note p:last-child {
+		margin: 0;
 		font-size: 1rem;
+		line-height: 1.65;
+		color: var(--cobogo-text-muted);
+	}
+
+	.closing-note strong {
 		color: var(--cobogo-text);
 	}
-	.access-path p {
-		margin: 0;
-		font-size: 0.88rem;
+
+	:global(.remote-recovery) {
+		margin: 0.35rem 0 1rem;
+		max-width: 48rem;
+		font-size: 0.86rem;
 		line-height: 1.5;
-		color: #4b5563;
+		color: var(--cobogo-text-muted);
+		text-align: left;
 	}
-	.access-path a {
-		display: inline-block;
-		margin-left: 0.2rem;
-		font-weight: 600;
-		color: var(--cobogo-accent);
-		text-underline-offset: 0.16em;
+
+	:global(.remote-recovery a) {
+		font-weight: 700;
+		color: var(--cobogo-accent-strong);
 	}
-	@media (max-width: 600px) {
-		.access-grid {
+
+	@media (max-width: 760px) {
+		.page-shell {
+			padding-inline: 1.15rem;
+		}
+
+		.hero {
 			grid-template-columns: 1fr;
+			gap: 2.5rem;
+			padding-top: 3.5rem;
+		}
+
+		.hero h1 {
+			font-size: clamp(3.25rem, 15vw, 5rem);
+		}
+
+		.section-heading,
+		.access-grid,
+		.closing-note {
+			grid-template-columns: 1fr;
+		}
+
+		.section-heading {
+			gap: 0.35rem;
+		}
+
+		.access-path,
+		.access-path + .access-path {
+			grid-template-columns: 3rem 1fr;
+			padding: 1.6rem 0;
+			border-left: 0;
+		}
+
+		.closing-note {
+			gap: 1rem;
 		}
 	}
 </style>
