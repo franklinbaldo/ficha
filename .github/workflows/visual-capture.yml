@@ -22,31 +22,25 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
-
       - uses: oven-sh/setup-bun@v2
-
       - name: Install web dependencies
         working-directory: web
         run: |
           bun install --frozen-lockfile
-          bun add --no-save playwright@1.54.2
-
+          bun add --no-save playwright@1.54.2 axe-core@4.10.3
       - name: Build site as GitHub Project Pages
         working-directory: web
         env:
           SITE: https://franklinbaldo.github.io
           BASE_PATH: /ficha/
         run: bun run build
-
       - name: Install Chromium for capture
         working-directory: web
         run: bunx playwright install chromium --with-deps
-
       - name: Prepare project-pages mount
         run: |
           mkdir -p .capture-root/ficha
           cp -a web/dist/. .capture-root/ficha/
-
       - name: Serve built artifact
         run: |
           python3 -m http.server 4321 --directory .capture-root > /tmp/ficha-capture-server.log 2>&1 &
@@ -57,18 +51,25 @@ jobs:
           done
           cat /tmp/ficha-capture-server.log
           exit 1
-
       - name: Capture first fold with hydration evidence
         working-directory: web
+        env:
+          GITHUB_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          bun run scripts/capture-home.mjs \
-            http://127.0.0.1:4321/ficha/ \
-            ../visual-evidence
-
+          bun run scripts/capture-home.mjs http://127.0.0.1:4321/ficha/ ../visual-evidence
+      - name: Verify semantic accessibility and keyboard path
+        working-directory: web
+        env:
+          GITHUB_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          bun run scripts/check-accessibility.mjs http://127.0.0.1:4321/ficha/ ../accessibility-evidence
       - name: Upload visual evidence
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: ficha-home-visual-${{ github.sha }}
-          path: visual-evidence/
+          name: ficha-home-visual-${{ github.event.pull_request.head.sha || github.sha }}
+          path: |
+            visual-evidence/
+            accessibility-evidence/
           if-no-files-found: error
           retention-days: 30
