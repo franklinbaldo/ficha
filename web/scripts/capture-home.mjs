@@ -97,7 +97,7 @@ for (const viewport of viewports) {
 
 const evidence = {
   url,
-  commit: process.env.GITHUB_SHA ?? null,
+  commit: process.env.GITHUB_HEAD_SHA || process.env.GITHUB_SHA || null,
   captures,
 };
 
