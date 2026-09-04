@@ -27,17 +27,23 @@ const serious = axeResult.violations.filter((item) => ['serious', 'critical'].in
 
 const interactiveSelector = 'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
 const expectedControls = await page.evaluate((selector) => {
-  return [...document.querySelectorAll(selector)].map((el, index) => {
-    const id = `cobogo-a11y-${index}`;
-    el.dataset.cobogoA11yId = id;
-    return {
-      id,
-      tag: el.tagName,
-      href: el.getAttribute('href'),
-      name: el.getAttribute('name'),
-      text: (el.textContent || '').trim().slice(0, 80),
-    };
-  });
+  return [...document.querySelectorAll(selector)]
+    .filter((el) => {
+      const style = getComputedStyle(el);
+      const rect = el.getBoundingClientRect();
+      return style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0 && rect.height > 0;
+    })
+    .map((el, index) => {
+      const id = `cobogo-a11y-${index}`;
+      el.dataset.cobogoA11yId = id;
+      return {
+        id,
+        tag: el.tagName,
+        href: el.getAttribute('href'),
+        name: el.getAttribute('name'),
+        text: (el.textContent || '').trim().slice(0, 80),
+      };
+    });
 }, interactiveSelector);
 
 const expected = expectedControls.length;
