@@ -142,6 +142,26 @@ jobs:
             --descriptor ".cache/$MONTH/production-descriptor.json" \
             $EXTRA_ARGS
 
+      # #242: use the exact produced CNPJ bytes, not a second RFB download.
+      # The adapter delegates duplicate semantics to estabelecimento_key_audit.
+      # Any violation stops this job before descriptor persistence or output upload.
+      - name: Revalidate estabelecimento full-key uniqueness on produced bytes
+        run: |
+          uv run python -m ficha_etl.monthly_estabelecimento_gate \
+            --month "$MONTH" \
+            --cnpjs ".cache/$MONTH/output/cnpjs.parquet" \
+            --evidence ".cache/$MONTH/evidence/monthly-estabelecimento-key-gate.json" \
+            --work-dir ".cache/$MONTH/monthly-estabelecimento-key-gate"
+
+      - name: Preserve estabelecimento key-gate evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: estabelecimento-key-gate-${{ needs.resolve.outputs.month }}
+          path: etl/.cache/${{ needs.resolve.outputs.month }}/evidence/monthly-estabelecimento-key-gate.json
+          if-no-files-found: warn
+          retention-days: 90
+
       # CRITICAL: o recibo nasce e fica durável ANTES de qualquer upload dos
       # outputs derivados. Upload/promoção nunca são fonte do hash esperado.
       - name: Persist production descriptor before upload
