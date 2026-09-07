@@ -117,7 +117,9 @@ def run_monthly_gate(
 
     con = key_audit._connection(database, temp)  # noqa: SLF001
     try:
-        source_rows, invalid_cnpj_rows = _project_production_keys(con, cnpjs_path, key_projection)
+        source_rows, invalid_cnpj_rows = _project_production_keys(
+            con, cnpjs_path, key_projection
+        )
         audit = key_audit.run_global_key_audit(con, [key_projection])
     finally:
         con.close()
@@ -185,7 +187,13 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         payload = run_monthly_gate(args.month, args.cnpjs, args.evidence, args.work_dir)
-    except (FileNotFoundError, OSError, ValueError, duckdb.Error, MonthlyEstabelecimentoKeyGateError) as exc:
+    except (
+        FileNotFoundError,
+        OSError,
+        ValueError,
+        duckdb.Error,
+        MonthlyEstabelecimentoKeyGateError,
+    ) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
     audit = payload["audit"]
