@@ -117,9 +117,7 @@ def run_monthly_gate(
 
     con = key_audit._connection(database, temp)  # noqa: SLF001
     try:
-        source_rows, invalid_cnpj_rows = _project_production_keys(
-            con, cnpjs_path, key_projection
-        )
+        source_rows, invalid_cnpj_rows = _project_production_keys(con, cnpjs_path, key_projection)
         audit = key_audit.run_global_key_audit(con, [key_projection])
     finally:
         con.close()
