@@ -171,11 +171,8 @@ jobs:
       - run: uv python install 3.11
       - run: uv sync --frozen
 
-      - name: Restore historical checkpoint cache
-        uses: actions/cache@v4
-        with:
-          path: etl/${{ steps.inputs.outputs.root }}
-          key: canonical-history-${{ steps.inputs.outputs.month }}-${{ steps.inputs.outputs.part }}-schema1-${{ hashFiles('etl/src/ficha_etl/canonical_history.py', 'etl/src/ficha_etl/canonical_shadow.py', 'etl/src/ficha_etl/registry.py', 'etl/uv.lock') }}
+      # Deliberately no Actions cache for the historical working tree: it can
+      # include multi-GB source/checkpoint data that is reproducible from IA.
 
       - name: Run historical canonical shadow
         env:
