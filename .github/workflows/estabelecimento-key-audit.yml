@@ -150,11 +150,8 @@ jobs:
       - run: uv python install 3.11
       - run: uv sync --frozen
 
-      - name: Restore key-audit checkpoint cache
-        uses: actions/cache@v4
-        with:
-          path: etl/${{ steps.inputs.outputs.root }}
-          key: estabelecimento-key-audit-${{ steps.inputs.outputs.month }}-schema1-${{ hashFiles('etl/src/ficha_etl/estabelecimento_key_audit.py', 'etl/src/ficha_etl/canonical_history.py', 'etl/src/ficha_etl/registry.py', 'etl/uv.lock') }}
+      # Deliberately no Actions cache for audit checkpoints: the ten-part
+      # working tree is reproducible from IA and can exceed the repo cache budget.
 
       - name: Run cross-part key audit
         env:
