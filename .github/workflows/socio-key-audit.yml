@@ -1,0 +1,433 @@
+name: Socio Key Audit — row identity investigation (issue #97 slice 5)
+
+on:
+  workflow_dispatch:
+    inputs:
+      month:
+        description: Historical IA snapshot (YYYY-MM)
+        required: true
+        default: '2026-04'
+        type: string
+      force:
+        description: Ignore matching cached part checkpoints and rebuild all ten
+        required: true
+        default: false
+        type: boolean
+      reanalyze_source_run_id:
+        description: >-
+          Run ID of a prior audit run whose checkpoint artifact should be
+          re-aggregated with the CURRENT code, with no raw ZIP download at
+          all (aggregation-only). Leave empty for a normal full audit that
+          downloads/verifies the ten real ZIPs.
+        required: false
+        default: ''
+        type: string
+  pull_request:
+    paths:
+      - '.github/workflows/socio-key-audit.yml'
+      - 'etl/src/ficha_etl/socio_key_audit.py'
+      - 'etl/src/ficha_etl/canonical_history.py'
+      - 'etl/src/ficha_etl/registry.py'
+      - 'etl/tests/test_socio_key_audit.py'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: socio-key-audit-${{ github.ref }}-${{ inputs.month || 'pr' }}
+  cancel-in-progress: false
+
+jobs:
+  smoke:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: etl
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+      - run: uv python install 3.11
+      - run: uv sync --frozen --extra dev
+
+      - name: Build ten tiny offline fixtures (exact dup, conflicting cross-part dup, blank key)
+        run: |
+          uv run python - <<'PY'
+          import csv
+          import io
+          import zipfile
+          from pathlib import Path
+
+          from ficha_etl import registry
+
+          root = Path(".socio-key-audit-smoke")
+          root.mkdir(parents=True, exist_ok=True)
+
+          def row(**overrides):
+              base = dict.fromkeys(registry.SOCIO_COLUMNS, "")
+              base.update(
+                  cnpj_basico="00000001",
+                  identificador_socio="2",
+                  nome_socio_razao_social="FULANO DE TAL",
+                  cnpj_cpf_socio="***111111**",
+                  qualificacao_socio="49",
+                  data_entrada_sociedade="20200101",
+                  qualificacao_representante_legal="00",
+                  faixa_etaria="5",
+              )
+              base.update(overrides)
+              return base
+
+          def write_zip(path, rows):
+              buffer = io.StringIO(newline="")
+              writer = csv.writer(
+                  buffer, delimiter=";", quotechar='"',
+                  quoting=csv.QUOTE_ALL, lineterminator="\n",
+              )
+              writer.writerows([[r[name] for name in registry.SOCIO_COLUMNS] for r in rows])
+              with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as archive:
+                  archive.writestr("K3241.K03200Y0.D60719.SOCIOCSV", buffer.getvalue().encode("latin-1"))
+
+          for part in range(10):
+              if part == 0:
+                  rows = [
+                      row(cnpj_basico="00000001", cnpj_cpf_socio="***111111**", qualificacao_socio="49"),
+                      row(cnpj_basico="00000002", cnpj_cpf_socio="***222222**"),
+                      row(cnpj_basico="00000002", cnpj_cpf_socio="***222222**"),  # exact dup
+                  ]
+              elif part == 5:
+                  rows = [
+                      row(cnpj_basico="00000001", cnpj_cpf_socio="***111111**", qualificacao_socio="99"),
+                      row(cnpj_basico="00000003", cnpj_cpf_socio=""),  # blank key component
+                  ]
+              else:
+                  rows = []
+              write_zip(root / f"Socios{part}.zip", rows)
+          PY
+
+      - name: Run offline socio key audit smoke
+        run: |
+          ZIP_ARGS=()
+          for part in 0 1 2 3 4 5 6 7 8 9; do
+            ZIP_ARGS+=(--zip "$part=.socio-key-audit-smoke/Socios$part.zip")
+          done
+          uv run python -m ficha_etl.socio_key_audit \
+            --month 2026-04 \
+            --root .socio-key-audit-smoke/run \
+            "${ZIP_ARGS[@]}"
+
+      - name: Validate candidate-key differentiation
+        run: |
+          REPORT=.socio-key-audit-smoke/run/evidence/global.socio-key-audit.json
+          jq -e '
+            .total_rows_scanned == 5 and
+            .categories.pessoa_fisica.row_count == 5 and
+            .categories.pessoa_fisica.identity_candidates["pf:cpf"].distinct_valid_key_count == 2 and
+            .categories.pessoa_fisica.identity_candidates["pf:cpf"].duplicate_key_count == 2 and
+            .categories.pessoa_fisica.identity_candidates["pf:cpf"].conflicting_key_count == null and
+            .categories.pessoa_fisica.identity_candidates["pf:cpf"].cross_part_duplicate_key_count == 1 and
+            (.categories.pessoa_fisica.identity_candidates["pf:cpf"].evidence_sample | length) == 2 and
+            .categories.pessoa_fisica.identity_candidates["pf:cpf"].blank_or_null_counts_by_component.cnpj_cpf_socio == 1 and
+            .categories.pessoa_fisica.relationship_candidates["pf:company_partner"].conflicting_key_count == 1 and
+            .categories.pessoa_fisica.relationship_candidates["pf:company_partner_qualificacao"].distinct_valid_key_count == 3 and
+            .categories.pessoa_fisica.relationship_candidates["pf:company_partner_qualificacao"].duplicate_key_count == 1 and
+            .categories.pessoa_fisica.relationship_candidates["pf:company_partner_qualificacao"].conflicting_key_count == 0
+          ' "$REPORT"
+
+  audit:
+    if: github.event_name == 'workflow_dispatch' && inputs.reanalyze_source_run_id == ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    defaults:
+      run:
+        working-directory: etl
+    env:
+      PYTHONIOENCODING: utf-8
+      PYTHONUTF8: '1'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate inputs
+        id: inputs
+        env:
+          INPUT_MONTH: ${{ inputs.month }}
+        run: |
+          if ! [[ "$INPUT_MONTH" =~ ^[0-9]{4}-(0[1-9]|1[0-2])$ ]]; then
+            echo "::error::Invalid month '$INPUT_MONTH' — expected YYYY-MM"
+            exit 2
+          fi
+          echo "month=$INPUT_MONTH" >> "$GITHUB_OUTPUT"
+          echo "root=.socio-key-audit/$INPUT_MONTH" >> "$GITHUB_OUTPUT"
+
+      - name: Free disk space
+        # Ten retained ZIPs (~50-230MB each, ~670MB total) plus one extracted
+        # CSV live at a time -- much smaller than estabelecimento's ~20GB,
+        # but the same headroom discipline as the other historical workflows.
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /usr/local/share/powershell /usr/share/swift \
+                      "$AGENT_TOOLSDIRECTORY" || true
+          sudo apt-get clean
+          df -h /
+
+      - uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+      - run: uv python install 3.11
+      - run: uv sync --frozen
+
+      - name: Restore key-audit checkpoint cache
+        uses: actions/cache@v4
+        with:
+          path: etl/${{ steps.inputs.outputs.root }}
+          key: socio-key-audit-${{ steps.inputs.outputs.month }}-schema1-${{ hashFiles('etl/src/ficha_etl/socio_key_audit.py', 'etl/src/ficha_etl/canonical_history.py', 'etl/src/ficha_etl/registry.py', 'etl/uv.lock') }}
+
+      - name: Run socio key audit
+        env:
+          MONTH: ${{ steps.inputs.outputs.month }}
+          ROOT: ${{ steps.inputs.outputs.root }}
+          FORCE: ${{ inputs.force }}
+        run: |
+          df -h /
+          EXTRA_ARGS=()
+          if [ "$FORCE" = "true" ]; then
+            EXTRA_ARGS+=(--force)
+          fi
+          uv run python -m ficha_etl.socio_key_audit \
+            --month "$MONTH" \
+            --root "$ROOT" \
+            "${EXTRA_ARGS[@]}"
+          df -h /
+
+      - name: Write summary
+        if: always()
+        env:
+          ROOT: ${{ steps.inputs.outputs.root }}
+        run: |
+          REPORT="$ROOT/evidence/global.socio-key-audit.json"
+          {
+            echo "## Socio key-identity investigation (issue #97 slice 5)"
+            echo
+            if [ -f "$REPORT" ]; then
+              jq -r '
+                def row_table(cands): "| Candidate | Distinct | Duplicate keys | Excess rows | Cross-part | Conflicting |",
+                  "|---|---:|---:|---:|---:|---:|",
+                  (cands | to_entries[] | "| `" + .key + "` | " +
+                    (.value.distinct_valid_key_count|tostring) + " | " +
+                    (.value.duplicate_key_count|tostring) + " | " +
+                    (.value.excess_duplicate_row_count|tostring) + " | " +
+                    (.value.cross_part_duplicate_key_count|tostring) + " | " +
+                    (.value.conflicting_key_count|tostring) + " |");
+                "- Snapshot: `" + .snapshot_month + "`",
+                "- Total rows scanned: `" + (.total_rows_scanned|tostring) + "`",
+                "",
+                (.categories | to_entries[] |
+                  "### " + .key + " (identificador_socio=\"" + .value.identificador_socio +
+                    "\", rows=" + (.value.row_count|tostring) + ")",
+                  "",
+                  "**Identity candidates**",
+                  "",
+                  row_table(.value.identity_candidates),
+                  "",
+                  "**Relationship candidates**",
+                  "",
+                  row_table(.value.relationship_candidates),
+                  "",
+                  "**Diagnostics**",
+                  "",
+                  "```json",
+                  (.value.diagnostics | tojson),
+                  "```",
+                  "")
+              ' "$REPORT"
+            else
+              echo "- No global report was produced — check part-level failure evidence below."
+              for f in "$ROOT"/evidence/*.failure.json; do
+                [ -f "$f" ] || continue
+                echo "  - $(jq -r '.source.name + \": \" + .error' "$f")"
+              done
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload checkpoints and evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: socio-key-audit-${{ steps.inputs.outputs.month }}-${{ github.run_id }}
+          # All-columns per-part checkpoints (minus nothing -- see module
+          # docstring) retained for inspection only -- not published to the
+          # Internet Archive by this workflow.
+          path: |
+            etl/${{ steps.inputs.outputs.root }}/columns/
+            etl/${{ steps.inputs.outputs.root }}/evidence/
+          if-no-files-found: warn
+          retention-days: 30
+          include-hidden-files: true
+
+  reanalyze:
+    # Aggregation-only: restores an already-verified checkpoint artifact
+    # from a PRIOR `audit` run and re-runs the CURRENT category-aware
+    # aggregation code against it -- no raw SociosN.zip is downloaded from
+    # the Internet Archive mirror at all. Exists specifically so a code
+    # change to the analysis logic produces a fresh, durable, CI-verified
+    # real-data artifact without paying the ~150-minute/multi-GB cost of a
+    # full re-download every time.
+    if: github.event_name == 'workflow_dispatch' && inputs.reanalyze_source_run_id != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      actions: read
+    defaults:
+      run:
+        working-directory: etl
+    env:
+      PYTHONIOENCODING: utf-8
+      PYTHONUTF8: '1'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate inputs
+        id: inputs
+        env:
+          INPUT_MONTH: ${{ inputs.month }}
+          INPUT_SOURCE_RUN_ID: ${{ inputs.reanalyze_source_run_id }}
+        run: |
+          if ! [[ "$INPUT_MONTH" =~ ^[0-9]{4}-(0[1-9]|1[0-2])$ ]]; then
+            echo "::error::Invalid month '$INPUT_MONTH' — expected YYYY-MM"
+            exit 2
+          fi
+          if ! [[ "$INPUT_SOURCE_RUN_ID" =~ ^[0-9]+$ ]]; then
+            echo "::error::reanalyze_source_run_id must be a numeric GH Actions run id, got '$INPUT_SOURCE_RUN_ID'"
+            exit 2
+          fi
+          echo "month=$INPUT_MONTH" >> "$GITHUB_OUTPUT"
+          echo "root=.socio-key-audit-reanalysis/$INPUT_MONTH" >> "$GITHUB_OUTPUT"
+          echo "artifact_name=socio-key-audit-$INPUT_MONTH-$INPUT_SOURCE_RUN_ID" >> "$GITHUB_OUTPUT"
+
+      - uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+      - run: uv python install 3.11
+      - run: uv sync --frozen
+
+      - name: Download source checkpoint artifact (no raw ZIP download)
+        id: download_artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ steps.inputs.outputs.artifact_name }}
+          run-id: ${{ inputs.reanalyze_source_run_id }}
+          github-token: ${{ github.token }}
+          path: etl/${{ steps.inputs.outputs.root }}
+
+      - name: Read source checkpoint commit from the restored artifact
+        id: source_commit
+        env:
+          ROOT: ${{ steps.inputs.outputs.root }}
+        run: |
+          # The prior audit run's own global report (if the artifact
+          # includes one) records the commit that produced the checkpoints
+          # -- structured provenance already written by the code, read
+          # BEFORE the aggregation step below overwrites this same file
+          # with the new report. Not inferred from any directory/file name.
+          SRC="$ROOT/evidence/global.socio-key-audit.json"
+          if [ -f "$SRC" ]; then
+            COMMIT=$(jq -r '.source_commit // empty' "$SRC")
+          else
+            COMMIT=""
+          fi
+          echo "commit=$COMMIT" >> "$GITHUB_OUTPUT"
+
+      - name: Run aggregation-only against the restored checkpoints
+        env:
+          MONTH: ${{ steps.inputs.outputs.month }}
+          ROOT: ${{ steps.inputs.outputs.root }}
+          SOURCE_RUN_ID: ${{ inputs.reanalyze_source_run_id }}
+          SOURCE_ARTIFACT_NAME: ${{ steps.inputs.outputs.artifact_name }}
+          SOURCE_ARTIFACT_ID: ${{ steps.download_artifact.outputs.artifact-id }}
+          SOURCE_CHECKPOINT_COMMIT: ${{ steps.source_commit.outputs.commit }}
+        run: |
+          EXTRA_ARGS=()
+          if [ -n "$SOURCE_ARTIFACT_ID" ]; then
+            EXTRA_ARGS+=(--source-artifact-id "$SOURCE_ARTIFACT_ID")
+          fi
+          if [ -n "$SOURCE_CHECKPOINT_COMMIT" ]; then
+            EXTRA_ARGS+=(--source-checkpoint-commit "$SOURCE_CHECKPOINT_COMMIT")
+          fi
+          uv run python -m ficha_etl.socio_key_audit \
+            --month "$MONTH" \
+            --root "$ROOT" \
+            --aggregate-only \
+            --source-run-id "$SOURCE_RUN_ID" \
+            --source-artifact-name "$SOURCE_ARTIFACT_NAME" \
+            "${EXTRA_ARGS[@]}"
+
+      - name: Write summary
+        if: always()
+        env:
+          ROOT: ${{ steps.inputs.outputs.root }}
+          SOURCE_RUN_ID: ${{ inputs.reanalyze_source_run_id }}
+        run: |
+          REPORT="$ROOT/evidence/global.socio-key-audit.json"
+          {
+            echo "## Socio key-identity re-analysis (issue #97 slice 5)"
+            echo
+            echo "- Source checkpoint artifact: run [\`$SOURCE_RUN_ID\`](https://github.com/${{ github.repository }}/actions/runs/$SOURCE_RUN_ID) -- no raw ZIP re-downloaded"
+            echo
+            if [ -f "$REPORT" ]; then
+              jq -r '
+                def row_table(cands): "| Candidate | Distinct | Duplicate keys | Excess rows | Cross-part | Conflicting |",
+                  "|---|---:|---:|---:|---:|---:|",
+                  (cands | to_entries[] | "| `" + .key + "` | " +
+                    (.value.distinct_valid_key_count|tostring) + " | " +
+                    (.value.duplicate_key_count|tostring) + " | " +
+                    (.value.excess_duplicate_row_count|tostring) + " | " +
+                    (.value.cross_part_duplicate_key_count|tostring) + " | " +
+                    (.value.conflicting_key_count|tostring) + " |");
+                "- Snapshot: `" + .snapshot_month + "`",
+                "- Mode: `" + .mode + "`",
+                "- Total rows scanned: `" + (.total_rows_scanned|tostring) + "`",
+                "- Verified checkpoint checksums: `" + (.verified_checkpoint_checksums | length | tostring) + "` parts (expected == actual for every part)",
+                "- Source: run [`" + .source_provenance.workflow_run_id + "`](https://github.com/${{ github.repository }}/actions/runs/" + .source_provenance.workflow_run_id + "), artifact `" + .source_provenance.artifact_name + "`" + (if .source_provenance.artifact_id then " (id `" + .source_provenance.artifact_id + "`)" else "" end) + (if .source_provenance.checkpoint_commit then ", checkpoint commit `" + .source_provenance.checkpoint_commit + "`" else "" end),
+                "- This reanalysis: workflow run `" + .reanalysis_workflow_run_id + "`, commit `" + .reanalysis_source_commit + "`",
+                "",
+                (.categories | to_entries[] |
+                  "### " + .key + " (identificador_socio=\"" + .value.identificador_socio +
+                    "\", rows=" + (.value.row_count|tostring) + ")",
+                  "",
+                  "**Identity candidates**",
+                  "",
+                  row_table(.value.identity_candidates),
+                  "",
+                  "**Relationship candidates**",
+                  "",
+                  row_table(.value.relationship_candidates),
+                  "",
+                  "**Diagnostics**",
+                  "",
+                  "```json",
+                  (.value.diagnostics | tojson),
+                  "```",
+                  "")
+              ' "$REPORT"
+            else
+              echo "- No global report was produced — the run failed before aggregation completed."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload re-analysis evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: socio-key-audit-reanalysis-${{ steps.inputs.outputs.month }}-${{ github.run_id }}
+          # Only the regenerated global report -- the per-part
+          # columns/*.parquet checkpoints are unchanged from the source
+          # artifact and are not re-uploaded here.
+          path: |
+            etl/${{ steps.inputs.outputs.root }}/evidence/global.socio-key-audit.json
+          if-no-files-found: error
+          retention-days: 30
+          include-hidden-files: true
