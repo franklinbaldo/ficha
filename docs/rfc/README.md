@@ -21,3 +21,4 @@ decisão definitiva.
 | # | Título | Status |
 |---|---|---|
 | [0001](0001-etl-v2-canonical-pipeline.md) | ETL V2: pipeline canônico tipado sob computação restrita | Accepted |
+| [0002](0002-socio-faixa-etaria-birth-interval-signal.md) | `faixa_etaria` de `socio` como sinal auxiliar de intervalo de nascimento | Draft |
