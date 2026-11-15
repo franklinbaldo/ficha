@@ -67,7 +67,7 @@ def test_build_snapshot_entry_accepts_complete_sharded_layer_without_monolith(tm
 
     assert "companies_zip" not in entry["files"]
     companies = entry["files"]["companies"]
-    assert companies["shard_by"] == "cnpj_base_prefix_2"
+    assert companies["shard_by"] == "cnpj_base_prefix_or_base36_mod_100_v1"
     assert [shard["shard"] for shard in companies["shards"]] == [
         f"{value:02d}" for value in range(100)
     ]

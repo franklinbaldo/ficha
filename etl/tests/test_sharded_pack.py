@@ -171,7 +171,7 @@ def test_one_shard_is_self_describing_and_materialized(tmp_path, digits, prefix)
     assert meta["count"] == 1
     assert meta["materialization"]["id"] == spec.materialization_id()
     assert meta["materialization"]["spec"]["range"] == {
-        "kind": "cnpj_base_prefix",
+        "kind": "cnpj_base_prefix_or_base36_mod_v1",
         "value": prefix,
     }
     assert meta["artifact"] is None

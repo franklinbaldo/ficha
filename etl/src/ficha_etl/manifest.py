@@ -27,6 +27,8 @@ from pathlib import Path
 import duckdb
 import httpx
 
+from .cnpj import SHARD_BY
+from .pack import SCHEMA_VERSION as COMPANIES_SCHEMA_VERSION
 from .mirror import (
     companies_shard_url,
     lookup_parquet_url,
@@ -121,7 +123,8 @@ def _companies_sharded_entry(month: str, shards: Iterable[CompanyShardIdentity])
         raise ValueError(f"incomplete companies shards: missing={missing} extra={extra}")
 
     return {
-        "shard_by": "cnpj_base_prefix_2",
+        "shard_by": SHARD_BY,
+        "schema_version": COMPANIES_SCHEMA_VERSION,
         "shards": [
             {
                 "shard": prefix,

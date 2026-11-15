@@ -336,7 +336,7 @@
         const clean = stripCNPJ(cnpj);
         let res;
 
-        if (clean.length === 14) {
+        if (/^[A-Z0-9]{12}[0-9]{2}$/.test(clean)) {
           const stmt = await conn.prepare(`
             SELECT cnpj, razao_social, nome_fantasia, uf,
                    cnae_principal_codigo, cnae_principal_descricao,

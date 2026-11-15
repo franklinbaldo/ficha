@@ -26,6 +26,7 @@ export type Socio = ficha.v1.ISocio;
 /** `12345678` → `'12/345/678.pb'` — mirrors ficha_etl.pack.cnpjpath. */
 export function cnpjpath(cnpjBase: number | string): string {
   const s = String(cnpjBase).padStart(8, '0');
+  if (!/^[A-Z0-9]{8}$/.test(s)) throw new Error('Invalid CNPJ root');
   return `${s.slice(0, 2)}/${s.slice(2, 5)}/${s.slice(5, 8)}.pb`;
 }
 
@@ -47,7 +48,13 @@ export function companyArchiveUrl(
 ): string {
   const { iaBase = 'https://archive.org/download', identifier, files } = options;
   if (files?.companies) {
-    const prefix = cnpjpath(cnpjBase).slice(0, 2);
+    const base = String(cnpjBase).padStart(8, '0');
+    if (!/^[A-Z0-9]{8}$/.test(base)) throw new Error('Invalid CNPJ root');
+    const rawPrefix = base.slice(0, 2);
+    const prefix = files.companies.shard_by === 'cnpj_base_prefix_or_base36_mod_100_v1'
+      && !/^[0-9]{2}$/.test(rawPrefix)
+      ? String(parseInt(rawPrefix, 36) % 100).padStart(2, '0')
+      : rawPrefix;
     const shard = files.companies.shards.find((entry) => entry.shard === prefix);
     if (!shard) {
       throw new Error(`companyArchiveUrl(${cnpjBase}): shard ${prefix} não declarado`);
@@ -133,3 +140,17 @@ function normalizeLongs(company: Company): Company {
 // and lookup-decoded descriptions that this layer can't supply on its
 // own. When wiring `fetchCompany` into the UI, build the row shape at
 // the call site where you have access to the lookup tables.
+
+/** Text fields in schema 1.1 override the legacy numeric mirrors. */
+export function companyRoot(company: Company): string {
+  return company.cnpj_base_text || String(company.cnpj_base ?? 0).padStart(8, '0');
+}
+
+export function estabelecimentoCnpj(company: Company, est: Estabelecimento): string {
+  const order = est.cnpj_ordem_text || String(est.cnpj_ordem ?? 0).padStart(4, '0');
+  return companyRoot(company) + order + String(est.cnpj_dv ?? 0).padStart(2, '0');
+}
+
+export function socioCnpj(socio: Socio): string {
+  return socio.cnpj_socio_text || String(socio.cnpj_socio ?? 0).padStart(14, '0');
+}

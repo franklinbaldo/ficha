@@ -17,6 +17,9 @@ package ficha.v1;
 //   - uint32/uint64: varint encoding — ocupa só os bytes necessários.
 //   - CNPJ (14 dígitos) = cnpj_base (uint32, 8 d) + cnpj_ordem (uint32, 4 d) + cnpj_dv (uint32, 2 d)
 //     Reconstituição: padStart(8,'0') + padStart(4,'0') + padStart(2,'0')
+//   - Schema 1.1 adds *_text fields without changing any v1 wire tags/types.
+//     Nonempty text is authoritative; numeric snapshots keep using integers.
+//     Consumers must support schema 1.1 before reading alphanumeric identities.
 //   - Datas: uint32 no formato YYYYMMDD (e.g. 20260514). 0 = ausente.
 //     Reconstituição: String(n).slice(0,4)+'-'+String(n).slice(4,6)+'-'+String(n).slice(6,8)
 //   - CPF mascarado: uint32 com os 6 dígitos do meio (RFB publica ***NNNNNN**).
@@ -67,6 +70,9 @@ enum FaixaEtaria {
 message Company {
   // identidade da raiz
   uint32 cnpj_base                   = 1;  // 8 dígitos; padStart(8,'0')
+  // Since schema 1.1: authoritative when nonempty. Legacy integers remain
+  // populated for numeric identifiers; readers must prefer the text fields.
+  string cnpj_base_text              = 4;
   string razao_social                = 2;
   string razao_social_normalizada    = 3;  // uppercase sem acento — busca client-side
 
@@ -89,6 +95,7 @@ message Company {
 message Estabelecimento {
   // identidade — cnpj_base fica na Company pai
   uint32             cnpj_ordem = 1;  // 4 dígitos; padStart(4,'0')
+  string             cnpj_ordem_text = 5;  // schema 1.1; e.g. E08G
   uint32             cnpj_dv    = 2;  // 2 dígitos; padStart(2,'0')
   TipoEstabelecimento tipo      = 3;
   string             nome_fantasia = 4;
@@ -141,6 +148,7 @@ message Socio {
 
   // identificação — mutuamente exclusivos por tipo
   uint32 cpf_mascarado_meio = 3;  // PF: 6 dígitos do meio (RFB: ***NNNNNN**); padStart(6,'0')
+  string cnpj_socio_text    = 9;  // schema 1.1; authoritative when nonempty
   uint64 cnpj_socio         = 4;  // PJ: 14 dígitos; padStart(14,'0')
 
   uint32      qualificacao_codigo    = 5;

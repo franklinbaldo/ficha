@@ -41,7 +41,8 @@ const CompanyShardSchema = z.object({
 
 const CompaniesShardedSchema = z
   .object({
-    shard_by: z.literal('cnpj_base_prefix_2'),
+    shard_by: z.enum(['cnpj_base_prefix_2', 'cnpj_base_prefix_or_base36_mod_100_v1']),
+    schema_version: z.enum(['1.0.0', '1.1.0']).optional(),
     shards: z.array(CompanyShardSchema).length(100),
   })
   .superRefine(({ shards }, ctx) => {

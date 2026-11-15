@@ -74,3 +74,14 @@ def test_monthly_gate_rejects_malformed_published_cnpj(tmp_path: Path) -> None:
 
     payload = json.loads(evidence.read_text(encoding="utf-8"))
     assert payload["invalid_cnpj_rows"] == 1
+
+
+def test_malformed_samples_remain_durable_in_failed_gate(tmp_path: Path) -> None:
+    cnpjs = tmp_path / "cnpjs.parquet"
+    evidence = tmp_path / "evidence.json"
+    _write_cnpjs(cnpjs, ["00000000E08G12", "00000000E08G1A", "invalid"])
+    with pytest.raises(MonthlyEstabelecimentoKeyGateError):
+        run_monthly_gate("2026-08", cnpjs, evidence, tmp_path / "work")
+    payload = json.loads(evidence.read_text())
+    assert payload["invalid_cnpj_rows"] == 2
+    assert payload["invalid_cnpj_sample"] == ["00000000E08G1A", "invalid"]

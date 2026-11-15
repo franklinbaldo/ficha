@@ -35,6 +35,7 @@ from . import canonical_history
 from . import estabelecimento_key_audit as key_audit
 from . import registry
 from .sources import is_valid_month
+from .cnpj import CNPJ_PATTERN
 
 
 class MonthlyEstabelecimentoKeyGateError(RuntimeError):
@@ -67,7 +68,7 @@ def _project_production_keys(
             COUNT(*) FILTER (
                 WHERE cnpj IS NULL
                    OR length(cnpj) <> 14
-                   OR NOT regexp_full_match(cnpj, '[0-9]{{14}}')
+                   OR NOT regexp_full_match(cnpj, '{CNPJ_PATTERN}')
             )::BIGINT
         FROM read_parquet({source})
         """
@@ -118,6 +119,15 @@ def run_monthly_gate(
     con = key_audit._connection(database, temp)  # noqa: SLF001
     try:
         source_rows, invalid_cnpj_rows = _project_production_keys(con, cnpjs_path, key_projection)
+        invalid_sample = (
+            con.execute(
+                f"SELECT cnpj FROM read_parquet({_literal(str(cnpjs_path))}) "
+                f"WHERE cnpj IS NULL OR NOT regexp_full_match(cnpj, '{CNPJ_PATTERN}') "
+                "ORDER BY cnpj NULLS FIRST LIMIT 20"
+            ).fetchall()
+            if invalid_cnpj_rows
+            else []
+        )
         audit = key_audit.run_global_key_audit(con, [key_projection])
     finally:
         con.close()
@@ -166,6 +176,8 @@ def run_monthly_gate(
         },
         "source_rows": source_rows,
         "invalid_cnpj_rows": invalid_cnpj_rows,
+        "invalid_cnpj_sample": [row[0] for row in invalid_sample],
+        "invalid_cnpj_sample_limit": 20,
         "audit": asdict(audit),
         "violations": violations,
     }
