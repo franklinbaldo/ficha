@@ -62,6 +62,25 @@ KNOWN_NULLABILITY_GAPS = {
 }
 
 
+# Enum domains are stricter than SQL VARCHAR; generated Zod currently widens them.
+EXPECTED_PUBLIC_ENUM_DOMAINS = {
+    "Cnpj": {
+        "identificador_matriz_filial": ("1", "2"),
+        "porte_empresa": ("00", "01", "03", "05"),
+        "situacao_cadastral": ("01", "02", "03", "04", "08"),
+    },
+    "Raiz": {"porte_empresa": ("00", "01", "03", "05")},
+    "Socio": {
+        "tipo": ("1", "2", "3"),
+        "tipo_descricao": ("PJ", "PF", "estrangeiro"),
+        "faixa_etaria": ("0", "1", "2", "3", "4", "5", "6", "7", "8", "9"),
+    },
+}
+KNOWN_UNRESTRICTED_ENUM_GAPS = {
+    table: set(domains) for table, domains in EXPECTED_PUBLIC_ENUM_DOMAINS.items()
+}
+
+
 def _sql_fields(table: str, slug: str) -> dict[str, str]:
     source = (ROOT / f"knowledge/types/{slug}.schema.sql").read_text(encoding="utf-8")
     match = re.fullmatch(
@@ -139,6 +158,29 @@ def _kind(expr: str) -> str:
     raise AssertionError(f"Unknown Zod scalar type: {expr}")
 
 
+def _enum_domain(expr: str) -> tuple[str, ...] | None:
+    if not expr.startswith("z.enum("):
+        return None
+    match = re.fullmatch(r"z\.enum\(\[([^\]]+)\]\)(?:\.nullable\(\))?", expr)
+    if match is None:
+        raise AssertionError(f"Unexpected Zod enum expression: {expr}")
+    members = [item.strip() for item in match.group(1).split(",")]
+    if not all(re.fullmatch(r"'[^']+'", item) for item in members):
+        raise AssertionError(f"Unexpected Zod enum members: {expr}")
+    values = tuple(item[1:-1] for item in members)
+    if len(values) != len(set(values)):
+        raise AssertionError(f"Duplicate Zod enum member: {expr}")
+    return values
+
+
+def _public_enum_domains(fields: dict[str, str]) -> dict[str, tuple[str, ...]]:
+    return {
+        name: values
+        for name, expr in fields.items()
+        if (values := _enum_domain(expr)) is not None
+    }
+
+
 def _nullability_gap(
     published: dict[str, str], generated: dict[str, str]
 ) -> set[str]:
@@ -182,6 +224,35 @@ class OkfContractCompatibilityTest(unittest.TestCase):
                     },
                     f"{table}: generated schema unexpectedly widened nullability",
                 )
+
+    def test_public_enum_domains_and_generated_widening_are_explicit(self) -> None:
+        for table, (_, public_name) in SOURCES.items():
+            with self.subTest(table=table):
+                published = _published_v1_fields(public_name)
+                generated = _generated_fields(table)
+                domains = _public_enum_domains(published)
+                self.assertEqual(domains, EXPECTED_PUBLIC_ENUM_DOMAINS[table])
+                widened = {
+                    name
+                    for name in domains
+                    if _enum_domain(generated[name]) is None
+                }
+                self.assertEqual(widened, KNOWN_UNRESTRICTED_ENUM_GAPS[table])
+                for name, values in domains.items():
+                    if name not in widened:
+                        self.assertEqual(
+                            _enum_domain(generated[name]),
+                            values,
+                            f"{table}.{name}: generated enum has different allowed values",
+                        )
+
+    def test_negative_public_enum_domain_drift_would_be_detected(self) -> None:
+        published = _published_v1_fields("socio")
+        published["tipo"] = "z.enum(['1', '2'])"
+        self.assertNotEqual(
+            _public_enum_domains(published),
+            EXPECTED_PUBLIC_ENUM_DOMAINS["Socio"],
+        )
 
     def test_negative_wrong_type_would_be_detected(self) -> None:
         published = _published_v1_fields("estabelecimento")

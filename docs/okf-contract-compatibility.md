@@ -6,16 +6,24 @@ manifesto, publicações, views ou a RFC 0001 (Accepted). A RFC 0001A continua D
 
 ## Fronteira observada
 
-| Relação publicada | Sidecar SQL OKF | Zod gerado | Zod público v1 | Colunas | Nulabilidades aceitas por v1 e rejeitadas pelo Zod gerado |
-| --- | --- | --- | --- | ---: | ---: |
-| `cnpjs.parquet` | `knowledge/types/cnpj.schema.sql` | `CnpjSchema` | `EstabelecimentoSchema` | 52 | 22 |
-| `raizes.parquet` | `knowledge/types/raiz.schema.sql` | `RaizSchema` | `RaizSchema` v1 | 18 | 1 |
-| `socios.parquet` | `knowledge/types/socio.schema.sql` | `SocioSchema` | `SocioSchema` v1 | 16 | 5 |
+| Relação publicada | Sidecar SQL OKF | Zod gerado | Zod público v1 | Colunas | Gaps de nulabilidade | Domínios enum v1 ampliados a string |
+| --- | --- | --- | --- | ---: | ---: | ---: |
+| `cnpjs.parquet` | `knowledge/types/cnpj.schema.sql` | `CnpjSchema` | `EstabelecimentoSchema` | 52 | 22 | 3 |
+| `raizes.parquet` | `knowledge/types/raiz.schema.sql` | `RaizSchema` | `RaizSchema` v1 | 18 | 1 | 1 |
+| `socios.parquet` | `knowledge/types/socio.schema.sql` | `SocioSchema` | `SocioSchema` v1 | 16 | 5 | 3 |
 
 Os **tipos básicos e os nomes das colunas** são equivalentes nesses três
 contratos: `VARCHAR` e enums Zod são strings; `VARCHAR[]` é lista de strings;
 `DOUBLE`, número; `INTEGER`, inteiro; `BOOLEAN`, booleano. A concordância
 de *shape* não implica paridade de validação de valores.
+
+Há **sete domínios de valores** presentes como `z.enum(...)` no contrato público
+v1 que o Zod OKF gerado atualmente expressa como `z.string()` sem restrição:
+Cnpj (`identificador_matriz_filial`, `porte_empresa`, `situacao_cadastral`),
+Raiz (`porte_empresa`) e Socio (`tipo`, `tipo_descricao`, `faixa_etaria`).
+Um código fora do enum público pode ser aceito pelo gerado, embora ambos
+sejam strings em SQL. O teste offline fixa esses sete domínios e a dívida
+atual, **sem** declarar equivalência de validação nem executar `safeParse`.
 
 O Zod público v1 aceita `null` em 26 campos de Cnpj, 1 de Raiz e 9 de Socio;
 o Zod OKF gerado só aceita em 4, 0 e 4, respectivamente. Em especial:
@@ -40,9 +48,10 @@ a lista deve ser revisada junto à mudança, com teste de valores reais/nulos.
 O teste Python de biblioteca padrão compara as declarações SQL do OKF com
 os schemas Zod v1 e gerado. Falha quando coluna ou tipo muda, quando surge
 uma nova incompatibilidade de nulabilidade, ou quando a lista de desvios
-deixa de descrever o estado do código. Inclui dois controles negativos
-(mutação de `cnpj` para número e remoção do `.nullable()` de
-`cpf_mascarado`). Não cria Parquet, não acessa RFB/IA e não executa ETL.
+deixa de descrever o estado do código, ou quando um dos sete domínios
+enum públicos muda sem revisão. Inclui três controles negativos em memória
+(mutação de `cnpj` para número, remoção do `.nullable()` de
+`cpf_mascarado` e exclusão de um valor permitido do enum `tipo`). Não cria Parquet, não acessa RFB/IA e não executa ETL.
 
 **Não prova** nulabilidade do Parquet observado, contagem de valores nulos,
 versões anteriores do snapshot, integridade de JSON Schema não versionado,
