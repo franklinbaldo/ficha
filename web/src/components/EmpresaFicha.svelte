@@ -59,7 +59,7 @@
     sociosError = null;
     try {
       const conn = await db.connect();
-      const cnpjBase = String(empresa.cnpj).padStart(14, '0').substring(0, 8);
+      const cnpjBase = canonicalCNPJ(empresa.cnpj).substring(0, 8);
       const stmt = await conn.prepare(`
         SELECT nome_socio_razao_social, tipo_descricao, qualificacao_descricao,
                data_entrada_sociedade, cpf_mascarado, cnpj_socio,
@@ -90,7 +90,7 @@
     contatosError = null;
     try {
       const conn = await db.connect();
-      const cnpjFull = String(empresa.cnpj).padStart(14, '0');
+      const cnpjFull = canonicalCNPJ(empresa.cnpj);
       const stmt = await conn.prepare(`
         SELECT tipo, valor, posicao
         FROM cnpj_contatos
@@ -118,7 +118,7 @@
     filiaisError = null;
     try {
       const conn = await db.connect();
-      const cnpjFull = String(empresa.cnpj).padStart(14, '0');
+      const cnpjFull = canonicalCNPJ(empresa.cnpj);
       const cnpjBase = cnpjFull.substring(0, 8);
       const stmt = await conn.prepare(`
         SELECT cnpj, razao_social, nome_fantasia, uf, municipio_nome, situacao_cadastral
@@ -138,9 +138,17 @@
     }
   }
 
-  function formatCNPJ(cnpj: string | number) {
-    let s = String(cnpj).padStart(14, '0');
-    return s.replace(/^(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})/, '$1.$2.$3/$4-$5');
+  // Legacy numeric CNPJs may arrive without their leading zeroes.
+  // Alphanumeric CNPJs are identifiers, never numbers to be padded/coerced.
+  function canonicalCNPJ(cnpj: string | number): string {
+    const raw = String(cnpj).toUpperCase();
+    return /^\d{1,14}$/.test(raw) ? raw.padStart(14, '0') : raw;
+  }
+
+  function formatCNPJ(cnpj: string | number): string {
+    const raw = canonicalCNPJ(cnpj);
+    if (!/^[A-Z0-9]{12}\d{2}$/.test(raw)) return String(cnpj);
+    return `${raw.slice(0, 2)}.${raw.slice(2, 5)}.${raw.slice(5, 8)}/${raw.slice(8, 12)}-${raw.slice(12)}`;
   }
 
   function formatCurrency(val: any) {
