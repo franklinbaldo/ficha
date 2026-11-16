@@ -1,8 +1,8 @@
 name: OKF contract compatibility
 
 on:
+  # Include stacked PRs, consistent with the CI fix for #207.
   pull_request:
-    branches: [main]
     paths:
       - 'knowledge/**'
       - 'web/src/schemas/v1/**'
