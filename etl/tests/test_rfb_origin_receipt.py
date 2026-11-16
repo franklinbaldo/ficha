@@ -67,6 +67,8 @@ class TestRfbOriginReceipt(unittest.TestCase):
             "missing timestamp": lambda r: r["source"].__setitem__("observed_at_utc", ""),
             "missing server date": lambda r: r["source"].__setitem__("server_date", ""),
             "extra digest claim": lambda r: r["files"][0].__setitem__("sha256", "0" * 64),
+            "receipt fake digest": lambda r: r.__setitem__("sha256_verified", True),
+            "source fake digest": lambda r: r["source"].__setitem__("sha256", "0" * 64),
         }
         for title, mutate in cases.items():
             with self.subTest(title=title):

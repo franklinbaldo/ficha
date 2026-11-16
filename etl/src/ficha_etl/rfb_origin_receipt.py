@@ -15,6 +15,8 @@ from .sources import canonical_inventory, is_valid_month
 
 SCHEMA_VERSION = "rfb-propfind-metadata-v1"
 _SOURCE_ROOT = "https://arquivos.receitafederal.gov.br/public.php/webdav"
+_RECEIPT_KEYS = frozenset({"schema_version", "month", "source", "identity_level", "content_hash_verified", "etag_semantics", "total_size_bytes", "files"})
+_SOURCE_KEYS = frozenset({"url", "method", "depth", "http_status", "server_date", "observed_at_utc"})
 _ENTRY_KEYS = frozenset({"name", "size_bytes", "etag_raw", "content_type", "ia_raw_name_expected"})
 _ETAG = re.compile(r'(?:W/)?"[^"\r\n]+"\Z')
 
@@ -27,6 +29,8 @@ def validate_origin_receipt(receipt: object) -> None:
     """
     if not isinstance(receipt, dict):
         raise ValueError("receipt must be a JSON object")
+    if set(receipt) != _RECEIPT_KEYS:
+        raise ValueError("unexpected origin receipt fields")
     if receipt.get("schema_version") != SCHEMA_VERSION:
         raise ValueError("unsupported origin receipt schema")
 
@@ -34,8 +38,8 @@ def validate_origin_receipt(receipt: object) -> None:
     if not isinstance(month, str) or not is_valid_month(month):
         raise ValueError("invalid month")
     source = receipt.get("source")
-    if not isinstance(source, dict):
-        raise ValueError("source metadata missing")
+    if not isinstance(source, dict) or set(source) != _SOURCE_KEYS:
+        raise ValueError("source metadata missing or has extra claims")
     expected_url = f"{_SOURCE_ROOT}/{month}/"
     if (
         source.get("url") != expected_url
