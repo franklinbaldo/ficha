@@ -1,9 +1,13 @@
-import { CnpjSchema, RaizSchema, SocioSchema } from '../generated/ficha-okf.zod';
+import { EstabelecimentoSchema, RaizSchema, SocioSchema } from '../schemas/v1';
 
+// Until a versioned OKF contract has proven semantic parity, validation of
+// published Parquet rows must follow the already published v1 contract.
+// The generated OKF schemas currently reject 28 permitted nullable fields
+// and widen seven enum domains; importing them here changes public semantics.
 export const okfParquetRowSchemas = {
-  Cnpj: CnpjSchema.omit({ type: true, title: true, description: true }).strict(),
-  Raiz: RaizSchema.omit({ type: true, title: true, description: true }).strict(),
-  Socio: SocioSchema.omit({ type: true, title: true, description: true }).strict(),
+  Cnpj: EstabelecimentoSchema.strict(),
+  Raiz: RaizSchema.strict(),
+  Socio: SocioSchema.strict(),
 } as const;
 
 export type OkfParquetRowType = keyof typeof okfParquetRowSchemas;
