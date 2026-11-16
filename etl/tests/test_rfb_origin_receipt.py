@@ -33,7 +33,10 @@ class TestRfbOriginReceipt(unittest.TestCase):
         self.assertEqual(receipt["identity_level"], "metadata-only")
         self.assertTrue(all(row["size_bytes"] > 0 for row in receipt["files"]))
         self.assertTrue(
-            all(row["ia_raw_name_expected"] == f'raw/{row["name"]}' for row in receipt["files"])
+            all(
+                row["ia_raw_name_expected"] == f"raw/{row['name']}"
+                for row in receipt["files"]
+            )
         )
 
     def test_weak_opaque_etag_is_accepted_but_never_a_hash(self):
@@ -51,22 +54,32 @@ class TestRfbOriginReceipt(unittest.TestCase):
             "boolean size": lambda r: r["files"][0].__setitem__("size_bytes", True),
             "empty etag": lambda r: r["files"][0].__setitem__("etag_raw", ""),
             "unquoted etag": lambda r: r["files"][0].__setitem__("etag_raw", "abc"),
-            "wrong MIME": lambda r: r["files"][0].__setitem__("content_type", "text/html"),
+            "wrong MIME": lambda r: r["files"][0].__setitem__(
+                "content_type", "text/html"
+            ),
             "wrong IA mapping": lambda r: r["files"][0].__setitem__(
                 "ia_raw_name_expected", "other.zip"
             ),
             "pretend checksum": lambda r: r.__setitem__("content_hash_verified", True),
-            "unknown hash state": lambda r: r.__setitem__("content_hash_verified", None),
+            "unknown hash state": lambda r: r.__setitem__(
+                "content_hash_verified", None
+            ),
             "mislabel etag hash": lambda r: r.__setitem__("etag_semantics", "md5"),
             "inflated byte sum": lambda r: r.__setitem__("total_size_bytes", 1),
             "different month": lambda r: r.__setitem__("month", "2026-09"),
             "wrong method": lambda r: r["source"].__setitem__("method", "GET"),
             "wrong HTTP status": lambda r: r["source"].__setitem__("http_status", 200),
             "wrong depth": lambda r: r["source"].__setitem__("depth", 0),
-            "wrong source": lambda r: r["source"].__setitem__("url", "https://example.invalid"),
-            "missing timestamp": lambda r: r["source"].__setitem__("observed_at_utc", ""),
+            "wrong source": lambda r: r["source"].__setitem__(
+                "url", "https://example.invalid"
+            ),
+            "missing timestamp": lambda r: r["source"].__setitem__(
+                "observed_at_utc", ""
+            ),
             "missing server date": lambda r: r["source"].__setitem__("server_date", ""),
-            "extra digest claim": lambda r: r["files"][0].__setitem__("sha256", "0" * 64),
+            "extra digest claim": lambda r: r["files"][0].__setitem__(
+                "sha256", "0" * 64
+            ),
         }
         for title, mutate in cases.items():
             with self.subTest(title=title):
