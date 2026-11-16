@@ -23,10 +23,18 @@ export type Estabelecimento = ficha.v1.IEstabelecimento;
 // eslint-disable-next-line @typescript-eslint/no-deprecated
 export type Socio = ficha.v1.ISocio;
 
+/** Integer callers may zero-pad; textual roots must already be eight ASCII chars. */
+function rootText(cnpjBase: number | string): string {
+  const s = typeof cnpjBase === 'number'
+    ? String(cnpjBase).padStart(8, '0')
+    : cnpjBase;
+  if (!/^[A-Z0-9]{8}$/.test(s)) throw new Error('Invalid CNPJ root');
+  return s;
+}
+
 /** `12345678` → `'12/345/678.pb'` — mirrors ficha_etl.pack.cnpjpath. */
 export function cnpjpath(cnpjBase: number | string): string {
-  const s = String(cnpjBase).padStart(8, '0');
-  if (!/^[A-Z0-9]{8}$/.test(s)) throw new Error('Invalid CNPJ root');
+  const s = rootText(cnpjBase);
   return `${s.slice(0, 2)}/${s.slice(2, 5)}/${s.slice(5, 8)}.pb`;
 }
 
@@ -48,8 +56,7 @@ export function companyArchiveUrl(
 ): string {
   const { iaBase = 'https://archive.org/download', identifier, files } = options;
   if (files?.companies) {
-    const base = String(cnpjBase).padStart(8, '0');
-    if (!/^[A-Z0-9]{8}$/.test(base)) throw new Error('Invalid CNPJ root');
+    const base = rootText(cnpjBase);
     const rawPrefix = base.slice(0, 2);
     const prefix = files.companies.shard_by === 'cnpj_base_prefix_or_base36_mod_100_v1'
       && !/^[0-9]{2}$/.test(rawPrefix)
