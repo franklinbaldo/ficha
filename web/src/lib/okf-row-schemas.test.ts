@@ -74,7 +74,7 @@ describe('published v1 OKF view row validation', () => {
           expect(runtimeSchema.safeParse({ ...baseRow, [name]: '__INVALID__' }).success).toBe(
             false
           );
-          const publicField = publicSchema.shape[name] as z.ZodTypeAny;
+          const publicField = (publicSchema.shape as Record<string, z.ZodTypeAny>)[name];
           for (const value of candidates.filter((candidate) => publicField.safeParse(candidate).success)) {
             expect(runtimeSchema.safeParse({ ...baseRow, [name]: value }).success).toBe(true);
           }
