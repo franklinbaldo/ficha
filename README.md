@@ -9,6 +9,8 @@ O **FICHA** é um fichário aberto das empresas brasileiras e um Data Lakehouse 
 - **Consultar no navegador:** https://franklinbaldo.github.io/ficha/
 - **Inspecionar o contrato público do snapshot vigente:** https://franklinbaldo.github.io/ficha/manifest.json
 
+**Manifesto ≠ disponibilidade live.** O JSON versionado declara competências, URLs e identidades dos artefatos; isso **não comprova** que as URLs do Internet Archive estejam acessíveis, que a busca no navegador funcione ou que o mês mais recente da RFB já esteja publicado. No corte de **16/11/2026** (`main@98329ff`), `manifest.current` declara **2026-07**, não 2026-08. A investigação e a recuperação de agosto estão na [issue #247](https://github.com/franklinbaldo/ficha/issues/247). A disponibilidade exige conferência independente de URLs, dados e interface.
+
 A interface atual consulta os Parquets no navegador com DuckDB-WASM e permite buscar por **empresa**, **pessoa/sócio**, **endereço** e **CNAE** quando os respectivos artefatos estão disponíveis no snapshot. A própria página mostra a competência em uso, origem, preservação e estado de verificação do conjunto publicado.
 
 O `manifest.json` é a porta para reutilização fora do site: ele declara a competência vigente, snapshots publicados e URLs dos artefatos preservados, com identidade verificável quando disponível. Assim, quem precisa analisar a base inteira não depende da interface do Ficha.
@@ -25,7 +27,7 @@ O projeto opera em duas camadas de acesso para máxima eficiência:
 - **Tecnologia:** explora a funcionalidade de "unzip" transparente do Internet Archive.
 - **Uso:** consultas diretas por raiz de CNPJ por URL estática previsível.
 - **Vantagem:** acesso pontual sem precisar varrer a base analítica inteira; protobuf é compacto.
-- **Status:** implementado e publicado como parte do contrato de snapshots. O reader atômico existe no frontend, mas a busca pública atual usa a camada analítica descrita abaixo.
+- **Status:** o reader atômico existe no código, e o manifesto versionado declara artefatos atômicos em alguns snapshots. A declaração não prova acesso HTTP live; a busca pública atual usa a camada analítica descrita abaixo. Não pressupor integração do reader atômico à jornada de busca.
 
 ### 2. Camada Analítica (Data Lakehouse)
 
@@ -63,11 +65,15 @@ cd web
 bun install
 bun dev
 
-# ETL
+# ETL: instalar e consultar a ajuda sem disparar processamento mensal
 cd etl
 uv venv && uv pip install -e ".[dev]"
-ficha-etl run --month 2026-01
+ficha-etl --help
 ```
+
+**Atenção:** `ficha-etl run --month YYYY-MM` **não é um comando de inspeção**. Com `IA_ACCESS_KEY` e `IA_SECRET_KEY`, a opção padrão (`skip_upload=False`) tenta enviar ZIPs RFB, Parquets e `companies.zip` ao Internet Archive e atualizar o manifesto **local**. Sem credenciais, o modo padrão recusa continuar. Mesmo com `--skip-upload`, ele ainda pode baixar/processar grandes volumes e escrever Parquets, ZIP local e o manifesto local: **não é teste barato nem somente leitura**. Consulte [etl/README.md](etl/README.md) antes de executá-lo.
+
+O CLI `run` gera `companies.zip` monolítico; a [esteira mensal versionada](.github/workflows/etl-monthly.yml) usa `monthly_sharded`, 100 shards e etapas separadas de validação/promoção. Uma rota não valida a outra. Nenhum ETL real, backfill, upload ou promoção está autorizado por este quickstart.
 
 ## O conceito "Ficha"
 
