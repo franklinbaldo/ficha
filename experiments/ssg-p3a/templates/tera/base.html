@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="{{ page.description | default('Protótipo Ficha') }}">
+<title>{{ page.title | default('FICHA') }}</title>
+<link rel="stylesheet" href="/ficha/css/style.css">
+<script type="module" src="/ficha/js/main.mjs"></script>
+</head>
+<body>
+<a class="skip-link" href="#main-content">Pular para o conteúdo</a>
+<header><nav aria-label="Navegação principal"><a class="brand" href="/ficha/">FICHA</a><a href="#consulta">Consulta</a><a href="#origin-title">Origem</a></nav></header>
+<main id="main-content">{% block content %}{% endblock %}</main>
+<footer><p>Protótipo isolado. Nenhum cadastro real consultado nesta demonstração.</p></footer>
+</body>
+</html>
