@@ -15,8 +15,21 @@ from .sources import canonical_inventory, is_valid_month
 
 SCHEMA_VERSION = "rfb-propfind-metadata-v1"
 _SOURCE_ROOT = "https://arquivos.receitafederal.gov.br/public.php/webdav"
-_RECEIPT_KEYS = frozenset({"schema_version", "month", "source", "identity_level", "content_hash_verified", "etag_semantics", "total_size_bytes", "files"})
-_SOURCE_KEYS = frozenset({"url", "method", "depth", "http_status", "server_date", "observed_at_utc"})
+_RECEIPT_KEYS = frozenset(
+    {
+        "schema_version",
+        "month",
+        "source",
+        "identity_level",
+        "content_hash_verified",
+        "etag_semantics",
+        "total_size_bytes",
+        "files",
+    }
+)
+_SOURCE_KEYS = frozenset(
+    {"url", "method", "depth", "http_status", "server_date", "observed_at_utc"}
+)
 _ENTRY_KEYS = frozenset({"name", "size_bytes", "etag_raw", "content_type", "ia_raw_name_expected"})
 _ETAG = re.compile(r'(?:W/)?"[^"\r\n]+"\Z')
 
