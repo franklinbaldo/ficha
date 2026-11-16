@@ -41,7 +41,7 @@ async function renderFicha(
   // A data: module cannot resolve bare package specifiers. Use the actual
   // installed Svelte server runtime, rather than a mocked renderer.
   const code = js.code.replace(
-    /from ['"](svelte(?:\\/[^'"]+)?)['"]/g,
+    /from ['"](svelte(?:\/[^'"]+)?)['"]/g,
     (_, specifier: string) => `from ${JSON.stringify(import.meta.resolve(specifier))}`
   );
   const moduleUrl = `data:text/javascript;base64,${Buffer.from(code).toString('base64')}`;
@@ -92,7 +92,7 @@ describe('EmpresaFicha CNPJ presentation (offline)', () => {
 
   it('keeps sibling SQL parameterized by full literal CNPJ and shared base', () => {
     // Static contract guard only. Query execution requires DuckDB fixture/E2E.
-    expect(source).toMatch(/WHERE cnpj_base = \\? AND cnpj != \\?/);
+    expect(source).toMatch(/WHERE cnpj_base = \? AND cnpj != \?/);
     expect(source).toContain('stmt.query(cnpjBase, cnpjFull)');
     expect(source).toContain('const cnpjFull = canonicalCNPJ(empresa.cnpj)');
   });
