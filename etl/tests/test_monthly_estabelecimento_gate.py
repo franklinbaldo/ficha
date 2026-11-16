@@ -86,6 +86,7 @@ def test_malformed_samples_remain_durable_in_failed_gate(tmp_path: Path) -> None
     assert payload["invalid_cnpj_rows"] == 2
     assert payload["invalid_cnpj_sample"] == ["00000000E08G1A", "invalid"]
 
+
 @pytest.mark.parametrize(
     "invalid",
     ["00000000E08G13", "00000000E08G22", "12345678000196", "1234567800019A"],
