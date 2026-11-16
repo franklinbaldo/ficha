@@ -56,6 +56,12 @@ export function companyArchiveUrl(
 ): string {
   const { iaBase = 'https://archive.org/download', identifier, files } = options;
   if (files?.companies) {
+    // Older manifests remain readable, but the new bucket mapping must explicitly
+    // advertise the wire schema that preserves alphanumeric CNPJ text.
+    if (files.companies.shard_by === 'cnpj_base_prefix_or_base36_mod_100_v1'
+        && files.companies.schema_version !== '1.1.0') {
+      throw new Error('companyArchiveUrl: schema 1.1.0 required for alphanumeric shards');
+    }
     const base = rootText(cnpjBase);
     const rawPrefix = base.slice(0, 2);
     const prefix = files.companies.shard_by === 'cnpj_base_prefix_or_base36_mod_100_v1'
@@ -99,7 +105,14 @@ export async function fetchCompany(
     throw new Error(`fetchCompany(${cnpjBase}): HTTP ${res.status} ${url}`);
   }
   const bytes = new Uint8Array(await res.arrayBuffer());
-  return normalizeLongs(ficha.v1.Company.decode(bytes));
+  const company = normalizeLongs(ficha.v1.Company.decode(bytes));
+  // A v1 decoder can silently discard unknown 1.1 text fields. At this
+  // supported reader boundary, never return a different root as a valid hit.
+  const expectedRoot = rootText(cnpjBase);
+  if (companyRoot(company) !== expectedRoot) {
+    throw new Error(`fetchCompany: root mismatch for ${expectedRoot} (unsupported or corrupt wire)`);
+  }
+  return company;
 }
 
 /** Possible shape of a 64-bit value returned by protobufjs uint64/int64. */
