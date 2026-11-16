@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -91,12 +92,18 @@ def _write_produced_parquet(path: Path, keys: list[str]) -> None:
 
 
 def _reconcile_with_independent_source(witnesses: tuple[PartWitness, ...], produced: Path) -> int:
-    """Check 10 distinct source receipts, immutable source bytes, and row counts."""
+    """Check source receipts, cardinality, and exact key multiplicities."""
     if len(witnesses) != len(PARTS) or {w.part for w in witnesses} != set(PARTS):
         raise ValueError("missing or repeated source part receipt")
+    source_keys: Counter[str] = Counter()
     for witness in witnesses:
-        if hashlib.sha256(witness.path.read_bytes()).hexdigest() != witness.sha256:
+        raw = witness.path.read_bytes()
+        if hashlib.sha256(raw).hexdigest() != witness.sha256:
             raise ValueError(f"source part {witness.part} changed after receipt")
+        lines = raw.decode("ascii").splitlines()
+        if not lines or lines[0] != "cnpj" or len(lines) - 1 != witness.rows:
+            raise ValueError(f"source part {witness.part} disagrees with its receipt")
+        source_keys.update(lines[1:])
     expected = sum(w.rows for w in witnesses)
     if expected == 0:
         raise ValueError("zero source rows cannot prove a complete monthly snapshot")
@@ -105,10 +112,20 @@ def _reconcile_with_independent_source(witnesses: tuple[PartWitness, ...], produ
         actual = int(
             con.execute("SELECT COUNT(*) FROM read_parquet(?)", [str(produced)]).fetchone()[0]
         )
+        if actual != expected:
+            raise ValueError(f"source/produced row mismatch: {expected} != {actual}")
+        produced_keys = Counter(
+            dict(
+                con.execute(
+                    "SELECT cnpj, COUNT(*) FROM read_parquet(?) GROUP BY cnpj",
+                    [str(produced)],
+                ).fetchall()
+            )
+        )
     finally:
         con.close()
-    if actual != expected:
-        raise ValueError(f"source/produced row mismatch: {expected} != {actual}")
+    if produced_keys != source_keys:
+        raise ValueError("source/produced key multiset mismatch")
     return expected
 
 
@@ -171,6 +188,20 @@ def test_truncated_unique_output_is_not_a_complete_snapshot(tmp_path: Path) -> N
 
     assert payload["status"] == "ok"  # Uniqueness does not imply completeness.
     with pytest.raises(ValueError, match="source/produced row mismatch: 10 != 9"):
+        _reconcile_with_independent_source(witnesses, produced)
+
+
+def test_equal_cardinality_key_substitution_fails_source_reconciliation(tmp_path: Path) -> None:
+    paths, keys = _source_parts(tmp_path / "origin")
+    witnesses = _capture_source_witnesses(paths)
+    substituted = keys.copy()
+    substituted[-1] = _cnpj("999999990001")
+    assert substituted[-1] not in keys
+
+    payload, produced, _ = _gate(tmp_path, substituted)
+    assert payload["status"] == "ok"  # Valid and unique, but not from these ten sources.
+    assert payload["source_rows"] == len(PARTS)
+    with pytest.raises(ValueError, match="source/produced key multiset mismatch"):
         _reconcile_with_independent_source(witnesses, produced)
 
 
