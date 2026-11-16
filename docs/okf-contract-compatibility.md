@@ -1,0 +1,74 @@
+# P4-A: matriz OKF / Zod / Parquet publicado
+
+Estado de referência: `main@98c5c110d9938d55b40c91d2309c99e40b186758` (16/11/2026).
+Escopo: **observação e testes de compatibilidade**, sem alterar schemas físicos,
+manifesto, publicações, views ou a RFC 0001 (Accepted). A RFC 0001A continua Draft.
+
+## Fronteira observada
+
+| Relação publicada | Sidecar SQL OKF | Zod gerado | Zod público v1 | Colunas | Nulabilidades aceitas por v1 e rejeitadas pelo Zod gerado |
+| --- | --- | --- | --- | ---: | ---: |
+| `cnpjs.parquet` | `knowledge/types/cnpj.schema.sql` | `CnpjSchema` | `EstabelecimentoSchema` | 52 | 22 |
+| `raizes.parquet` | `knowledge/types/raiz.schema.sql` | `RaizSchema` | `RaizSchema` v1 | 18 | 1 |
+| `socios.parquet` | `knowledge/types/socio.schema.sql` | `SocioSchema` | `SocioSchema` v1 | 16 | 5 |
+
+Os **tipos básicos e os nomes das colunas** são equivalentes nesses três
+contratos: `VARCHAR` e enums Zod são strings; `VARCHAR[]` é lista de strings;
+`DOUBLE`, número; `INTEGER`, inteiro; `BOOLEAN`, booleano. A concordância
+de *shape* não implica paridade de validação de valores.
+
+O Zod público v1 aceita `null` em 26 campos de Cnpj, 1 de Raiz e 9 de Socio;
+o Zod OKF gerado só aceita em 4, 0 e 4, respectivamente. Em especial:
+
+- **Cnpj**: `nome_fantasia`, `complemento`, `pais_codigo`, `ddd_1`,
+  `opcao_simples` e outros 17 campos são `.nullable()` no schema
+  público, mas estritos no gerado.
+- **Raiz**: `ente_federativo_responsavel` é nullable somente no público.
+- **Socio**: `cnpj_socio`, `pais_codigo`, `pais_nome`,
+  `representante_legal_qualificacao_descricao` e `faixa_etaria`
+  são nullable somente no público. O exemplo OKF contém um sócio PJ,
+  insuficiente para inferir todos os casos PF/estrangeiro.
+
+Os 28 desacordos aparecem em
+`knowledge/tests/test_contract_compatibility.py` como inventário explícito
+de **dívida existente**, não autorização para aceitar linhas através do Zod
+gerado. Se o gerador ou os contratos forem corrigidos por decisão posterior,
+a lista deve ser revisada junto à mudança, com teste de valores reais/nulos.
+
+## Garantias e lacunas do teste isolado
+
+O teste Python de biblioteca padrão compara as declarações SQL do OKF com
+os schemas Zod v1 e gerado. Falha quando coluna ou tipo muda, quando surge
+uma nova incompatibilidade de nulabilidade, ou quando a lista de desvios
+deixa de descrever o estado do código. Inclui dois controles negativos
+(mutação de `cnpj` para número e remoção do `.nullable()` de
+`cpf_mascarado`). Não cria Parquet, não acessa RFB/IA e não executa ETL.
+
+**Não prova** nulabilidade do Parquet observado, contagem de valores nulos,
+versões anteriores do snapshot, integridade de JSON Schema não versionado,
+nem comportamento de `safeParse` em runtime. O sidecar SQL, sem
+`NOT NULL`, também não deve ser tomado sozinho como evidência de
+nulabilidade física. O teste ETL existente
+`etl/tests/test_okf_published_schema.py` compara nomes/tipos com um
+Parquet de fixture; não substitui testes de linha com `null`.
+
+A cobertura OKF gerada abrange somente Cnpj, Raiz e Socio; não se deve
+assumir automaticamente cobertura dos demais artefatos Parquet do manifesto.
+O adaptador `web/src/lib/okf-row-schemas.ts` também não seleciona o
+contrato pela versão do snapshot. Ambas são dependências de decisão do
+Elefante/Polvo e não foram alteradas.
+
+## Gate enxuto
+
+`.github/workflows/okf-contract.yml` observa `knowledge/**`, os schemas
+Zod públicos v1, `ficha-okf.zod.ts`, este documento e o próprio workflow.
+Roda `python3 -m unittest discover -s knowledge/tests -p 'test_*.py' -v`
+sobre o SHA de origem da PR, sem instalar pacotes, gerar dados ou usar
+segredos. Uma PR que só altera `knowledge/**` não deve depender do filtro
+`web/**` do job atual de CI, que não observa esse diretório.
+
+**Próxima decisão, não executada:** alinhar política de `null` e versão
+com o dono do contrato público, e só então revisar gerador/consumidores e
+acrescentar provas de `safeParse`/Parquet sobre fixtures. A avaliação das
+RFCs 0001/0001A pertence ao Polvo e ao Elefante. Não se propõe nova
+materialização física.
