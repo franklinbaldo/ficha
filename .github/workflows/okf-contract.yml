@@ -1,0 +1,45 @@
+name: OKF contract compatibility
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'knowledge/**'
+      - 'web/src/schemas/v1/**'
+      - 'web/src/generated/ficha-okf.zod.ts'
+      - 'docs/okf-contract-compatibility.md'
+      - '.github/workflows/okf-contract.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'knowledge/**'
+      - 'web/src/schemas/v1/**'
+      - 'web/src/generated/ficha-okf.zod.ts'
+      - 'docs/okf-contract-compatibility.md'
+      - '.github/workflows/okf-contract.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  compatibility:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # For PRs, test the exact owner branch SHA, not GitHub's synthetic
+          # merge ref; preserve an auditable link between tests and commit.
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Verify checked-out commit
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          actual="$(git rev-parse HEAD)"
+          echo "EXPECTED_SHA=$EXPECTED_SHA"
+          echo "CHECKED_OUT_SHA=$actual"
+          test "$actual" = "$EXPECTED_SHA"
+
+      - name: Compare OKF SQL, generated Zod and public v1 contracts
+        run: python3 -m unittest discover -s knowledge/tests -p 'test_*.py' -v
