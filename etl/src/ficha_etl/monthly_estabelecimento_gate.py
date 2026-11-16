@@ -54,9 +54,10 @@ def _dv_sql(weights: tuple[int, ...]) -> str:
 
 
 def _valid_cnpj_sql() -> str:
-    """Validate format and both check digits without a row-by-row Python UDF."""
+    """Validate format, non-repeated identity, and DVs without a Python UDF."""
     return (
         f"regexp_full_match(cnpj, '{CNPJ_PATTERN}')"
+        " AND cnpj <> repeat(substr(cnpj, 1, 1), 14)"
         f" AND (ascii(substr(cnpj, 13, 1)) - 48) = {_dv_sql(_DV_WEIGHTS_1)}"
         f" AND (ascii(substr(cnpj, 14, 1)) - 48) = {_dv_sql(_DV_WEIGHTS_2)}"
     )
@@ -200,7 +201,7 @@ def run_monthly_gate(
         },
         "source_rows": source_rows,
         "invalid_cnpj_rows": invalid_cnpj_rows,
-        "cnpj_validation": "ASCII A-Z/0-9 and two RFB modulo-11 check digits",
+        "cnpj_validation": "ASCII A-Z/0-9, non-repeated digits and two RFB modulo-11 check digits",
         "invalid_cnpj_sample": [row[0] for row in invalid_sample],
         "invalid_cnpj_sample_limit": 20,
         "audit": asdict(audit),

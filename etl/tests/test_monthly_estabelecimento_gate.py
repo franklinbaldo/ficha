@@ -89,7 +89,14 @@ def test_malformed_samples_remain_durable_in_failed_gate(tmp_path: Path) -> None
 
 @pytest.mark.parametrize(
     "invalid",
-    ["00000000E08G13", "00000000E08G22", "12345678000196", "1234567800019A"],
+    [
+        "00000000000000",  # checksum-only validation would accept this sentinel
+        "11111111111111",  # equal-digit identities must also fail
+        "00000000E08G13",
+        "00000000E08G22",
+        "12345678000196",
+        "1234567800019A",
+    ],
 )
 def test_monthly_gate_rejects_wrong_mod11_or_format(tmp_path: Path, invalid: str) -> None:
     cnpjs = tmp_path / "cnpjs.parquet"
