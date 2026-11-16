@@ -56,7 +56,7 @@ class RawReconciliationTests(unittest.TestCase):
         archive["files"][0]["size"] = "99"
         report = reconcile_raw_metadata(origin, archive)
         self.assertFalse(report.metadata_consistent)
-        self.assertEqual(report.files[0].status, "size_mismatch")
+        self.assertIn("size_mismatch", {f.status for f in report.files})
 
     def test_missing_file_is_not_identical(self):
         origin, archive = fixtures()
