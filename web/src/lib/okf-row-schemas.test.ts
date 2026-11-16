@@ -75,6 +75,7 @@ describe('published v1 OKF view row validation', () => {
             false
           );
           const publicField = (publicSchema.shape as Record<string, z.ZodTypeAny>)[name];
+          if (!publicField) throw new Error(`Unknown public v1 enum: ${type}.${name}`);
           for (const value of candidates.filter((candidate) => publicField.safeParse(candidate).success)) {
             expect(runtimeSchema.safeParse({ ...baseRow, [name]: value }).success).toBe(true);
           }
