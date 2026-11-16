@@ -16,7 +16,9 @@ def fixtures() -> tuple[dict, dict]:
         "month": "2026-08",
         "source": {
             "url": "https://arquivos.receitafederal.gov.br/public.php/webdav/2026-08/",
-            "method": "PROPFIND", "depth": 1, "http_status": 207,
+            "method": "PROPFIND",
+            "depth": 1,
+            "http_status": 207,
         },
         "identity_level": "metadata-only",
         "content_hash_verified": False,
@@ -24,7 +26,9 @@ def fixtures() -> tuple[dict, dict]:
         "total_size_bytes": len(names) * 100,
         "files": [
             {
-                "name": name, "size_bytes": 100, "etag_raw": '"opaque-etag"',
+                "name": name,
+                "size_bytes": 100,
+                "etag_raw": '"opaque-etag"',
                 "content_type": "application/zip",
                 "ia_raw_name_expected": f"raw/{name}",
             }
@@ -33,10 +37,8 @@ def fixtures() -> tuple[dict, dict]:
     }
     archive = {
         "metadata": {"identifier": "ficha-2026-08"},
-        "files": [
-            {"name": f"raw/{name}", "size": "100", "sha1": "a" * 40}
-            for name in names
-        ] + [{"name": "metadata.xml", "size": "1000"}],
+        "files": [{"name": f"raw/{name}", "size": "100", "sha1": "a" * 40} for name in names]
+        + [{"name": "metadata.xml", "size": "1000"}],
     }
     return origin, archive
 
