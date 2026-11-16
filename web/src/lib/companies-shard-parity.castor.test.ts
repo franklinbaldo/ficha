@@ -22,14 +22,14 @@ describe('Castor P0-A: complete Python ↔ JS shard mapping', () => {
       for (const second of alphabet) {
         const prefix = first + second;
         const actual = companyArchiveUrl(prefix + '000000', { identifier: 'fixture', files });
-        const match = /companies-(\\d{2})\\.zip$/.exec(actual);
+        const match = /companies-(\d{2})\.zip$/.exec(actual);
         expect(match, prefix).not.toBeNull();
         const bucket = match![1]!;
         const expected = /^[0-9]{2}$/.test(prefix)
           ? prefix
           : String(Number.parseInt(prefix, 36) % 100).padStart(2, '0');
         expect(bucket, prefix).toBe(expected);
-        transcript.push(`${prefix}:${bucket}\\n`);
+        transcript.push(`${prefix}:${bucket}\n`);
       }
     }
     expect(transcript).toHaveLength(1296);

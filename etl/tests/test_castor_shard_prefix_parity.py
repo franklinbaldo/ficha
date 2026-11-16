@@ -1,6 +1,6 @@
 """Exhaustive P0-A partition proof shared with the TypeScript reader.
 
-Canonical transcript: alphabet ordered 0..9,A..Z; each line PREFIX:BUCKET\\n.
+Canonical transcript: alphabet ordered 0..9,A..Z; each line PREFIX:BUCKET\n.
 The digest is fixed independently of either implementation.
 """
 
@@ -27,7 +27,7 @@ def test_all_1296_prefixes_have_one_stable_bucket_and_js_parity_digest() -> None
             assert bucket == prefix  # v1 numeric snapshot bucket is unchanged
         actual[prefix] = bucket
 
-    transcript = "".join(f"{prefix}:{actual[prefix]}\\n" for prefix in prefixes)
+    transcript = "".join(f"{prefix}:{actual[prefix]}\n" for prefix in prefixes)
     assert hashlib.sha256(transcript.encode("ascii")).hexdigest() == _DIGEST
     assert set(actual.values()) == {f"{n:02d}" for n in range(100)}
 
