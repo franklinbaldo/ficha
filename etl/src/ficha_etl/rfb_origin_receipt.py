@@ -89,10 +89,15 @@ def validate_origin_receipt(receipt: object) -> None:
             raise ValueError(f"{name}: unexpected MIME type")
         if entry["ia_raw_name_expected"] != f"raw/{name}":
             raise ValueError(f"{name}: IA path is only an expected one-to-one mapping")
-        if not isinstance(entry["etag_raw"], str) or not _ETAG.fullmatch(entry["etag_raw"]):
+        if not isinstance(entry["etag_raw"], str) or not _ETAG.fullmatch(
+            entry["etag_raw"]
+        ):
             raise ValueError(f"{name}: missing or invalid opaque ETag")
         total += size
     if observed_names != canonical:
         raise ValueError("inventory names do not match canonical 37")
-    if type(receipt.get("total_size_bytes")) is not int or receipt["total_size_bytes"] != total:
+    if (
+        type(receipt.get("total_size_bytes")) is not int
+        or receipt["total_size_bytes"] != total
+    ):
         raise ValueError("total byte count contradicts individual metadata")
