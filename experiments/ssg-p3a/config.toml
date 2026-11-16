@@ -1,0 +1,8 @@
+site_name = "FICHA"
+site_title = "FICHA — fichário público"
+site_description = "Protótipo isolado SSG Rust"
+language = "pt-BR"
+base_url = "https://franklinbaldo.github.io/ficha/"
+content_dir = "content"
+output_dir = "dist/ficha"
+template_dir = "templates"
