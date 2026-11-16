@@ -74,8 +74,7 @@ def reconcile_raw_metadata(origin: object, archive: object) -> RawMetadataReport
         source.get("method") != "PROPFIND"
         or source.get("depth") != 1
         or source.get("http_status") != 207
-        or source.get("url") !=
-            f"https://arquivos.receitafederal.gov.br/public.php/webdav/{month}/"
+        or source.get("url") != f"https://arquivos.receitafederal.gov.br/public.php/webdav/{month}/"
     ):
         raise ValueError("RFB origin metadata is not a canonical PROPFIND observation")
     if (
@@ -95,7 +94,9 @@ def reconcile_raw_metadata(origin: object, archive: object) -> RawMetadataReport
             raise ValueError("invalid RFB entry")
         name = entry.get("name")
         if (
-            not isinstance(name, str) or name not in expected_names or name in sizes
+            not isinstance(name, str)
+            or name not in expected_names
+            or name in sizes
             or entry.get("ia_raw_name_expected") != f"raw/{name}"
             or entry.get("content_type") != "application/zip"
             or not isinstance(entry.get("etag_raw"), str)
@@ -108,9 +109,8 @@ def reconcile_raw_metadata(origin: object, archive: object) -> RawMetadataReport
         sizes[name] = size
     if sizes.keys() != expected_names:
         raise ValueError("RFB inventory names differ from canonical 37")
-    if (
-        type(origin.get("total_size_bytes")) is not int
-        or origin["total_size_bytes"] != sum(sizes.values())
+    if type(origin.get("total_size_bytes")) is not int or origin["total_size_bytes"] != sum(
+        sizes.values()
     ):
         raise ValueError("RFB metadata total disagrees with entries")
 
@@ -144,14 +144,21 @@ def reconcile_raw_metadata(origin: object, archive: object) -> RawMetadataReport
         sha1 = entry.get("sha1")
         valid_sha1 = isinstance(sha1, str) and _SHA1.fullmatch(sha1) is not None
         status = (
-            "incomplete_metadata" if remote_size is None or not valid_sha1
-            else "size_mismatch" if remote_size != expected_size
+            "incomplete_metadata"
+            if remote_size is None or not valid_sha1
+            else "size_mismatch"
+            if remote_size != expected_size
             else "size_and_sha1_observed"
         )
-        checks.append(RawFileCheck(
-            remote_name, expected_size, remote_size,
-            sha1.lower() if valid_sha1 else None, status
-        ))
+        checks.append(
+            RawFileCheck(
+                remote_name,
+                expected_size,
+                remote_size,
+                sha1.lower() if valid_sha1 else None,
+                status,
+            )
+        )
 
     unexpected = tuple(sorted(set(raw) - {f"raw/{name}" for name in expected_names}))
     return RawMetadataReport(month, tuple(checks), unexpected)
