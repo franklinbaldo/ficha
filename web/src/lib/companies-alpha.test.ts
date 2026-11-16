@@ -38,7 +38,7 @@ describe('schema 1.1 textual identity with v1 numeric fallback', () => {
   it('rejects a mismatched legacy wire instead of silently returning root 00000000', async () => {
     const legacyBytes = ficha.v1.Company.encode({ cnpj_base: 0 }).finish();
     const fetchImpl = (async () => ({
-      ok: true, status: 200, arrayBuffer: async () => legacyBytes.slice().buffer,
+      ok: true, status: 200, arrayBuffer: async () => Uint8Array.from(legacyBytes).buffer,
     })) as unknown as typeof fetch;
     await expect(fetchCompany('ABCD1234', { identifier: 'test', fetchImpl }))
       .rejects.toThrow(/root mismatch/);
@@ -51,7 +51,7 @@ describe('schema 1.1 textual identity with v1 numeric fallback', () => {
     ] as const) {
       const bytes = ficha.v1.Company.encode(company).finish();
       const fetchImpl = (async () => ({
-        ok: true, status: 200, arrayBuffer: async () => bytes.slice().buffer,
+        ok: true, status: 200, arrayBuffer: async () => Uint8Array.from(bytes).buffer,
       })) as unknown as typeof fetch;
       const decoded = await fetchCompany(root, { identifier: 'test', fetchImpl });
       expect(decoded && companyRoot(decoded)).toBe(root);

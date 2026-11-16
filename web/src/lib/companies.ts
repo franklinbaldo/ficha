@@ -56,13 +56,13 @@ export function companyArchiveUrl(
 ): string {
   const { iaBase = 'https://archive.org/download', identifier, files } = options;
   if (files?.companies) {
+    const base = rootText(cnpjBase);
     // Older manifests remain readable, but the new bucket mapping must explicitly
     // advertise the wire schema that preserves alphanumeric CNPJ text.
     if (files.companies.shard_by === 'cnpj_base_prefix_or_base36_mod_100_v1'
         && files.companies.schema_version !== '1.1.0') {
       throw new Error('companyArchiveUrl: schema 1.1.0 required for alphanumeric shards');
     }
-    const base = rootText(cnpjBase);
     const rawPrefix = base.slice(0, 2);
     const prefix = files.companies.shard_by === 'cnpj_base_prefix_or_base36_mod_100_v1'
       && !/^[0-9]{2}$/.test(rawPrefix)
