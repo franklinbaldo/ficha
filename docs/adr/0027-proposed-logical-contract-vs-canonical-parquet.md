@@ -85,6 +85,38 @@ mesmos dados, hashes e estratégia de retomada; não multiplicar por dez.
   [0009](0009-denormalization-and-roundtrip.md), [0012](0012-ia-mirror-as-source-of-truth.md)
   seguem válidos. Esta proposta não edita ADR Accepted nem RFC Accepted.
 
+## Revisão cruzada P4-A: contrato sem paridade semântica comprovada
+
+A [matriz P4-A da Abelha](https://github.com/franklinbaldo/ficha/blob/e81d2e658988d1dcdb276ef6c47a650ed392fd43/docs/okf-contract-compatibility.md)
+([PR #255 draft](https://github.com/franklinbaldo/ficha/pull/255)) mede **86 colunas**
+em três relações: Cnpj (52), Raiz (18), Socio (16). Os nomes e tipos
+básicos SQL/Zod concordam, mas há **28 diferenças já existentes de
+nulabilidade** (22/1/5) e **sete domínios `z.enum` do contrato público v1
+ampliados a `z.string()` no Zod OKF gerado** (3/1/3). O gerado pode
+rejeitar `null` permitido por v1 e admitir códigos que v1 rejeita:
+**não é substituto intercambiável do contrato público**, seja escolhida
+a alternativa A, B ou C.
+
+A [Action OKF #43973816419](https://github.com/franklinbaldo/ficha/actions/runs/43973816419)
+foi conferida no HEAD P4-A `e81d2e658988d1dcdb276ef6c47a650ed392fd43`:
+job de compatibilidade e seus passos de checkout, SHA e comparação
+**SUCCESS**; a PR documenta **6 testes offline, três negativos**.
+Isto **não** prova linhas reais em Parquet, `safeParse` em execução,
+JSON Schema, igualdade entre versões de snapshot, PK/FK em escala ou
+ainda as relações públicas fora dessas três. `NOT_RUN` para essas
+provas e para ETL. O gate `knowledge/**` existe na PR P4-A, não
+deve ser presumido integrado à `main`.
+
+**Pré-condição para deliberação executável:** escolher explicitamente
+a autoridade para `null` e enums (schema público v1, gerado e/ou
+versão do snapshot), exigir contrato versionado por competência,
+cobertura de relações restantes e testes negativos de valores de
+linha, não apenas `DESCRIBE`. A decisão A/B/C pode estabelecer um
+alvo arquitetural, **mas não aprova troca de validador, remoção do
+oracle independente ou migração/publicação** antes dessas provas e
+das prioridades P0/P1. P4-A pertence à Abelha: nenhuma alteração no
+arquivo, gerador ou schema dela é proposta aqui.
+
 ## Sequência e aceite antes de mudar arquitetura
 
 1. **P0/P1 antes de P4:** estabilizar alfanuméricos/Protobuf, completude,
