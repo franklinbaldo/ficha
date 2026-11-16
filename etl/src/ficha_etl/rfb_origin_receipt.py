@@ -15,9 +15,7 @@ from .sources import canonical_inventory, is_valid_month
 
 SCHEMA_VERSION = "rfb-propfind-metadata-v1"
 _SOURCE_ROOT = "https://arquivos.receitafederal.gov.br/public.php/webdav"
-_ENTRY_KEYS = frozenset(
-    {"name", "size_bytes", "etag_raw", "content_type", "ia_raw_name_expected"}
-)
+_ENTRY_KEYS = frozenset({"name", "size_bytes", "etag_raw", "content_type", "ia_raw_name_expected"})
 _ETAG = re.compile(r'(?:W/)?"[^"\r\n]+"\Z')
 
 
@@ -89,15 +87,10 @@ def validate_origin_receipt(receipt: object) -> None:
             raise ValueError(f"{name}: unexpected MIME type")
         if entry["ia_raw_name_expected"] != f"raw/{name}":
             raise ValueError(f"{name}: IA path is only an expected one-to-one mapping")
-        if not isinstance(entry["etag_raw"], str) or not _ETAG.fullmatch(
-            entry["etag_raw"]
-        ):
+        if not isinstance(entry["etag_raw"], str) or not _ETAG.fullmatch(entry["etag_raw"]):
             raise ValueError(f"{name}: missing or invalid opaque ETag")
         total += size
     if observed_names != canonical:
         raise ValueError("inventory names do not match canonical 37")
-    if (
-        type(receipt.get("total_size_bytes")) is not int
-        or receipt["total_size_bytes"] != total
-    ):
+    if type(receipt.get("total_size_bytes")) is not int or receipt["total_size_bytes"] != total:
         raise ValueError("total byte count contradicts individual metadata")
