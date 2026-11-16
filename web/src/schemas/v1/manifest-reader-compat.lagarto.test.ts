@@ -149,4 +149,42 @@ describe('Lagarto P0-D: manifest v1/v1.1 and reader contract', () => {
     zero.files.companies.shards[0]!.size = 0;
     expect(SnapshotEntrySchema.safeParse(zero).success).toBe(false);
   });
+
+  it('exposes the unsupported v1 numeric-only reconstruction of v1.1 alphanumeric wire', () => {
+    const wire = ficha.v1.Company.encode({
+      cnpj_base: 0,
+      cnpj_base_text: '00000000',
+      estabelecimentos: [{ cnpj_ordem_text: 'E08G', cnpj_dv: 12 }],
+    }).finish();
+    const decoded = ficha.v1.Company.decode(wire);
+    const establishment = decoded.estabelecimentos[0]!;
+    // A v1 numeric-only projection ignores the 1.1 text field, losing E08G.
+    // This test does NOT claim an actual v1 decoder rejects the new bytes.
+    const legacyNumericOnly = String(decoded.cnpj_base ?? 0).padStart(8, '0')
+      + String(establishment.cnpj_ordem ?? 0).padStart(4, '0')
+      + String(establishment.cnpj_dv ?? 0).padStart(2, '0');
+    const authoritative = estabelecimentoCnpj(decoded, establishment);
+    expect(legacyNumericOnly).toBe('00000000000012');
+    expect(authoritative).toBe('00000000E08G12');
+    expect(legacyNumericOnly).not.toBe(authoritative);
+  });
+
+  it('refuses an alphanumeric root when a legacy numeric-prefix shard manifest is selected', () => {
+    const legacy = SnapshotEntrySchema.parse({
+      ...snapshot('2026-07'),
+      files: {
+        ...snapshot('2026-07').files,
+        companies: { shard_by: 'cnpj_base_prefix_2', shards: shards() },
+      },
+    });
+    expect(() => companyArchiveUrl('A0000000', {
+      identifier: 'ficha-2026-07',
+      files: legacy.files,
+    })).toThrow(/shard A0/);
+    const current = SnapshotEntrySchema.parse(snapshot11());
+    expect(companyArchiveUrl('A0000000', {
+      identifier: 'ficha-2026-08',
+      files: current.files,
+    })).toBe(archive + '/ficha-2026-08/companies-60.zip');
+  });
 });
