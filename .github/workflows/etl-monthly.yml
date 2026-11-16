@@ -24,8 +24,10 @@ permissions:
   contents: write
   pull-requests: write
 
+# One repo-wide lock for scheduled and manual monthly runs, regardless of target month.
+# cancel-in-progress: false never interrupts an active publication attempt.
 concurrency:
-  group: ficha-monthly-${{ inputs.month || 'auto' }}
+  group: ficha-monthly-publication
   cancel-in-progress: false
 
 jobs:
