@@ -30,8 +30,14 @@ def _descriptor() -> dict:
             name: _identity(str(i))
             for i, name in enumerate(
                 (
-                    "cnpjs", "cnpj_contatos", "cnpj_cnaes", "raizes",
-                    "socios", "enderecos", "pessoas", "lookups",
+                    "cnpjs",
+                    "cnpj_contatos",
+                    "cnpj_cnaes",
+                    "raizes",
+                    "socios",
+                    "enderecos",
+                    "pessoas",
+                    "lookups",
                 ),
                 start=1,
             )
