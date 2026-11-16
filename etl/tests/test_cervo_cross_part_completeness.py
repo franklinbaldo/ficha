@@ -39,9 +39,9 @@ class PartWitness:
 
 
 def _check_digit(value: str, weights: tuple[int, ...]) -> str:
-    remainder = sum((ord(char) - 48) * weight for char, weight in zip(
-        value, weights, strict=True
-    )) % 11
+    remainder = (
+        sum((ord(char) - 48) * weight for char, weight in zip(value, weights, strict=True)) % 11
+    )
     return str(0 if remainder < 2 else 11 - remainder)
 
 
@@ -56,8 +56,10 @@ def _source_parts(root: Path, *, duplicate_alpha: bool = False, empty: bool = Fa
     paths = []
     keys = []
     for part in PARTS:
-        key = ALPHA_CNPJ if part == 0 or (duplicate_alpha and part == 1) else _cnpj(
-            f"{part + 1:08d}0001"
+        key = (
+            ALPHA_CNPJ
+            if part == 0 or (duplicate_alpha and part == 1)
+            else _cnpj(f"{part + 1:08d}0001")
         )
         part_keys = [] if empty else [key]
         path = root / f"Estabelecimentos{part}.csv"
@@ -73,9 +75,7 @@ def _capture_source_witnesses(paths: list[Path]) -> tuple[PartWitness, ...]:
         raw = path.read_bytes()
         lines = raw.decode("ascii").splitlines()
         assert lines and lines[0] == "cnpj"
-        witnesses.append(
-            PartWitness(part, path, hashlib.sha256(raw).hexdigest(), len(lines) - 1)
-        )
+        witnesses.append(PartWitness(part, path, hashlib.sha256(raw).hexdigest(), len(lines) - 1))
     return tuple(witnesses)
 
 
@@ -90,9 +90,7 @@ def _write_produced_parquet(path: Path, keys: list[str]) -> None:
         con.close()
 
 
-def _reconcile_with_independent_source(
-    witnesses: tuple[PartWitness, ...], produced: Path
-) -> int:
+def _reconcile_with_independent_source(witnesses: tuple[PartWitness, ...], produced: Path) -> int:
     """Check 10 distinct source receipts, immutable source bytes, and row counts."""
     if len(witnesses) != len(PARTS) or {w.part for w in witnesses} != set(PARTS):
         raise ValueError("missing or repeated source part receipt")
