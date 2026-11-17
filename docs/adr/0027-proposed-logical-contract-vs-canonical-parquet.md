@@ -154,24 +154,29 @@ a P0 (Castor, Lagarto, Gavião e Elefante), não a esta ADR. Nenhum schema
 Protobuf, manifesto ou endpoint é alterado nesta PR.
 
 **P0-D [#252](https://github.com/franklinbaldo/ficha/pull/252),
-HEAD `3ba54c76` (base #246@`4aeecc99`):** fixtures de 100 URLs
-v1/v1.1 passam isoladamente com **1/100** URL comum.
-Não é colisão no IA. O negativo direto `submit_one_shard`
-segue **XFAIL(strict=True)** na base antiga:
-[CI #44060476250](https://github.com/franklinbaldo/ficha/actions/runs/44060476250)
-verde, **sem PASS da guarda**. #252 não sincronizada a Castor.
+HEAD [`677143f9`](https://github.com/franklinbaldo/ficha/commit/677143f936c6f2666b4023f6094d161a291e150c)
+(base Castor `93702fa2`, 17/11):** sincronizada; diff só dos
+testes Lagarto. A guarda direta deixou de ser XFAIL: três negativos
+obrigatórios **PASS** para `submit_one_shard`,
+`submit_prepared_shard` e `publish_one_shard` antes de I/O simulado.
+[CI #44076734206](https://github.com/franklinbaldo/ficha/actions/runs/44076734206):
+ETL Linux/Windows **684 PASS + 1 XFAIL** cada, web 112 PASS,
+ficha-py SKIPPED. **Novo XFAIL(strict=True):** escrita parcial em
+`Path.write_text` pode corromper o manifesto anterior apesar do
+rollback de `snapshot-entry.json`; falta testar falha posterior em
+`verification.json`. URLs v1/v1.1 com sobreposição 1/100 são
+**sintéticas**, não colisão observada no IA. P0 HOLD por atomicidade,
+opt-in, disjunção de URLs e decoders v1 externos.
 
 **P0-A [#246](https://github.com/franklinbaldo/ficha/pull/246),
-HEAD `73eca877`, 17/11:** `require_legacy_shard_upload_contract`
-protege `publish_one_shard`, `submit_prepared_shard` e
-`submit_one_shard` **antes de I/O**, além do preflight CLI.
-[CI #44060580799](https://github.com/franklinbaldo/ficha/actions/runs/44060580799)
-executou Test nos quatro jobs (ETL Linux/Windows, web, ficha-py).
-Fecha a lacuna direta **na branch Castor**, não prova
-URLs disjuntas v1/v1.1, descoberta opt-in, proteção de decoders v1
-externos ou PUT real. Na `main`, `upload-outputs` precede
-`submit-shard`, fora dessas guardas. **P0 HOLD** até revisão,
-contrato de publicação e decisão dos owners.
+HEAD `93702fa2` (17/11):** guardas pré-I/O dos três entrypoints
+diretos de publicação e preflight CLI, após sincronizar `main` sem
+delta lógico nessas guardas.
+[CI #44069343949](https://github.com/franklinbaldo/ficha/actions/runs/44069343949):
+Test executado, ETL Linux/Windows 674 PASS cada, web 101,
+ficha-py 21. Não prova URLs disjuntas, leitores v1 externos ou
+publicação. Na `main`, `upload-outputs` precede `submit-shard`.
+**P0 HOLD.**
 
 ## Fronteira de descoberta e artefatos SSG: dois contratos distintos
 
@@ -196,23 +201,14 @@ na branch P3-A rejeita formato inesperado, retira o widget conhecido e
 isola o manifesto sintético; **não foi integrado à main**. Build da PoC
 não equivale a ensaio de deploy, consultas reais ou paridade visual.
 
-**Falha histórica P3-A:** [CI #44015083398](https://github.com/franklinbaldo/ficha/actions/runs/44015083398)
-reprovou `Error generating manifest` com exit 0; o quality gate nativo
-era 9/10. PoC offline não prova buscas reais, deploy ou a11y manual.
-
-**Atualização P3-A em 17/11/2026, [HEAD `0a2db297`](https://github.com/franklinbaldo/ficha/commit/0a2db297c4e6850d98cccf32e6406ef1eb1d7a45):**
-o `staticdatagen v0.0.32` exigia `name` nos metadados da página;
-`site_name` em `config.toml` não bastava. A PoC acrescentou `name: FICHA`
-no frontmatter e restringiu o isolamento do web manifest a um shape
-validado, sem mudar o manifesto RFB. O [CI específico
-#44022172722](https://github.com/franklinbaldo/ficha/actions/runs/44022172722)
-concluiu `SUCCESS` no mesmo HEAD: testes Node **29/29**, build SSG real,
-finalização/artefatos, Chromium em **3 larguras**, axe em **12 estados** e
-step **`Detect upstream build diagnostics even on exit code zero` SUCCESS**.
-Isto resolve o defeito **nesta PoC offline**, não transforma exit 0 em
-oráculo universal. O quality gate nativo permanece **9/10** por exigência
-de rodapé promocional; busca DuckDB/Protobuf real, paridade, leitor de tela,
-rollback **de produção** e deploy seguem **NOT_RUN**. A #257 permanece Draft.
+**SSG, histórico:** [CI #44015083398](https://github.com/franklinbaldo/ficha/actions/runs/44015083398)
+detectou erro interno de manifesto apesar de exit 0. A PoC corrigiu
+`name: FICHA` nos metadados e isolou o webmanifest;
+[CI #44022172722](https://github.com/franklinbaldo/ficha/actions/runs/44022172722)
+executou 29 testes Node, SSG real, três larguras Chromium,
+axe 12 estados e detector de diagnóstico. O quality gate nativo 9/10
+cobra rodapé promocional; não inflar nota inserindo propaganda.
+Nada disso certifica dados reais, deploy ou rollback do Pages.
 
 **Gate extra de cutover, a cargo de P3-A:** validar artefatos e diagnósticos,
 não apenas código de saída do processo; esclarecer/corrigir o erro de
@@ -231,11 +227,18 @@ e rollback do Pages anterior. O shell SSG não deve decidir formatos de
 ETL nem promover snapshots. **A/B/C continuam independentes desse corte**;
 a implementação pertence a P0-D/P3-A, após aceite e autorização de deploy.
 
-**17/11, P3-A:** [CI #44045318433](https://github.com/franklinbaldo/ficha/actions/runs/44045318433)
-executou no SHA `8435b5f` rollback **offline** de um artefato
-legado **sintético**: inventários SHA-256, falha pós-troca e
-restauração em sandbox. Negativos cobrem hash errado, adulteração,
-colisão de manifesto e symlink. **Rollback real de Pages: NOT_RUN.**
+**P3-A [#257](https://github.com/franklinbaldo/ficha/pull/257),
+HEAD `78502f6b` (17/11):** o SSG **não gera** o
+`manifest.json` de dados RFB; trocar diretamente `dist/ficha/`
+eliminaria esse contrato público. O
+[CI #44072244590](https://github.com/franklinbaldo/ficha/actions/runs/44072244590)
+executou **46/46 testes Node**, build SSG, Chromium 320/375/1440,
+axe 12/12 e rollback **offline sintético**. O ensaio rejeita manifesto
+ausente, inválido ou divergente e preserva os bytes antigos apenas em
+sandbox. **Cutover futuro:** montar e verificar byte-a-byte o manifesto
+RFB (`current`, `snapshots`, URLs, base `/ficha/`) e ensaiar GET
+e rollback de Pages após autorização. **Deploy real NOT_RUN**; a ADR
+não autoriza migração.
 
 ## Revisão cruzada P4-A: contrato sem paridade semântica comprovada
 
