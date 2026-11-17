@@ -162,3 +162,55 @@ def reconcile_raw_metadata(origin: object, archive: object) -> RawMetadataReport
 
     unexpected = tuple(sorted(set(raw) - {f"raw/{name}" for name in expected_names}))
     return RawMetadataReport(month, tuple(checks), unexpected)
+
+
+@dataclass(frozen=True)
+class RawHeadObservation:
+    """Size-level observation of one IA HEAD response, never a byte digest."""
+
+    name: str
+    catalog_size: int | None
+    head_size: int | None
+    status: str
+
+    @property
+    def head_size_consistent(self) -> bool:
+        return self.status == "head_size_matches_catalog"
+
+    @property
+    def content_identity_verified(self) -> bool:
+        return False
+
+
+def check_raw_head(
+    report: RawMetadataReport,
+    name: str,
+    *,
+    http_status: object,
+    content_length: object,
+    content_encoding: str | None = None,
+) -> RawHeadObservation:
+    """Compare supplied HEAD transport headers with one listed IA object.
+
+    The caller must associate the HEAD response with the correct object URL.
+    Neither HTTP 200 nor matching sizes attest remote ZIP content or RFB bytes.
+    This function performs no network request and authorizes no upload/skip.
+    """
+    entry = next((file for file in report.files if file.name == name), None)
+    if entry is None:
+        raise ValueError("HEAD target is not in the canonical IA inventory")
+    head_size = _positive_size(content_length)
+    encoding = content_encoding.strip().lower() if isinstance(content_encoding, str) else None
+    if type(http_status) is not int or http_status != 200:
+        status = "http_not_ok"
+    elif content_encoding is not None and encoding != "identity":
+        status = "unsupported_encoding"
+    elif head_size is None:
+        status = "missing_or_invalid_length"
+    elif entry.status != "size_and_sha1_observed":
+        status = "catalog_incomplete"
+    elif head_size != entry.remote_size:
+        status = "head_size_mismatch"
+    else:
+        status = "head_size_matches_catalog"
+    return RawHeadObservation(name, entry.remote_size, head_size, status)

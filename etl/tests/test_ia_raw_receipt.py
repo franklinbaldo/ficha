@@ -5,7 +5,7 @@ from __future__ import annotations
 import copy
 import unittest
 
-from ficha_etl.ia_raw_receipt import reconcile_raw_metadata
+from ficha_etl.ia_raw_receipt import check_raw_head, reconcile_raw_metadata
 from ficha_etl.sources import canonical_inventory
 
 
@@ -132,6 +132,75 @@ class RawReconciliationTests(unittest.TestCase):
         origin["total_size_bytes"] -= 1
         with self.assertRaisesRegex(ValueError, "total disagrees"):
             reconcile_raw_metadata(origin, archive)
+
+    def test_head_size_only_does_not_attest_remote_content(self):
+        origin, archive = fixtures()
+        report = reconcile_raw_metadata(origin, archive)
+        observed = check_raw_head(report, "raw/Cnaes.zip", http_status=200, content_length="100")
+        self.assertTrue(observed.head_size_consistent)
+        self.assertEqual(observed.catalog_size, 100)
+        self.assertEqual(observed.head_size, 100)
+        self.assertFalse(observed.content_identity_verified)
+        self.assertFalse(report.content_identity_verified)
+
+    def test_head_non_200_is_not_a_size_attestation(self):
+        origin, archive = fixtures()
+        report = reconcile_raw_metadata(origin, archive)
+        for status in (True, None, 206, 301, 302, 304, 403, 404, 500):
+            with self.subTest(status=status):
+                observation = check_raw_head(
+                    report, "raw/Cnaes.zip", http_status=status, content_length="100"
+                )
+                self.assertEqual(observation.status, "http_not_ok")
+                self.assertFalse(observation.head_size_consistent)
+
+    def test_head_missing_invalid_or_disagreeing_length(self):
+        origin, archive = fixtures()
+        report = reconcile_raw_metadata(origin, archive)
+        for length in (None, True, "", "0", "-1", "1.2", " 100", "１２３"):
+            with self.subTest(length=length):
+                observation = check_raw_head(
+                    report, "raw/Cnaes.zip", http_status=200, content_length=length
+                )
+                self.assertEqual(observation.status, "missing_or_invalid_length")
+        observation = check_raw_head(report, "raw/Cnaes.zip", http_status=200, content_length="101")
+        self.assertEqual(observation.status, "head_size_mismatch")
+        self.assertFalse(observation.head_size_consistent)
+
+    def test_head_encoding_and_target_must_be_unambiguous(self):
+        origin, archive = fixtures()
+        report = reconcile_raw_metadata(origin, archive)
+        for encoding in ("gzip", "br", ""):
+            with self.subTest(encoding=encoding):
+                observation = check_raw_head(
+                    report,
+                    "raw/Cnaes.zip",
+                    http_status=200,
+                    content_length="100",
+                    content_encoding=encoding,
+                )
+                self.assertEqual(observation.status, "unsupported_encoding")
+        self.assertTrue(
+            check_raw_head(
+                report,
+                "raw/Cnaes.zip",
+                http_status=200,
+                content_length="100",
+                content_encoding="Identity",
+            ).head_size_consistent
+        )
+        with self.assertRaisesRegex(ValueError, "not in the canonical"):
+            check_raw_head(report, "raw/other.zip", http_status=200, content_length="100")
+
+    def test_head_cannot_rescue_invalid_ia_catalog(self):
+        origin, archive = fixtures()
+        archive["files"][0]["sha1"] = None
+        report = reconcile_raw_metadata(origin, archive)
+        observation = check_raw_head(
+            report, archive["files"][0]["name"], http_status=200, content_length="100"
+        )
+        self.assertEqual(observation.status, "catalog_incomplete")
+        self.assertFalse(observation.head_size_consistent)
 
 
 if __name__ == "__main__":
