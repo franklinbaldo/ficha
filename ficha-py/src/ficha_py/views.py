@@ -7,6 +7,8 @@ runs against `connect_local` or `connect_ia` without modification.
 
 from __future__ import annotations
 
+import re
+
 import ibis
 from ibis import _
 from ibis.backends.duckdb import Backend as DuckDBBackend
@@ -23,8 +25,8 @@ def socios_de(con: DuckDBBackend, cnpj_base: str) -> Table:
     Returns an Ibis Table expression filtered to the requested raiz.
     Add `.execute()` to materialize a pandas DataFrame.
     """
-    if not cnpj_base or len(cnpj_base) != 8 or not cnpj_base.isdigit():
-        raise ValueError(f"cnpj_base must be 8 digits, got {cnpj_base!r}")
+    if not isinstance(cnpj_base, str) or not re.fullmatch(r"[A-Z0-9]{8}", cnpj_base):
+        raise ValueError(f"cnpj_base must be 8 uppercase ASCII characters, got {cnpj_base!r}")
     return _socios_table(con).filter(_.cnpj_base == cnpj_base)
 
 
@@ -34,8 +36,8 @@ def filiais_de(con: DuckDBBackend, cnpj_base: str) -> Table:
     Returns an Ibis Table expression filtered to the requested raiz.
     Add `.execute()` to materialize a pandas DataFrame.
     """
-    if not cnpj_base or len(cnpj_base) != 8 or not cnpj_base.isdigit():
-        raise ValueError(f"cnpj_base must be 8 digits, got {cnpj_base!r}")
+    if not isinstance(cnpj_base, str) or not re.fullmatch(r"[A-Z0-9]{8}", cnpj_base):
+        raise ValueError(f"cnpj_base must be 8 uppercase ASCII characters, got {cnpj_base!r}")
     return _cnpjs_table(con).filter(_.cnpj_base == cnpj_base)
 
 

@@ -1,25 +1,25 @@
 /**
  * Validação e formatação de CNPJ.
  *
- * O CNPJ tem 14 dígitos: 12 dígitos base (8 raiz + 4 ordem) + 2 dígitos
+ * O CNPJ tem 14 caracteres: 12 posições alfanuméricas (8 raiz + 4 ordem) + 2 dígitos
  * verificadores calculados pelo módulo 11.
  */
 
 export type CNPJ = string & { readonly __brand: 'CNPJ' };
 
-const STRIP_RE = /\D/g;
-const CNPJ_RE = /^\d{14}$/;
+const STRIP_RE = /[.\/\-\s]/g;
+const CNPJ_RE = /^[A-Z0-9]{12}[0-9]{2}$/;
 
-/** Remove qualquer caractere não-numérico. */
+/** Remove pontuação de apresentação; preserva letras e rejeita outros símbolos. */
 export function strip(input: string): string {
-  return input.replace(STRIP_RE, '');
+  return input.toUpperCase().replace(STRIP_RE, '');
 }
 
 /** Calcula um dígito verificador conforme regra módulo 11 da Receita Federal. */
 function checkDigit(base: string, weights: number[]): number {
   const sum = base
     .split('')
-    .reduce((acc, ch, i) => acc + Number(ch) * weights[i]!, 0);
+    .reduce((acc, ch, i) => acc + (ch.charCodeAt(0) - 48) * weights[i]!, 0);
   const remainder = sum % 11;
   return remainder < 2 ? 0 : 11 - remainder;
 }
@@ -44,14 +44,14 @@ export function isValid(input: string): boolean {
 }
 
 /**
- * Type guard que confirma o input como CNPJ válido (14 dígitos puros).
+ * Type guard que confirma o input como CNPJ válido (14 caracteres ASCII).
  * Use depois de `isValid` para narrowing.
  */
 export function asCNPJ(input: string): CNPJ | null {
   return isValid(input) ? (strip(input) as CNPJ) : null;
 }
 
-/** Formata 14 dígitos para `XX.XXX.XXX/XXXX-XX`. */
+/** Formata 14 caracteres para `XX.XXX.XXX/XXXX-XX`. */
 export function format(cnpj: string): string {
   const d = strip(cnpj);
   if (d.length !== 14) return cnpj;

@@ -23,9 +23,18 @@ export type Estabelecimento = ficha.v1.IEstabelecimento;
 // eslint-disable-next-line @typescript-eslint/no-deprecated
 export type Socio = ficha.v1.ISocio;
 
+/** Integer callers may zero-pad; textual roots must already be eight ASCII chars. */
+function rootText(cnpjBase: number | string): string {
+  const s = typeof cnpjBase === 'number'
+    ? String(cnpjBase).padStart(8, '0')
+    : cnpjBase;
+  if (!/^[A-Z0-9]{8}$/.test(s)) throw new Error('Invalid CNPJ root');
+  return s;
+}
+
 /** `12345678` → `'12/345/678.pb'` — mirrors ficha_etl.pack.cnpjpath. */
 export function cnpjpath(cnpjBase: number | string): string {
-  const s = String(cnpjBase).padStart(8, '0');
+  const s = rootText(cnpjBase);
   return `${s.slice(0, 2)}/${s.slice(2, 5)}/${s.slice(5, 8)}.pb`;
 }
 
@@ -47,7 +56,27 @@ export function companyArchiveUrl(
 ): string {
   const { iaBase = 'https://archive.org/download', identifier, files } = options;
   if (files?.companies) {
-    const prefix = cnpjpath(cnpjBase).slice(0, 2);
+    const base = rootText(cnpjBase);
+    // A legacy prefix-2 index only describes numeric roots. A textual root
+    // beginning with digits would otherwise be routed to a plausible old ZIP.
+    if (files.companies.shard_by === 'cnpj_base_prefix_2' && /^[0-9]{2}/.test(base) && /[A-Z]/.test(base)) {
+      throw new Error('companyArchiveUrl: alphanumeric root requires v1.1 shard mapping');
+    }
+    // Older manifests remain readable, but the new bucket mapping must explicitly
+    // advertise the wire schema that preserves alphanumeric CNPJ text.
+    if (files.companies.shard_by === 'cnpj_base_prefix_or_base36_mod_100_v1'
+        && files.companies.schema_version !== '1.1.0') {
+      throw new Error('companyArchiveUrl: schema 1.1.0 required for alphanumeric shards');
+    }
+    if (files.companies.shard_by === 'cnpj_base_prefix_2'
+        && files.companies.schema_version === '1.1.0') {
+      throw new Error('companyArchiveUrl: schema 1.1.0 cannot use legacy numeric shard mapping');
+    }
+    const rawPrefix = base.slice(0, 2);
+    const prefix = files.companies.shard_by === 'cnpj_base_prefix_or_base36_mod_100_v1'
+      && !/^[0-9]{2}$/.test(rawPrefix)
+      ? String(parseInt(rawPrefix, 36) % 100).padStart(2, '0')
+      : rawPrefix;
     const shard = files.companies.shards.find((entry) => entry.shard === prefix);
     if (!shard) {
       throw new Error(`companyArchiveUrl(${cnpjBase}): shard ${prefix} não declarado`);
@@ -85,7 +114,22 @@ export async function fetchCompany(
     throw new Error(`fetchCompany(${cnpjBase}): HTTP ${res.status} ${url}`);
   }
   const bytes = new Uint8Array(await res.arrayBuffer());
-  return normalizeLongs(ficha.v1.Company.decode(bytes));
+  const company = normalizeLongs(ficha.v1.Company.decode(bytes));
+  // A v1-indexed ZIP must not masquerade as 1.1 just because the numeric root
+  // still matches: alphanumeric establishment orders or partners are lossy in v1.
+  if (options.files?.companies?.shard_by === 'cnpj_base_prefix_2' &&
+      (company.cnpj_base_text ||
+       company.estabelecimentos?.some(est => est.cnpj_ordem_text) ||
+       company.socios?.some(socio => socio.cnpj_socio_text))) {
+    throw new Error('fetchCompany: v1 numeric shard contains v1.1 textual CNPJ fields');
+  }
+  // A v1 decoder can silently discard unknown 1.1 text fields. At this
+  // supported reader boundary, never return a different root as a valid hit.
+  const expectedRoot = rootText(cnpjBase);
+  if (companyRoot(company) !== expectedRoot) {
+    throw new Error(`fetchCompany: root mismatch for ${expectedRoot} (unsupported or corrupt wire)`);
+  }
+  return company;
 }
 
 /** Possible shape of a 64-bit value returned by protobufjs uint64/int64. */
@@ -133,3 +177,17 @@ function normalizeLongs(company: Company): Company {
 // and lookup-decoded descriptions that this layer can't supply on its
 // own. When wiring `fetchCompany` into the UI, build the row shape at
 // the call site where you have access to the lookup tables.
+
+/** Text fields in schema 1.1 override the legacy numeric mirrors. */
+export function companyRoot(company: Company): string {
+  return company.cnpj_base_text || String(company.cnpj_base ?? 0).padStart(8, '0');
+}
+
+export function estabelecimentoCnpj(company: Company, est: Estabelecimento): string {
+  const order = est.cnpj_ordem_text || String(est.cnpj_ordem ?? 0).padStart(4, '0');
+  return companyRoot(company) + order + String(est.cnpj_dv ?? 0).padStart(2, '0');
+}
+
+export function socioCnpj(socio: Socio): string {
+  return socio.cnpj_socio_text || String(socio.cnpj_socio ?? 0).padStart(14, '0');
+}

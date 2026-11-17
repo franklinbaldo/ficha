@@ -114,6 +114,9 @@ export namespace ficha {
             /** Company cnpj_base. */
             cnpj_base: number;
 
+            /** Company cnpj_base_text. */
+            cnpj_base_text: string;
+
             /** Company razao_social. */
             razao_social: string;
 
@@ -234,6 +237,9 @@ export namespace ficha {
                 /** Company cnpj_base */
                 cnpj_base?: (number|null);
 
+                /** Company cnpj_base_text */
+                cnpj_base_text?: (string|null);
+
                 /** Company razao_social */
                 razao_social?: (string|null);
 
@@ -296,6 +302,9 @@ export namespace ficha {
 
             /** Estabelecimento cnpj_ordem. */
             cnpj_ordem: number;
+
+            /** Estabelecimento cnpj_ordem_text. */
+            cnpj_ordem_text: string;
 
             /** Estabelecimento cnpj_dv. */
             cnpj_dv: number;
@@ -486,6 +495,9 @@ export namespace ficha {
                 /** Estabelecimento cnpj_ordem */
                 cnpj_ordem?: (number|null);
 
+                /** Estabelecimento cnpj_ordem_text */
+                cnpj_ordem_text?: (string|null);
+
                 /** Estabelecimento cnpj_dv */
                 cnpj_dv?: (number|null);
 
@@ -624,6 +636,9 @@ export namespace ficha {
             /** Socio cpf_mascarado_meio. */
             cpf_mascarado_meio: number;
 
+            /** Socio cnpj_socio_text. */
+            cnpj_socio_text: string;
+
             /** Socio cnpj_socio. */
             cnpj_socio: number;
 
@@ -740,6 +755,9 @@ export namespace ficha {
 
                 /** Socio cpf_mascarado_meio */
                 cpf_mascarado_meio?: (number|null);
+
+                /** Socio cnpj_socio_text */
+                cnpj_socio_text?: (string|null);
 
                 /** Socio cnpj_socio */
                 cnpj_socio?: (number|null);

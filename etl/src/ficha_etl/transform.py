@@ -452,6 +452,30 @@ def _dedupe_cnpj_basico_table(con: duckdb.DuckDBPyConnection, table: str) -> int
         """
     ).fetchone()
 
+    if conflicting_total:
+        rows = con.execute(
+            f"SELECT DISTINCT {tiebreak_cols} FROM {table} "
+            "WHERE cnpj_basico IN (SELECT unnest(?)) "
+            f"ORDER BY {tiebreak_cols} LIMIT 21",
+            [conflicting_sample],
+        ).fetchall()
+        log.warning(
+            "W13.1a conflict evidence: %s",
+            json.dumps(
+                {
+                    "table": table,
+                    "conflicting_keys": conflicting_total,
+                    "sample_keys": conflicting_sample,
+                    "row_limit": 20,
+                    "truncated": len(rows) > 20,
+                    "rows": [dict(zip(cols, row)) for row in rows[:20]],
+                    "selection_policy": "existing deterministic full-row order; not verified correct",
+                },
+                ensure_ascii=True,
+                sort_keys=True,
+            ),
+        )
+
     con.execute(
         f"CREATE OR REPLACE TABLE {table} AS "
         f"SELECT * FROM {table} WHERE cnpj_basico IS NULL "
