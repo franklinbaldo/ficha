@@ -434,11 +434,12 @@ def _require_distinct_finalize_outputs(
     verification_path: Path,
     manifest_path: Path,
     descriptor_path: Path,
+    receipts_dir: Path,
 ) -> None:
-    """Reject aliases between the input descriptor and all output paths.
+    """Reject aliasing of outputs with each other or immutable inputs.
 
-    A shared pathname, symlink target or hardlinked inode could overwrite
-    the source descriptor, a receipt, or the manifest during finalization.
+    The descriptor and all 100 input shard receipts are protected before any
+    descriptor read, receipt load, or remote verification starts.
     """
     paths = (
         ("descriptor", descriptor_path),
@@ -453,6 +454,18 @@ def _require_distinct_finalize_outputs(
             if same_path or same_inode:
                 raise ValueError(f"finalize output paths must be distinct: {name} and {other_name}")
 
+    # A receipt is read-only input. Guard it before _load_all_receipts so that
+    # a successful finalize cannot overwrite its own production checkpoint.
+    for prefix in PUBLIC_COMPANIES_GEOMETRY.prefixes():
+        receipt = receipts_dir / f"receipt-{prefix}.json"
+        for name, output in paths[1:]:
+            same_path = output.resolve() == receipt.resolve()
+            same_inode = output.exists() and receipt.exists() and output.samefile(receipt)
+            if same_path or same_inode:
+                raise ValueError(
+                    f"finalize output paths must be distinct: {name} and receipt-{prefix}"
+                )
+
 
 def command_finalize(args: argparse.Namespace) -> None:
     month = _require_month(args.month)
@@ -461,6 +474,7 @@ def command_finalize(args: argparse.Namespace) -> None:
         Path(args.verification),
         Path(args.manifest),
         Path(args.descriptor),
+        Path(args.receipts_dir),
     )
     descriptor = _load_descriptor(Path(args.descriptor), month)
     pinned = materialization_inputs_from_descriptor(descriptor)
