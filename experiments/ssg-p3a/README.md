@@ -107,3 +107,40 @@ alfanumérico passando pelo formulário, erros de entrada, reset na troca
 de modalidade, ausência de consulta de rede e ausência de exceções JS.
 Este ensaio **não** equivale a auditoria axe/WCAG, leitor de tela, dados
 reais, desempenho WASM/Protobuf ou autorização de deploy.
+
+
+## Checkpoint P3-A: auditoria axe real, somente no protótipo
+
+O script `tests/axe-built.mjs` usa **Chromium + axe-core 4.10.3** em
+preview **loopback** do resultado SSG já construído. Dependências ausentes
+ou build ausente **falham**, não são convertidos em aprovação. A biblioteca
+axe é servida somente em `/ficha/__audit__/axe.js` no servidor local do
+ensaio, nunca incorporada a `dist/` nem ao GitHub Pages. O navegador não
+pode acessar IA, RFB ou qualquer origem remota.
+
+```sh
+# Instalar/inspecionar as dependências em pasta temporária, fora do frontend:
+FICHA_PLAYWRIGHT_MODULE=/caminho/versionado/node_modules/playwright \
+FICHA_AXE_MODULE=/caminho/versionado/node_modules/axe-core \
+node tests/axe-built.mjs dist
+```
+
+**Evidência Ifro do commit `d24883758fae595cf20fc7bc29ed95a3cb4ccbed`:**
+`ssg 0.0.76` (tarball SHA-256 do README), build e finalização em
+`dist/ficha/`, materialização de 3 assets, `smoke-built` PASS,
+`node --test` **27/27 PASS**, navegador legado **3/3 viewports PASS**.
+A nova auditoria com **axe-core 4.10.3 + Chromium** cobriu
+**320/375/1440 px × 4 estados** (inicial, inválido, indisponível,
+troca de modalidade): **12/12 estados sem violações** das regras
+automatizadas WCAG 2.0/2.1 A/AA escolhidas, `incomplete=[]` neste
+ensaio. Controle negativo reproduzível em cópia isolada:
+trocar `for="search-term"` por `for="missing-term"` fez o teste
+**falhar com exit 1**, regra axe `label` de impacto crítico, no
+primeiro estado/viewport. Essa contraprova não modifica arquivos do repo.
+
+**Limite estrito:** axe não substitui leitor de tela, julgamento humano,
+testes de dados verdadeiros ou matriz completa WCAG. Todos esses gates
+continuam `NOT_RUN`. O SSG ainda registra erro de manifest em log
+e quality gate 9/10 apesar de gerar HTML; portanto **PR DRAFT/HOLD**,
+sem merge/deploy. Não existe execução do axe em Actions nessa PoC:
+somente ensaio Ifro sobre HEAD conferido.
