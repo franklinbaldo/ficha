@@ -14,6 +14,9 @@ type EmpresaFixture = {
 
 const matriz = '00000000000191';
 const filialAlfa = '00000000E08G12';
+// Synthetic identities: a textual root must not collide with a numeric root.
+const matrizRaizAlfa = 'A0000000000191';
+const filialRaizAlfa = 'A0000000E08G12';
 
 // Render the real Svelte markup and formatCNPJ, with entirely local fixtures.
 // For the expanded-list cases, inject the state normally populated by DuckDB;
@@ -136,7 +139,10 @@ describe('P0-E: SQL real para matriz e filial (DuckDB-WASM offline)', () => {
         "INSERT INTO cnpjs VALUES " +
           "('00000000000191', '00000000', 'MATRIZ', 'MATRIZ', 'DF', 'BRASILIA', 'ATIVA')," +
           "('00000000E08G12', '00000000', 'FILIAL', 'FILIAL ALFA', 'GO', 'GOIANIA', 'ATIVA')," +
-          "('00000001000191', '00000001', 'OUTRA', 'OUTRA', 'RJ', 'RIO', 'ATIVA')"
+          "('00000001000191', '00000001', 'OUTRA', 'OUTRA', 'RJ', 'RIO', 'ATIVA')," +
+          "('A0000000000191', 'A0000000', 'MATRIZ ALFA', 'MATRIZ ALFA', 'SP', 'SAO PAULO', 'ATIVA')," +
+          "('A0000000E08G12', 'A0000000', 'FILIAL ALFA', 'FILIAL ALFA', 'SP', 'CAMPINAS', 'ATIVA')," +
+          "('B0000000E08G12', 'B0000000', 'OUTRA RAIZ ALFA', 'OUTRA', 'RJ', 'RIO', 'ATIVA')"
       );
 
       const consultar = (selecionado: string) => {
@@ -169,6 +175,20 @@ describe('P0-E: SQL real para matriz e filial (DuckDB-WASM offline)', () => {
       expect(htmlMatriz).toContain('FILIAL ALFA');
       expect(htmlMatriz).not.toContain('00000001000191');
       expect(consultar('00000001000191')).toEqual([]);
+
+      // A textual CNPJ root must be compared as text, including the first eight
+      // positions. Numeric siblings and another alphabetic root must not leak in.
+      const daFilialRaizAlfa = consultar(filialRaizAlfa);
+      expect(daFilialRaizAlfa.map((r) => r.cnpj)).toEqual([matrizRaizAlfa]);
+      const htmlRaizAlfa = await renderFicha(
+        { cnpj: filialRaizAlfa, razao_social: 'FILIAL ALFA', uf: 'SP' },
+        daFilialRaizAlfa
+      );
+      expect(htmlRaizAlfa).toContain('A0.000.000/E08G-12');
+      expect(htmlRaizAlfa).toContain('A0.000.000/0001-91');
+      expect(htmlRaizAlfa).not.toContain('00.000.000/0001-91');
+      expect(consultar(matrizRaizAlfa).map((r) => r.cnpj)).toEqual([filialRaizAlfa]);
+      expect(consultar('B0000000E08G12')).toEqual([]);
     } finally {
       conn.close();
     }
