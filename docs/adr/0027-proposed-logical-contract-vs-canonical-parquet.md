@@ -121,7 +121,7 @@ o [protótipo SSG Rust P3-A #257](https://github.com/franklinbaldo/ficha/pull/25
 observou no `ssg 0.0.76` a inclusão de widget de busca genérica e a
 emissão de `manifest.json` **de aplicativo** com `name=Static Site`,
 diferente do `manifest.json` **RFB** (`current` e `snapshots`).
-O [finalizador isolado do Morcego](../../experiments/ssg-p3a/scripts/finalize-output.mjs)
+O [finalizador isolado do Morcego](https://github.com/franklinbaldo/ficha/blob/e2f3550f202626ada17859562258e4752edf18bd/experiments/ssg-p3a/scripts/finalize-output.mjs)
 na branch P3-A rejeita formato inesperado, retira o widget conhecido e
 isola o manifesto sintético; **não foi integrado à main**. Build da PoC
 não equivale a ensaio de deploy, consultas reais ou paridade visual.
