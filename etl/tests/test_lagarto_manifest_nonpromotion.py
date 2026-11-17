@@ -190,6 +190,7 @@ def test_submitted_but_unverified_shard_never_promotes(monkeypatch, tmp_path: Pa
         monthly_sharded.command_finalize(args)
     _assert_no_promotion(args, before)
 
+
 @pytest.mark.xfail(
     strict=True,
     reason="P0-D known gap: finalize writes snapshot-entry before a failed manifest gate",
