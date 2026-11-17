@@ -72,3 +72,14 @@ test('oracle negativo: asset sob /ficha/ mas ausente no build', () => {
   withFixture(dir => writeFileSync(join(dir, 'index.html'), validHtml.replace('</body>', '<script src="/ficha/js/fantasma.mjs"></script></body>')),
     dir => assert.throws(() => verifyBuiltShell(dir), /asset local ausente/));
 });
+
+test('oracle negativo: script remoto não é permitido no shell offline', () => {
+  withFixture(dir => writeFileSync(join(dir, 'index.html'),
+    validHtml.replace('</body>', '<script src="https://cdn.example.invalid/poc.js"></script></body>')),
+  dir => assert.throws(() => verifyBuiltShell(dir), /URL externa não autorizada/));
+});
+test('oracle negativo: link HTTPS arbitrário não é exceção para asset ou origem', () => {
+  withFixture(dir => writeFileSync(join(dir, 'index.html'),
+    validHtml.replace('https://franklinbaldo.github.io/ficha/manifest.json', 'https://example.invalid/ficha/manifest.json')),
+  dir => assert.throws(() => verifyBuiltShell(dir), /URL externa não autorizada/));
+});
