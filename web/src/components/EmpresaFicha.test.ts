@@ -2,7 +2,8 @@ import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { compile } from 'svelte/compiler';
 import { render } from 'svelte/server';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import * as ts from 'typescript';
 
 const source = readFileSync(new URL('./EmpresaFicha.svelte', import.meta.url), 'utf8');
 
@@ -312,5 +313,95 @@ describe('EmpresaFicha request invalidation (static source contract, no browser)
       expect(body).toMatch(/finally\s*\{\s*await conn\.close\(\)/);
       expect(body).toContain('|| loading');
     }
+  });
+});
+// Source-backed handler with deferred DuckDB stand-in: exercises overlapping
+// awaits and cleanup, but does not claim browser hydration or real Parquet.
+describe('EmpresaFicha: async filial handler (offline)', () => {
+  const tail = source.split('async function toggleFiliais()')[1]
+    ?.split('// Legacy numeric CNPJs')[0];
+  if (!tail) throw new Error('toggleFiliais source anchor disappeared');
+  const executable = ts.transpileModule('async function toggleFiliais()' + tail, {
+    compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None },
+  }).outputText;
+  type FilialState = {
+    toggleFiliais(): Promise<void>;
+    change(cnpj: string): void;
+    snapshot(): { filiais: Array<{ cnpj: string }>; filiaisError: string | null; loadingFiliais: boolean };
+  };
+  function harness(database: unknown): FilialState {
+    // Execute the actual handler, replacing Svelte rune state with local vars.
+    const build = new Function('database', [
+      "let db = database, activeCNPJ = 'A0000000E08G12', requestEpoch = 1;",
+      'let filiais = [], filiaisError = null, loadingFiliais = false, showFiliais = false;',
+      'function isCurrentRequest(cnpj, requestDb, epoch) {',
+      'return cnpj === activeCNPJ && requestDb === db && epoch === requestEpoch; }',
+      executable,
+      'return { toggleFiliais,',
+      'change(cnpj) { activeCNPJ = cnpj; requestEpoch++; filiais = [];',
+      'filiaisError = null; loadingFiliais = false; showFiliais = false; },',
+      'snapshot() { return { filiais, filiaisError, loadingFiliais }; } };',
+    ].join('\n'));
+    return build(database) as FilialState;
+  }
+
+  it('discards a delayed result for the previous company, even if it finishes last', async () => {
+    const pending: Array<{ full: string; resolve: (result: any) => void }> = [];
+    let closedStatements = 0;
+    let closedConnections = 0;
+    const db = {
+      async connect() {
+        return {
+          async prepare() {
+            return {
+              async query(_base: string, full: string) {
+                return new Promise((resolve) => pending.push({ full, resolve }));
+              },
+              async close() { closedStatements++; },
+            };
+          },
+          async close() { closedConnections++; },
+        };
+      },
+    };
+    const ui = harness(db);
+    const first = ui.toggleFiliais();
+    await vi.waitFor(() => expect(pending).toHaveLength(1));
+    ui.change('B0000000E08G12');
+    const second = ui.toggleFiliais();
+    await vi.waitFor(() => expect(pending).toHaveLength(2));
+    expect(pending.map((request) => request.full))
+      .toEqual(['A0000000E08G12', 'B0000000E08G12']);
+    const rows = (cnpj: string) => ({ toArray: () => [{ toJSON: () => ({ cnpj }) }] });
+    pending[1].resolve(rows('B0000000000191'));
+    await second;
+    pending[0].resolve(rows('A0000000000191'));
+    await first;
+    expect(ui.snapshot()).toEqual({
+      filiais: [{ cnpj: 'B0000000000191' }],
+      filiaisError: null,
+      loadingFiliais: false,
+    });
+    expect(closedStatements).toBe(2);
+    expect(closedConnections).toBe(2);
+  });
+
+  it('closes an opened connection when prepare fails, without caching success', async () => {
+    let closedConnections = 0;
+    const ui = harness({
+      async connect() {
+        return {
+          async prepare() { throw new Error('synthetic prepare failure'); },
+          async close() { closedConnections++; },
+        };
+      },
+    });
+    await ui.toggleFiliais();
+    expect(ui.snapshot()).toEqual({
+      filiais: [],
+      filiaisError: 'synthetic prepare failure',
+      loadingFiliais: false,
+    });
+    expect(closedConnections).toBe(1);
   });
 });
