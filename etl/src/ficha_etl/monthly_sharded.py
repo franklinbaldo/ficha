@@ -444,9 +444,9 @@ def _require_distinct_finalize_outputs(
     )
     for index, (name, path) in enumerate(outputs):
         for other_name, other in outputs[index + 1 :]:
-            if path.resolve() == other.resolve() or (
-                path.exists() and other.exists() and path.samefile(other)
-            ):
+            same_path = path.resolve() == other.resolve()
+            same_inode = path.exists() and other.exists() and path.samefile(other)
+            if same_path or same_inode:
                 raise ValueError(
                     f"finalize output paths must be distinct: {name} and {other_name}"
                 )
