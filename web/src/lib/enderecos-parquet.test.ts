@@ -1,6 +1,7 @@
 import { createRequire } from 'node:module';
 import { describe, expect, it } from 'vitest';
 import {
+  normalizarLogradouro,
   planejarConsultaEnderecos,
   type FiltroEnderecos,
 } from './enderecos-query';
@@ -55,6 +56,44 @@ describe('P3-B: execução real de SQL parametrizado sobre Parquet sintético', 
       ).toArray()[0]?.toJSON().n as number | bigint;
       expect(Number(contagem)).toBe(4);
       conn.query("CREATE VIEW enderecos AS SELECT * FROM 'p3b-fixture.parquet'");
+
+
+      // Testa a expressão SQL efetiva do writer em entradas cruas sintéticas,
+      // evitando afirmar paridade apenas porque a fixture já veio normalizada.
+      // Espelho de transform.py/write_enderecos_parquet (sem executar ETL real).
+      const linhasNormalizadas = conn.query(String.raw`
+        WITH entradas(logradouro) AS (
+          VALUES ('R. das Flores'), ('Av.  São   João'), ('TV. da Paz'),
+                 ('AL. das Águas'), ('Pça da Sé'), ('PC. das Artes'),
+                 ('EST. Linha 1'), ('ROD. BR-364'), ('VL. Nova'),
+                 ('LG. da Feira'), ('Avenida Brasil')
+        ), _base AS (
+          SELECT logradouro,
+                 UPPER(strip_accents(TRIM(
+                   regexp_replace(logradouro, '\s+', ' ', 'g')
+                 ))) AS _logr
+          FROM entradas
+        )
+        SELECT logradouro,
+               COALESCE(
+                 MAP {
+                   'R': 'RUA ', 'AV': 'AVENIDA ', 'TV': 'TRAVESSA ',
+                   'AL': 'ALAMEDA ', 'PCA': 'PRACA ', 'PC': 'PRACA ',
+                   'EST': 'ESTRADA ', 'ROD': 'RODOVIA ',
+                   'VL': 'VILA ', 'LG': 'LARGO '
+                 }[regexp_extract(_logr, '^([A-Z]+)\.?\s+', 1)]
+                   || regexp_replace(_logr, '^[A-Z]+\.?\s+', ''),
+                 _logr
+               ) AS logradouro_normalizado
+        FROM _base ORDER BY logradouro
+      `).toArray().map((linha) => linha.toJSON() as {
+        logradouro: string; logradouro_normalizado: string;
+      });
+      expect(linhasNormalizadas).toHaveLength(11);
+      for (const linha of linhasNormalizadas) {
+        expect(normalizarLogradouro(linha.logradouro))
+          .toBe(linha.logradouro_normalizado);
+      }
 
       const consultar = (filtro: FiltroEnderecos): string[] => {
         const plano = planejarConsultaEnderecos(filtro);
