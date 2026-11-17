@@ -40,6 +40,39 @@ try {
     assert.equal(await page.locator('#search-status').getAttribute('aria-live'), 'polite');
     await page.keyboard.press('Tab');
     assert.equal(await page.evaluate(() => document.activeElement.className), 'skip-link');
+    // Prova de semântica por papéis/nomes acessíveis (não equivale a leitor de tela real).
+    for (const [role, name] of [
+      ['navigation', 'Navegação principal'],
+      ['combobox', 'Buscar por'],
+      ['textbox', 'CNPJ ou termo'],
+      ['button', 'Consultar'],
+      ['status', undefined],
+    ]) {
+      assert.equal(await page.getByRole(role, name ? { name } : {}).count(), 1,
+        `papel/nome acessível ausente: ${role}/${name ?? 'status'} em ${width}px`);
+    }
+    // Ciclo completo de Tab, incluindo link público: o foco deve ficar visível.
+    for (const selector of [
+      'header nav a.brand',
+      'header nav a[href="#consulta"]',
+      'header nav a[href="#origin-title"]',
+      '#search-kind',
+      '#search-term',
+      '#search-form button',
+      '.origin a[href="https://franklinbaldo.github.io/ficha/manifest.json"]',
+    ]) {
+      await page.keyboard.press('Tab');
+      assert.equal(await page.locator(selector).evaluate(el => el === document.activeElement),
+        true, `ordem de Tab incorreta em ${width}px: ${selector}`);
+      const focus = await page.locator(selector).evaluate(el => {
+        const style = getComputedStyle(el);
+        const bounds = el.getBoundingClientRect();
+        return { outline: style.outlineStyle, width: Number.parseFloat(style.outlineWidth),
+          visible: bounds.width > 0 && bounds.height > 0 };
+      });
+      assert.ok(focus.visible && focus.outline === 'solid' && focus.width >= 2,
+        `foco não perceptível em ${width}px: ${selector} ${JSON.stringify(focus)}`);
+    }
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1),
       false, `overflow horizontal em ${width}px`);
     await page.locator('#search-term').fill('00000000E08G12');
@@ -72,7 +105,7 @@ try {
     assert.equal(await page.locator('#search-result').isVisible(), false);
     assert.deepEqual(errors, [], 'erros JS no navegador');
     assert.deepEqual(remoteRequests, [], 'a PoC NÃO pode consultar dados reais');
-    console.log(`BROWSER_PASS width=${width} focus=skip-link mock/unavailable/invalid/reset text-200 keyboard-submit no-overflow no-remote-fetch`);
+    console.log(`BROWSER_PASS width=${width} focus=skip-link mock/unavailable/invalid/reset text-200 keyboard-submit tab-order focus-visible accessible-names no-overflow no-remote-fetch`);
     await page.close();
   }
 } catch (error) {
