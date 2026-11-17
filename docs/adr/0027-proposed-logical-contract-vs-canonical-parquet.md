@@ -103,6 +103,38 @@ para proteger decoders externos já distribuídos. A estratégia exata pertence
 a P0 (Castor, Lagarto, Gavião e Elefante), não a esta ADR. Nenhum schema
 Protobuf, manifesto ou endpoint é alterado nesta PR.
 
+## Fronteira de descoberta e artefatos SSG: dois contratos distintos
+
+A incompatibilidade de Protobuf não se limita aos bytes. O
+[`manifest.ts` v1 na main](../../web/src/schemas/v1/manifest.ts)
+exige `shard_by: 'cnpj_base_prefix_2'` em **todos** os snapshots e
+valida o objeto inteiro. O [negativo offline P0-D #252](https://github.com/franklinbaldo/ficha/pull/252)
+mostrou que acrescentar um snapshot v1.1 com outro `shard_by` ao mesmo
+índice invalida a descoberta v1 **mesmo mantendo `current` no mês v1**.
+Isso evidencia risco de indisponibilidade histórica; o ensaio no frontend
+v1 efetivamente implantado continua **NOT_RUN**. Separar o índice ou
+negociar a versão *antes da descoberta* é decisão de P0, não do contrato
+lógico OKF.
+
+Há também um conflito independente entre geradores de páginas e dados:
+o [protótipo SSG Rust P3-A #257](https://github.com/franklinbaldo/ficha/pull/257)
+observou no `ssg 0.0.76` a inclusão de widget de busca genérica e a
+emissão de `manifest.json` **de aplicativo** com `name=Static Site`,
+diferente do `manifest.json` **RFB** (`current` e `snapshots`).
+O [finalizador isolado do Morcego](../../experiments/ssg-p3a/scripts/finalize-output.mjs)
+na branch P3-A rejeita formato inesperado, retira o widget conhecido e
+isola o manifesto sintético; **não foi integrado à main**. Build da PoC
+não equivale a ensaio de deploy, consultas reais ou paridade visual.
+
+**Gates antes de qualquer corte SSG:** nome/namespace separados e teste
+negativo de colisão entre manifestos; conservação do contrato RFB/URLs e
+base `/ficha/`; busca única especializada (sem widget genérico);
+descoberta versionada compatível com frontend legado; teste de falha
+fechada para formato desconhecido; hashes do build, paridade de consultas
+e rollback do Pages anterior. O shell SSG não deve decidir formatos de
+ETL nem promover snapshots. **A/B/C continuam independentes desse corte**;
+a implementação pertence a P0-D/P3-A, após aceite e autorização de deploy.
+
 ## Revisão cruzada P4-A: contrato sem paridade semântica comprovada
 
 A [matriz P4-A da Abelha](https://github.com/franklinbaldo/ficha/blob/e81d2e658988d1dcdb276ef6c47a650ed392fd43/docs/okf-contract-compatibility.md)
