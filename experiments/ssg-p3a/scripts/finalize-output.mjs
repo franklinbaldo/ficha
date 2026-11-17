@@ -10,9 +10,24 @@ function checkGeneratedManifest(file) {
   const manifest = JSON.parse(readFileSync(file, 'utf8'));
   assert.ok(!('current' in manifest) && !('snapshots' in manifest),
     'manifesto RFB: nunca renomear, sobrescrever nem alterar');
-  assert.deepEqual(Object.keys(manifest).sort(), ['display', 'name', 'short_name', 'start_url']);
-  assert.equal(manifest.name, 'Static Site', 'manifesto SSG desconhecido: parar');
-  assert.equal(manifest.start_url, '/', 'manifesto SSG mudou: parar');
+  // SSG 0.0.76/staticdatagen 0.0.32 uses the page frontmatter 'name'
+  // for the PWA web manifest. Missing 'name' emits an ERROR but exits zero.
+  // Refuse that older fallback as well as unknown data-manifest contracts.
+  assert.deepEqual(Object.keys(manifest).sort(), [
+    'background_color', 'description', 'display', 'name',
+    'orientation', 'scope', 'short_name', 'start_url', 'theme_color',
+  ], 'formato do manifesto gerado pelo SSG mudou: parar');
+  assert.equal(manifest.name, 'FICHA', 'manifesto SSG desconhecido: parar');
+  assert.equal(manifest.start_url, '.', 'manifesto SSG mudou: parar');
+  assert.equal(manifest.display, 'standalone', 'manifesto SSG mudou: parar');
+  assert.equal(manifest.scope, '/', 'manifesto SSG mudou: parar');
+  assert.equal(manifest.background_color, '#ffffff', 'manifesto SSG mudou: parar');
+  assert.equal(manifest.orientation, 'portrait-primary', 'manifesto SSG mudou: parar');
+  assert.equal(manifest.short_name, null, 'manifesto SSG mudou: parar');
+  assert.equal(manifest.theme_color, null, 'manifesto SSG mudou: parar');
+  assert.ok(typeof manifest.description === 'string'
+    && manifest.description.startsWith('Ensaio isolado do shell estático do Ficha'),
+    'descrição do manifesto SSG mudou: parar');
 }
 
 /**
