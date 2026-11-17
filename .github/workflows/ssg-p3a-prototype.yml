@@ -31,6 +31,9 @@ jobs:
       - name: Node regression tests (includes negative fixtures)
         run: node --test tests/*.test.mjs
 
+      - name: Offline Pages artifact importer regression (9 synthetic cases)
+        run: python3 -m unittest discover -s tests -p 'test_*.py' -v
+
       - name: Install exactly pinned SSG release (checksum verified)
         env:
           GH_TOKEN: ${{ github.token }}
