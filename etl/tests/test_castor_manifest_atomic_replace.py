@@ -59,9 +59,7 @@ def test_successful_atomic_replace_writes_complete_legacy_index(
     manifest = tmp_path / "public" / "manifest.json"
     manifest.parent.mkdir()
     if preexisting:
-        manifest.write_bytes(
-            b'{"current":"2026-07","snapshots":[{"date":"2026-07"}]}\n'
-        )
+        manifest.write_bytes(b'{"current":"2026-07","snapshots":[{"date":"2026-07"}]}\n')
 
     manifest_mod.update_manifest(manifest, _entry())
 
