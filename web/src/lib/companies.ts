@@ -57,6 +57,11 @@ export function companyArchiveUrl(
   const { iaBase = 'https://archive.org/download', identifier, files } = options;
   if (files?.companies) {
     const base = rootText(cnpjBase);
+    // A legacy prefix-2 index only describes numeric roots. A textual root
+    // beginning with digits would otherwise be routed to a plausible old ZIP.
+    if (files.companies.shard_by === 'cnpj_base_prefix_2' && /[A-Z]/.test(base)) {
+      throw new Error('companyArchiveUrl: alphanumeric root requires v1.1 shard mapping');
+    }
     // Older manifests remain readable, but the new bucket mapping must explicitly
     // advertise the wire schema that preserves alphanumeric CNPJ text.
     if (files.companies.shard_by === 'cnpj_base_prefix_or_base36_mod_100_v1'

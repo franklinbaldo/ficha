@@ -65,6 +65,24 @@ describe('schema 1.1 textual identity with v1 numeric fallback', () => {
     } };
     expect(companyArchiveUrl('ABCD1234', { identifier: 'test', files })).toBe('https://example.org/companies-71.zip');
   });
+  it('never routes an alphanumeric root through a legacy numeric ZIP, even with numeric prefix', () => {
+    const files = { companies: {
+      shard_by: 'cnpj_base_prefix_2' as const,
+      shards: [{ shard: '00', url: 'https://example.org/companies-00.zip', sha1: 'a'.repeat(40), size: 1 }],
+    } };
+    expect(companyArchiveUrl('00123456', { identifier: 'legacy', files }))
+      .toBe('https://example.org/companies-00.zip');
+    expect(() => companyArchiveUrl('00AB1234', { identifier: 'legacy', files }))
+      .toThrow(/alphanumeric root requires v1.1 shard mapping/);
+    expect(companyArchiveUrl('00AB1234', { identifier: 'new', files: {
+      companies: { ...files.companies,
+        shard_by: 'cnpj_base_prefix_or_base36_mod_100_v1' as const,
+        schema_version: '1.1.0' as const,
+      },
+    } }))
+      .toBe('https://example.org/companies-00.zip');
+  });
+
   it('fails closed when new bucket semantics omit the 1.1 wire contract', () => {
     const files = { companies: {
       shard_by: 'cnpj_base_prefix_or_base36_mod_100_v1' as const,
