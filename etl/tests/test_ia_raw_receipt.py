@@ -252,7 +252,9 @@ class RawReconciliationTests(unittest.TestCase):
             "stale observation": lambda r: r["source"].__setitem__(
                 "observed_at_utc", "2026-11-17T21:37:51+00:00"
             ),
-            "invalid etag": lambda r: r["files"][0].__setitem__("etag_raw", '"bad' + chr(0) + 'etag"'),
+            "invalid etag": lambda r: r["files"][0].__setitem__(
+                "etag_raw", '"bad' + chr(0) + 'etag"'
+            ),
             "extra unverified hash claim": lambda r: r.__setitem__("sha256_verified", True),
             "extra file hash claim": lambda r: r["files"][0].__setitem__("sha256", "0" * 64),
             "boolean HTTP status": lambda r: r["source"].__setitem__("http_status", True),
