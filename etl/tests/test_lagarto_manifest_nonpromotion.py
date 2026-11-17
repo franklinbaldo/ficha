@@ -21,9 +21,11 @@ from ficha_etl.shard_transfer import ShardTransferAction
 
 MONTH = "2026-08"
 
-# Pinned against the actual _pack_rows output; mirrored by the TS P0-D test.
+# Single producer-owned fixture, read by both Python and TS P0-D tests.
 PACKER_CA_MEMBER_HEX = (
-    "22084341303030303031a20108100c2a0445303847aa01104a0e3030303030303030453038473132a006f0ae0c"
+    (Path(__file__).parent / "fixtures" / "company-v11-ca000001.hex")
+    .read_text(encoding="ascii")
+    .strip()
 )
 PACKER_CA_MEMBER_SHA256 = "041e2b5e6f039959b03fd185021493f422ce884ea155590c9e99916ca769ec48"
 

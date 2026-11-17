@@ -320,3 +320,64 @@ def test_finalize_rejects_descriptor_linked_to_output_before_io(
     assert args.verification.read_bytes() == original_descriptor
     assert args.manifest.read_bytes() == previous_manifest
     assert not args.snapshot_entry.exists()
+
+
+@pytest.mark.parametrize("output", ["snapshot_entry", "verification", "manifest"])
+@pytest.mark.parametrize("alias_kind", ["pathname", "symlink", "hardlink"])
+def test_finalize_rejects_output_alias_to_input_receipt_before_any_reads(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    output: str,
+    alias_kind: str,
+) -> None:
+    args = _args(tmp_path)
+    args.receipts_dir.mkdir()
+    receipt = args.receipts_dir / "receipt-42.json"
+    original_receipt = b'{"checkpoint":"immutable receipt 42"}\\n'
+    receipt.write_bytes(original_receipt)
+    original_manifest = args.manifest.read_bytes()
+
+    if alias_kind == "pathname":
+        setattr(args, output, receipt)
+    else:
+        alias = tmp_path / f"{output}-{alias_kind}.json"
+        try:
+            if alias_kind == "symlink":
+                alias.symlink_to(receipt)
+            else:
+                alias.hardlink_to(receipt)
+        except (OSError, NotImplementedError):
+            pytest.skip(f"{alias_kind} unavailable on this filesystem")
+        setattr(args, output, alias)
+
+    def forbidden(*_args, **_kwargs):
+        pytest.fail("finalize must reject receipt alias before reading inputs or network")
+
+    monkeypatch.setattr(monthly_sharded, "_load_descriptor", forbidden)
+    monkeypatch.setattr(monthly_sharded, "_load_all_receipts", forbidden)
+    monkeypatch.setattr(monthly_sharded, "wait_for_descriptor_remote", forbidden)
+    monkeypatch.setattr(monthly_sharded, "fetch_item_metadata", forbidden)
+
+    with pytest.raises(ValueError, match="finalize output paths must be distinct: .*receipt-42"):
+        monthly_sharded.command_finalize(args)
+
+    assert receipt.read_bytes() == original_receipt
+    assert (tmp_path / "manifest.json").read_bytes() == original_manifest
+    assert not (tmp_path / "snapshot-entry.json").exists()
+    assert not (tmp_path / "verification.json").exists()
+
+
+def test_finalize_allows_distinct_outputs_with_input_receipts(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    args = _args(tmp_path)
+    args.receipts_dir.mkdir()
+    receipt = args.receipts_dir / "receipt-42.json"
+    sentinel = b'{"checkpoint":"untouched after successful finalize"}\\n'
+    receipt.write_bytes(sentinel)
+    _mock_offline_inputs(monkeypatch, alpha=False)
+
+    monthly_sharded.command_finalize(args)
+
+    assert receipt.read_bytes() == sentinel
+    assert json.loads(args.manifest.read_text(encoding="utf-8"))["current"] == args.month

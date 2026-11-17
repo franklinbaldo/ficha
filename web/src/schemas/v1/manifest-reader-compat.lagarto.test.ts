@@ -1,5 +1,6 @@
 /** P0-D offline contract tests. No Internet Archive requests or real manifest writes. */
 import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { describe, expect, it, vi } from 'vitest';
 import { Field, Root, Type } from 'protobufjs';
 import { z } from 'zod';
@@ -11,7 +12,10 @@ import { fetchAtomicV11Company, parseAtomicV11Manifest } from '../../lib/compani
 import { ManifestSchema, SnapshotEntrySchema } from './manifest';
 
 const archive = 'https://archive.org/download';
-const packerCaMemberHex = '22084341303030303031a20108100c2a0445303847aa01104a0e3030303030303030453038473132a006f0ae0c';
+const packerCaMemberHex = readFileSync(
+  new URL('../../../../etl/tests/fixtures/company-v11-ca000001.hex', import.meta.url),
+  'utf8',
+).trim();
 const packerCaMemberSha256 = '041e2b5e6f039959b03fd185021493f422ce884ea155590c9e99916ca769ec48';
 const file = (name: string) => ({
   url: archive + '/ficha-2026-04/' + name,
