@@ -262,19 +262,16 @@ def test_direct_transfer_api_must_refuse_unversioned_v11_wire(
             path.write_bytes(b"synthetic-protobuf-v11-wire-only")
             return SimpleNamespace(path=path)
 
-    monkeypatch.setattr(
-        shard_transfer, "_metadata_still_matches", lambda *_a, **_kw: {}
-    )
-    monkeypatch.setattr(
-        shard_transfer,
-        "_classify",
-        lambda *_a, **_kw: SimpleNamespace(
+    transfer = shard_transfer
+
+    def always_absent(*_args, **_kwargs):
+        return SimpleNamespace(
             state=ShardReuseState.ABSENT, name="companies-00.zip", detail=""
-        ),
-    )
-    monkeypatch.setattr(
-        shard_transfer, "_reconcile_catalog_absent", lambda *_a, **_kw: None
-    )
+        )
+
+    monkeypatch.setattr(transfer, "_metadata_still_matches", lambda *_a, **_kw: {})
+    monkeypatch.setattr(transfer, "_classify", always_absent)
+    monkeypatch.setattr(transfer, "_reconcile_catalog_absent", lambda *_a, **_kw: None)
 
     uploads: list[str] = []
 
