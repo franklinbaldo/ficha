@@ -1,5 +1,6 @@
 ---
 name: FICHA
+permalink: https://franklinbaldo.github.io/ficha/
 title: FICHA — ensaio SSG Rust
 description: Ensaio isolado do shell estático do Ficha sem consulta real.
 language: pt-BR
