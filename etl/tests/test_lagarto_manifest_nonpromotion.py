@@ -145,3 +145,43 @@ def test_remote_receipt_mismatch_never_promotes(monkeypatch, tmp_path: Path):
     with pytest.raises(RuntimeError, match="diverges from production receipt"):
         monthly_sharded.command_finalize(args)
     _assert_no_promotion(args, before)
+
+def test_remote_descriptor_sha_mismatch_blocks_promotion(monkeypatch, tmp_path: Path):
+    """A base-file hash divergence must fail before shard verification/promotion."""
+    args, before = _setup(tmp_path)
+    expected = monthly_sharded._expected_remote_files(_descriptor())
+    remote_files = [
+        {"name": name, "size": size, "sha1": sha1}
+        for name, (size, sha1) in expected.items()
+    ]
+    for entry in remote_files:
+        if entry["name"] == "cnpjs.parquet":
+            entry["sha1"] = "e" * 40
+    monkeypatch.setattr(
+        monthly_sharded,
+        "fetch_item_metadata",
+        lambda *_args, **_kwargs: {"files": remote_files},
+    )
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("shards must not be checked after descriptor mismatch")
+
+    monkeypatch.setattr(monthly_sharded, "verify_all_shards", forbidden)
+    with pytest.raises(RuntimeError, match="remote bytes diverge from production descriptor"):
+        monthly_sharded.command_finalize(args)
+    _assert_no_promotion(args, before)
+
+
+def test_submitted_but_unverified_shard_never_promotes(monkeypatch, tmp_path: Path):
+    """All 100 names being present is insufficient without VERIFIED action."""
+    args, before = _setup(tmp_path)
+    monkeypatch.setattr(monthly_sharded, "wait_for_descriptor_remote", lambda *_a, **_kw: {})
+    results = [_verified(f"{i:02d}") for i in range(100)]
+    results[42].action = ShardTransferAction.SUBMITTED
+    monkeypatch.setattr(
+        monthly_sharded, "verify_all_shards", lambda *_a, **_kw: results
+    )
+    with pytest.raises(RuntimeError, match="42: verify returned submitted"):
+        monthly_sharded.command_finalize(args)
+    _assert_no_promotion(args, before)
+
