@@ -1,0 +1,277 @@
+{
+  "schema_version": "rfb-propfind-metadata-v1",
+  "month": "2026-08",
+  "source": {
+    "url": "https://arquivos.receitafederal.gov.br/public.php/webdav/2026-08/",
+    "method": "PROPFIND",
+    "depth": 1,
+    "http_status": 207,
+    "server_date": "Mon, 16 Nov 2026 21:37:49 GMT",
+    "observed_at_utc": "2026-11-16T21:37:51+00:00"
+  },
+  "identity_level": "metadata-only",
+  "content_hash_verified": false,
+  "etag_semantics": "opaque-validator-not-content-hash",
+  "total_size_bytes": 7692070350,
+  "files": [
+    {
+      "name": "Cnaes.zip",
+      "size_bytes": 22078,
+      "etag_raw": "\"57ca9ef3c6f8149f0ab08589b300f96d\"",
+      "content_type": "application/zip",
+      "ia_raw_name_expected": "raw/Cnaes.zip"
+    },
+    {
+      "name": "Empresas0.zip",
+      "size_bytes": 552734286,
+      "etag_raw": "\"95c254b100063e48cf4cbb966ecce2a4\"",
+      "content_type": "application/zip",
+      "ia_raw_name_expected": "raw/Empresas0.zip"
+    },
+    {
+      "name": "Empresas1.zip",
+      "size_bytes": 77892906,
+      "etag_raw": "\"03172453ff1e75c9b7a94ad7f52d8caf\"",
+      "content_type": "application/zip",
+      "ia_raw_name_expected": "raw/Empresas1.zip"
+    },
+    {
+      "name": "Empresas2.zip",
+      "size_bytes": 79119503,
+      "etag_raw": "\"df0b1492fa939ec2acad5ac130e602b9\"",
+      "content_type": "application/zip",
+      "ia_raw_name_expected": "raw/Empresas2.zip"
+    },
+    {
+      "name": "Empresas3.zip",
+      "size_bytes": 85107043,
+      "etag_raw": "\"b33da6ef871f57e0bc628216fee75a39\"",
+      "content_type": "application/zip",
+      "ia_raw_name_expected": "raw/Empresas3.zip"
+    },
+    {
+      "name": "Empresas4.zip",
+      "size_bytes": 90236931,
+      "etag_raw": "\"33051e9d6140d7994f14f08ce9032b69\"",
+      "content_type": "application/zip",
+      "ia_raw_name_expected": "raw/Empresas4.zip"
+    },
+    {
+      "name": "Empresas5.zip",
+      "size_bytes": 97335034,
+      "etag_raw": "\"418af92a70194e1dc02d2974c4b5c727\"",
+      "content_type": "application/zip",
+      "ia_raw_name_expected": "raw/Empresas5.zip"
+    },
+    {
+      "name": "Empresas6.zip",
+      "size_bytes": 94230071,
+      "etag_raw": "\"3ebd489c4d63299cd9700b6940e1fe5a\"",
+      "content_type": "application/zip",
+      "ia_raw_name_expected": "raw/Empresas6.zip"
+    },
+    {
+      "name": "Empresas7.zip",
+      "size_bytes": 98726923,
+      "etag_raw": "\"1b7277e04f6f824956aca67e74a06c86\"",
+      "content_type": "application/zip",
+      "ia_raw_name_expected": "raw/Empresas7.zip"
+    },
+    {
+      "name": "Empresas8.zip",
+      "size_bytes": 98801940,
+      "etag_raw": "\"8d5c107a13535e2d5eb517273247e7dc\"",
+      "content_type": "application/zip",
+      "ia_raw_name_expected": "raw/Empresas8.zip"
+    },
+    {
+      "name": "Empresas9.zip",
+      "size_bytes": 94372131,
+      "etag_raw": "\"3e0b4f02b52521a8341be95f88f2261c\"",
+      "content_type": "application/zip",
+      "ia_raw_name_expected": "raw/Empresas9.zip"
+    },
+    {
+      "name": "Estabelecimentos0.zip",
+      "size_bytes": 2200116910,
+      "etag_raw": "\"274eaa108d11a21301caf0346c0d76ec\"",
+      "content_type": "application/zip",
+      "ia_raw_name_expected": "raw/Estabelecimentos0.zip"
+    },
+    {
+      "name": "Estabelecimentos1.zip",
+      "size_bytes": 341753658,
+      "etag_raw": "\"034352314476f4e070f85e92090b501f\"",
+      "content_type": "application/zip",
+      "ia_raw_name_expected": "raw/Estabelecimentos1.zip"
+    },
+    {
+      "name": "Estabelecimentos2.zip",
+      "size_bytes": 336127884,
+      "etag_raw": "\"a1975f1811849d63baf092f7373a0926\"",
+      "content_type": "application/zip",
+      "ia_raw_name_expected": "raw/Estabelecimentos2.zip"
+    },
+    {
+      "name": "Estabelecimentos3.zip",
+      "size_bytes": 367641274,
+      "etag_raw": "\"6f13be08362d1b04ae36bdf9bde0168e\"",
+      "content_type": "application/zip",
+      "ia_raw_name_expected": "raw/Estabelecimentos3.zip"
+    },
+    {
+      "name": "Estabelecimentos4.zip",
+      "size_bytes": 340246482,
+      "etag_raw": "\"3de50043ed243b734df6359c8501b3de\"",
+      "content_type": "application/zip",
+      "ia_raw_name_expected": "raw/Estabelecimentos4.zip"
+    },
+    {
+      "name": "Estabelecimentos5.zip",
+      "size_bytes": 335998993,
+      "etag_raw": "\"66bf6081e400c1da20159e15dc2792d7\"",
+      "content_type": "application/zip",
+      "ia_raw_name_expected": "raw/Estabelecimentos5.zip"
+    },
+    {
+      "name": "Estabelecimentos6.zip",
+      "size_bytes": 368845297,
+      "etag_raw": "\"97fe472872020ffefae283b191474798\"",
+      "content_type": "application/zip",
+      "ia_raw_name_expected": "raw/Estabelecimentos6.zip"
+    },
+    {
+      "name": "Estabelecimentos7.zip",
+      "size_bytes": 339985622,
+      "etag_raw": "\"5802619a3c05fadd56983519875b0b76\"",
+      "content_type": "application/zip",
+      "ia_raw_name_expected": "raw/Estabelecimentos7.zip"
+    },
+    {
+      "name": "Estabelecimentos8.zip",
+      "size_bytes": 335311452,
+      "etag_raw": "\"f9c775cea944c8e56ddb6f3376c632d2\"",
+      "content_type": "application/zip",
+      "ia_raw_name_expected": "raw/Estabelecimentos8.zip"
+    },
+    {
+      "name": "Estabelecimentos9.zip",
+      "size_bytes": 369237808,
+      "etag_raw": "\"211dc76f38f7a427f69d6b07123dfcdb\"",
+      "content_type": "application/zip",
+      "ia_raw_name_expected": "raw/Estabelecimentos9.zip"
+    },
+    {
+      "name": "Motivos.zip",
+      "size_bytes": 1180,
+      "etag_raw": "\"5083658d4ea9706f647125aab8e6bc3a\"",
+      "content_type": "application/zip",
+      "ia_raw_name_expected": "raw/Motivos.zip"
+    },
+    {
+      "name": "Municipios.zip",
+      "size_bytes": 43443,
+      "etag_raw": "\"bf9fa7cea57f10a4383d41d422300d21\"",
+      "content_type": "application/zip",
+      "ia_raw_name_expected": "raw/Municipios.zip"
+    },
+    {
+      "name": "Naturezas.zip",
+      "size_bytes": 1563,
+      "etag_raw": "\"f4cda4a234df07741789f9d7f42c735e\"",
+      "content_type": "application/zip",
+      "ia_raw_name_expected": "raw/Naturezas.zip"
+    },
+    {
+      "name": "Paises.zip",
+      "size_bytes": 2745,
+      "etag_raw": "\"a8e0a6cc2d2b1f9bac51c9fba2610d95\"",
+      "content_type": "application/zip",
+      "ia_raw_name_expected": "raw/Paises.zip"
+    },
+    {
+      "name": "Qualificacoes.zip",
+      "size_bytes": 980,
+      "etag_raw": "\"f89579b41375e0d954f29f25eec240e1\"",
+      "content_type": "application/zip",
+      "ia_raw_name_expected": "raw/Qualificacoes.zip"
+    },
+    {
+      "name": "Simples.zip",
+      "size_bytes": 302289129,
+      "etag_raw": "\"b39e41a2c405a1ee16c1d802ad8aedb3\"",
+      "content_type": "application/zip",
+      "ia_raw_name_expected": "raw/Simples.zip"
+    },
+    {
+      "name": "Socios0.zip",
+      "size_bytes": 242883070,
+      "etag_raw": "\"bdb6339aa67b6c063742fabfe1756252\"",
+      "content_type": "application/zip",
+      "ia_raw_name_expected": "raw/Socios0.zip"
+    },
+    {
+      "name": "Socios1.zip",
+      "size_bytes": 49520370,
+      "etag_raw": "\"fd7336f8857dc8cb5126d12caa97a45f\"",
+      "content_type": "application/zip",
+      "ia_raw_name_expected": "raw/Socios1.zip"
+    },
+    {
+      "name": "Socios2.zip",
+      "size_bytes": 49037679,
+      "etag_raw": "\"341a0ff5295004288b0e510f0f75eb12\"",
+      "content_type": "application/zip",
+      "ia_raw_name_expected": "raw/Socios2.zip"
+    },
+    {
+      "name": "Socios3.zip",
+      "size_bytes": 49045291,
+      "etag_raw": "\"d2c42f4203b941afa0f0179bf172783c\"",
+      "content_type": "application/zip",
+      "ia_raw_name_expected": "raw/Socios3.zip"
+    },
+    {
+      "name": "Socios4.zip",
+      "size_bytes": 49446216,
+      "etag_raw": "\"c32273359ba8b95bcb1c8cb8087fc8ef\"",
+      "content_type": "application/zip",
+      "ia_raw_name_expected": "raw/Socios4.zip"
+    },
+    {
+      "name": "Socios5.zip",
+      "size_bytes": 49228829,
+      "etag_raw": "\"ab4f5057207a540a50d2e2bc929ebcf7\"",
+      "content_type": "application/zip",
+      "ia_raw_name_expected": "raw/Socios5.zip"
+    },
+    {
+      "name": "Socios6.zip",
+      "size_bytes": 49130796,
+      "etag_raw": "\"1cfc01cfda69f17dd2d5ea430d302b2b\"",
+      "content_type": "application/zip",
+      "ia_raw_name_expected": "raw/Socios6.zip"
+    },
+    {
+      "name": "Socios7.zip",
+      "size_bytes": 49017791,
+      "etag_raw": "\"b881ec505e4d6472ddf01c6dd3b8deac\"",
+      "content_type": "application/zip",
+      "ia_raw_name_expected": "raw/Socios7.zip"
+    },
+    {
+      "name": "Socios8.zip",
+      "size_bytes": 49525621,
+      "etag_raw": "\"e56b851a957977a30a7c9ac3c339508f\"",
+      "content_type": "application/zip",
+      "ia_raw_name_expected": "raw/Socios8.zip"
+    },
+    {
+      "name": "Socios9.zip",
+      "size_bytes": 49051421,
+      "etag_raw": "\"a547b20f728588759f362cd2afe10db3\"",
+      "content_type": "application/zip",
+      "ia_raw_name_expected": "raw/Socios9.zip"
+    }
+  ]
+}
