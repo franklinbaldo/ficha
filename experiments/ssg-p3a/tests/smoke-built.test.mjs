@@ -55,3 +55,20 @@ test('oracle negativo: manifesto falso ocupa contrato RFB', () => {
   withFixture(dir => writeFileSync(join(dir, 'manifest.json'), JSON.stringify({name:'Static Site',start_url:'/'})),
     dir => assert.throws(() => verifyBuiltShell(dir), /não é um contrato de dados RFB/));
 });
+
+test('oracle negativo: âncora interna aponta para ID ausente', () => {
+  withFixture(dir => writeFileSync(join(dir, 'index.html'), validHtml.replace('href="#main-content"', 'href="#inexistente"')),
+    dir => assert.throws(() => verifyBuiltShell(dir), /âncora sem destino/));
+});
+test('oracle negativo: link local sai do prefixo /ficha/', () => {
+  withFixture(dir => writeFileSync(join(dir, 'index.html'), validHtml.replace('</body>', '<a href="/admin/">externo</a></body>')),
+    dir => assert.throws(() => verifyBuiltShell(dir), /URL local fora da base/));
+});
+test('oracle negativo: path traversal escapa de /ficha/', () => {
+  withFixture(dir => writeFileSync(join(dir, 'index.html'), validHtml.replace('</body>', '<a href="/ficha/../admin">perigoso</a></body>')),
+    dir => assert.throws(() => verifyBuiltShell(dir), /URL local escapa da base/));
+});
+test('oracle negativo: asset sob /ficha/ mas ausente no build', () => {
+  withFixture(dir => writeFileSync(join(dir, 'index.html'), validHtml.replace('</body>', '<script src="/ficha/js/fantasma.mjs"></script></body>')),
+    dir => assert.throws(() => verifyBuiltShell(dir), /asset local ausente/));
+});
