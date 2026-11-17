@@ -37,9 +37,7 @@ def _blocks_schedule(document):
         needs = job.get("needs", [])
         if isinstance(needs, str):
             needs = [needs]
-        return bool(needs) and all(
-            depends_on_resolve(dep, seen | {name}) for dep in needs
-        )
+        return bool(needs) and all(depends_on_resolve(dep, seen | {name}) for dep in needs)
 
     return all(depends_on_resolve(name) for name in jobs)
 
