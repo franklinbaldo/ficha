@@ -48,6 +48,22 @@ export function rehearseRollback(previousDir, candidateDir, options = {}) {
   assert.equal(prior.sha256, options.expectedPreviousSha256, 'hash anterior divergente: abortar');
   verifyBuiltShell(candidate);
   const next = inventory(candidate);
+  // A raw replacement would erase the public RFB data manifest: the SSG
+  // build contains only the quarantined application webmanifest.
+  const priorManifestFile = join(previous, 'manifest.json');
+  assert.ok(existsSync(priorManifestFile), 'manifesto RFB anterior ausente: abortar');
+  const manifestBytes = readFileSync(priorManifestFile);
+  let dataManifest;
+  try { dataManifest = JSON.parse(manifestBytes); }
+  catch { assert.fail('manifesto RFB anterior não é JSON válido'); }
+  assert.ok(typeof dataManifest.current === 'string' && dataManifest.current.length > 0
+    && Array.isArray(dataManifest.snapshots), 'manifesto RFB anterior sem current/snapshots');
+  const manifestSha256 = sha(manifestBytes);
+  const candidateManifestFile = join(candidate, 'manifest.json');
+  if (existsSync(candidateManifestFile)) {
+    assert.equal(sha(readFileSync(candidateManifestFile)), manifestSha256,
+      'manifesto RFB do candidato divergente: abortar');
+  }
   const sandbox = mkdtempSync(join(tmpdir(), 'ficha-p3a-rollback-'));
   const active = join(sandbox, 'active');
   const staged = join(sandbox, 'candidate');
@@ -58,14 +74,21 @@ export function rehearseRollback(previousDir, candidateDir, options = {}) {
   try {
     cpSync(previous, active, { recursive: true });
     cpSync(candidate, staged, { recursive: true });
+    // Only the temporary slot is hydrated; never alter source/build/Pages.
+    if (!existsSync(join(staged, 'manifest.json'))) {
+      cpSync(priorManifestFile, join(staged, 'manifest.json'));
+    }
+    const stagedCandidate = inventory(staged);
+    assert.equal(sha(readFileSync(join(staged, 'manifest.json'))), manifestSha256,
+      'manifesto RFB não preservado no sandbox');
     if (options.afterStage) options.afterStage(staged); // test-only fault injection
     assert.equal(inventory(active).sha256, prior.sha256, 'cópia anterior divergente');
-    assert.equal(inventory(staged).sha256, next.sha256, 'candidato adulterado antes da troca');
+    assert.equal(inventory(staged).sha256, stagedCandidate.sha256, 'candidato adulterado antes da troca');
     try {
       renameSync(active, saved);
       renameSync(staged, active);
       switched = true;
-      assert.equal(inventory(active).sha256, next.sha256, 'slot candidato divergente');
+      assert.equal(inventory(active).sha256, stagedCandidate.sha256, 'slot candidato divergente');
       if (options.simulateFailure) throw new Error('SIMULATED_POST_SWITCH_FAILURE');
     } catch (error) {
       if (error.message !== 'SIMULATED_POST_SWITCH_FAILURE' || !options.simulateFailure) throw error;
@@ -85,6 +108,9 @@ export function rehearseRollback(previousDir, candidateDir, options = {}) {
       simulatedPostSwitchFailure: injectedFailureCaught,
       previousSha256: prior.sha256,
       candidateSha256: next.sha256,
+      stagedCandidateSha256: stagedCandidate.sha256,
+      manifestSha256,
+      manifestPreservedOnlyInSandbox: true,
       restoredSha256: restored.sha256,
       filesPrevious: prior.files,
       filesCandidate: next.files,

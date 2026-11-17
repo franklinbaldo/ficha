@@ -144,3 +144,16 @@ continuam `NOT_RUN`. O SSG ainda registra erro de manifest em log
 e quality gate 9/10 apesar de gerar HTML; portanto **PR DRAFT/HOLD**,
 sem merge/deploy. Não existe execução do axe em Actions nessa PoC:
 somente ensaio Ifro sobre HEAD conferido.
+
+## Checkpoint: manifesto RFB preservado no rollback offline (17/11/2026)
+
+O gerador SSG isolado não emite o `manifest.json` público de dados;
+uma substituição crua de diretório o apagaria. O ensaio agora exige
+contrato RFB anterior válido, recusa conflito de manifesto no candidato
+e preserva seus bytes **somente dentro do sandbox**, sem alterar o build
+SSG, `web/`, o IA ou a publicação. Registra `candidateSha256` (SSG bruto),
+`stagedCandidateSha256` (slot temporário com contrato),
+`manifestSha256` e `restoredSha256`. Contraprovas rejeitam ausência,
+formato inválido e divergência. A fixture continua sintética e não
+substitui teste com artefato Astro verdadeiro, hash independente externo,
+paridade de assets ou rollback real do Pages.

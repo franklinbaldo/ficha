@@ -68,3 +68,18 @@ O gate P3-A executa `node scripts/rollback-drill.mjs dist/ficha` **depois do bui
 Controles negativos: hash anterior errado, adulteração do staging, manifesto de aplicativo colidindo com `manifest.json` de dados, symlink e diretórios sobrepostos. O teste nunca afirma ter recuperado um deploy Astro real. Para ensaio posterior com artefato Astro **genuíno** e hash obtido independentemente, fornecer `node scripts/rollback-drill.mjs dist/ficha /caminho/artefato-anterior` e `FICHA_PREVIOUS_TREE_SHA256`; sem hash a execução falha.
 
 **Bloqueios antes do corte:** preservar e identificar o artefato real do Pages e o workflow anterior, executar restauração em ambiente homologado autorizado, verificar paridade e ensaiar rollback de workflow e publicação. O exercício atual demonstra somente reversibilidade de arquivos em sandbox; **não** demonstra reversão de GitHub Pages, DNS, cache/CDN, compatibilidade de dados nem a navegação antiga.
+
+## Preservação do contrato de dados no ensaio offline (17/11/2026)
+
+A PoC SSG não contém `manifest.json` da RFB: seu manifesto PWA foi
+quarentenado. Substituir o diretório inteiro apagaria o contrato público.
+O ensaio exige `current` e `snapshots` no artefato anterior, confere o
+SHA-256 independente do inventário, recusa manifesto RFB divergente no
+candidato e preserva os bytes exatos **apenas no slot temporário**. São
+registrados hashes separados para SSG bruto, candidato montado e manifesto.
+Controles negativos exercitam ausência, formato inválido e divergência.
+
+Isso não altera `web/`, o manifesto produtivo, URLs ou snapshots. Não
+prova paridade dos demais assets, rollback do Pages ou restauração Astro
+real: os artefatos genuínos, hashes externos e autorização operacional
+continuam necessários antes de qualquer corte.

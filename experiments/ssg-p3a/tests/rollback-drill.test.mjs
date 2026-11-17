@@ -30,6 +30,8 @@ test('rollback: candidate SSG enters only sandbox; original previous and candida
     const result = rehearseRollback(old, next, {expectedPreviousSha256: before, simulateFailure: true});
     assert.equal(result.switchedInSandbox, true);
     assert.equal(result.simulatedPostSwitchFailure, true);
+    assert.equal(result.manifestPreservedOnlyInSandbox, true);
+    assert.notEqual(result.stagedCandidateSha256, result.candidateSha256);
     assert.equal(result.restoredSha256, before);
     assert.equal(inventory(next).sha256, fresh);
     assert.equal(readFileSync(join(old, 'manifest.json'), 'utf8'), '{"current":"SYNTHETIC","snapshots":[]}');
@@ -61,4 +63,42 @@ test('rollback negativo: artefatos de origem sobrepostos são recusados', () => 
   fixture((old) => assert.throws(() => rehearseRollback(old, old, {
     expectedPreviousSha256: inventory(old).sha256,
   }), /artefatos sobrepostos/));
+});
+
+test('rollback negativo: artefato anterior sem manifesto público é recusado', () => {
+  fixture((old, next) => {
+    rmSync(join(old, 'manifest.json'));
+    assert.throws(() => rehearseRollback(old, next, {
+      expectedPreviousSha256: inventory(old).sha256,
+    }), /manifesto RFB anterior ausente/);
+  });
+});
+test('rollback negativo: manifesto anterior sem contrato RFB é recusado', () => {
+  fixture((old, next) => {
+    writeFileSync(join(old, 'manifest.json'), '{"name":"SSG PWA"}');
+    assert.throws(() => rehearseRollback(old, next, {
+      expectedPreviousSha256: inventory(old).sha256,
+    }), /manifesto RFB anterior sem current\/snapshots/);
+  });
+});
+test('rollback negativo: candidato com manifesto RFB diferente é recusado', () => {
+  fixture((old, next) => {
+    writeFileSync(join(next, 'manifest.json'), '{"current":"OTHER","snapshots":[]}');
+    assert.throws(() => rehearseRollback(old, next, {
+      expectedPreviousSha256: inventory(old).sha256,
+    }), /manifesto RFB do candidato divergente/);
+  });
+});
+test('rollback positivo sintético: manifesto idêntico já presente não é modificado', () => {
+  fixture((old, next) => {
+    writeFileSync(join(next, 'manifest.json'), readFileSync(join(old, 'manifest.json')));
+    const before = inventory(next).sha256;
+    const result = rehearseRollback(old, next, {
+      expectedPreviousSha256: inventory(old).sha256,
+      simulateFailure: true,
+    });
+    assert.equal(result.candidateSha256, before);
+    assert.equal(result.stagedCandidateSha256, before);
+    assert.equal(inventory(next).sha256, before);
+  });
 });
