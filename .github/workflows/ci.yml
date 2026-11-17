@@ -1,8 +1,8 @@
 name: CI
 
 on:
-  pull_request:
-    branches: [main]
+  # Includes stacked PRs whose base is another feature branch (#207).
+  pull_request: {}
   push:
     branches: [main]
 
