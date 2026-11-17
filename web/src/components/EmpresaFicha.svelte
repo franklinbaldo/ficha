@@ -448,6 +448,9 @@
               </div>
             {/each}
           </div>
+          {#if filiais.length === 50}
+            <div class="empty-state">Exibindo 50 estabelecimentos; pode haver outros.</div>
+          {/if}
         {/if}
       </div>
     {/if}

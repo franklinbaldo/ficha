@@ -87,6 +87,27 @@ describe('EmpresaFicha CNPJ presentation (offline)', () => {
     expect(malformed).not.toMatch(/class="label[^"]*">(Matriz|Filial)<\/span>/);
   });
 
+
+  it('makes the 50-sibling query limit explicit without implying completeness', async () => {
+    const siblings = Array.from({ length: 50 }, (_, index) => ({
+      cnpj: `A0000000${String(index + 2).padStart(4, '0')}91`,
+      nome_fantasia: `FILIAL ${index + 1}`,
+      uf: 'RO',
+    }));
+    const html = await renderFicha(
+      { cnpj: matrizRaizAlfa, razao_social: 'MATRIZ ALFA', uf: 'RO' }, siblings
+    );
+    expect(html).toContain('Exibindo 50 estabelecimentos; pode haver outros.');
+    expect(html).toContain('A0.000.000/0002-91');
+    expect(html).toContain('A0.000.000/0051-91');
+    const shorter = await renderFicha(
+      { cnpj: matrizRaizAlfa, razao_social: 'MATRIZ ALFA', uf: 'RO' },
+      siblings.slice(0, 1)
+    );
+    expect(shorter).not.toContain('pode haver outros.');
+    expect(source).toMatch(/ORDER BY cnpj\s+LIMIT 50/);
+  });
+
   it('shows an existing numeric matriz without changing its identity', async () => {
     const html = await renderFicha({ cnpj: matriz, razao_social: 'MATRIZ', uf: 'DF' });
     expect(html).toContain('00.000.000/0001-91');
