@@ -14,9 +14,8 @@ from types import SimpleNamespace
 import pytest
 
 from ficha_etl import monthly_sharded, shard_transfer
-from ficha_etl.materialization import MaterializationSpec, ShardRange
-from ficha_etl.shard_publish import ShardPublishError
-from ficha_etl.shard_remote import PUBLIC_COMPANIES_GEOMETRY, ShardReuseState
+from ficha_etl.shard_publish import ShardPublishError, publish_one_shard
+from ficha_etl.shard_remote import PUBLIC_COMPANIES_GEOMETRY
 from ficha_etl.shard_transfer import ShardTransferAction
 
 MONTH = "2026-08"
@@ -229,63 +228,95 @@ def test_manifest_refusal_does_not_leave_orphan_snapshot_entry(
     assert not args.verification.exists()
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="P0-A: direct shard_transfer API still lacks a universal v1.1 pre-PUT guard",
-)
+@pytest.mark.parametrize("entrypoint", ("submit-one", "submit-prepared", "publish-one"))
 def test_direct_transfer_api_must_refuse_unversioned_v11_wire(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    tmp_path: Path, entrypoint: str
 ) -> None:
-    """Known gap: bypassing the monthly CLI must never PUT v1.1 to a v1 ZIP name.
+    """All three public APIs must reject wire 1.1 before local/remote IO.
 
-    Purely offline transfer simulation. XFAIL documents the missing boundary;
-    it is NOT evidence that the unversioned publish path is safe.
+    No preflight CLI, network, pack, metadata, filesystem write or IA PUT.
+    This tests the shared guard on the currently legacy companies-NN.zip API,
+    NOT safe publication/discovery of a separate 1.1 namespace.
     """
 
     class V11Session:
         geometry = PUBLIC_COMPANIES_GEOMETRY
         month = MONTH
-        schema_version = "1.1.0"
+        wire_version = "1.1.0"
         shard_by = "cnpj_base_prefix_or_base36_mod_100_v1"
 
-        def materialization_spec(self, prefix: str, *, input_sha1s: dict):
-            return MaterializationSpec(
-                snapshot=self.month,
-                shard_range=ShardRange(prefix),
-                inputs=input_sha1s,
-                descriptor_sha256="f" * 64,
+        def materialization_spec(self, *_args, **_kwargs):
+            pytest.fail("materialization must not start before v1.1 rejection")
+
+    def forbidden(*_args, **_kwargs):
+        pytest.fail("I/O must not start before v1.1 rejection")
+
+    kwargs = {
+        "pinned_inputs": {},
+        "fetch_metadata": forbidden,
+        "fetch_meta": forbidden,
+        "fetch_direct": forbidden,
+        "upload": forbidden,
+    }
+    session = V11Session()
+    with pytest.raises(ShardPublishError, match="unversioned companies-NN.zip"):
+        if entrypoint == "submit-one":
+            shard_transfer.submit_one_shard(session, "00", tmp_path, **kwargs)
+        elif entrypoint == "submit-prepared":
+            prepared = shard_transfer.PreparedShard(
+                prefix="00",
+                name="companies-00.zip",
+                path=tmp_path / "must-not-read.zip",
+                materialization_id="synthetic",
+                size=12,
+                sha1="a" * 40,
             )
+            shard_transfer.submit_prepared_shard(session, prepared, **kwargs)
+        else:
+            publish_one_shard(session, "00", tmp_path, **kwargs)
 
-        def pack(self, prefix: str, output_dir: Path, *, materialization):
-            output_dir.mkdir(parents=True, exist_ok=True)
-            path = output_dir / self.geometry.shard_name(prefix)
-            path.write_bytes(b"synthetic-protobuf-v11-wire-only")
-            return SimpleNamespace(path=path)
+    assert list(tmp_path.iterdir()) == []
 
-    transfer = shard_transfer
 
-    def always_absent(*_args, **_kwargs):
-        return SimpleNamespace(state=ShardReuseState.ABSENT, name="companies-00.zip", detail="")
+@pytest.mark.xfail(
+    strict=True,
+    reason="P0-D: manifest writing is not yet atomic or compensated after partial IO",
+)
+def test_manifest_mid_write_failure_must_restore_previous_bytes(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Regression expected to fail until manifest update becomes atomic.
 
-    monkeypatch.setattr(transfer, "_metadata_still_matches", lambda *_a, **_kw: {})
-    monkeypatch.setattr(transfer, "_classify", always_absent)
-    monkeypatch.setattr(transfer, "_reconcile_catalog_absent", lambda *_a, **_kw: None)
+    Inject a partial write *inside the real update_manifest Path.write_text*,
+    instead of a synthetic pre-write validation rejection. Zero remote IO.
+    """
+    args, before = _setup(tmp_path)
+    monkeypatch.setattr(monthly_sharded, "wait_for_descriptor_remote", lambda *_a, **_kw: {})
+    monkeypatch.setattr(
+        monthly_sharded,
+        "verify_all_shards",
+        lambda *_a, **_kw: [_verified(f"{i:02d}") for i in range(100)],
+    )
+    # Keep the real manifest writer reachable with a compatible v1 candidate.
+    monkeypatch.setattr(
+        monthly_sharded,
+        "finalize_sharded_snapshot_entry",
+        lambda *_a, **_kw: {
+            "date": MONTH,
+            "schema_version": "1.0.0",
+            "files": {"companies": {"shard_by": "cnpj_base_prefix_2"}},
+        },
+    )
+    original_write_text = Path.write_text
 
-    uploads: list[str] = []
+    def interrupted_write(path: Path, content: str, *a, **kw):
+        if path == args.manifest:
+            path.write_bytes(b'{"current":')
+            raise OSError("injected partial manifest write")
+        return original_write_text(path, content, *a, **kw)
 
-    def record_fake_upload(name: str, _path: Path) -> None:
-        uploads.append(name)
+    monkeypatch.setattr(Path, "write_text", interrupted_write)
+    with pytest.raises(OSError, match="injected partial manifest write"):
+        monthly_sharded.command_finalize(args)
 
-    with pytest.raises(ShardPublishError, match=r"1\.1|wire|unversioned|namespace"):
-        shard_transfer.submit_one_shard(
-            V11Session(),
-            "00",
-            tmp_path / "shards",
-            pinned_inputs={},
-            fetch_metadata=lambda: {},
-            fetch_meta=lambda _name: None,
-            fetch_direct=lambda _name: None,
-            upload=record_fake_upload,
-        )
-
-    assert uploads == []
+    _assert_no_promotion(args, before)

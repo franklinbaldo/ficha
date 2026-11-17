@@ -6,7 +6,7 @@ we can establish only correspondence of names and advertised sizes, NOT byte
 identity, ZIP integrity or permission to skip/rewrite a remote object.
 
 This module is pure: no network, archive GET, uploads or production decisions.
-The RFB origin receipt itself must be independently validated at its source.
+The canonical RFB origin receipt is validated before any IA comparison.
 """
 
 from __future__ import annotations
@@ -14,10 +14,10 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-from .sources import canonical_inventory, is_valid_month
+from .rfb_origin_receipt import validate_origin_receipt
+from .sources import canonical_inventory
 
 _SHA1 = re.compile(r"[0-9a-fA-F]{40}\Z")
-_ORIGIN_SCHEMA = "rfb-propfind-metadata-v1"
 
 
 @dataclass(frozen=True)
@@ -64,55 +64,14 @@ def reconcile_raw_metadata(origin: object, archive: object) -> RawMetadataReport
     records fail closed. Missing or insufficient *file* metadata is reported as
     unverified, never interpreted as an identical object.
     """
-    if not isinstance(origin, dict) or origin.get("schema_version") != _ORIGIN_SCHEMA:
-        raise ValueError("invalid RFB origin receipt schema")
-    month = origin.get("month")
-    if not isinstance(month, str) or not is_valid_month(month):
-        raise ValueError("invalid month")
-    source = origin.get("source")
-    if not isinstance(source, dict) or (
-        source.get("method") != "PROPFIND"
-        or source.get("depth") != 1
-        or source.get("http_status") != 207
-        or source.get("url") != f"https://arquivos.receitafederal.gov.br/public.php/webdav/{month}/"
-    ):
-        raise ValueError("RFB origin metadata is not a canonical PROPFIND observation")
-    if (
-        origin.get("identity_level") != "metadata-only"
-        or origin.get("content_hash_verified") is not False
-        or origin.get("etag_semantics") != "opaque-validator-not-content-hash"
-    ):
-        raise ValueError("RFB metadata must not claim cryptographic identity")
-
+    # P1-B owns validation of the complete RFB receipt. Never accept a
+    # partial/forged metadata receipt as evidence of IA correspondence.
+    validate_origin_receipt(origin)
+    if not isinstance(origin, dict):
+        raise ValueError("invalid RFB origin receipt")
+    month = origin["month"]
+    sizes = {entry["name"]: entry["size_bytes"] for entry in origin["files"]}
     expected_names = {spec.name for spec in canonical_inventory()}
-    origin_files = origin.get("files")
-    if not isinstance(origin_files, list) or len(origin_files) != len(expected_names):
-        raise ValueError("incomplete RFB inventory")
-    sizes: dict[str, int] = {}
-    for entry in origin_files:
-        if not isinstance(entry, dict):
-            raise ValueError("invalid RFB entry")
-        name = entry.get("name")
-        if (
-            not isinstance(name, str)
-            or name not in expected_names
-            or name in sizes
-            or entry.get("ia_raw_name_expected") != f"raw/{name}"
-            or entry.get("content_type") != "application/zip"
-            or not isinstance(entry.get("etag_raw"), str)
-            or not entry["etag_raw"]
-        ):
-            raise ValueError(f"invalid/duplicate RFB entry: {name!r}")
-        size = _positive_size(entry.get("size_bytes"))
-        if size is None or type(entry.get("size_bytes")) is not int:
-            raise ValueError(f"invalid RFB size for {name}")
-        sizes[name] = size
-    if sizes.keys() != expected_names:
-        raise ValueError("RFB inventory names differ from canonical 37")
-    if type(origin.get("total_size_bytes")) is not int or origin["total_size_bytes"] != sum(
-        sizes.values()
-    ):
-        raise ValueError("RFB metadata total disagrees with entries")
 
     if not isinstance(archive, dict):
         raise ValueError("IA metadata is unavailable")

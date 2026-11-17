@@ -25,6 +25,8 @@ from pathlib import Path
 import internetarchive as ia
 
 from . import transform, upload
+from .cnpj import SHARD_BY as COMPANIES_SHARD_BY
+from .pack import SCHEMA_VERSION as COMPANIES_WIRE_VERSION
 from .manifest import (
     CompanyShardIdentity,
     build_production_descriptor,
@@ -355,9 +357,26 @@ def command_prepare_shard(args: argparse.Namespace) -> None:
     )
 
 
+def _require_safe_legacy_shard_upload() -> None:
+    """Do not publish 1.1 wire under ZIP names discoverable by v1 decoders.
+
+    The monthly submit path still targets unversioned companies-NN.zip. An
+    updated manifest gate runs only *after* submit, too late to protect v1
+    consumers from a newly created 1.1 ZIP. Block before any remote access
+    until a separate, versioned artifact namespace is implemented.
+    """
+    if COMPANIES_WIRE_VERSION != "1.0.0" or COMPANIES_SHARD_BY != "cnpj_base_prefix_2":
+        raise ShardPublishError(
+            "refusing unversioned companies-NN.zip upload of Protobuf "
+            f"{COMPANIES_WIRE_VERSION} with shard mapping {COMPANIES_SHARD_BY}; "
+            "separate versioned artifact URLs and opt-in discovery are required"
+        )
+
+
 def command_submit_shard(args: argparse.Namespace) -> None:
     month = _require_month(args.month)
     prefix = PUBLIC_COMPANIES_GEOMETRY.validate_prefix(args.prefix)
+    _require_safe_legacy_shard_upload()
     descriptor = _load_descriptor(Path(args.descriptor), month)
     pinned = materialization_inputs_from_descriptor(descriptor)
     receipt = _load_receipt(Path(args.receipt), month, prefix)
