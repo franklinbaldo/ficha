@@ -463,5 +463,5 @@ def test_p0d_formatter_diagnostic() -> None:
         text=True,
         check=False,
     )
-    assert result.returncode == 0, result.stderr
     assert not result.stdout, result.stdout
+    assert result.returncode == 0, result.stderr
