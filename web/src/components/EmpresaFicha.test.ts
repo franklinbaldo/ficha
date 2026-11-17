@@ -23,7 +23,8 @@ const filialRaizAlfa = 'A0000000E08G12';
 // this proves display, not the browser event or any live SQL/Parquet round trip.
 async function renderFicha(
   empresa: EmpresaFixture,
-  siblings: Array<{ cnpj: string; nome_fantasia: string; uf: string }> = []
+  siblings: Array<{ cnpj: string; nome_fantasia: string; uf: string }> = [],
+  socios: Array<Record<string, unknown>> = []
 ): Promise<string> {
   let componentSource = source;
   if (siblings.length > 0) {
@@ -35,6 +36,17 @@ async function renderFicha(
     componentSource = componentSource
       .replace(emptyState, `let filiais = $state<FilialRow[]>(${JSON.stringify(siblings)});`)
       .replace(closedState, 'let showFiliais = $state(true);');
+  }
+
+  if (socios.length > 0) {
+    const emptyState = 'let socios = $state<SocioRow[]>([]);';
+    const closedState = 'let showSocios = $state(false);';
+    if (!source.includes(emptyState) || !source.includes(closedState)) {
+      throw new Error('Socios fixture anchors changed in EmpresaFicha.svelte');
+    }
+    componentSource = componentSource
+      .replace(emptyState, `let socios = $state<SocioRow[]>(${JSON.stringify(socios)});`)
+      .replace(closedState, 'let showSocios = $state(true);');
   }
 
   const { js } = compile(componentSource, {
@@ -86,6 +98,14 @@ describe('EmpresaFicha CNPJ presentation (offline)', () => {
 
     const shortHtml = await renderFicha({ cnpj: '1234567890123', razao_social: 'LEGADO', uf: 'SP' });
     expect(shortHtml).toContain('01.234.567/8901-23');
+  });
+
+  it('formats lowercase alphanumeric identities as uppercase without losing a letter', async () => {
+    const html = await renderFicha({
+      cnpj: 'a0000000e08g12', razao_social: 'FILIAL ALFA', uf: 'GO'
+    });
+    expect(html).toContain('A0.000.000/E08G-12');
+    expect(html).not.toContain('A0.000.000/0000-12');
   });
 
   it('does not invent a padded identity for a malformed alphanumeric string', async () => {
@@ -189,6 +209,72 @@ describe('P0-E: SQL real para matriz e filial (DuckDB-WASM offline)', () => {
       expect(htmlRaizAlfa).not.toContain('00.000.000/0001-91');
       expect(consultar(matrizRaizAlfa).map((r) => r.cnpj)).toEqual([filialRaizAlfa]);
       expect(consultar('B0000000E08G12')).toEqual([]);
+
+      // Execute the other two SQL statements taken from this Svelte component.
+      // A shared alphanumeric root must not be coerced to a numeric key; contact
+      // lookup must additionally isolate the complete 14-character identity.
+      const sqlFor = (fn: string, next: string) => {
+        const block = source.split(`async function ${fn}()`)[1]
+          ?.split(`async function ${next}()`)[0];
+        const statement = block?.match(/conn\.prepare\(\x60([\s\S]*?)\x60\)/)?.[1];
+        if (!statement) throw new Error(`SQL not found for ${fn}`);
+        return statement;
+      };
+
+      conn.query(
+        'CREATE TABLE socios (' +
+          'cnpj_base VARCHAR, nome_socio_razao_social VARCHAR, ' +
+          'tipo_descricao VARCHAR, qualificacao_descricao VARCHAR, ' +
+          'data_entrada_sociedade VARCHAR, cpf_mascarado VARCHAR, ' +
+          'cnpj_socio VARCHAR, pais_nome VARCHAR, faixa_etaria VARCHAR, ' +
+          'representante_legal_nome VARCHAR, ' +
+          'representante_legal_qualificacao_descricao VARCHAR)'
+      );
+      conn.query(
+        'INSERT INTO socios (cnpj_base, nome_socio_razao_social, tipo_descricao, ' +
+          'qualificacao_descricao, cnpj_socio) VALUES ' +
+          "('A0000000', 'SOCIA ALFA', 'JURIDICA', 'TITULAR', 'A0000000E08G12')," +
+          "('00000000', 'SOCIA NUMERICA', 'JURIDICA', 'TITULAR', '00000000000191')," +
+          "('B0000000', 'OUTRA RAIZ', 'JURIDICA', 'TITULAR', 'B0000000E08G12')"
+      );
+      const sociosStmt = conn.prepare(sqlFor('toggleSocios', 'toggleContatos'));
+      try {
+        const sociosAlfa = sociosStmt.query(matrizRaizAlfa.slice(0, 8))
+          .toArray().map((row) => row.toJSON());
+        expect(sociosAlfa.map((row) => row.nome_socio_razao_social)).toEqual(['SOCIA ALFA']);
+        expect(sociosAlfa[0]?.cnpj_socio).toBe(filialRaizAlfa);
+        const htmlSocios = await renderFicha(
+          { cnpj: matrizRaizAlfa, razao_social: 'MATRIZ ALFA', uf: 'SP' },
+          [], sociosAlfa
+        );
+        expect(htmlSocios).toContain('A0.000.000/E08G-12');
+        expect(sociosStmt.query(matriz.slice(0, 8)).toArray()
+          .map((row) => row.toJSON().nome_socio_razao_social)).toEqual(['SOCIA NUMERICA']);
+      } finally {
+        sociosStmt.close();
+      }
+
+      conn.query(
+        'CREATE TABLE cnpj_contatos (cnpj VARCHAR, tipo VARCHAR, valor VARCHAR, posicao INTEGER)'
+      );
+      conn.query(
+        "INSERT INTO cnpj_contatos VALUES " +
+          "('A0000000E08G12', 'email', 'filial@exemplo.invalid', 1)," +
+          "('A0000000000191', 'email', 'matriz@exemplo.invalid', 1)," +
+          "('00000000E08G12', 'email', 'numerica@exemplo.invalid', 1)"
+      );
+      const contatosStmt = conn.prepare(sqlFor('toggleContatos', 'toggleFiliais'));
+      try {
+        const contatos = contatosStmt.query(filialRaizAlfa).toArray()
+          .map((row) => row.toJSON().valor);
+        expect(contatos).toEqual(['filial@exemplo.invalid']);
+        expect(contatosStmt.query(matrizRaizAlfa).toArray()
+          .map((row) => row.toJSON().valor)).toEqual(['matriz@exemplo.invalid']);
+        expect(contatosStmt.query(filialAlfa).toArray()
+          .map((row) => row.toJSON().valor)).toEqual(['numerica@exemplo.invalid']);
+      } finally {
+        contatosStmt.close();
+      }
     } finally {
       conn.close();
     }
