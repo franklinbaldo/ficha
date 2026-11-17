@@ -207,7 +207,7 @@ def check_raw_head(
         status = "unsupported_encoding"
     elif head_size is None:
         status = "missing_or_invalid_length"
-    elif entry.status != "size_and_sha1_observed":
+    elif not report.metadata_consistent or entry.status != "size_and_sha1_observed":
         status = "catalog_incomplete"
     elif head_size != entry.remote_size:
         status = "head_size_mismatch"

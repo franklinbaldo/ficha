@@ -192,6 +192,27 @@ class RawReconciliationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "not in the canonical"):
             check_raw_head(report, "raw/other.zip", http_status=200, content_length="100")
 
+    def test_head_cannot_rescue_partial_or_extra_ia_inventory(self):
+        for mutation in ("missing_other_file", "unexpected_raw_file"):
+            with self.subTest(mutation=mutation):
+                origin, archive = fixtures()
+                if mutation == "missing_other_file":
+                    archive["files"] = [
+                        file for file in archive["files"] if file["name"] != "raw/Empresas0.zip"
+                    ]
+                else:
+                    archive["files"].append(
+                        {"name": "raw/rogue.zip", "size": "100", "sha1": "a" * 40}
+                    )
+                report = reconcile_raw_metadata(origin, archive)
+                self.assertFalse(report.metadata_consistent)
+                observation = check_raw_head(
+                    report, "raw/Cnaes.zip", http_status=200, content_length="100"
+                )
+                self.assertEqual(observation.status, "catalog_incomplete")
+                self.assertFalse(observation.head_size_consistent)
+                self.assertFalse(observation.content_identity_verified)
+
     def test_head_cannot_rescue_invalid_ia_catalog(self):
         origin, archive = fixtures()
         archive["files"][0]["sha1"] = None
