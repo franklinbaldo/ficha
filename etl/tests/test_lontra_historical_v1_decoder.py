@@ -33,8 +33,7 @@ def _actual_v1_company_class():
         for node in tree.body
         if isinstance(node, ast.Assign)
         and any(
-            isinstance(target, ast.Name) and target.id == "DESCRIPTOR"
-            for target in node.targets
+            isinstance(target, ast.Name) and target.id == "DESCRIPTOR" for target in node.targets
         )
     ]
     assert len(matches) == 1
@@ -45,9 +44,7 @@ def _actual_v1_company_class():
 
     pool = descriptor_pool.DescriptorPool()
     pool.AddSerializedFile(serialized_descriptor)
-    return message_factory.GetMessageClass(
-        pool.FindMessageTypeByName("ficha.v1.Company")
-    )
+    return message_factory.GetMessageClass(pool.FindMessageTypeByName("ficha.v1.Company"))
 
 
 def test_actual_historical_v1_decoder_still_reads_numeric_v11_wire() -> None:
@@ -81,10 +78,7 @@ def test_actual_historical_v1_decoder_cannot_represent_alpha_branch_order() -> N
     decoded_modern = current_pb.Company.FromString(wire)
     decoded_legacy = legacy_company.FromString(wire)
     assert decoded_modern.estabelecimentos[0].cnpj_ordem_text == "E08G"
-    assert (
-        "cnpj_ordem_text"
-        not in decoded_legacy.estabelecimentos[0].DESCRIPTOR.fields_by_name
-    )
+    assert "cnpj_ordem_text" not in decoded_legacy.estabelecimentos[0].DESCRIPTOR.fields_by_name
     assert decoded_legacy.estabelecimentos[0].cnpj_ordem == 0
     legacy_cnpj = (
         f"{decoded_legacy.cnpj_base:08d}"
