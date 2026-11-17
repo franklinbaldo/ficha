@@ -118,7 +118,7 @@ describe('EmpresaFicha CNPJ presentation (offline)', () => {
     // Static contract guard only. Query execution requires DuckDB fixture/E2E.
     expect(source).toMatch(/WHERE cnpj_base = \? AND cnpj != \?/);
     expect(source).toContain('stmt.query(cnpjBase, cnpjFull)');
-    expect(source).toContain('const cnpjFull = canonicalCNPJ(empresa.cnpj)');
+    expect(source).toContain('const cnpjFull = requestedCNPJ;');
   });
 });
 
@@ -277,6 +277,40 @@ describe('P0-E: SQL real para matriz e filial (DuckDB-WASM offline)', () => {
       }
     } finally {
       conn.close();
+    }
+  });
+});
+
+describe('EmpresaFicha request invalidation (static source contract, no browser)', () => {
+  it('resets all cached detail panels when the selected CNPJ or DuckDB changes', () => {
+    const watcher = source.split('$effect(() => {')[1]?.split('\n  });')[0];
+    expect(watcher).toContain('const nextCNPJ = activeCNPJ');
+    expect(watcher).toContain('const nextDb = db');
+    expect(watcher).toContain('requestEpoch += 1');
+    for (const section of ['Socios', 'Contatos', 'Filiais']) {
+      const field = section.toLowerCase();
+      expect(watcher).toContain(`${field} = [];`);
+      expect(watcher).toContain(`show${section} = false;`);
+      expect(watcher).toContain(`loading${section} = false;`);
+      expect(watcher).toContain(`${field}Error = null;`);
+    }
+  });
+
+  it('guards async success/error/finally against stale identity and releases resources', () => {
+    expect(source).toContain('cnpj === activeCNPJ && requestDb === db && epoch === requestEpoch');
+    for (const [fn, next] of [
+      ['toggleSocios', 'toggleContatos'],
+      ['toggleContatos', 'toggleFiliais'],
+      ['toggleFiliais', 'Legacy numeric CNPJs'],
+    ]) {
+      const body = source.split(`async function ${fn}()`)[1]?.split(next)[0];
+      expect(body, fn).toBeTruthy();
+      expect(body).toContain('const requestedCNPJ = activeCNPJ');
+      expect(body).toContain('const epoch = requestEpoch');
+      expect(body?.match(/isCurrentRequest\(requestedCNPJ, requestDb, epoch\)/g)?.length).toBe(3);
+      expect(body).toMatch(/finally\s*\{\s*await stmt\.close\(\)/);
+      expect(body).toMatch(/finally\s*\{\s*await conn\.close\(\)/);
+      expect(body).toContain('|| loading');
     }
   });
 });

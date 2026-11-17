@@ -49,92 +49,164 @@
   let showFiliais = $state(false);
   let filiaisError = $state<string | null>(null);
 
+  // SearchCNPJ renders an unkeyed list: Svelte may reuse this instance for
+  // another CNPJ. Forget every expanded panel and invalidate in-flight queries
+  // whenever either the identifier or DuckDB connection changes.
+  let activeCNPJ = $derived(canonicalCNPJ(empresa.cnpj));
+  let requestEpoch = 0;
+  let previousCNPJ: string | null = null;
+  let previousDb: duckdb.AsyncDuckDB | null = null;
+
+  $effect(() => {
+    const nextCNPJ = activeCNPJ;
+    const nextDb = db;
+    if (nextCNPJ === previousCNPJ && nextDb === previousDb) return;
+    previousCNPJ = nextCNPJ;
+    previousDb = nextDb;
+    requestEpoch += 1;
+    socios = [];
+    contatos = [];
+    filiais = [];
+    sociosError = null;
+    contatosError = null;
+    filiaisError = null;
+    loadingSocios = false;
+    loadingContatos = false;
+    loadingFiliais = false;
+    showSocios = false;
+    showContatos = false;
+    showFiliais = false;
+  });
+
+  function isCurrentRequest(cnpj: string, requestDb: duckdb.AsyncDuckDB, epoch: number): boolean {
+    return cnpj === activeCNPJ && requestDb === db && epoch === requestEpoch;
+  }
+
   async function toggleSocios() {
     if (showSocios) { showSocios = false; return; }
     showSocios = true;
-    if (socios.length > 0 || sociosError) return;
+    if (socios.length > 0 || sociosError || loadingSocios) return;
     if (!db) return;
 
+    const requestedCNPJ = activeCNPJ;
+    const requestDb = db;
+    const epoch = requestEpoch;
     loadingSocios = true;
     sociosError = null;
     try {
-      const conn = await db.connect();
-      const cnpjBase = canonicalCNPJ(empresa.cnpj).substring(0, 8);
-      const stmt = await conn.prepare(`
-        SELECT nome_socio_razao_social, tipo_descricao, qualificacao_descricao,
-               data_entrada_sociedade, cpf_mascarado, cnpj_socio,
-               pais_nome, faixa_etaria,
-               representante_legal_nome, representante_legal_qualificacao_descricao
-        FROM socios
-        WHERE cnpj_base = ?
-        ORDER BY qualificacao_descricao, nome_socio_razao_social
-      `);
-      const res = await stmt.query(cnpjBase);
-      await stmt.close();
-      await conn.close();
-      socios = res.toArray().map((r) => r.toJSON() as SocioRow);
+      const conn = await requestDb.connect();
+      try {
+        const cnpjBase = requestedCNPJ.substring(0, 8);
+        const stmt = await conn.prepare(`
+          SELECT nome_socio_razao_social, tipo_descricao, qualificacao_descricao,
+                 data_entrada_sociedade, cpf_mascarado, cnpj_socio,
+                 pais_nome, faixa_etaria,
+                 representante_legal_nome, representante_legal_qualificacao_descricao
+          FROM socios
+          WHERE cnpj_base = ?
+          ORDER BY qualificacao_descricao, nome_socio_razao_social
+        `);
+        try {
+          const res = await stmt.query(cnpjBase);
+          if (isCurrentRequest(requestedCNPJ, requestDb, epoch)) {
+            socios = res.toArray().map((r) => r.toJSON() as SocioRow);
+          }
+        } finally {
+          await stmt.close();
+        }
+      } finally {
+        await conn.close();
+      }
     } catch (e) {
-      sociosError = (e as Error).message;
+      if (isCurrentRequest(requestedCNPJ, requestDb, epoch)) {
+        sociosError = (e as Error).message;
+      }
     } finally {
-      loadingSocios = false;
+      if (isCurrentRequest(requestedCNPJ, requestDb, epoch)) loadingSocios = false;
     }
   }
 
   async function toggleContatos() {
     if (showContatos) { showContatos = false; return; }
     showContatos = true;
-    if (contatos.length > 0 || contatosError) return;
+    if (contatos.length > 0 || contatosError || loadingContatos) return;
     if (!db) return;
 
+    const requestedCNPJ = activeCNPJ;
+    const requestDb = db;
+    const epoch = requestEpoch;
     loadingContatos = true;
     contatosError = null;
     try {
-      const conn = await db.connect();
-      const cnpjFull = canonicalCNPJ(empresa.cnpj);
-      const stmt = await conn.prepare(`
-        SELECT tipo, valor, posicao
-        FROM cnpj_contatos
-        WHERE cnpj = ?
-        ORDER BY tipo, posicao
-      `);
-      const res = await stmt.query(cnpjFull);
-      await stmt.close();
-      await conn.close();
-      contatos = res.toArray().map((r) => r.toJSON() as ContatoRow);
+      const conn = await requestDb.connect();
+      try {
+        const cnpjFull = requestedCNPJ;
+        const stmt = await conn.prepare(`
+          SELECT tipo, valor, posicao
+          FROM cnpj_contatos
+          WHERE cnpj = ?
+          ORDER BY tipo, posicao
+        `);
+        try {
+          const res = await stmt.query(cnpjFull);
+          if (isCurrentRequest(requestedCNPJ, requestDb, epoch)) {
+            contatos = res.toArray().map((r) => r.toJSON() as ContatoRow);
+          }
+        } finally {
+          await stmt.close();
+        }
+      } finally {
+        await conn.close();
+      }
     } catch (e) {
-      contatosError = (e as Error).message;
+      if (isCurrentRequest(requestedCNPJ, requestDb, epoch)) {
+        contatosError = (e as Error).message;
+      }
     } finally {
-      loadingContatos = false;
+      if (isCurrentRequest(requestedCNPJ, requestDb, epoch)) loadingContatos = false;
     }
   }
 
   async function toggleFiliais() {
     if (showFiliais) { showFiliais = false; return; }
     showFiliais = true;
-    if (filiais.length > 0 || filiaisError) return;
+    if (filiais.length > 0 || filiaisError || loadingFiliais) return;
     if (!db) return;
 
+    const requestedCNPJ = activeCNPJ;
+    const requestDb = db;
+    const epoch = requestEpoch;
     loadingFiliais = true;
     filiaisError = null;
     try {
-      const conn = await db.connect();
-      const cnpjFull = canonicalCNPJ(empresa.cnpj);
-      const cnpjBase = cnpjFull.substring(0, 8);
-      const stmt = await conn.prepare(`
-        SELECT cnpj, razao_social, nome_fantasia, uf, municipio_nome, situacao_cadastral
-        FROM cnpjs
-        WHERE cnpj_base = ? AND cnpj != ?
-        ORDER BY cnpj
-        LIMIT 50
-      `);
-      const res = await stmt.query(cnpjBase, cnpjFull);
-      await stmt.close();
-      await conn.close();
-      filiais = res.toArray().map((r) => r.toJSON() as FilialRow);
+      const conn = await requestDb.connect();
+      try {
+        const cnpjFull = requestedCNPJ;
+        const cnpjBase = cnpjFull.substring(0, 8);
+        const stmt = await conn.prepare(`
+          SELECT cnpj, razao_social, nome_fantasia, uf, municipio_nome, situacao_cadastral
+          FROM cnpjs
+          WHERE cnpj_base = ? AND cnpj != ?
+          ORDER BY cnpj
+          LIMIT 50
+        `);
+        try {
+          const res = await stmt.query(cnpjBase, cnpjFull);
+          if (isCurrentRequest(requestedCNPJ, requestDb, epoch)) {
+            filiais = res.toArray().map((r) => r.toJSON() as FilialRow);
+          }
+        } finally {
+          await stmt.close();
+        }
+      } finally {
+        await conn.close();
+      }
     } catch (e) {
-      filiaisError = (e as Error).message;
+      if (isCurrentRequest(requestedCNPJ, requestDb, epoch)) {
+        filiaisError = (e as Error).message;
+      }
     } finally {
-      loadingFiliais = false;
+      if (isCurrentRequest(requestedCNPJ, requestDb, epoch)) loadingFiliais = false;
     }
   }
 
