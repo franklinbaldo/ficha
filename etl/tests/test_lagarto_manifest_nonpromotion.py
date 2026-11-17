@@ -21,6 +21,14 @@ from ficha_etl.shard_transfer import ShardTransferAction
 
 MONTH = "2026-08"
 
+# Pinned against the actual _pack_rows output; mirrored by the TS P0-D test.
+PACKER_CA_MEMBER_HEX = (
+    "22084341303030303031a20108100c2a0445303847"
+    "aa01104a0e3030303030303030453038473132a006f0ae0c"
+)
+PACKER_CA_MEMBER_SHA256 = "041e2b5e6f039959b03fd185021493f422ce884ea155590c9e99916ca769ec48"
+
+
 
 def _identity(seed: str) -> dict:
     return {"size": 11, "sha1": seed * 40, "sha256": seed * 64}
@@ -400,3 +408,45 @@ def test_verification_receipt_failure_must_not_promote_partial_state(
         args.verification.read_bytes() if args.verification.exists() else None
     ) == previous_verification
     assert list(args.manifest.parent.glob(".manifest.json.*.tmp")) == []
+
+
+def test_actual_python_packer_member_matches_pinned_ts_fixture(tmp_path: Path) -> None:
+    """Pin the same genuine .pb member later decoded by the TS opt-in test.
+
+    The local producer and web reader agree on a byte fixture. Nothing is
+    uploaded, and this is not evidence of a remote ZIP or external v1 client.
+    """
+    import hashlib
+    import zipfile
+
+    from ficha_etl import pack, sharded_pack
+
+    session = sharded_pack.ShardPackSession(
+        MONTH, PUBLIC_COMPANIES_GEOMETRY, parquets_base=str(tmp_path)
+    )
+    spec = session.materialization_spec("42", input_sha1s={})
+    archive = tmp_path / "companies-42.zip"
+    rows = iter(
+        [
+            {"cnpj_base": "42000001"},
+            {
+                "cnpj_base": "CA000001",
+                "estabelecimentos": [{"cnpj_ordem": "E08G", "cnpj_dv": "12"}],
+                "socios": [{"cnpj_socio": "00000000E08G12"}],
+            },
+        ]
+    )
+    count, _size = sharded_pack._pack_rows(
+        rows,
+        {kind: [] for kind in pack.LOOKUP_KINDS},
+        archive,
+        snapshot_month=MONTH,
+        materialization=spec,
+        schema_desc=pack._schema_desc_bytes(),
+        schema_sha256=session.schema_sha256,
+    )
+    assert count == 2
+    with zipfile.ZipFile(archive) as zipped:
+        wire = zipped.read("CA/000/001.pb")
+    assert wire.hex() == PACKER_CA_MEMBER_HEX
+    assert hashlib.sha256(wire).hexdigest() == PACKER_CA_MEMBER_SHA256

@@ -1,4 +1,5 @@
 /** P0-D offline contract tests. No Internet Archive requests or real manifest writes. */
+import { createHash } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
 import { Field, Root, Type } from 'protobufjs';
 import { z } from 'zod';
@@ -10,6 +11,8 @@ import { fetchAtomicV11Company, parseAtomicV11Manifest } from '../../lib/compani
 import { ManifestSchema, SnapshotEntrySchema } from './manifest';
 
 const archive = 'https://archive.org/download';
+const packerCaMemberHex = '22084341303030303031a20108100c2a0445303847aa01104a0e3030303030303030453038473132a006f0ae0c';
+const packerCaMemberSha256 = '041e2b5e6f039959b03fd185021493f422ce884ea155590c9e99916ca769ec48';
 const file = (name: string) => ({
   url: archive + '/ficha-2026-04/' + name,
   sha256: 'a'.repeat(64),
@@ -340,4 +343,39 @@ describe('Lagarto P0-D: manifest v1/v1.1 and reader contract', () => {
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
+
+  it('reads the exact Python-generated CA member through the opt-in reader', async () => {
+    // This is the *same* member asserted from sharded_pack._pack_rows by the
+    // Python P0-D test, not a separately encoded protobufjs approximation.
+    const wire = Uint8Array.from(
+      packerCaMemberHex.match(/../g)!.map((value) => Number.parseInt(value, 16))
+    );
+    expect(createHash('sha256').update(wire).digest('hex')).toBe(packerCaMemberSha256);
+    const payload = new ArrayBuffer(wire.byteLength);
+    new Uint8Array(payload).set(wire);
+    const manifest = ManifestSchema.parse({ current: '2026-08', snapshots: [snapshot11()] });
+    const fetchImpl = vi.fn(async () => new Response(payload)) as unknown as typeof fetch;
+    const company = await fetchAtomicV11Company('CA000001', manifest, { fetchImpl });
+
+    expect(company).not.toBeNull();
+    expect(companyRoot(company!)).toBe('CA000001');
+    expect(estabelecimentoCnpj(company!, company!.estabelecimentos![0]!))
+      .toBe('CA000001E08G12');
+    expect(socioCnpj(company!.socios![0]!)).toBe('00000000E08G12');
+    expect(fetchImpl).toHaveBeenCalledOnce();
+    const requested = String((fetchImpl as unknown as ReturnType<typeof vi.fn>).mock.calls[0]?.[0]);
+    expect(requested).toBe(
+      'https://archive.org/download/ficha-2026-08/wire-1.1/companies-42.zip/CA/000/001.pb'
+    );
+
+    // Even when the genuine bytes are available, a legacy URL must be
+    // rejected *before* a fetch. This is routing isolation, not byte integrity.
+    const collision = structuredClone(manifest);
+    collision.snapshots[0]!.files.companies!.shards[42]!.url =
+      'https://archive.org/download/ficha-2026-08/companies-42.zip';
+    const forbidden = vi.fn(async () => new Response(payload)) as unknown as typeof fetch;
+    await expect(fetchAtomicV11Company('CA000001', collision, { fetchImpl: forbidden }))
+      .rejects.toThrow(/unversioned or noncanonical URL/);
+    expect(forbidden).not.toHaveBeenCalled();
+  });
 });
