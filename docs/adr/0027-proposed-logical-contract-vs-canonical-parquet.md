@@ -186,26 +186,12 @@ na branch P3-A rejeita formato inesperado, retira o widget conhecido e
 isola o manifesto sintético; **não foi integrado à main**. Build da PoC
 não equivale a ensaio de deploy, consultas reais ou paridade visual.
 
-**Evidência adicional P3-A no HEAD `56c8bea487968dc9f393b9e0e1ac6535d2238039`**
-([README da PoC](https://github.com/franklinbaldo/ficha/blob/56c8bea487968dc9f393b9e0e1ac6535d2238039/experiments/ssg-p3a/README.md)):
-o `ssg 0.0.76` retornou **exit 0** embora emitisse
-`Error generating manifest: Invalid manifest name: Name cannot be empty`;
-o quality gate nativo marcou **9/10**, com reprovação do requisito de rodapé
-promocional. Em executor Ifro, o owner P3-A relatou **27/27 testes Node**
-e **12/12 estados axe/Chromium** (quatro estados × três larguras) sem
-violações automatizadas selecionadas; mutar `label for` gerou falha
-deliberada `AXE_FAIL`/exit 1. São evidências **da PoC offline**,
-não de contrato RFB, leitura DuckDB/Protobuf, paridade de produção ou
-acessibilidade manual. O CI padrão, filtrado por paths, **não executa**
-build SSG/axe e não substitui essa prova local. **Já existe, porém, um gate
-isolado no HEAD P3-A `65592bb6`**: [Actions #44015083398](https://github.com/franklinbaldo/ficha/actions/runs/44015083398)
-terminou em **FAILURE**. Os passos executados de testes Node (27 casos),
-build/finalizador, navegador local e axe (12 estados) foram `SUCCESS`, mas
-o passo final de diagnóstico detectou justamente o erro interno do manifesto
-apesar de `exit 0` do SSG. Isso é um **negativo real fail-closed em CI**,
-não falha de ETL nem aprovação para merge/deploy. A falha permaneceu registrada como contraprova, mas a causa foi
-posteriormente localizada pelo owner P3-A nos metadados de página; as
-verificações de dados reais e rollback continuam `NOT_RUN`.
+**Histórico P3-A:** no HEAD `56c8bea4`, o `ssg 0.0.76` emitia
+`Error generating manifest` com exit 0; quality gate nativo: 9/10.
+O [CI #44015083398](https://github.com/franklinbaldo/ficha/actions/runs/44015083398)
+reprovou no diagnóstico final, embora Node/build/Chromium/axe
+executados estivessem verdes. É prova **offline** da PoC, não de
+paridade DuckDB/Protobuf, publicação ou acessibilidade manual.
 
 **Atualização P3-A em 17/11/2026, [HEAD `0a2db297`](https://github.com/franklinbaldo/ficha/commit/0a2db297c4e6850d98cccf32e6406ef1eb1d7a45):**
 o `staticdatagen v0.0.32` exigia `name` nos metadados da página;
