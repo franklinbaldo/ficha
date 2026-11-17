@@ -53,7 +53,10 @@ function snapshot11() {
       companies: {
         shard_by: 'cnpj_base_prefix_or_base36_mod_100_v1' as const,
         schema_version: '1.1.0' as const,
-        shards: shards(),
+        shards: shards().map((entry) => ({
+          ...entry,
+          url: entry.url.replace('/companies-', '/wire-1.1/companies-'),
+        })),
       },
     },
   };
@@ -108,7 +111,7 @@ describe('Lagarto P0-D: manifest v1/v1.1 and reader contract', () => {
     expect(companyArchiveUrl('A0000000', {
       identifier: 'ficha-2026-08',
       files: manifest.snapshots[1]!.files,
-    })).toBe(archive + '/ficha-2026-08/companies-60.zip');
+    })).toBe(archive + '/ficha-2026-08/wire-1.1/companies-60.zip');
   });
 
   it('prefers v1.1 literal alpha fields over numeric mirrors after wire decoding', () => {
@@ -131,7 +134,7 @@ describe('Lagarto P0-D: manifest v1/v1.1 and reader contract', () => {
       expect(companyArchiveUrl(prefix + '000000', {
         identifier: 'ficha-2026-08',
         files: parsed.files,
-      })).toBe(archive + '/ficha-2026-08/companies-' + prefix + '.zip');
+      })).toBe(archive + '/ficha-2026-08/wire-1.1/companies-' + prefix + '.zip');
     }
   });
 
@@ -188,7 +191,7 @@ describe('Lagarto P0-D: manifest v1/v1.1 and reader contract', () => {
     expect(companyArchiveUrl('A0000000', {
       identifier: 'ficha-2026-08',
       files: current.files,
-    })).toBe(archive + '/ficha-2026-08/companies-60.zip');
+    })).toBe(archive + '/ficha-2026-08/wire-1.1/companies-60.zip');
   });
   it('proves a real v1-only protobuf decoder silently drops v1.1 alpha identity fields', () => {
     // This is a minimal *actual* protobufjs v1 wire schema, not a numeric projection.
@@ -278,7 +281,7 @@ describe('Lagarto P0-D: manifest v1/v1.1 and reader contract', () => {
     expect(oldUrls).toHaveLength(100);
     expect(newUrls).toHaveLength(100);
     expect(oldUrls.every((url) => url.includes('/ficha-2026-07/'))).toBe(true);
-    expect(newUrls.every((url) => url.includes('/ficha-2026-08/'))).toBe(true);
+    expect(newUrls.every((url) => url.includes('/ficha-2026-08/wire-1.1/'))).toBe(true);
     expect(oldUrls.filter((url) => newUrls.includes(url))).toHaveLength(0);
     // A client that manually fetches v1.1 wire still silently loses letters;
     // separating discovery cannot retroactively change legacy decoders.
