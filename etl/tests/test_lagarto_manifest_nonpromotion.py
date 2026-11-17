@@ -13,7 +13,10 @@ from types import SimpleNamespace
 
 import pytest
 
-from ficha_etl import monthly_sharded
+from ficha_etl import monthly_sharded, shard_transfer
+from ficha_etl.materialization import MaterializationSpec, ShardRange
+from ficha_etl.shard_publish import ShardPublishError
+from ficha_etl.shard_remote import PUBLIC_COMPANIES_GEOMETRY, ShardReuseState
 from ficha_etl.shard_transfer import ShardTransferAction
 
 MONTH = "2026-08"
@@ -224,3 +227,70 @@ def test_manifest_refusal_does_not_leave_orphan_snapshot_entry(
         args.snapshot_entry.read_bytes() if args.snapshot_entry.exists() else None
     ) == previous_entry
     assert not args.verification.exists()
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="P0-A: direct shard_transfer API still lacks a universal v1.1 pre-PUT guard",
+)
+def test_direct_transfer_api_must_refuse_unversioned_v11_wire(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Known gap: bypassing the monthly CLI must never PUT v1.1 to a v1 ZIP name.
+
+    Purely offline transfer simulation. XFAIL documents the missing boundary;
+    it is NOT evidence that the unversioned publish path is safe.
+    """
+
+    class V11Session:
+        geometry = PUBLIC_COMPANIES_GEOMETRY
+        month = MONTH
+        schema_version = "1.1.0"
+        shard_by = "cnpj_base_prefix_or_base36_mod_100_v1"
+
+        def materialization_spec(self, prefix: str, *, input_sha1s: dict):
+            return MaterializationSpec(
+                snapshot=self.month,
+                shard_range=ShardRange(prefix),
+                inputs=input_sha1s,
+                descriptor_sha256="f" * 64,
+            )
+
+        def pack(self, prefix: str, output_dir: Path, *, materialization):
+            output_dir.mkdir(parents=True, exist_ok=True)
+            path = output_dir / self.geometry.shard_name(prefix)
+            path.write_bytes(b"synthetic-protobuf-v11-wire-only")
+            return SimpleNamespace(path=path)
+
+    monkeypatch.setattr(shard_transfer, "_metadata_still_matches", lambda *_a, **_kw: {})
+    monkeypatch.setattr(
+        shard_transfer,
+        "_classify",
+        lambda *_a, **_kw: SimpleNamespace(
+            state=ShardReuseState.ABSENT, name="companies-00.zip", detail=""
+        ),
+    )
+    monkeypatch.setattr(
+        shard_transfer, "_reconcile_catalog_absent", lambda *_a, **_kw: None
+    )
+
+    uploads: list[str] = []
+
+    def record_fake_upload(name: str, _path: Path) -> None:
+        uploads.append(name)
+
+    with pytest.raises(
+        ShardPublishError, match=r"1\\.1|wire|unversioned|namespace|packer"
+    ):
+        shard_transfer.submit_one_shard(
+            V11Session(),
+            "00",
+            tmp_path / "shards",
+            pinned_inputs={},
+            fetch_metadata=lambda: {},
+            fetch_meta=lambda _name: None,
+            fetch_direct=lambda _name: None,
+            upload=record_fake_upload,
+        )
+
+    assert uploads == []
