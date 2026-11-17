@@ -40,6 +40,23 @@ export function verifyBuiltShell(dir) {
   assert.match(css, /:focus-visible/, 'indicação de foco ausente');
   assert.match(js, /createLookupController/, 'módulo de UI não conectado ao adaptador');
   assert.match(consult, /export function createLookupController/, 'módulo de consulta não emitido');
+  // Fail closed on broken fragment links and URLs escaping GitHub Pages /ficha/.
+  for (const [, target] of html.matchAll(/\b(?:href|src)=["']([^"']+)["']/g)) {
+    if (target.startsWith('#')) {
+      const anchor = target.slice(1);
+      assert.ok(anchor && (html.includes(`id="${anchor}"`) || html.includes(`id='${anchor}'`)),
+        `âncora sem destino: ${target}`);
+      continue;
+    }
+    if (/^https?:\/\//.test(target)) continue; // contrato RFB publicado, fora desta PoC
+    assert.ok(target.startsWith('/ficha/'), `URL local fora da base /ficha/: ${target}`);
+    const pathname = new URL(target, 'https://preview.invalid').pathname;
+    assert.ok(pathname.startsWith('/ficha/'), `URL local escapa da base: ${target}`);
+    const relative = pathname.slice('/ficha/'.length);
+    if (relative && !relative.endsWith('/')) {
+      assert.ok(existsSync(join(dir, relative)), `asset local ausente: ${target}`);
+    }
+  }
   return { htmlBytes: Buffer.byteLength(html), cssBytes: Buffer.byteLength(css), jsBytes: Buffer.byteLength(js) + Buffer.byteLength(consult) };
 }
 
