@@ -16,16 +16,19 @@ from pathlib import Path
 
 from google.protobuf import descriptor_pool, message_factory
 
-from ficha_etl.proto.ficha.v1 import company_pb2 as current_pb
-
 _OLD_BLOB = "68bd9bec5f4c663b689599cd0acb17ac8d32fa68"
-_OLD_SOURCE = Path(__file__).parent / "fixtures" / "company_pb2_v1_at_021ec8b5.txt"
+_NEW_BLOB = "49195b4d26dcff7cc89feeb4bdc390fcdbfe5d3e"
+_FIXTURES = {
+    "v1": ("company_pb2_v1_at_021ec8b5.txt", _OLD_BLOB),
+    "v11": ("company_pb2_v11_at_ef2a7a46.txt", _NEW_BLOB),
+}
 
 
-def _actual_v1_company_class():
-    raw = _OLD_SOURCE.read_bytes()
+def _company_class(wire: str):
+    name, expected_blob_sha = _FIXTURES[wire]
+    raw = (Path(__file__).parent / "fixtures" / name).read_bytes()
     git_blob = b"blob " + str(len(raw)).encode("ascii") + bytes([0]) + raw
-    assert hashlib.sha1(git_blob, usedforsecurity=False).hexdigest() == _OLD_BLOB
+    assert hashlib.sha1(git_blob, usedforsecurity=False).hexdigest() == expected_blob_sha
 
     tree = ast.parse(raw.decode("utf-8"))
     matches = [
@@ -49,8 +52,8 @@ def _actual_v1_company_class():
 
 def test_actual_historical_v1_decoder_still_reads_numeric_v11_wire() -> None:
     """Positive control: unchanged tags preserve numeric company identity."""
-    legacy_company = _actual_v1_company_class()
-    encoded = current_pb.Company(cnpj_base=12345678)
+    legacy_company = _company_class("v1")
+    encoded = _company_class("v11")(cnpj_base=12345678)
     establishment = encoded.estabelecimentos.add()
     establishment.cnpj_ordem = 1
     establishment.cnpj_dv = 90
@@ -68,14 +71,14 @@ def test_actual_historical_v1_decoder_still_reads_numeric_v11_wire() -> None:
 
 def test_actual_historical_v1_decoder_cannot_represent_alpha_branch_order() -> None:
     """Negative control: parse succeeds, but E08G is invisible to v1 consumers."""
-    legacy_company = _actual_v1_company_class()
-    company = current_pb.Company(cnpj_base=0)
+    legacy_company = _company_class("v1")
+    company = _company_class("v11")(cnpj_base=0)
     establishment = company.estabelecimentos.add()
     establishment.cnpj_ordem_text = "E08G"
     establishment.cnpj_dv = 12
     wire = company.SerializeToString()
 
-    decoded_modern = current_pb.Company.FromString(wire)
+    decoded_modern = _company_class("v11").FromString(wire)
     decoded_legacy = legacy_company.FromString(wire)
     assert decoded_modern.estabelecimentos[0].cnpj_ordem_text == "E08G"
     assert "cnpj_ordem_text" not in decoded_legacy.estabelecimentos[0].DESCRIPTOR.fields_by_name
@@ -91,13 +94,13 @@ def test_actual_historical_v1_decoder_cannot_represent_alpha_branch_order() -> N
 
 def test_actual_historical_v1_decoder_cannot_represent_alpha_root_or_partner() -> None:
     """Other new text tags are unknown to the pinned historical decoder."""
-    legacy_company = _actual_v1_company_class()
-    company = current_pb.Company(cnpj_base_text="0000000A")
+    legacy_company = _company_class("v1")
+    company = _company_class("v11")(cnpj_base_text="0000000A")
     partner = company.socios.add()
     partner.cnpj_socio_text = "00000000E08G12"
     wire = company.SerializeToString()
 
-    decoded_modern = current_pb.Company.FromString(wire)
+    decoded_modern = _company_class("v11").FromString(wire)
     decoded_legacy = legacy_company.FromString(wire)
     assert decoded_modern.cnpj_base_text == "0000000A"
     assert decoded_modern.socios[0].cnpj_socio_text == "00000000E08G12"
