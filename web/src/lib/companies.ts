@@ -59,7 +59,7 @@ export function companyArchiveUrl(
     const base = rootText(cnpjBase);
     // A legacy prefix-2 index only describes numeric roots. A textual root
     // beginning with digits would otherwise be routed to a plausible old ZIP.
-    if (files.companies.shard_by === 'cnpj_base_prefix_2' && /[A-Z]/.test(base)) {
+    if (files.companies.shard_by === 'cnpj_base_prefix_2' && /^[0-9]{2}/.test(base) && /[A-Z]/.test(base)) {
       throw new Error('companyArchiveUrl: alphanumeric root requires v1.1 shard mapping');
     }
     // Older manifests remain readable, but the new bucket mapping must explicitly
