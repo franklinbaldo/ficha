@@ -170,6 +170,27 @@ na branch P3-A rejeita formato inesperado, retira o widget conhecido e
 isola o manifesto sintético; **não foi integrado à main**. Build da PoC
 não equivale a ensaio de deploy, consultas reais ou paridade visual.
 
+**Evidência adicional P3-A no HEAD `56c8bea487968dc9f393b9e0e1ac6535d2238039`**
+([README da PoC](https://github.com/franklinbaldo/ficha/blob/56c8bea487968dc9f393b9e0e1ac6535d2238039/experiments/ssg-p3a/README.md)):
+o `ssg 0.0.76` retornou **exit 0** embora emitisse
+`Error generating manifest: Invalid manifest name: Name cannot be empty`;
+o quality gate nativo marcou **9/10**, com reprovação do requisito de rodapé
+promocional. Em executor Ifro, o owner P3-A relatou **27/27 testes Node**
+e **12/12 estados axe/Chromium** (quatro estados × três larguras) sem
+violações automatizadas selecionadas; mutar `label for` gerou falha
+deliberada `AXE_FAIL`/exit 1. São evidências **da PoC offline**,
+não de contrato RFB, leitura DuckDB/Protobuf, paridade de produção ou
+acessibilidade manual. O CI padrão, filtrado por paths, **não executa**
+build SSG/axe e não substitui essa prova local.
+
+**Gate extra de cutover, a cargo de P3-A:** validar artefatos e diagnósticos,
+não apenas código de saída do processo; esclarecer/corrigir o erro de
+manifesto em upstream ou estabelecer critério verificável de falha fechada,
+sem transformar o finalizador experimental em contrato de produção por
+omissão. O 9/10 deve ser interpretado pelo pilar faltante, não inflado
+para 10/10 mediante inserção promocional. A decisão A/B/C não pode
+ser confundida com aprovação desse corte de frontend.
+
 **Gates antes de qualquer corte SSG:** nome/namespace separados e teste
 negativo de colisão entre manifestos; conservação do contrato RFB/URLs e
 base `/ficha/`; busca única especializada (sem widget genérico);
