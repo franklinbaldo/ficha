@@ -227,7 +227,6 @@ class RawReconciliationTests(unittest.TestCase):
         self.assertEqual(observation.status, "catalog_incomplete")
         self.assertFalse(observation.head_size_consistent)
 
-
     def test_real_rfb_receipt_fixture_reaches_ia_without_byte_identity(self):
         fixture = Path(__file__).parent / "fixtures" / "rfb" / "2026-08-propfind.json"
         origin = json.loads(fixture.read_text(encoding="utf-8"))
@@ -253,18 +252,10 @@ class RawReconciliationTests(unittest.TestCase):
             "stale observation": lambda r: r["source"].__setitem__(
                 "observed_at_utc", "2026-11-17T21:37:51+00:00"
             ),
-            "invalid etag": lambda r: r["files"][0].__setitem__(
-                "etag_raw", '"bad\\x00etag"'
-            ),
-            "extra unverified hash claim": lambda r: r.__setitem__(
-                "sha256_verified", True
-            ),
-            "extra file hash claim": lambda r: r["files"][0].__setitem__(
-                "sha256", "0" * 64
-            ),
-            "boolean HTTP status": lambda r: r["source"].__setitem__(
-                "http_status", True
-            ),
+            "invalid etag": lambda r: r["files"][0].__setitem__("etag_raw", '"bad\\x00etag"'),
+            "extra unverified hash claim": lambda r: r.__setitem__("sha256_verified", True),
+            "extra file hash claim": lambda r: r["files"][0].__setitem__("sha256", "0" * 64),
+            "boolean HTTP status": lambda r: r["source"].__setitem__("http_status", True),
         }
         for title, mutate in cases.items():
             with self.subTest(title=title):
