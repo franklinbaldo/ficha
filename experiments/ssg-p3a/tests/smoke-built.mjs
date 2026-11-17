@@ -48,7 +48,11 @@ export function verifyBuiltShell(dir) {
         `âncora sem destino: ${target}`);
       continue;
     }
-    if (/^https?:\/\//.test(target)) continue; // contrato RFB publicado, fora desta PoC
+    if (/^https?:\/\//i.test(target)) {
+      assert.equal(target, 'https://franklinbaldo.github.io/ficha/manifest.json',
+        `URL externa não autorizada na PoC: ${target}`);
+      continue;
+    }
     assert.ok(target.startsWith('/ficha/'), `URL local fora da base /ficha/: ${target}`);
     const pathname = new URL(target, 'https://preview.invalid').pathname;
     assert.ok(pathname.startsWith('/ficha/'), `URL local escapa da base: ${target}`);
