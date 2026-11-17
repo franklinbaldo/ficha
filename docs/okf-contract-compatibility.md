@@ -51,9 +51,10 @@ gerado OKF é um artefato de modelagem, **não** substituto seguro para
 `safeParse` de linhas v1: há 28 nulos permitidos que ele rejeita e 7
 domínios de enum cujos valores ele alarga. A ausência de campo também é
 diferente de `null`: os 86 campos de dados são obrigatórios no v1 atual.
-Este guard passa a detectar qualquer `.optional()` introduzido sem
-equivalência entre os dois schemas. Campos de metadados do gerado não
-são colunas e ficam fora desse teste.
+Este guard rejeita `.optional()` em **qualquer coluna de dados**, inclusive
+quando ambos os schemas passam a aceitá-la simultaneamente (um teste
+de paridade sozinho não detectaria esse enfraquecimento). Campos de
+metadados do gerado não são colunas e ficam fora desse teste.
 
 A futura escolha de contrato por `schema_version`/competência e a
 política de colunas extras nas views requerem decisão coordenada com
@@ -66,9 +67,11 @@ O teste Python de biblioteca padrão compara as declarações SQL do OKF com
 os schemas Zod v1 e gerado. Falha quando coluna ou tipo muda, quando surge
 uma nova incompatibilidade de nulabilidade, ou quando a lista de desvios
 deixa de descrever o estado do código, ou quando um dos sete domínios
-enum públicos muda sem revisão. Inclui quatro controles negativos em memória
+enum públicos muda sem revisão. Inclui cinco controles negativos em memória
 (mutação de `cnpj` para número, remoção do `.nullable()` de
-`cpf_mascarado` exclusão de um valor permitido do enum `tipo` e ampliação indevida de campo obrigatório para `.optional()`). Não cria Parquet, não acessa RFB/IA e não executa ETL.
+`cpf_mascarado`, exclusão de um valor permitido do enum `tipo`, ampliação
+de um campo obrigatório para `.optional()` apenas no gerado e ampliação
+simultânea nos dois schemas). Não cria Parquet, não acessa RFB/IA e não executa ETL.
 
 **Não prova** nulabilidade do Parquet observado, contagem de valores nulos,
 versões anteriores do snapshot, integridade de JSON Schema não versionado,

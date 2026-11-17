@@ -205,6 +205,11 @@ def _optional_mismatch(
     }
 
 
+def _optional_fields(fields: dict[str, str]) -> set[str]:
+    """All missing/undefined-enabled fields, even if both schemas agree."""
+    return {name for name, expr in fields.items() if ".optional()" in expr}
+
+
 class OkfContractCompatibilityTest(unittest.TestCase):
     def test_sql_generated_and_public_v1_column_types_agree(self) -> None:
         for table, (slug, public_name) in SOURCES.items():
@@ -249,12 +254,33 @@ class OkfContractCompatibilityTest(unittest.TestCase):
                     set(),
                     f"{table}: unexpected required/optional field drift",
                 )
+                # The public v1 contract requires all 86 data columns. A
+                # simultaneous .optional() change in both schemas must fail,
+                # not pass merely because their optionality matches.
+                self.assertFalse(
+                    _optional_fields(published),
+                    f"{table}: public v1 unexpectedly allows missing columns",
+                )
+                self.assertFalse(
+                    _optional_fields(generated),
+                    f"{table}: generated OKF unexpectedly allows missing columns",
+                )
 
     def test_negative_optional_field_widening_would_be_detected(self) -> None:
         published = _published_v1_fields("estabelecimento")
         generated = _generated_fields("Cnpj")
         generated["cnpj"] = "z.string().optional()"
         self.assertEqual(_optional_mismatch(published, generated), {"cnpj"})
+
+    def test_negative_both_schemas_widened_to_optional_is_detected(self) -> None:
+        published = _published_v1_fields("estabelecimento")
+        generated = _generated_fields("Cnpj")
+        published["cnpj"] = "z.string().optional()"
+        generated["cnpj"] = "z.string().optional()"
+        # A parity-only assertion would miss this breaking change.
+        self.assertEqual(_optional_mismatch(published, generated), set())
+        self.assertEqual(_optional_fields(published), {"cnpj"})
+        self.assertEqual(_optional_fields(generated), {"cnpj"})
 
     def test_public_enum_domains_and_generated_widening_are_explicit(self) -> None:
         for table, (_, public_name) in SOURCES.items():
