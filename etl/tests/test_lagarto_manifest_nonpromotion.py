@@ -280,7 +280,7 @@ def test_direct_transfer_api_must_refuse_unversioned_v11_wire(
         uploads.append(name)
 
     with pytest.raises(
-        ShardPublishError, match=r"1\\.1|wire|unversioned|namespace|packer"
+        ShardPublishError, match=r"1\.1|wire|unversioned|namespace|packer"
     ):
         shard_transfer.submit_one_shard(
             V11Session(),
