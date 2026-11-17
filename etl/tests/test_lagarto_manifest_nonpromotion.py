@@ -13,6 +13,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from ficha_etl import manifest as manifest_mod
 from ficha_etl import monthly_sharded, shard_transfer
 from ficha_etl.shard_publish import ShardPublishError, publish_one_shard
 from ficha_etl.shard_remote import PUBLIC_COMPANIES_GEOMETRY
@@ -278,26 +279,16 @@ def test_direct_transfer_api_must_refuse_unversioned_v11_wire(
     assert list(tmp_path.iterdir()) == []
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="P0-D: manifest writing is not yet atomic or compensated after partial IO",
-)
-def test_manifest_mid_write_failure_must_restore_previous_bytes(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """Regression expected to fail until manifest update becomes atomic.
-
-    Inject a partial write *inside the real update_manifest Path.write_text*,
-    instead of a synthetic pre-write validation rejection. Zero remote IO.
-    """
-    args, before = _setup(tmp_path)
+def _prepare_legacy_finalize(monkeypatch: pytest.MonkeyPatch, args: argparse.Namespace) -> None:
+    """Reach the real legacy manifest writer using 100 offline verified shards."""
     monkeypatch.setattr(monthly_sharded, "wait_for_descriptor_remote", lambda *_a, **_kw: {})
     monkeypatch.setattr(
         monthly_sharded,
         "verify_all_shards",
         lambda *_a, **_kw: [_verified(f"{i:02d}") for i in range(100)],
     )
-    # Keep the real manifest writer reachable with a compatible v1 candidate.
+    # Keep the real writer reachable; production wire 1.1 is deliberately
+    # rejected by the legacy gate and is not published by these tests.
     monkeypatch.setattr(
         monthly_sharded,
         "finalize_sharded_snapshot_entry",
@@ -307,16 +298,57 @@ def test_manifest_mid_write_failure_must_restore_previous_bytes(
             "files": {"companies": {"shard_by": "cnpj_base_prefix_2"}},
         },
     )
-    original_write_text = Path.write_text
 
-    def interrupted_write(path: Path, content: str, *a, **kw):
-        if path == args.manifest:
-            path.write_bytes(b'{"current":')
-            raise OSError("injected partial manifest write")
-        return original_write_text(path, content, *a, **kw)
 
-    monkeypatch.setattr(Path, "write_text", interrupted_write)
-    with pytest.raises(OSError, match="injected partial manifest write"):
+def test_manifest_replace_failure_preserves_bytes_and_no_snapshot_entry(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Exercise the new staged writer at os.replace through command_finalize.
+
+    Unlike the old Path.write_text injection, this reaches the Castor #246
+    implementation. The test fails if the staging/rollback is bypassed.
+    """
+    args, before = _setup(tmp_path)
+    _prepare_legacy_finalize(monkeypatch, args)
+
+    def interrupted_replace(src: str | Path, dst: str | Path) -> None:
+        assert Path(src).parent == args.manifest.parent
+        assert Path(src).is_file(), "staged manifest must exist before replacement"
+        assert Path(dst) == args.manifest
+        raise OSError("injected manifest os.replace failure")
+
+    monkeypatch.setattr(manifest_mod.os, "replace", interrupted_replace)
+    with pytest.raises(OSError, match="injected manifest os.replace failure"):
+        monthly_sharded.command_finalize(args)
+
+    _assert_no_promotion(args, before)
+    assert list(args.manifest.parent.glob(".manifest.json.*.tmp")) == []
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="P0-D: verification.json fails after manifest commit; transaction boundary unresolved",
+)
+def test_verification_receipt_failure_must_not_promote_partial_state(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Known gap: a failed verification receipt follows a successful commit.
+
+    The fault is injected only into the receipt writer after 100 synthetic
+    verified shards, with no network or live publication. This is a contract
+    counterexample, not proof of multi-file rollback.
+    """
+    args, before = _setup(tmp_path)
+    _prepare_legacy_finalize(monkeypatch, args)
+    original_write_json = monthly_sharded._write_json
+
+    def fail_verification(path: Path, payload: object) -> None:
+        if Path(path) == args.verification:
+            raise OSError("injected verification.json write failure")
+        original_write_json(path, payload)
+
+    monkeypatch.setattr(monthly_sharded, "_write_json", fail_verification)
+    with pytest.raises(OSError, match="injected verification.json write failure"):
         monthly_sharded.command_finalize(args)
 
     _assert_no_promotion(args, before)

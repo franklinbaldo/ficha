@@ -20,6 +20,8 @@ import datetime
 import hashlib
 import json
 import logging
+import os
+import tempfile
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
@@ -353,11 +355,30 @@ def update_manifest(manifest_path: Path, snapshot_entry: dict) -> None:
     manifest["snapshots"].sort(key=lambda s: s["date"], reverse=True)
     manifest["current"] = manifest["snapshots"][0]["date"]
 
+    # Stage complete bytes in the same directory, then replace the discovery
+    # index atomically. A partial write, flush or rename failure must leave
+    # the old manifest byte-for-byte intact (or absent on first creation).
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
-    manifest_path.write_text(
-        json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-    )
+    payload = json.dumps(manifest, ensure_ascii=False, indent=2) + "\n"
+    staged_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            newline="\n",
+            dir=manifest_path.parent,
+            prefix=f".{manifest_path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as staged:
+            staged_path = Path(staged.name)
+            staged.write(payload)
+            staged.flush()
+            os.fsync(staged.fileno())
+        os.replace(staged_path, manifest_path)
+    finally:
+        if staged_path is not None:
+            staged_path.unlink(missing_ok=True)
     log.info(
         "manifest atualizado: current=%s, %d snapshot(s)",
         manifest["current"],
