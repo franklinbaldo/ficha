@@ -326,6 +326,20 @@ def verify_snapshot_files(snapshot_entry: dict) -> list[str]:
 
 def update_manifest(manifest_path: Path, snapshot_entry: dict) -> None:
     """Upserta um snapshot no manifest.json (cria do zero se não existir)."""
+    # The historical manifest.json is the discovery contract of the deployed
+    # Protobuf v1 client. Placing an alphanumeric 1.1 layer in this shared
+    # index makes that client reject *all* snapshots (even its old current).
+    # The alternate opt-in index/URLs are a separate publication contract.
+    companies = snapshot_entry.get("files", {}).get("companies")
+    if isinstance(companies, dict) and (
+        companies.get("shard_by") != "cnpj_base_prefix_2"
+        or companies.get("schema_version") not in (None, "1.0.0")
+    ):
+        raise ValueError(
+            "legacy manifest.json cannot discover Protobuf 1.1 company shards; "
+            "use a separate opt-in index and versioned artifact URLs"
+        )
+
     month = snapshot_entry["date"]
 
     if manifest_path.exists():
