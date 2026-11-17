@@ -80,7 +80,9 @@ def test_genuine_zip_retains_alphanumeric_root_order_and_partner(tmp_path: Path)
         company_file = next(
             item for item in descriptor_set.file if item.name == "ficha/v1/company.proto"
         )
-        fields = {msg.name: {field.name for field in msg.field} for msg in company_file.message_type}
+        fields = {
+            msg.name: {field.name for field in msg.field} for msg in company_file.message_type
+        }
         assert "cnpj_base_text" in fields["Company"]
         assert "cnpj_ordem_text" in fields["Estabelecimento"]
         assert "cnpj_socio_text" in fields["Socio"]
