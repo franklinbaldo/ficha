@@ -1,11 +1,8 @@
 name: Deploy site
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'web/**'
-      - '.github/workflows/deploy.yml'
+  # Publicação exige acionamento manual e autorização específica.
+  # Mudanças na main seguem pelo CI normal, sem disparar Pages.
   workflow_dispatch:
 
 permissions:
