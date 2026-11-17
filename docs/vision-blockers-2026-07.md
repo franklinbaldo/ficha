@@ -2,6 +2,8 @@
 
 **Data:** 2026-07-13 · **HEAD de referência:** `06d4f91d`
 
+> **Aviso histórico (corte 13/07/2026).** Este diagnóstico preserva observações e recomendações do HEAD `06d4f91d`; **não descreve o estado atual nem autoriza** os seus `workflow_dispatch`, backfill ou publicações. Conferir [README](../README.md), [manifesto versionado](../web/public/manifest.json) e [#247](https://github.com/franklinbaldo/ficha/issues/247). Declarações no manifesto não provam disponibilidade live.
+
 A visão (README + ADRs): um Data Lakehouse serverless de CNPJ com **snapshots
 mensais automáticos** no Internet Archive, **histórico completo desde 2023-05**,
 **camada atômica por CNPJ**, **camada analítica rica** no navegador (Pessoa,

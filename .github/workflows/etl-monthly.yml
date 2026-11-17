@@ -32,6 +32,9 @@ concurrency:
 
 jobs:
   resolve:
+    # Temporary production hold: schedule ticks remain visible, but run no jobs.
+    # Remove only after explicit operational authorization to resume monthly ETL.
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     outputs:
       month: ${{ steps.month.outputs.value }}

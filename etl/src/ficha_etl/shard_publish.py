@@ -81,6 +81,23 @@ class ShardPublishError(RuntimeError):
     """Estado remoto ou pós-condição não permite continuar com segurança."""
 
 
+def require_legacy_shard_upload_contract(session: ShardPackSession) -> None:
+    """Fail closed before any IO to the unversioned companies-NN.zip names.
+
+    A Protobuf 1.1 producer must never write under the v1 discovery namespace,
+    regardless of whether the caller uses monthly_sharded, shard_transfer or
+    this older publishing API. Unknown sessions cannot opt into legacy writes.
+    """
+    wire = getattr(session, "wire_version", None)
+    mapping = getattr(session, "shard_by", None)
+    if wire != "1.0.0" or mapping != "cnpj_base_prefix_2":
+        raise ShardPublishError(
+            "refusing unversioned companies-NN.zip upload of Protobuf "
+            f"{wire!r} with shard mapping {mapping!r}; "
+            "separate versioned artifact URLs and opt-in discovery are required"
+        )
+
+
 def pin_materialization_inputs(fetch_metadata: MetadataFetch) -> dict[str, str]:
     return materialization_input_sha1s(fetch_metadata())
 
@@ -316,6 +333,7 @@ def publish_one_shard(
     post_put_direct_attempts: int = _POST_PUT_DIRECT_ATTEMPTS,
     sleep: Callable[[float], None] = time.sleep,
 ) -> ShardPublishResult:
+    require_legacy_shard_upload_contract(session)
     if session.geometry != PUBLIC_COMPANIES_GEOMETRY:
         raise ShardPublishError(
             f"geometria de publicação deve ser {PUBLIC_COMPANIES_GEOMETRY.prefix_digits} dígitos"
