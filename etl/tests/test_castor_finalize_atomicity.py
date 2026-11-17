@@ -118,6 +118,61 @@ def test_simulated_gate_failure_restores_preexisting_entry(
     assert not args.verification.exists()
 
 
+
+@pytest.mark.parametrize("preexisting", [False, True])
+@pytest.mark.parametrize("partial_write", [False, True])
+def test_verification_write_failure_never_promotes_manifest(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    preexisting: bool,
+    partial_write: bool,
+) -> None:
+    args = _args(tmp_path)
+    _mock_offline_inputs(monkeypatch, alpha=False)
+    previous_manifest = args.manifest.read_bytes()
+    previous_entry = b'{"old":"entry"}\n' if preexisting else None
+    previous_verification = b'{"old":"verified"}\n' if preexisting else None
+    if preexisting:
+        args.snapshot_entry.write_bytes(previous_entry)
+        args.verification.write_bytes(previous_verification)
+
+    original_write = monthly_sharded._write_json
+
+    def interrupted(path: Path, payload: object) -> None:
+        if Path(path) == args.verification:
+            if partial_write:
+                Path(path).write_bytes(b'{"incomplete":')
+            raise OSError("injected verification write failure")
+        original_write(path, payload)
+
+    monkeypatch.setattr(monthly_sharded, "_write_json", interrupted)
+    with pytest.raises(OSError, match="injected verification write failure"):
+        monthly_sharded.command_finalize(args)
+
+    assert args.manifest.read_bytes() == previous_manifest
+    assert (args.snapshot_entry.read_bytes() if args.snapshot_entry.exists() else None) == previous_entry
+    assert (args.verification.read_bytes() if args.verification.exists() else None) == previous_verification
+
+
+def test_manifest_refusal_restores_previous_verification_bytes(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    args = _args(tmp_path)
+    _mock_offline_inputs(monkeypatch, alpha=True)
+    previous_manifest = args.manifest.read_bytes()
+    previous_entry = b'{"old":"entry"}\n'
+    previous_verification = b'{"old":"verified"}\n'
+    args.snapshot_entry.write_bytes(previous_entry)
+    args.verification.write_bytes(previous_verification)
+
+    with pytest.raises(ValueError, match="legacy manifest.json"):
+        monthly_sharded.command_finalize(args)
+
+    assert args.manifest.read_bytes() == previous_manifest
+    assert args.snapshot_entry.read_bytes() == previous_entry
+    assert args.verification.read_bytes() == previous_verification
+
+
 def test_legacy_success_persists_entry_and_verification(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

@@ -494,27 +494,36 @@ def command_finalize(args: argparse.Namespace) -> None:
 
     entry = finalize_sharded_snapshot_entry(descriptor, identities)
     snapshot_entry_path = Path(args.snapshot_entry)
-    previous_entry = snapshot_entry_path.read_bytes() if snapshot_entry_path.exists() else None
-    _write_json(snapshot_entry_path, entry)
+    verification_path = Path(args.verification)
+    manifest_path = Path(args.manifest)
+    # The manifest is the discovery commit point. Both local receipts must
+    # exist before it changes; a failed receipt/manifest write rolls back
+    # previous bytes instead of exposing an apparently finalized snapshot.
+    previous_documents = {
+        path: path.read_bytes() if path.exists() else None
+        for path in (snapshot_entry_path, verification_path)
+    }
     try:
-        update_manifest(Path(args.manifest), entry)
+        _write_json(snapshot_entry_path, entry)
+        _write_json(
+            verification_path,
+            {
+                "month": month,
+                "base_files_verified": len(_expected_remote_files(descriptor)),
+                "company_shards_verified": len(identities),
+                "identity_source": "production-descriptor-and-pre-upload-shard-receipts",
+            },
+        )
+        update_manifest(manifest_path, entry)
     except Exception:
-        # A rejected publication gate cannot leave a misleading finalized
-        # snapshot-entry. Preserve the exact bytes if this is a retry.
-        if previous_entry is None:
-            snapshot_entry_path.unlink(missing_ok=True)
-        else:
-            snapshot_entry_path.write_bytes(previous_entry)
+        # Local compensation only. This is not a crash-safe transaction across
+        # three files or a remote IA promotion.
+        for path, previous in previous_documents.items():
+            if previous is None:
+                path.unlink(missing_ok=True)
+            else:
+                path.write_bytes(previous)
         raise
-    _write_json(
-        Path(args.verification),
-        {
-            "month": month,
-            "base_files_verified": len(_expected_remote_files(descriptor)),
-            "company_shards_verified": len(identities),
-            "identity_source": "production-descriptor-and-pre-upload-shard-receipts",
-        },
-    )
     print(f"snapshot {month} finalized from production identities: 100/100 shards")
 
 
