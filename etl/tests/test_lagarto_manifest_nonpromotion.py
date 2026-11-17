@@ -29,7 +29,6 @@ PACKER_CA_MEMBER_HEX = (
 PACKER_CA_MEMBER_SHA256 = "041e2b5e6f039959b03fd185021493f422ce884ea155590c9e99916ca769ec48"
 
 
-
 def _identity(seed: str) -> dict:
     return {"size": 11, "sha1": seed * 40, "sha256": seed * 64}
 
