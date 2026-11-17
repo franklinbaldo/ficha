@@ -99,15 +99,22 @@ def _is_lower_hex(value: str, length: int) -> bool:
     return len(value) == length and all(char in "0123456789abcdef" for char in value)
 
 
-def _companies_sharded_entry(month: str, shards: Iterable[CompanyShardIdentity]) -> dict:
-    """Converte 100 identidades fechadas no contrato público."""
+def _companies_sharded_entry(
+    month: str,
+    shards: Iterable[CompanyShardIdentity],
+    *,
+    namespace: str = "",
+) -> dict:
+    """Build an index from 100 byte identities without renaming remote artifacts."""
+    if namespace not in ("", "wire-1.1/"):
+        raise ValueError(f"unsupported companies namespace: {namespace!r}")
     geometry = PUBLIC_COMPANIES_GEOMETRY
     by_prefix: dict[str, CompanyShardIdentity] = {}
     for shard in shards:
         prefix = geometry.validate_prefix(shard.shard)
         if prefix in by_prefix:
             raise ValueError(f"duplicate companies shard: {prefix}")
-        expected_name = geometry.shard_name(prefix)
+        expected_name = namespace + geometry.shard_name(prefix)
         if shard.name != expected_name:
             raise ValueError(
                 f"companies shard {prefix}: artifact name {shard.name!r} != {expected_name!r}"
@@ -230,6 +237,8 @@ def build_production_descriptor(month: str, output_dir: Path) -> dict:
 def finalize_sharded_snapshot_entry(
     production_descriptor: dict,
     company_shards: Iterable[CompanyShardIdentity],
+    *,
+    namespace: str = "",
 ) -> dict:
     """Acrescenta shards ao descriptor sem recalcular identidade já produzida."""
     entry = copy.deepcopy(production_descriptor)
@@ -241,7 +250,7 @@ def finalize_sharded_snapshot_entry(
         raise ValueError("production descriptor missing files")
     if "companies" in files or "companies_zip" in files:
         raise ValueError("production descriptor already contains companies artifact")
-    files["companies"] = _companies_sharded_entry(month, company_shards)
+    files["companies"] = _companies_sharded_entry(month, company_shards, namespace=namespace)
     return entry
 
 
@@ -326,14 +335,60 @@ def verify_snapshot_files(snapshot_entry: dict) -> list[str]:
     return broken
 
 
-def update_manifest(manifest_path: Path, snapshot_entry: dict) -> None:
-    """Upserta um snapshot no manifest.json (cria do zero se não existir)."""
+def _require_opt_in_v11_entry(snapshot_entry: dict) -> None:
+    """Validate a complete, disjoint v1.1 index before any local mutation.
+
+    This helper only prepares an opt-in LOCAL discovery file. It does not
+    enable publication, upload, or remote verification of the 1.1 artifacts.
+    """
+    files = snapshot_entry.get("files")
+    if not isinstance(files, dict) or "companies_zip" in files:
+        raise ValueError("opt-in 1.1 requires a sharded-only companies layer")
+    companies = files.get("companies")
+    if not isinstance(companies, dict) or (
+        companies.get("shard_by") != "cnpj_base_prefix_or_base36_mod_100_v1"
+        or companies.get("schema_version") != "1.1.0"
+    ):
+        raise ValueError("opt-in 1.1 requires explicit wire and bucket versions")
+
+    shards = companies.get("shards")
+    if not isinstance(shards, list) or len(shards) != 100:
+        raise ValueError("opt-in 1.1 requires exactly 100 shards")
+    seen: set[str] = set()
+    for shard in shards:
+        if not isinstance(shard, dict):
+            raise ValueError("opt-in 1.1 shard must be an object")
+        prefix = PUBLIC_COMPANIES_GEOMETRY.validate_prefix(shard.get("shard"))
+        expected_url = companies_shard_url(
+            snapshot_entry["date"], f"wire-1.1/companies-{prefix}.zip"
+        )
+        if prefix in seen or shard.get("url") != expected_url:
+            raise ValueError(f"opt-in 1.1 shard {prefix}: duplicate or unversioned URL")
+        if (
+            not isinstance(shard.get("size"), int)
+            or isinstance(shard["size"], bool)
+            or shard["size"] <= 0
+            or not isinstance(shard.get("sha1"), str)
+            or not _is_lower_hex(shard["sha1"], 40)
+        ):
+            raise ValueError(f"opt-in 1.1 shard {prefix}: invalid byte identity")
+        seen.add(prefix)
+
+
+def update_manifest(
+    manifest_path: Path, snapshot_entry: dict, *, opt_in_v11: bool = False
+) -> None:
+    """Upsert a LOCAL index; default discovery stays strictly Protobuf v1."""
+    if opt_in_v11:
+        if manifest_path.name != "manifest-atomic-v1.1.json" or manifest_path.is_symlink():
+            raise ValueError("opt-in 1.1 must use a separate manifest-atomic-v1.1.json")
+        _require_opt_in_v11_entry(snapshot_entry)
     # The historical manifest.json is the discovery contract of the deployed
     # Protobuf v1 client. Placing an alphanumeric 1.1 layer in this shared
     # index makes that client reject *all* snapshots (even its old current).
     # The alternate opt-in index/URLs are a separate publication contract.
     companies = snapshot_entry.get("files", {}).get("companies")
-    if isinstance(companies, dict) and (
+    if not opt_in_v11 and isinstance(companies, dict) and (
         companies.get("shard_by") != "cnpj_base_prefix_2"
         or companies.get("schema_version") not in (None, "1.0.0")
     ):
@@ -346,6 +401,9 @@ def update_manifest(manifest_path: Path, snapshot_entry: dict) -> None:
 
     if manifest_path.exists():
         manifest: dict = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if opt_in_v11:
+            for existing in manifest["snapshots"]:
+                _require_opt_in_v11_entry(existing)
     else:
         log.info("manifest.json não existe — criando do zero")
         manifest = {"current": month, "snapshots": []}
