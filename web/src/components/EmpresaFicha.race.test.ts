@@ -104,3 +104,82 @@ describe('EmpresaFicha: stale socios/contatos (offline)', () => {
     expect(connectionsClosed).toBe(2);
   });
 });
+
+
+// Execute the actual $effect body against mutable state. This checks every
+// reset branch, but does not mount Svelte or exercise its browser scheduler.
+describe('EmpresaFicha: execution of the context invalidation effect (offline)', () => {
+  const body = source.split('$effect(() => {')[1]?.split('\n  });')[0];
+  if (!body) throw new Error('Missing context invalidation effect');
+
+  function createHarness() {
+    const initialDb = {};
+    const otherDb = {};
+    const factory = new Function('initialDb', [
+      "let activeCNPJ = 'A0000000E08G12', db = initialDb;",
+      'let previousCNPJ = null, previousDb = null, requestEpoch = 0;',
+      'let socios = [], contatos = [], filiais = [];',
+      'let sociosError = null, contatosError = null, filiaisError = null;',
+      'let loadingSocios = false, loadingContatos = false, loadingFiliais = false;',
+      'let showSocios = false, showContatos = false, showFiliais = false;',
+      'const runEffect = () => {', body, '};',
+      'return {',
+      '  runEffect,',
+      '  change(cnpj, newDb) { activeCNPJ = cnpj; db = newDb; runEffect(); },',
+      '  seed() {',
+      "    socios = [{ marker: 'OLD' }];",
+      "    contatos = [{ marker: 'OLD' }];",
+      "    filiais = [{ marker: 'OLD' }];",
+      "    sociosError = 'old error'; contatosError = 'old error'; filiaisError = 'old error';",
+      '    loadingSocios = true; loadingContatos = true; loadingFiliais = true;',
+      '    showSocios = true; showContatos = true; showFiliais = true;',
+      '  },',
+      '  snapshot() {',
+      '    return {',
+      '      requestEpoch, socios, contatos, filiais,',
+      '      sociosError, contatosError, filiaisError,',
+      '      loadingSocios, loadingContatos, loadingFiliais,',
+      '      showSocios, showContatos, showFiliais,',
+      '    };',
+      '  },',
+      '};',
+    ].join('\n'));
+    const ui = factory(initialDb) as {
+      runEffect(): void;
+      change(cnpj: string, db: unknown): void;
+      seed(): void;
+      snapshot(): Record<string, unknown>;
+    };
+    return { ui, initialDb, otherDb };
+  }
+
+  it('preserves expanded data if neither CNPJ nor DuckDB changed', () => {
+    const { ui } = createHarness();
+    ui.runEffect();
+    expect(ui.snapshot().requestEpoch).toBe(1);
+    ui.seed();
+    const existing = ui.snapshot();
+    ui.runEffect();
+    expect(ui.snapshot()).toEqual(existing);
+  });
+
+  it.each(['cnpj', 'duckdb'] as const)(
+    'clears all panels and advances the epoch when %s changes',
+    (dimension) => {
+      const { ui, initialDb, otherDb } = createHarness();
+      ui.runEffect();
+      ui.seed();
+      ui.change(
+        dimension === 'cnpj' ? 'B0000000E08G12' : 'A0000000E08G12',
+        dimension === 'duckdb' ? otherDb : initialDb,
+      );
+      expect(ui.snapshot()).toEqual({
+        requestEpoch: 2,
+        socios: [], contatos: [], filiais: [],
+        sociosError: null, contatosError: null, filiaisError: null,
+        loadingSocios: false, loadingContatos: false, loadingFiliais: false,
+        showSocios: false, showContatos: false, showFiliais: false,
+      });
+    },
+  );
+});
