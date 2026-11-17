@@ -474,8 +474,21 @@ def command_finalize(args: argparse.Namespace) -> None:
         )
 
     entry = finalize_sharded_snapshot_entry(descriptor, identities)
-    _write_json(Path(args.snapshot_entry), entry)
-    update_manifest(Path(args.manifest), entry)
+    snapshot_entry_path = Path(args.snapshot_entry)
+    previous_entry = (
+        snapshot_entry_path.read_bytes() if snapshot_entry_path.exists() else None
+    )
+    _write_json(snapshot_entry_path, entry)
+    try:
+        update_manifest(Path(args.manifest), entry)
+    except Exception:
+        # A rejected publication gate cannot leave a misleading finalized
+        # snapshot-entry. Preserve the exact bytes if this is a retry.
+        if previous_entry is None:
+            snapshot_entry_path.unlink(missing_ok=True)
+        else:
+            snapshot_entry_path.write_bytes(previous_entry)
+        raise
     _write_json(
         Path(args.verification),
         {
