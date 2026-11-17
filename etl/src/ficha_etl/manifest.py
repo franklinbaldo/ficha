@@ -375,9 +375,7 @@ def _require_opt_in_v11_entry(snapshot_entry: dict) -> None:
         seen.add(prefix)
 
 
-def update_manifest(
-    manifest_path: Path, snapshot_entry: dict, *, opt_in_v11: bool = False
-) -> None:
+def update_manifest(manifest_path: Path, snapshot_entry: dict, *, opt_in_v11: bool = False) -> None:
     """Upsert a LOCAL index; default discovery stays strictly Protobuf v1."""
     if opt_in_v11:
         if manifest_path.name != "manifest-atomic-v1.1.json" or manifest_path.is_symlink():
@@ -388,9 +386,13 @@ def update_manifest(
     # index makes that client reject *all* snapshots (even its old current).
     # The alternate opt-in index/URLs are a separate publication contract.
     companies = snapshot_entry.get("files", {}).get("companies")
-    if not opt_in_v11 and isinstance(companies, dict) and (
-        companies.get("shard_by") != "cnpj_base_prefix_2"
-        or companies.get("schema_version") not in (None, "1.0.0")
+    if (
+        not opt_in_v11
+        and isinstance(companies, dict)
+        and (
+            companies.get("shard_by") != "cnpj_base_prefix_2"
+            or companies.get("schema_version") not in (None, "1.0.0")
+        )
     ):
         raise ValueError(
             "legacy manifest.json cannot discover Protobuf 1.1 company shards; "
