@@ -1,5 +1,7 @@
 /** P0-D offline contract tests. No Internet Archive requests or real manifest writes. */
 import { describe, expect, it } from 'vitest';
+import { Field, Root, Type } from 'protobufjs';
+
 import { ficha } from '../../generated/company.pb.js';
 import { companyArchiveUrl, companyRoot, estabelecimentoCnpj, socioCnpj } from '../../lib/companies';
 import { currentSnapshot } from '../../lib/manifest';
@@ -187,4 +189,41 @@ describe('Lagarto P0-D: manifest v1/v1.1 and reader contract', () => {
       files: current.files,
     })).toBe(archive + '/ficha-2026-08/companies-60.zip');
   });
+  it('proves a real v1-only protobuf decoder silently drops v1.1 alpha identity fields', () => {
+    // This is a minimal *actual* protobufjs v1 wire schema, not a numeric projection.
+    // Its v1 field tags match the published pre-1.1 Company/Estabelecimento tags.
+    const legacy = new Root();
+    const pkg = legacy.define('ficha.v1');
+    pkg.add(new Type('Estabelecimento')
+      .add(new Field('cnpj_ordem', 1, 'uint32'))
+      .add(new Field('cnpj_dv', 2, 'uint32')));
+    pkg.add(new Type('Company')
+      .add(new Field('cnpj_base', 1, 'uint32'))
+      .add(new Field('estabelecimentos', 20, 'Estabelecimento', 'repeated')));
+    legacy.resolveAll();
+
+    const wire = ficha.v1.Company.encode({
+      cnpj_base: 0,
+      cnpj_base_text: '00000000',
+      estabelecimentos: [{ cnpj_ordem_text: 'E08G', cnpj_dv: 12 }],
+    }).finish();
+    const v1Type = legacy.lookupType('ficha.v1.Company');
+    const old = v1Type.toObject(v1Type.decode(wire)) as {
+      cnpj_base?: number;
+      estabelecimentos: Array<{ cnpj_ordem?: number; cnpj_dv?: number }>;
+    };
+    expect(old.estabelecimentos).toHaveLength(1);
+    expect(old.estabelecimentos[0]!.cnpj_ordem).toBeUndefined();
+
+    const legacyCnpj = String(old.cnpj_base ?? 0).padStart(8, '0')
+      + String(old.estabelecimentos[0]!.cnpj_ordem ?? 0).padStart(4, '0')
+      + String(old.estabelecimentos[0]!.cnpj_dv ?? 0).padStart(2, '0');
+    const updated = ficha.v1.Company.decode(wire);
+    expect(legacyCnpj).toBe('00000000000012');
+    expect(estabelecimentoCnpj(updated, updated.estabelecimentos[0]!))
+      .toBe('00000000E08G12');
+    // Observed silent corruption proves forward compatibility is NOT guaranteed.
+    // This test cannot force out-of-repository old clients to negotiate a version.
+  });
+
 });
