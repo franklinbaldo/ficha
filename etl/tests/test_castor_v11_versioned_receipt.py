@@ -28,7 +28,9 @@ class _Spec:
 
 
 def _session(
-    *, wire: str = "1.1.0", mapping: str = "cnpj_base_prefix_or_base36_mod_100_v1",
+    *,
+    wire: str = "1.1.0",
+    mapping: str = "cnpj_base_prefix_or_base36_mod_100_v1",
     geometry: ShardGeometry = PUBLIC_COMPANIES_GEOMETRY,
 ):
     return SimpleNamespace(
@@ -83,11 +85,17 @@ def test_unknown_or_legacy_contract_fails_before_local_io(
     tmp_path: Path, wire: str, mapping: str
 ) -> None:
     missing = PreparedShard(
-        prefix="42", name="companies-42.zip", path=tmp_path / "not-created.zip",
-        materialization_id="a" * 64, size=1, sha1="0" * 40,
+        prefix="42",
+        name="companies-42.zip",
+        path=tmp_path / "not-created.zip",
+        materialization_id="a" * 64,
+        size=1,
+        sha1="0" * 40,
     )
     with pytest.raises(ShardPublishError, match="opt-in wire-1.1"):
-        plan_opt_in_v11_shard(_session(wire=wire, mapping=mapping), missing, pinned_inputs={})
+        plan_opt_in_v11_shard(
+            _session(wire=wire, mapping=mapping), missing, pinned_inputs={}
+        )
     assert not missing.path.exists()
 
 
