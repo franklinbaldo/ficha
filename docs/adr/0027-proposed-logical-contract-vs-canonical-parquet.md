@@ -85,6 +85,24 @@ mesmos dados, hashes e estratégia de retomada; não multiplicar por dez.
   [0009](0009-denormalization-and-roundtrip.md), [0012](0012-ia-mirror-as-source-of-truth.md)
   seguem válidos. Esta proposta não edita ADR Accepted nem RFC Accepted.
 
+## Risco cruzado P0: compatibilidade wire não decorre do contrato OKF
+
+A [revisão independente do Gavião na #246](https://github.com/franklinbaldo/ficha/pull/246#pullrequestreview-5930640389)
+e o [teste da #252](https://github.com/franklinbaldo/ficha/pull/252)
+produziram uma contraprova offline: um decoder Protobuf **v1 real**, ao ler
+bytes v1.1 de `00000000E08G12`, ignora a nova tag alfanumérica e
+reconstrói `00000000000012` sem erro. O leitor v1.1 recupera o CNPJ
+correto. Isto demonstra risco de **corrupção semântica silenciosa** para
+consumidores antigos; não demonstra que o snapshot novo foi publicado.
+
+**Gate independente de A/B/C:** provar, com fixture v1→v1.1 e decoder legado
+real, que a publicação/roteamento **não expõe bytes incompatíveis** a
+consumidores v1. Versionar explicitamente URLs ou negociar protocolo no
+ponto de entrega; validar a versão apenas no cliente atualizado é insuficiente
+para proteger decoders externos já distribuídos. A estratégia exata pertence
+a P0 (Castor, Lagarto, Gavião e Elefante), não a esta ADR. Nenhum schema
+Protobuf, manifesto ou endpoint é alterado nesta PR.
+
 ## Revisão cruzada P4-A: contrato sem paridade semântica comprovada
 
 A [matriz P4-A da Abelha](https://github.com/franklinbaldo/ficha/blob/e81d2e658988d1dcdb276ef6c47a650ed392fd43/docs/okf-contract-compatibility.md)
