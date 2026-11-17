@@ -223,6 +223,14 @@
     return `${raw.slice(0, 2)}.${raw.slice(2, 5)}.${raw.slice(5, 8)}/${raw.slice(8, 12)}-${raw.slice(12)}`;
   }
 
+  // The four establishment-order characters identify head office (0001).
+  // Keep letters in both the root and branch order; malformed IDs get no label.
+  function tipoEstabelecimento(cnpj: string | number): 'Matriz' | 'Filial' | null {
+    const raw = canonicalCNPJ(cnpj);
+    if (!/^[A-Z0-9]{12}\\d{2}$/.test(raw)) return null;
+    return raw.slice(8, 12) === '0001' ? 'Matriz' : 'Filial';
+  }
+
   function formatCurrency(val: any) {
     if (val === null || val === undefined) return 'R$ 0,00';
     let numVal: number;
@@ -243,6 +251,9 @@
     <div class="ficha-id">
       <span class="label">CNPJ</span>
       <span class="value">{formatCNPJ(empresa.cnpj)}</span>
+      {#if tipoEstabelecimento(empresa.cnpj)}
+        <span class="label">{tipoEstabelecimento(empresa.cnpj)}</span>
+      {/if}
     </div>
     <div class="ficha-uf">
       {empresa.uf}
@@ -414,6 +425,9 @@
               <div class="list-item">
                 <div class="item-header">
                   <span class="item-nome mono">{formatCNPJ(f.cnpj)}</span>
+                  {#if tipoEstabelecimento(f.cnpj)}
+                    <span class="badge">{tipoEstabelecimento(f.cnpj)}</span>
+                  {/if}
                   {#if f.situacao_cadastral}
                     <span class="badge badge-sit-{f.situacao_cadastral.toLowerCase()}">{f.situacao_cadastral}</span>
                   {/if}
