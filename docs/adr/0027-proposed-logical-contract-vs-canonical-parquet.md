@@ -40,6 +40,50 @@ A−B, não inclui todo snapshot e não demonstra custo monetário ou que o
 armazenamento deva ser permanente. Requer comparação no mesmo runner,
 mesmos dados, hashes e estratégia de retomada; não multiplicar por dez.
 
+## Custo de recuperação: checkpoint local não é checkpoint durável
+
+**Achado no HEAD `main@d6fab5d98d497e0115a88991e7394c5f704b84f4`:**
+o [histórico do shadow](../canonical-estabelecimento-history.md) ainda afirma
+que o GitHub Actions faz cache do *working tree* completo por parte. Porém,
+a [PR #244 já integrada](https://github.com/franklinbaldo/ficha/pull/244)
+removeu deliberadamente esse cache de dados reproduzíveis multi-GB.
+O [workflow vigente](../../.github/workflows/canonical-shadow-history.yml)
+declara explicitamente que **não há Actions cache da árvore histórica**;
+`setup-uv enable-cache` armazena dependências, não o Parquet canônico.
+O [workflow mensal](../../.github/workflows/etl-monthly.yml) persiste
+*descriptor*, métricas e recibos pequenos como artifacts, mas isso **não
+constitui** um checkpoint completo restaurável de raw/CSV/canônico num
+runner novo. O artifact de uma parte do shadow contém Parquet e evidências,
+não a árvore de origem completa. A afirmação histórica de cache deve ser
+tratada como **desatualizada**, não como capacidade operacional atual.
+
+Consequência para A versus B/C: uma escrita intermediária que só sobrevive
+**durante o mesmo job/runner** pode evitar recomputação local de etapas, mas
+**não comprova retomada entre runs**. Qualquer economia alegada depende de
+retenção autorizada, identidade de bytes, transferência, restore no runner
+substituto e política de descarte. Não autorizar novo cache multi-GB ou
+transporte remoto por inferência desta ADR.
+
+**Modelo de decisão a preencher, sem números presumidos:** para o mesmo
+snapshot, runner e gates, medir `ΔT_sucesso = T_A - T_B` e
+`ΔT_recuperação = T_reinício_B - T_reinício_A` sob falha equivalente.
+A camada física A só ganha **em tempo esperado** se
+`ΔT_sucesso < p_falha × ΔT_recuperação`, quando `ΔT_recuperação > 0`;
+se o checkpoint não sobrevive à falha ensaiada, não contabilizar benefício
+de restore. Separadamente, comparar pico de RSS/disco, bytes persistidos,
+minutos de runner, retenção, transferência e custo monetário; **hard limits**
+e integridade prevalecem sobre qualquer desigualdade de tempo. O valor
+de `p_falha` é **desconhecido** e precisa ser explicitado, não escolhido
+para justificar a arquitetura.
+
+**Contraprova barata antes de prometer retomada:** fixture offline,
+checkpoint com SHA e recibo, interrupção controlada após a escrita e nova
+instância isolada sem filesystem anterior; exigir que o restore autorizado
+reconstrua **os mesmos bytes e linhagem** antes de derivar produtos.
+Se não houver storage admissível ou restore verificável, marcar
+`RECOVERY_NOT_PROVEN`, não `PASS`. Um ensaio real entre runners e custos
+de operação requer planejamento/orçamento separados.
+
 ## Invariantes não negociáveis
 
 1. **Custódia:** origem RFB, identidade de cada ZIP/parte, competência,
@@ -145,7 +189,11 @@ nulabilidade** (22/1/5) e **sete domínios `z.enum` do contrato público v1
 ampliados a `z.string()` no Zod OKF gerado** (3/1/3). O gerado pode
 rejeitar `null` permitido por v1 e admitir códigos que v1 rejeita:
 **não é substituto intercambiável do contrato público**, seja escolhida
-a alternativa A, B ou C.
+a alternativa A, B ou C. A [revisão P4-A mais recente](https://github.com/franklinbaldo/ficha/pull/255)
+também separa **campo ausente** de `null`: os 86 campos de dados do v1
+continuam obrigatórios, inclusive se ambos os schemas fossem ampliados
+simultaneamente com `.optional()` (uma checagem só de paridade não detectaria
+essa regressão). Cobrir essa contraprova antes de trocar validadores.
 
 A [Action OKF #43973816419](https://github.com/franklinbaldo/ficha/actions/runs/43973816419)
 foi conferida no HEAD P4-A `e81d2e658988d1dcdb276ef6c47a650ed392fd43`:
