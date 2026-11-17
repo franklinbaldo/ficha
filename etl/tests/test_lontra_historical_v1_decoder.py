@@ -28,7 +28,7 @@ def _company_class(wire: str):
     name, expected_blob_sha = _FIXTURES[wire]
     raw = (Path(__file__).parent / "fixtures" / name).read_bytes()
     # Git for Windows may check out text fixtures as CRLF; compare canonical Git bytes.
-    raw = raw.replace(b"\\r\\n", b"\\n")
+    raw = raw.replace(b"\r\n", b"\n")
     git_blob = b"blob " + str(len(raw)).encode("ascii") + bytes([0]) + raw
     assert hashlib.sha1(git_blob, usedforsecurity=False).hexdigest() == expected_blob_sha
 
