@@ -72,19 +72,19 @@ describe('EmpresaFicha CNPJ presentation (offline)', () => {
       { cnpj: matriz, razao_social: 'MATRIZ', uf: 'DF' },
       [{ cnpj: filialAlfa, nome_fantasia: 'FILIAL ALFA', uf: 'GO' }]
     );
-    expect(daMatriz).toMatch(/class="label">Matriz<\/span>/);
-    expect(daMatriz).toMatch(/class="badge">Filial<\/span>/);
+    expect(daMatriz).toMatch(/class="label[^"]*">Matriz<\/span>/);
+    expect(daMatriz).toMatch(/class="badge[^"]*">Filial<\/span>/);
     const daFilial = await renderFicha(
       { cnpj: filialRaizAlfa, razao_social: 'FILIAL ALFA', uf: 'SP' },
       [{ cnpj: matrizRaizAlfa, nome_fantasia: 'MATRIZ ALFA', uf: 'SP' }]
     );
-    expect(daFilial).toMatch(/class="label">Filial<\/span>/);
-    expect(daFilial).toMatch(/class="badge">Matriz<\/span>/);
+    expect(daFilial).toMatch(/class="label[^"]*">Filial<\/span>/);
+    expect(daFilial).toMatch(/class="badge[^"]*">Matriz<\/span>/);
     expect(daFilial).toContain('A0.000.000/E08G-12');
     const malformed = await renderFicha({
       cnpj: '0000000E08G12', razao_social: 'INVÁLIDO', uf: 'GO'
     });
-    expect(malformed).not.toMatch(/class="label">(Matriz|Filial)<\/span>/);
+    expect(malformed).not.toMatch(/class="label[^"]*">(Matriz|Filial)<\/span>/);
   });
 
   it('shows an existing numeric matriz without changing its identity', async () => {
