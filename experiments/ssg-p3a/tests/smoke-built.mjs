@@ -19,12 +19,23 @@ export function verifyBuiltShell(dir) {
   const consult = readRequired(dir, 'js/consult.mjs');
   assert.match(html, /<html\b[^>]*\blang=["']pt-BR["']/i, 'idioma da página');
   assert.doesNotMatch(html, /\{\{!?[^}]+\}\}|\{%[^%]+%\}/, 'template não resolvido');
+  assert.doesNotMatch(html, /ssg-search-(widget|btn|overlay|input)|Search documentation/,
+    'busca genérica do SSG não pode competir com a busca CNPJ');
+  const dataManifest = join(dir, 'manifest.json');
+  if (existsSync(dataManifest)) {
+    const manifest = JSON.parse(readRequired(dir, 'manifest.json'));
+    assert.ok(typeof manifest.current === 'string' && Array.isArray(manifest.snapshots),
+      'manifest.json não é um contrato de dados RFB');
+  } else {
+    assert.ok(existsSync(join(dir, 'ssg-generated-webmanifest.json')),
+      'manifesto SSG não foi isolado do caminho público de dados');
+  }
   for (const id of ['main-content', 'search-form', 'search-kind', 'search-term', 'search-status', 'search-result']) {
     assert.match(html, new RegExp(`\\bid=["']${id}["']`), `elemento ${id} ausente`);
   }
   assert.match(html, /href=["']\/ficha\/css\/style\.css["']/, 'CSS fora da base /ficha/');
   assert.match(html, /src=["']\/ficha\/js\/main\.mjs["']/, 'módulo JS não conectado ao HTML');
-  assert.match(html, /href=["']\/ficha\/manifest\.json["']/, 'link do manifesto precisa manter base /ficha/');
+  assert.match(html, /href=["']https:\/\/franklinbaldo\.github\.io\/ficha\/manifest\.json["']/, 'PoC deve apontar para manifesto publicado, nunca para o manifesto SSG');
   assert.match(html, /aria-live=["']polite["']/, 'resultado sem live region');
   assert.match(css, /:focus-visible/, 'indicação de foco ausente');
   assert.match(js, /createLookupController/, 'módulo de UI não conectado ao adaptador');

@@ -36,6 +36,6 @@ layout: index
 <section class="origin" aria-labelledby="origin-title">
   <h2 id="origin-title">Origem e competência</h2>
   <p>Snapshots da Receita Federal são preservados no Internet Archive.</p>
-  <a href="/ficha/manifest.json">Manifesto público de dados</a>
+  <a href="https://franklinbaldo.github.io/ficha/manifest.json">Manifesto publicado (site de produção)</a>
   <p><small>O manifesto pertence ao site de produção, não a esta PoC isolada.</small></p>
 </section>

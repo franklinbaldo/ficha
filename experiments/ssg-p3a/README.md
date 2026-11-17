@@ -19,7 +19,8 @@ Em executor autorizado com SSG e Node instalados:
 ```sh
 cd experiments/ssg-p3a
 ssg --version  # deve ser 0.0.76 antes de prosseguir
-ssg build -f config.toml
+ssg build -f config.toml --jobs 2 --max-memory 128
+node scripts/finalize-output.mjs  # apenas PoC; isola widget e manifesto do SSG
 node scripts/materialize-assets.mjs
 node --test tests/*.test.mjs
 node tests/smoke-built.mjs dist/ficha
@@ -47,13 +48,44 @@ de busca em inglês. O `manifest.json` da PoC é um artefato do SSG,
 **não** o contrato de snapshots RFB. Esses pontos impedem tratar o
 protótipo como apto a substituir o site publicado.
 
-No HEAD que acrescenta o script de cópia, o build completo precisa ser
-reexecutado e ligado a SHA, logs, assets e testes. Navegador/axe,
-DuckDB/Protobuf, paridade e produção ainda `NOT_RUN`.
-Nenhum comando de deploy.
+Em cada commit, repetir o build real, finalização estrita, cópia de assets,
+smoke HTTP e testes e registrar SHA. Ainda faltam navegador/axe,
+DuckDB/Protobuf, paridade e produção (NOT_RUN). Nenhum comando de deploy.
 
 O adaptador padrão retorna *indisponível na demonstração*. Os testes
 Node cobrem normalização alfanumérica, entrada vazia, distinção entre
 ausência/erro e resposta obsoleta. Não comprovam navegador, rede,
 DuckDB, Protobuf, parser do SSG nem WCAG. Esses gates são **NOT_RUN**
 até prova em executor. Sem comandos de deploy.
+
+## Checkpoint: isolamento de efeitos do SSG 0.0.76
+
+A [pipeline upstream v0.0.76](https://github.com/sebastienrousseau/static-site-generator/blob/v0.0.76/src/core/pipeline.rs)
+registra SearchPlugin incondicionalmente. Na saída observada, ele injeta uma
+segunda busca genérica em inglês, incompatível com a semântica da busca CNPJ.
+A versão também gera um manifest.json de aplicativo (name=Static Site,
+start_url=/), diferente do contrato RFB (current + snapshots), e o
+compilador registra Invalid manifest name: Name cannot be empty apesar de
+retornar zero. O aviso do compilador persiste, não foi resolvido pela PoC.
+
+O script scripts/finalize-output.mjs é uma contenção experimental e versionada:
+confere a estrutura exata do widget e de seus CSS/JS, retira sua referência
+do HTML e isola o manifesto sintético como ssg-generated-webmanifest.json.
+Recusa nomes/estrutura desconhecidos e nunca toca em manifestos contendo
+current ou snapshots. Não se deve reutilizar o script para produção sem
+contrato formal com o gerador e revisão da estratégia do manifesto.
+A página de teste usa uma URL absoluta para o contrato do site publicado
+(https://franklinbaldo.github.io/ficha/manifest.json), não um manifesto
+de dados local fictício. CSS/JS e navegação continuam sob /ficha/.
+
+O template MiniJinja inclui CSP de demonstração connect-src 'none'.
+Essa política impede consultas remotas de propósito, pois o adaptador é mock;
+para produção haverá política revisada para IA/CORS/WASM, com verificação
+de CSP/SRI e sem unsafe-inline. O quality gate nativo passou 9/10 em
+build isolado do SSG 0.0.76; o único pilar reprovado exige texto promocional
+Made with SSG no rodapé, que não deve ser inserido só para maquiar o gate.
+O resultado 9/10 não significa que testes de navegador/WCAG passaram.
+
+Build HTTP local e node --test são obrigatórios antes de corte.
+Ainda faltam: testes reais de teclado, axe, leitor de tela, dados
+DuckDB/Protobuf, paridade, proteção da publicação e deploy autorizado.

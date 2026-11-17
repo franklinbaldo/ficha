@@ -11,7 +11,7 @@ const validHtml = `<!doctype html><html lang="pt-BR"><head>
 <body><a href="#main-content">Pular</a><main id="main-content">
 <form id="search-form"><select id="search-kind"></select><input id="search-term"></form>
 <p id="search-status" aria-live="polite"></p><section id="search-result"></section>
-<a href="/ficha/manifest.json">manifesto</a></main></body></html>`;
+<a href="https://franklinbaldo.github.io/ficha/manifest.json">manifesto</a></main></body></html>`;
 
 function fixture(change = () => {}) {
   const dir = mkdtempSync(join(tmpdir(), 'ficha-ssg-smoke-'));
@@ -20,6 +20,7 @@ function fixture(change = () => {}) {
   writeFileSync(join(dir, 'css/style.css'), 'a:focus-visible{outline:2px solid red}');
   writeFileSync(join(dir, 'js/main.mjs'), 'const createLookupController=()=>null;');
   writeFileSync(join(dir, 'js/consult.mjs'), 'export function createLookupController(){}');
+  writeFileSync(join(dir, 'ssg-generated-webmanifest.json'), JSON.stringify({name:'Static Site'}));
   change(dir);
   return dir;
 }
@@ -44,4 +45,13 @@ test('oracle negativo: token de template não resolvido falha', () => {
 });
 test('oracle negativo: live region ausente falha', () => {
   withFixture(dir => writeFileSync(join(dir, 'index.html'), validHtml.replace('aria-live="polite"','')), dir => assert.throws(() => verifyBuiltShell(dir), /resultado sem live region/));
+});
+
+test('oracle negativo: widget genérico sobreviveu à finalização', () => {
+  withFixture(dir => writeFileSync(join(dir, 'index.html'), validHtml.replace('</body>', '<div id="ssg-search-widget"></div></body>')),
+    dir => assert.throws(() => verifyBuiltShell(dir), /busca genérica do SSG/));
+});
+test('oracle negativo: manifesto falso ocupa contrato RFB', () => {
+  withFixture(dir => writeFileSync(join(dir, 'manifest.json'), JSON.stringify({name:'Static Site',start_url:'/'})),
+    dir => assert.throws(() => verifyBuiltShell(dir), /não é um contrato de dados RFB/));
 });
