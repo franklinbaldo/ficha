@@ -54,9 +54,7 @@ def _mock_offline_inputs(monkeypatch: pytest.MonkeyPatch, *, alpha: bool) -> Non
         for prefix, receipt in receipts.items()
     ]
     layer = {
-        "shard_by": (
-            "cnpj_base_prefix_or_base36_mod_100_v1" if alpha else "cnpj_base_prefix_2"
-        ),
+        "shard_by": ("cnpj_base_prefix_or_base36_mod_100_v1" if alpha else "cnpj_base_prefix_2"),
         "schema_version": "1.1.0" if alpha else "1.0.0",
     }
     entry = {"date": month, "files": {"companies": layer}}
@@ -65,22 +63,14 @@ def _mock_offline_inputs(monkeypatch: pytest.MonkeyPatch, *, alpha: bool) -> Non
         raise AssertionError("network access is forbidden in fixture")
 
     monkeypatch.setattr(monthly_sharded, "_load_descriptor", lambda *_: {"date": month})
-    monkeypatch.setattr(
-        monthly_sharded, "materialization_inputs_from_descriptor", lambda _: {}
-    )
+    monkeypatch.setattr(monthly_sharded, "materialization_inputs_from_descriptor", lambda _: {})
     monkeypatch.setattr(monthly_sharded, "_load_all_receipts", lambda *_: receipts)
     monkeypatch.setattr(monthly_sharded, "ShardPackSession", lambda *_a: object())
-    monkeypatch.setattr(
-        monthly_sharded, "wait_for_descriptor_remote", lambda *_a, **_kw: {}
-    )
-    monkeypatch.setattr(
-        monthly_sharded, "verify_all_shards", lambda *_a, **_kw: verified
-    )
+    monkeypatch.setattr(monthly_sharded, "wait_for_descriptor_remote", lambda *_a, **_kw: {})
+    monkeypatch.setattr(monthly_sharded, "verify_all_shards", lambda *_a, **_kw: verified)
     monkeypatch.setattr(monthly_sharded, "fetch_item_metadata", forbidden)
     monkeypatch.setattr(monthly_sharded, "fetch_remote_shard_meta", forbidden)
-    monkeypatch.setattr(
-        monthly_sharded, "finalize_sharded_snapshot_entry", lambda *_a: entry
-    )
+    monkeypatch.setattr(monthly_sharded, "finalize_sharded_snapshot_entry", lambda *_a: entry)
     monkeypatch.setattr(monthly_sharded, "_expected_remote_files", lambda _: {})
 
 

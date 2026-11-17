@@ -475,9 +475,7 @@ def command_finalize(args: argparse.Namespace) -> None:
 
     entry = finalize_sharded_snapshot_entry(descriptor, identities)
     snapshot_entry_path = Path(args.snapshot_entry)
-    previous_entry = (
-        snapshot_entry_path.read_bytes() if snapshot_entry_path.exists() else None
-    )
+    previous_entry = snapshot_entry_path.read_bytes() if snapshot_entry_path.exists() else None
     _write_json(snapshot_entry_path, entry)
     try:
         update_manifest(Path(args.manifest), entry)
