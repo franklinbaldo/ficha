@@ -74,9 +74,7 @@ def test_genuine_zip_retains_alphanumeric_root_order_and_partner(tmp_path: Path)
         assert "_schema.proto" in names
         assert all(f"_lookups/{kind}.pb" in names for kind in pack.LOOKUP_KINDS)
 
-        descriptor_set = descriptor_pb2.FileDescriptorSet.FromString(
-            archive.read("_schema.desc")
-        )
+        descriptor_set = descriptor_pb2.FileDescriptorSet.FromString(archive.read("_schema.desc"))
         company_file = next(
             item for item in descriptor_set.file if item.name == "ficha/v1/company.proto"
         )
