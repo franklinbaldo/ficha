@@ -19,9 +19,9 @@ uv pip install -e ".[dev]"
 ## Inspeção dos comandos (sem executar o pipeline)
 
 ```bash
-# Ajuda local; não processa snapshots nem faz uploads
-ficha-etl --help
-ficha-etl run --help
+# Ajuda local via ambiente .venv criado acima; sem upload/ETL
+uv run --no-sync ficha-etl --help
+uv run --no-sync ficha-etl run --help
 ```
 
 ### `run` é uma operação potencialmente publicadora

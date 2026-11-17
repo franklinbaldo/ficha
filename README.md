@@ -60,15 +60,20 @@ ficha/
 ## 🚀 Desenvolvimento
 
 ```bash
-# Frontend
+# Frontend (a partir da raiz do repositório)
 cd web
 bun install
 bun dev
+```
 
-# ETL: instalar e consultar a ajuda sem disparar processamento mensal
+Em **outro terminal**, a partir da raiz do repositório:
+
+```bash
+# ETL: instalar e consultar a ajuda sem processar snapshots
 cd etl
 uv venv && uv pip install -e ".[dev]"
-ficha-etl --help
+uv run --no-sync ficha-etl --help
+uv run --no-sync ficha-etl run --help
 ```
 
 **Atenção:** `ficha-etl run --month YYYY-MM` **não é um comando de inspeção**. Com `IA_ACCESS_KEY` e `IA_SECRET_KEY`, a opção padrão (`skip_upload=False`) tenta enviar ZIPs RFB, Parquets e `companies.zip` ao Internet Archive e atualizar o manifesto **local**. Sem credenciais, o modo padrão recusa continuar. Mesmo com `--skip-upload`, ele ainda pode baixar/processar grandes volumes e escrever Parquets, ZIP local e o manifesto local: **não é teste barato nem somente leitura**. Consulte [etl/README.md](etl/README.md) antes de executá-lo.
