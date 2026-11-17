@@ -45,7 +45,9 @@ def _actual_v1_company_class():
 
     pool = descriptor_pool.DescriptorPool()
     pool.AddSerializedFile(serialized_descriptor)
-    return message_factory.GetMessageClass(pool.FindMessageTypeByName("ficha.v1.Company"))
+    return message_factory.GetMessageClass(
+        pool.FindMessageTypeByName("ficha.v1.Company")
+    )
 
 
 def test_actual_historical_v1_decoder_still_reads_numeric_v11_wire() -> None:
@@ -106,8 +108,6 @@ def test_actual_historical_v1_decoder_cannot_represent_alpha_root_or_partner() -
     assert decoded_modern.cnpj_base_text == "0000000A"
     assert decoded_modern.socios[0].cnpj_socio_text == "00000000E08G12"
     assert "cnpj_base_text" not in decoded_legacy.DESCRIPTOR.fields_by_name
-    assert (
-        "cnpj_socio_text" not in decoded_legacy.socios[0].DESCRIPTOR.fields_by_name
-    )
+    assert "cnpj_socio_text" not in decoded_legacy.socios[0].DESCRIPTOR.fields_by_name
     assert decoded_legacy.cnpj_base == 0
     assert decoded_legacy.socios[0].cnpj_socio == 0
