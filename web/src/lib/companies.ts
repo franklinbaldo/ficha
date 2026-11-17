@@ -111,6 +111,14 @@ export async function fetchCompany(
   }
   const bytes = new Uint8Array(await res.arrayBuffer());
   const company = normalizeLongs(ficha.v1.Company.decode(bytes));
+  // A v1-indexed ZIP must not masquerade as 1.1 just because the numeric root
+  // still matches: alphanumeric establishment orders or partners are lossy in v1.
+  if (options.files?.companies?.shard_by === 'cnpj_base_prefix_2' &&
+      (company.cnpj_base_text ||
+       company.estabelecimentos?.some(est => est.cnpj_ordem_text) ||
+       company.socios?.some(socio => socio.cnpj_socio_text))) {
+    throw new Error('fetchCompany: v1 numeric shard contains v1.1 textual CNPJ fields');
+  }
   // A v1 decoder can silently discard unknown 1.1 text fields. At this
   // supported reader boundary, never return a different root as a valid hit.
   const expectedRoot = rootText(cnpjBase);

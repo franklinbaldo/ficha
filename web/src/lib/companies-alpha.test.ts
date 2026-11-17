@@ -92,6 +92,28 @@ describe('schema 1.1 textual identity with v1 numeric fallback', () => {
       .toThrow(/schema 1\.1\.0 required/);
   });
 
+  it('refuses alpha establishment wire mislabeled as v1, even with a matching numeric root', async () => {
+    // Authentic 1.1 packer fixture: numeric root 00000000, alpha order E08G, DV 12.
+    const bytes = Uint8Array.from('a20108100c2a0445303847'.match(/../g)!.map(b => parseInt(b, 16)));
+    const fetchImpl = (async () => ({
+      ok: true, status: 200, arrayBuffer: async () => bytes.buffer,
+    })) as unknown as typeof fetch;
+    const shard = { shard: '00', url: 'https://example.org/companies-00.zip', sha1: 'a'.repeat(40), size: 1 };
+    await expect(fetchCompany('00000000', {
+      identifier: 'legacy', fetchImpl,
+      files: { companies: { shard_by: 'cnpj_base_prefix_2', shards: [shard] } },
+    })).rejects.toThrow(/v1 numeric shard contains v1.1 textual CNPJ fields/);
+    const valid = await fetchCompany('00000000', {
+      identifier: 'new', fetchImpl,
+      files: { companies: {
+        shard_by: 'cnpj_base_prefix_or_base36_mod_100_v1',
+        schema_version: '1.1.0', shards: [shard],
+      } },
+    });
+    expect(valid).not.toBeNull();
+    expect(estabelecimentoCnpj(valid!, valid!.estabelecimentos![0]!)).toBe('00000000E08G12');
+  });
+
   it('rejects a mismatched legacy wire instead of silently returning root 00000000', async () => {
     const legacyBytes = ficha.v1.Company.encode({ cnpj_base: 0 }).finish();
     const fetchImpl = (async () => ({
