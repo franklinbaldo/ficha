@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { compile } from 'svelte/compiler';
 import { render } from 'svelte/server';
 import { describe, expect, it } from 'vitest';
@@ -95,5 +96,81 @@ describe('EmpresaFicha CNPJ presentation (offline)', () => {
     expect(source).toMatch(/WHERE cnpj_base = \? AND cnpj != \?/);
     expect(source).toContain('stmt.query(cnpjBase, cnpjFull)');
     expect(source).toContain('const cnpjFull = canonicalCNPJ(empresa.cnpj)');
+  });
+});
+
+
+describe('P0-E: SQL real para matriz e filial (DuckDB-WASM offline)', () => {
+  it('consulta a raiz com parâmetros e mostra os irmãos nos dois sentidos', async () => {
+    // Use the SQL actually written in EmpresaFicha, not a rewritten test query.
+    const filiaisSource = source.split('async function toggleFiliais()')[1]
+      ?.split('// Legacy numeric CNPJs')[0];
+    const sql = filiaisSource?.match(/conn\.prepare\(\x60([\s\S]*?)\x60\)/)?.[1];
+    expect(sql).toBeTruthy();
+
+    const require = createRequire(import.meta.url);
+    const duckdb = require('@duckdb/duckdb-wasm/blocking') as
+      typeof import('@duckdb/duckdb-wasm/blocking');
+    const db = await duckdb.createDuckDB(
+      {
+        mvp: {
+          mainModule: require.resolve('@duckdb/duckdb-wasm/dist/duckdb-mvp.wasm'),
+          mainWorker: require.resolve('@duckdb/duckdb-wasm/dist/duckdb-node-mvp.worker.cjs'),
+        },
+      },
+      new duckdb.VoidLogger(),
+      duckdb.NODE_RUNTIME,
+    );
+    await db.instantiate();
+    db.open({ path: ':memory:' });
+    const conn = db.connect();
+
+    try {
+      conn.query(
+        'CREATE TABLE cnpjs (' +
+          'cnpj VARCHAR, cnpj_base VARCHAR, razao_social VARCHAR, ' +
+          'nome_fantasia VARCHAR, uf VARCHAR, municipio_nome VARCHAR, ' +
+          'situacao_cadastral VARCHAR)'
+      );
+      conn.query(
+        "INSERT INTO cnpjs VALUES " +
+          "('00000000000191', '00000000', 'MATRIZ', 'MATRIZ', 'DF', 'BRASILIA', 'ATIVA')," +
+          "('00000000E08G12', '00000000', 'FILIAL', 'FILIAL ALFA', 'GO', 'GOIANIA', 'ATIVA')," +
+          "('00000001000191', '00000001', 'OUTRA', 'OUTRA', 'RJ', 'RIO', 'ATIVA')"
+      );
+
+      const consultar = (selecionado: string) => {
+        const stmt = conn.prepare(sql!);
+        try {
+          return stmt.query(selecionado.slice(0, 8), selecionado)
+            .toArray()
+            .map((row) => row.toJSON() as {
+              cnpj: string; nome_fantasia: string; uf: string;
+            });
+        } finally {
+          stmt.close();
+        }
+      };
+
+      const daFilial = consultar(filialAlfa);
+      expect(daFilial.map((r) => r.cnpj)).toEqual([matriz]);
+      const htmlFilial = await renderFicha(
+        { cnpj: filialAlfa, razao_social: 'FILIAL', uf: 'GO' }, daFilial
+      );
+      expect(htmlFilial).toContain('00.000.000/E08G-12');
+      expect(htmlFilial).toContain('00.000.000/0001-91');
+
+      const daMatriz = consultar(matriz);
+      expect(daMatriz.map((r) => r.cnpj)).toEqual([filialAlfa]);
+      const htmlMatriz = await renderFicha(
+        { cnpj: matriz, razao_social: 'MATRIZ', uf: 'DF' }, daMatriz
+      );
+      expect(htmlMatriz).toContain('00.000.000/E08G-12');
+      expect(htmlMatriz).toContain('FILIAL ALFA');
+      expect(htmlMatriz).not.toContain('00000001000191');
+      expect(consultar('00000001000191')).toEqual([]);
+    } finally {
+      conn.close();
+    }
   });
 });
