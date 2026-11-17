@@ -451,3 +451,17 @@ def test_actual_python_packer_member_matches_pinned_ts_fixture(tmp_path: Path) -
         wire = zipped.read("CA/000/001.pb")
     assert wire.hex() == PACKER_CA_MEMBER_HEX
     assert hashlib.sha256(wire).hexdigest() == PACKER_CA_MEMBER_SHA256
+
+
+def test_p0d_formatter_diagnostic() -> None:
+    """Temporary probe to print the exact formatter diff on CI Windows."""
+    import subprocess
+
+    result = subprocess.run(
+        ["uv", "run", "ruff", "format", "--diff", "tests/test_lagarto_manifest_nonpromotion.py"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert not result.stdout, result.stdout
