@@ -153,6 +153,16 @@ para proteger decoders externos já distribuídos. A estratégia exata pertence
 a P0 (Castor, Lagarto, Gavião e Elefante), não a esta ADR. Nenhum schema
 Protobuf, manifesto ou endpoint é alterado nesta PR.
 
+**Contraprova P0-D [#252](https://github.com/franklinbaldo/ficha/pull/252),
+HEAD `315a69e3`:** índices sintéticos v1 e v1.1, com 100 URLs
+únicas cada, passam isoladamente `SnapshotEntrySchema.safeParse`.
+Substituir uma URL v1.1 por URL v1 mantém o parser verde e cria
+interseção de **1/100** entre namespaces. É fixture offline, não
+colisão observada no IA. A [#246](https://github.com/franklinbaldo/ficha/pull/246)
+rejeita 1.1 no manifesto legado, **mas não prova disjunção** dos ZIPs.
+Exigir teste negativo de interseção v1×v1.1 no produtor e leitor
+opt-in, além da unicidade dentro de cada índice.
+
 ## Fronteira de descoberta e artefatos SSG: dois contratos distintos
 
 A incompatibilidade de Protobuf não se limita aos bytes. O
