@@ -159,3 +159,20 @@ def test_legacy_submitter_rejects_1_1_plan_before_network_or_put(tmp_path: Path)
             fetch_direct=forbidden,
         )
     assert called == []
+
+
+def test_versioned_sources_match_repository_ruff_format() -> None:
+    """Expose the exact formatter patch on the Windows test runner."""
+    import subprocess
+
+    targets = [
+        "src/ficha_etl/shard_transfer.py",
+        "tests/test_castor_v11_versioned_receipt.py",
+    ]
+    check = subprocess.run(
+        ["ruff", "format", "--diff", *targets],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert check.returncode == 0, check.stdout + check.stderr
