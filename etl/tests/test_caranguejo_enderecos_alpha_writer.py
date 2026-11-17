@@ -78,9 +78,7 @@ def test_enderecos_writer_preserves_alpha_base_and_order_and_rfb(
                 ),
             ],
         )
-        con.execute(
-            "CREATE TABLE lookup_municipios (codigo VARCHAR, descricao VARCHAR)"
-        )
+        con.execute("CREATE TABLE lookup_municipios (codigo VARCHAR, descricao VARCHAR)")
         con.executemany(
             "INSERT INTO lookup_municipios VALUES (?, ?)",
             [
