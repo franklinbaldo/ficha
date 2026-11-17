@@ -146,6 +146,7 @@ def test_remote_receipt_mismatch_never_promotes(monkeypatch, tmp_path: Path):
         monthly_sharded.command_finalize(args)
     _assert_no_promotion(args, before)
 
+
 def test_remote_descriptor_sha_mismatch_blocks_promotion(monkeypatch, tmp_path: Path):
     """A base-file hash divergence must fail before shard verification/promotion."""
     args, before = _setup(tmp_path)
@@ -167,7 +168,9 @@ def test_remote_descriptor_sha_mismatch_blocks_promotion(monkeypatch, tmp_path: 
         raise AssertionError("shards must not be checked after descriptor mismatch")
 
     monkeypatch.setattr(monthly_sharded, "verify_all_shards", forbidden)
-    with pytest.raises(RuntimeError, match="remote bytes diverge from production descriptor"):
+    with pytest.raises(
+        RuntimeError, match="remote bytes diverge from production descriptor"
+    ):
         monthly_sharded.command_finalize(args)
     _assert_no_promotion(args, before)
 
