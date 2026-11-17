@@ -191,8 +191,23 @@ terminou em **FAILURE**. Os passos executados de testes Node (27 casos),
 build/finalizador, navegador local e axe (12 estados) foram `SUCCESS`, mas
 o passo final de diagnóstico detectou justamente o erro interno do manifesto
 apesar de `exit 0` do SSG. Isso é um **negativo real fail-closed em CI**,
-não falha de ETL nem aprovação para merge/deploy. A causa upstream segue
-pendente; as verificações de dados reais e rollback continuam `NOT_RUN`.
+não falha de ETL nem aprovação para merge/deploy. A falha permaneceu registrada como contraprova, mas a causa foi
+posteriormente localizada pelo owner P3-A nos metadados de página; as
+verificações de dados reais e rollback continuam `NOT_RUN`.
+
+**Atualização P3-A em 17/11/2026, [HEAD `0a2db297`](https://github.com/franklinbaldo/ficha/commit/0a2db297c4e6850d98cccf32e6406ef1eb1d7a45):**
+o `staticdatagen v0.0.32` exigia `name` nos metadados da página;
+`site_name` em `config.toml` não bastava. A PoC acrescentou `name: FICHA`
+no frontmatter e restringiu o isolamento do web manifest a um shape
+validado, sem mudar o manifesto RFB. O [CI específico
+#44022172722](https://github.com/franklinbaldo/ficha/actions/runs/44022172722)
+concluiu `SUCCESS` no mesmo HEAD: testes Node **29/29**, build SSG real,
+finalização/artefatos, Chromium em **3 larguras**, axe em **12 estados** e
+step **`Detect upstream build diagnostics even on exit code zero` SUCCESS**.
+Isto resolve o defeito **nesta PoC offline**, não transforma exit 0 em
+oráculo universal. O quality gate nativo permanece **9/10** por exigência
+de rodapé promocional; busca DuckDB/Protobuf real, paridade, leitor de tela,
+rollback exercitado e deploy seguem **NOT_RUN**. A #257 permanece Draft.
 
 **Gate extra de cutover, a cargo de P3-A:** validar artefatos e diagnósticos,
 não apenas código de saída do processo; esclarecer/corrigir o erro de
