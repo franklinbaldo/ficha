@@ -216,9 +216,7 @@ def plan_opt_in_v11_shard(
             "and cnpj_base_prefix_or_base36_mod_100_v1"
         )
 
-    prefix, expected, local = _validate_prepared(
-        session, prepared, pinned_inputs=pinned_inputs
-    )
+    prefix, expected, local = _validate_prepared(session, prepared, pinned_inputs=pinned_inputs)
     return PreparedShard(
         prefix=prefix,
         name=f"wire-1.1/{session.geometry.shard_name(prefix)}",

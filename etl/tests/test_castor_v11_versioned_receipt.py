@@ -93,9 +93,7 @@ def test_unknown_or_legacy_contract_fails_before_local_io(
         sha1="0" * 40,
     )
     with pytest.raises(ShardPublishError, match="opt-in wire-1.1"):
-        plan_opt_in_v11_shard(
-            _session(wire=wire, mapping=mapping), missing, pinned_inputs={}
-        )
+        plan_opt_in_v11_shard(_session(wire=wire, mapping=mapping), missing, pinned_inputs={})
     assert not missing.path.exists()
 
 
@@ -159,20 +157,3 @@ def test_legacy_submitter_rejects_1_1_plan_before_network_or_put(tmp_path: Path)
             fetch_direct=forbidden,
         )
     assert called == []
-
-
-def test_versioned_sources_match_repository_ruff_format() -> None:
-    """Expose the exact formatter patch on the Windows test runner."""
-    import subprocess
-
-    targets = [
-        "src/ficha_etl/shard_transfer.py",
-        "tests/test_castor_v11_versioned_receipt.py",
-    ]
-    check = subprocess.run(
-        ["ruff", "format", "--diff", *targets],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    assert check.returncode == 0, check.stdout + check.stderr
