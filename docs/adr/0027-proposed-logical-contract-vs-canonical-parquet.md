@@ -153,23 +153,25 @@ para proteger decoders externos já distribuídos. A estratégia exata pertence
 a P0 (Castor, Lagarto, Gavião e Elefante), não a esta ADR. Nenhum schema
 Protobuf, manifesto ou endpoint é alterado nesta PR.
 
-**Contraprova P0-D [#252](https://github.com/franklinbaldo/ficha/pull/252),
-HEAD `315a69e3`:** índices sintéticos v1 e v1.1, com 100 URLs
-únicas cada, passam isoladamente `SnapshotEntrySchema.safeParse`.
-Substituir uma URL v1.1 por URL v1 mantém o parser verde e cria
-interseção de **1/100** entre namespaces. É fixture offline, não
-colisão observada no IA. A [#246](https://github.com/franklinbaldo/ficha/pull/246)
-rejeita 1.1 no manifesto legado, **mas não prova disjunção** dos ZIPs.
-Exigir teste negativo de interseção v1×v1.1 no produtor e leitor
-opt-in, além da unicidade dentro de cada índice.
+**P0-D [#252](https://github.com/franklinbaldo/ficha/pull/252),
+HEAD `3ba54c76` (base #246@`4aeecc99`):** fixtures de 100 URLs
+v1/v1.1 passam isoladamente com **1/100** URL comum.
+Não é colisão no IA. O negativo direto `submit_one_shard`
+segue **XFAIL(strict=True)** na base antiga:
+[CI #44060476250](https://github.com/franklinbaldo/ficha/actions/runs/44060476250)
+verde, **sem PASS da guarda**. #252 não sincronizada a Castor.
 
-**17/11, P0:** [#246](https://github.com/franklinbaldo/ficha/pull/246)
-`faced446d` incluiu guarda pré-I/O apenas no CLI
-`command_submit_shard` para wire 1.1 em `companies-NN.zip`.
-**HOLD:** chamadas diretas a `shard_transfer` contornam a guarda;
-`upload-outputs` corre antes de `submit`. Os [negativos da #252](https://github.com/franklinbaldo/ficha/pull/252)
-e o rollback local (`4aeecc99`) não provam atomicidade IA,
-URLs disjuntas v1/v1.1 ou segurança de publicação.
+**P0-A [#246](https://github.com/franklinbaldo/ficha/pull/246),
+HEAD `73eca877`, 17/11:** `require_legacy_shard_upload_contract`
+protege `publish_one_shard`, `submit_prepared_shard` e
+`submit_one_shard` **antes de I/O**, além do preflight CLI.
+[CI #44060580799](https://github.com/franklinbaldo/ficha/actions/runs/44060580799)
+executou Test nos quatro jobs (ETL Linux/Windows, web, ficha-py).
+Fecha a lacuna direta **na branch Castor**, não prova
+URLs disjuntas v1/v1.1, descoberta opt-in, proteção de decoders v1
+externos ou PUT real. Na `main`, `upload-outputs` precede
+`submit-shard`, fora dessas guardas. **P0 HOLD** até revisão,
+contrato de publicação e decisão dos owners.
 
 ## Fronteira de descoberta e artefatos SSG: dois contratos distintos
 
