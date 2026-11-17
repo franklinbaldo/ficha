@@ -262,7 +262,9 @@ def test_direct_transfer_api_must_refuse_unversioned_v11_wire(
             path.write_bytes(b"synthetic-protobuf-v11-wire-only")
             return SimpleNamespace(path=path)
 
-    monkeypatch.setattr(shard_transfer, "_metadata_still_matches", lambda *_a, **_kw: {})
+    monkeypatch.setattr(
+        shard_transfer, "_metadata_still_matches", lambda *_a, **_kw: {}
+    )
     monkeypatch.setattr(
         shard_transfer,
         "_classify",
@@ -279,9 +281,7 @@ def test_direct_transfer_api_must_refuse_unversioned_v11_wire(
     def record_fake_upload(name: str, _path: Path) -> None:
         uploads.append(name)
 
-    with pytest.raises(
-        ShardPublishError, match=r"1\.1|wire|unversioned|namespace|packer"
-    ):
+    with pytest.raises(ShardPublishError, match=r"1\.1|wire|unversioned|namespace"):
         shard_transfer.submit_one_shard(
             V11Session(),
             "00",
