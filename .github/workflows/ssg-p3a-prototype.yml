@@ -1,0 +1,89 @@
+# P3-A only: no deploy, ETL, Internet Archive access, or production files.
+name: SSG P3-A isolated prototype
+on:
+  pull_request:
+    paths:
+      - 'experiments/ssg-p3a/**'
+      - 'docs/adr/0028-ssg-rust-frontend-proposed.md'
+      - '.github/workflows/ssg-p3a-prototype.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  prototype:
+    if: ${{ github.event.pull_request.number == 257 }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    defaults:
+      run:
+        shell: bash
+        working-directory: experiments/ssg-p3a
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20.19.2'
+
+      - name: Node regression tests (includes negative fixtures)
+        run: node --test tests/*.test.mjs
+
+      - name: Install exactly pinned SSG release (checksum verified)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/p3a-ssg"
+          gh release download v0.0.76 \
+            --repo sebastienrousseau/static-site-generator \
+            --pattern 'ssg-v0.0.76-*x86_64*linux*gnu*.tar.gz' \
+            --dir "$RUNNER_TEMP/p3a-ssg"
+          mapfile -t archives < <(find "$RUNNER_TEMP/p3a-ssg" -maxdepth 1 -type f -name '*.tar.gz')
+          [ "${#archives[@]}" -eq 1 ] || { echo '::error::Expected exactly one pinned SSG archive'; exit 1; }
+          echo 'a0ed1f8cde9b8b00d93f9a4f31bd78a803cc43f4370872cd3909835e32ad4358  '"${archives[0]}" | sha256sum --check
+          mkdir -p "$RUNNER_TEMP/p3a-ssg/bin"
+          tar -xzf "${archives[0]}" -C "$RUNNER_TEMP/p3a-ssg/bin"
+          mapfile -t executables < <(find "$RUNNER_TEMP/p3a-ssg/bin" -type f -name ssg)
+          [ "${#executables[@]}" -eq 1 ] || { echo '::error::SSG executable not found uniquely'; exit 1; }
+          chmod +x "${executables[0]}"
+          [ "$("${executables[0]}" --version)" = 'ssg 0.0.76' ] || exit 1
+          printf 'SSG_BIN=%s\n' "${executables[0]}" >> "$GITHUB_ENV"
+
+      - name: Real SSG build, isolated (never deploy)
+        run: |
+          set -euo pipefail
+          "$SSG_BIN" build -f config.toml --jobs 2 --max-memory 128 2>&1 | tee "$RUNNER_TEMP/p3a-build.log"
+          node scripts/finalize-output.mjs
+          node scripts/materialize-assets.mjs
+          node tests/smoke-built.mjs dist/ficha
+
+      - name: Install pinned browser audit dependencies outside repository
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/p3a-deps"
+          npm install --prefix "$RUNNER_TEMP/p3a-deps" --no-save --no-audit --no-fund \
+            playwright@1.56.1 axe-core@4.10.3
+          "$RUNNER_TEMP/p3a-deps/node_modules/.bin/playwright" install chromium
+          echo "FICHA_PLAYWRIGHT_MODULE=$RUNNER_TEMP/p3a-deps/node_modules/playwright" >> "$GITHUB_ENV"
+          echo "FICHA_AXE_MODULE=$RUNNER_TEMP/p3a-deps/node_modules/axe-core" >> "$GITHUB_ENV"
+
+      - name: Browser and axe (local mock only; no network data)
+        run: |
+          set -euo pipefail
+          node tests/browser-built.mjs dist
+          node tests/axe-built.mjs dist
+
+      - name: Detect upstream build diagnostics even on exit code zero
+        if: always()
+        run: |
+          set -euo pipefail
+          test -f "$RUNNER_TEMP/p3a-build.log" || { echo '::error::SSG build did not run'; exit 1; }
+          if grep -Eiq '(^|[[:space:]])(error generating manifest:|error:|panic|thread .* panicked)' "$RUNNER_TEMP/p3a-build.log"; then
+            echo '::error::SSG reported an error despite possible exit 0; prototype remains HOLD'
+            grep -Ein 'error generating manifest:|error:|panic|thread .* panicked' "$RUNNER_TEMP/p3a-build.log"
+            exit 1
+          fi
+          echo 'SSG diagnostics clear; native quality gate still requires independent review'
