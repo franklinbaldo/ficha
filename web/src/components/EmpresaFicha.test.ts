@@ -373,9 +373,9 @@ describe('EmpresaFicha: async filial handler (offline)', () => {
     expect(pending.map((request) => request.full))
       .toEqual(['A0000000E08G12', 'B0000000E08G12']);
     const rows = (cnpj: string) => ({ toArray: () => [{ toJSON: () => ({ cnpj }) }] });
-    pending[1].resolve(rows('B0000000000191'));
+    pending[1]!.resolve(rows('B0000000000191'));
     await second;
-    pending[0].resolve(rows('A0000000000191'));
+    pending[0]!.resolve(rows('A0000000000191'));
     await first;
     expect(ui.snapshot()).toEqual({
       filiais: [{ cnpj: 'B0000000000191' }],
