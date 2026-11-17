@@ -59,7 +59,8 @@ def validate_origin_receipt(receipt: object) -> None:
     if (
         source.get("url") != expected_url
         or source.get("method") != "PROPFIND"
-        or source.get("depth") != 1
+        or type(source.get("depth")) is not int
+        or source["depth"] != 1
         or type(source.get("http_status")) is not int
         or source["http_status"] != 207
     ):
