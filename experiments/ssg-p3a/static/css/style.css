@@ -9,6 +9,8 @@ header,footer{border-block:1px solid var(--edge);padding:1rem max(1rem,calc((100
 nav{display:flex;gap:1.5rem;flex-wrap:wrap}.brand{font-weight:800;letter-spacing:.12em;margin-right:auto}
 main{max-width:66rem;margin:auto;padding:clamp(1rem,4vw,3rem)}
 h1{font-size:clamp(2rem,5vw,3.5rem);line-height:1.13;max-width:20ch}
+/* Reflow with 200% text at 320 CSS px: avoid long headings expanding the page. */
+h1,h2{overflow-wrap:anywhere}
 .intro p{max-width:65ch}.eyebrow{color:var(--muted);font-size:.82rem;text-transform:uppercase;letter-spacing:.12em}
 .panel{margin-block:2.5rem;padding:clamp(1rem,3vw,2rem);border:1px solid var(--edge);border-radius:.65rem;background:#fff}
 form{display:grid;grid-template-columns:1fr 2fr auto;gap:.6rem 1rem;align-items:end}

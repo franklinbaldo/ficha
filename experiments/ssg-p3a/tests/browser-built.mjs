@@ -53,9 +53,26 @@ try {
     assert.match(await page.locator('#search-status').textContent(), /14 caracteres/);
     await page.locator('#search-kind').selectOption('pessoa');
     assert.match(await page.locator('#search-status').textContent(), /Nenhuma consulta realizada/);
+    // Teste de ampliação de texto 200%, independente do tamanho normal do viewport.
+    // WCAG 1.4.4/1.4.10: não aceitar rolagem horizontal em 320 CSS px.
+    await page.evaluate(() => { document.documentElement.style.fontSize = '200%'; });
+    assert.equal(
+      await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth + 1),
+      false, `overflow horizontal com texto a 200% em ${width}px`
+    );
+    for (const selector of ['#search-kind', '#search-term', '#search-form button', '#search-status']) {
+      assert.equal(await page.locator(selector).isVisible(), true,
+        `controle oculto com texto 200%: ${selector}`);
+    }
+    // Submissão pelo teclado também deve preservar o estado de indisponibilidade.
+    await page.locator('#search-kind').selectOption('cnpj');
+    await page.locator('#search-term').fill('00000000E08G12');
+    await page.locator('#search-term').press('Enter');
+    await page.waitForFunction(() => document.querySelector('#search-status')?.dataset.state === 'unavailable');
+    assert.equal(await page.locator('#search-result').isVisible(), false);
     assert.deepEqual(errors, [], 'erros JS no navegador');
     assert.deepEqual(remoteRequests, [], 'a PoC NÃO pode consultar dados reais');
-    console.log(`BROWSER_PASS width=${width} focus=skip-link mock/unavailable/invalid/reset no-overflow no-remote-fetch`);
+    console.log(`BROWSER_PASS width=${width} focus=skip-link mock/unavailable/invalid/reset text-200 keyboard-submit no-overflow no-remote-fetch`);
     await page.close();
   }
 } catch (error) {
