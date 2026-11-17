@@ -45,7 +45,14 @@ def _descriptor() -> dict:
         "lookups": {
             name: _identity(letter)
             for name, letter in zip(
-                ("cnaes", "motivos", "municipios", "naturezas", "paises", "qualificacoes"),
+                (
+                    "cnaes",
+                    "motivos",
+                    "municipios",
+                    "naturezas",
+                    "paises",
+                    "qualificacoes",
+                ),
                 "abcdef",
                 strict=True,
             )
@@ -110,7 +117,9 @@ def _verified(prefix: str):
     )
 
 
-def test_missing_receipt_never_accesses_network_or_promotes(monkeypatch, tmp_path: Path):
+def test_missing_receipt_never_accesses_network_or_promotes(
+    monkeypatch, tmp_path: Path
+):
     args, before = _setup(tmp_path, missing_receipt="42")
 
     def forbidden(*_args, **_kwargs):
@@ -125,7 +134,9 @@ def test_missing_receipt_never_accesses_network_or_promotes(monkeypatch, tmp_pat
 
 def test_partial_remote_verification_never_promotes(monkeypatch, tmp_path: Path):
     args, before = _setup(tmp_path)
-    monkeypatch.setattr(monthly_sharded, "wait_for_descriptor_remote", lambda *_a, **_kw: {})
+    monkeypatch.setattr(
+        monthly_sharded, "wait_for_descriptor_remote", lambda *_a, **_kw: {}
+    )
     monkeypatch.setattr(
         monthly_sharded,
         "verify_all_shards",
@@ -138,10 +149,14 @@ def test_partial_remote_verification_never_promotes(monkeypatch, tmp_path: Path)
 
 def test_remote_receipt_mismatch_never_promotes(monkeypatch, tmp_path: Path):
     args, before = _setup(tmp_path)
-    monkeypatch.setattr(monthly_sharded, "wait_for_descriptor_remote", lambda *_a, **_kw: {})
+    monkeypatch.setattr(
+        monthly_sharded, "wait_for_descriptor_remote", lambda *_a, **_kw: {}
+    )
     results = [_verified(f"{i:02d}") for i in range(100)]
     results[42].sha1 = "e" * 40
-    monkeypatch.setattr(monthly_sharded, "verify_all_shards", lambda *_a, **_kw: results)
+    monkeypatch.setattr(
+        monthly_sharded, "verify_all_shards", lambda *_a, **_kw: results
+    )
     with pytest.raises(RuntimeError, match="diverges from production receipt"):
         monthly_sharded.command_finalize(args)
     _assert_no_promotion(args, before)
@@ -178,7 +193,9 @@ def test_remote_descriptor_sha_mismatch_blocks_promotion(monkeypatch, tmp_path: 
 def test_submitted_but_unverified_shard_never_promotes(monkeypatch, tmp_path: Path):
     """All 100 names being present is insufficient without VERIFIED action."""
     args, before = _setup(tmp_path)
-    monkeypatch.setattr(monthly_sharded, "wait_for_descriptor_remote", lambda *_a, **_kw: {})
+    monkeypatch.setattr(
+        monthly_sharded, "wait_for_descriptor_remote", lambda *_a, **_kw: {}
+    )
     results = [_verified(f"{i:02d}") for i in range(100)]
     results[42].action = ShardTransferAction.SUBMITTED
     monkeypatch.setattr(
@@ -187,4 +204,3 @@ def test_submitted_but_unverified_shard_never_promotes(monkeypatch, tmp_path: Pa
     with pytest.raises(RuntimeError, match="42: verify returned submitted"):
         monthly_sharded.command_finalize(args)
     _assert_no_promotion(args, before)
-
