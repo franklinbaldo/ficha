@@ -1,11 +1,12 @@
 /** P0-D offline contract tests. No Internet Archive requests or real manifest writes. */
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { Field, Root, Type } from 'protobufjs';
 import { z } from 'zod';
 
 import { ficha } from '../../generated/company.pb.js';
 import { companyArchiveUrl, companyRoot, estabelecimentoCnpj, socioCnpj } from '../../lib/companies';
 import { currentSnapshot } from '../../lib/manifest';
+import { fetchAtomicV11Company, parseAtomicV11Manifest } from '../../lib/companies-atomic-v11';
 import { ManifestSchema, SnapshotEntrySchema } from './manifest';
 
 const archive = 'https://archive.org/download';
@@ -288,7 +289,7 @@ describe('Lagarto P0-D: manifest v1/v1.1 and reader contract', () => {
   });
 
 
-  it('exposes a cross-version shard URL collision that passes each index in isolation', () => {
+  it('rejects a cross-version shard URL collision before any member request', async () => {
     // Candidate opt-in discovery must compare its URLs against the *v1* index;
     // uniqueness within v1.1 alone cannot prevent reuse of legacy wire paths.
     const legacy = {
@@ -320,8 +321,23 @@ describe('Lagarto P0-D: manifest v1/v1.1 and reader contract', () => {
     expect(SnapshotEntrySchema.safeParse(collision).success).toBe(true);
     expect(collision.files.companies.shards.filter((entry) => v1Urls.has(entry.url)))
       .toHaveLength(1);
-    // This is a documented failing boundary, NOT a passing production guard.
-    // A future opt-in publisher/reader must reject it before promotion or fetch.
+
+    // Generic schema accepts this invalid cross-version index. The real opt-in
+    // reader must reject it before attempting to fetch any ZIP member.
+    const validOptIn = { current: optIn.date, snapshots: [optIn] };
+    expect(parseAtomicV11Manifest(validOptIn).current).toBe('2026-08');
+    const ambiguousIndex = ManifestSchema.parse({
+      current: collision.date,
+      snapshots: [collision],
+    });
+    expect(() => parseAtomicV11Manifest(ambiguousIndex))
+      .toThrow(/unversioned or noncanonical URL/);
+    const fetchImpl = vi.fn(async () => {
+      throw new Error('network must not run on invalid opt-in index');
+    }) as unknown as typeof fetch;
+    await expect(fetchAtomicV11Company('00000000', ambiguousIndex, { fetchImpl }))
+      .rejects.toThrow(/unversioned or noncanonical URL/);
+    expect(fetchImpl).not.toHaveBeenCalled();
   });
 
 });
