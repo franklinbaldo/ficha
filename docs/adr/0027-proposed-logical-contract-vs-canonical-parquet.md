@@ -113,12 +113,16 @@ de operação requer planejamento/orçamento separados.
 - [`scripts/generate-okf-contracts.sh`](../../scripts/generate-okf-contracts.sh)
   fixa `okf-parser==0.42.0` e gera Zod, JSON Schema, DuckDB/views. Há
   implementação parcial, não aceite de equivalência nem prova de origem.
-- [`.github/workflows/ci.yml`](../../.github/workflows/ci.yml) ativa
-  verificações por caminhos `web/**`, `etl/**` e `ficha-py/**`;
-  mudanças apenas em `knowledge/**` ou no script gerador podem deixar os
-  gates relevantes sem execução. Corrigir a matriz OKF↔Zod↔Parquet,
-  nulabilidade, JSON Schema e CI é o escopo **P4-A da Abelha**. Não editar
-  arquivos dela nesta PR.
+- [`.github/workflows/ci.yml`](../../.github/workflows/ci.yml) filtra
+  suites por `web/**`, `etl/**` e `ficha-py/**`, de modo que o `success`
+  genérico de uma alteração só documental pode conter testes `SKIPPED`.
+  Após [#255 integrada](https://github.com/franklinbaldo/ficha/pull/255),
+  há [gate OKF próprio](../../.github/workflows/okf-contract.yml) para
+  `knowledge/**`, Zod público/gerado e arquivos associados; o script
+  gerador e a paridade JSON Schema/Parquet em dados reais **não são
+  automaticamente cobertos por esse inventário textual**. Correções de
+  nulabilidade, enums, versionamento, gerador e testes de runtime exigem
+  decisão e owner P4-A; não editar seus arquivos nesta PR.
 - A [RFC 0001 §8.2](../rfc/0001-etl-v2-canonical-pipeline.md)
   registra `null-and-count` sem limiar codificado e `quarantine` ainda
   declaratória. Nenhuma das alternativas físicas resolve isso sozinha.
@@ -181,7 +185,14 @@ violações automatizadas selecionadas; mutar `label for` gerou falha
 deliberada `AXE_FAIL`/exit 1. São evidências **da PoC offline**,
 não de contrato RFB, leitura DuckDB/Protobuf, paridade de produção ou
 acessibilidade manual. O CI padrão, filtrado por paths, **não executa**
-build SSG/axe e não substitui essa prova local.
+build SSG/axe e não substitui essa prova local. **Já existe, porém, um gate
+isolado no HEAD P3-A `65592bb6`**: [Actions #44015083398](https://github.com/franklinbaldo/ficha/actions/runs/44015083398)
+terminou em **FAILURE**. Os passos executados de testes Node (27 casos),
+build/finalizador, navegador local e axe (12 estados) foram `SUCCESS`, mas
+o passo final de diagnóstico detectou justamente o erro interno do manifesto
+apesar de `exit 0` do SSG. Isso é um **negativo real fail-closed em CI**,
+não falha de ETL nem aprovação para merge/deploy. A causa upstream segue
+pendente; as verificações de dados reais e rollback continuam `NOT_RUN`.
 
 **Gate extra de cutover, a cargo de P3-A:** validar artefatos e diagnósticos,
 não apenas código de saída do processo; esclarecer/corrigir o erro de
@@ -216,15 +227,16 @@ continuam obrigatórios, inclusive se ambos os schemas fossem ampliados
 simultaneamente com `.optional()` (uma checagem só de paridade não detectaria
 essa regressão). Cobrir essa contraprova antes de trocar validadores.
 
-A [Action OKF #43973816419](https://github.com/franklinbaldo/ficha/actions/runs/43973816419)
-foi conferida no HEAD P4-A `e81d2e658988d1dcdb276ef6c47a650ed392fd43`:
-job de compatibilidade e seus passos de checkout, SHA e comparação
-**SUCCESS**; a PR documenta **6 testes offline, três negativos**.
-Isto **não** prova linhas reais em Parquet, `safeParse` em execução,
-JSON Schema, igualdade entre versões de snapshot, PK/FK em escala ou
-ainda as relações públicas fora dessas três. `NOT_RUN` para essas
-provas e para ETL. O gate `knowledge/**` existe na PR P4-A, não
-deve ser presumido integrado à `main`.
+**Atualização de integração em 17/11/2026:** a [PR #255 P4-A](https://github.com/franklinbaldo/ficha/pull/255)
+foi **MERGED**, por squash [`5c10e4a8`](https://github.com/franklinbaldo/ficha/commit/5c10e4a81670c9079c9f7f868dedaa5d898fab52).
+O [gate OKF #44012953206](https://github.com/franklinbaldo/ficha/actions/runs/44012953206)
+executou **9 testes de biblioteca padrão**, incluindo **cinco mutações
+negativas**, com resultado `SUCCESS` no HEAD P4-A `bdf6efe4`.
+A `main@c3e4a3a` já contém o workflow e a matriz; isto **não** equivale
+a conferir linhas reais em Parquet, `safeParse` em execução, JSON Schema,
+igualdade histórica de snapshots, PK/FK em escala ou relações públicas fora
+dessas três. Essas provas são **NOT_RUN** no escopo P4-B; tampouco houve
+alteração contratual pelo merge documental/de testes.
 
 **Pré-condição para deliberação executável:** escolher explicitamente
 a autoridade para `null` e enums (schema público v1, gerado e/ou
@@ -240,8 +252,10 @@ arquivo, gerador ou schema dela é proposta aqui.
 
 1. **P0/P1 antes de P4:** estabilizar alfanuméricos/Protobuf, completude,
    CI visual, custódia e janela de publicação. Não executar ETL real.
-2. **P4-A:** receber matriz da Abelha de nulabilidade/tipos, diffs dos
-   artefatos gerados e CI para `knowledge/**`. Evitar edição concorrente.
+2. **P4-A:** usar a matriz e o CI `knowledge/**` **já integrados** pela
+   Abelha como baseline; deliberar autoridade de `null`/enums/versão e
+   solicitar provas de `safeParse`, JSON Schema e linhas Parquet antes de
+   alterar validadores. Evitar edição concorrente.
 3. **Deliberação:** proprietário/Elefante escolhem A, B ou C, com
    definição explícita de oracle independente, checkpoint opcional,
    gatilhos de materialização, duração e descarte, e ADR de supersessão
