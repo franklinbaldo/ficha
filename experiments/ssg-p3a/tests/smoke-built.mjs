@@ -49,8 +49,11 @@ export function verifyBuiltShell(dir) {
       continue;
     }
     if (/^https?:\/\//i.test(target)) {
-      assert.equal(target, 'https://franklinbaldo.github.io/ficha/manifest.json',
-        `URL externa não autorizada na PoC: ${target}`);
+      // SSG also emits an absolute canonical permalink for the mock landing page.
+      assert.ok([
+        'https://franklinbaldo.github.io/ficha/',
+        'https://franklinbaldo.github.io/ficha/manifest.json',
+      ].includes(target), `URL externa não autorizada na PoC: ${target}`);
       continue;
     }
     assert.ok(target.startsWith('/ficha/'), `URL local fora da base /ficha/: ${target}`);
