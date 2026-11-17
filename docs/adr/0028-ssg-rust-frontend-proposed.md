@@ -60,3 +60,11 @@ Somente novos arquivos de ADR/protótipo. Não editar `web/`, componentes
 da Raposa, ETL, workflows, manifesto ou ADR histórica. Não executar
 produção, deploy, publicação de snapshots, download de base ou gasto.
 Se build SSG ou browser não foi executado, registrar **NOT_RUN**.
+
+## Ensaio de recuperação offline (17/11/2026)
+
+O gate P3-A executa `node scripts/rollback-drill.mjs dist/ficha` **depois do build SSG real**. O teste reúne o candidato SSG e um **artefato anterior sintético e explicitamente rotulado**, copia ambos para uma área temporária, confere inventários SHA-256 de paths e bytes, ativa o candidato **apenas na área de ensaio**, injeta uma falha após a troca e restaura os bytes do artefato anterior. A limpeza é local, sem Pages, ETL ou IA.
+
+Controles negativos: hash anterior errado, adulteração do staging, manifesto de aplicativo colidindo com `manifest.json` de dados, symlink e diretórios sobrepostos. O teste nunca afirma ter recuperado um deploy Astro real. Para ensaio posterior com artefato Astro **genuíno** e hash obtido independentemente, fornecer `node scripts/rollback-drill.mjs dist/ficha /caminho/artefato-anterior` e `FICHA_PREVIOUS_TREE_SHA256`; sem hash a execução falha.
+
+**Bloqueios antes do corte:** preservar e identificar o artefato real do Pages e o workflow anterior, executar restauração em ambiente homologado autorizado, verificar paridade e ensaiar rollback de workflow e publicação. O exercício atual demonstra somente reversibilidade de arquivos em sandbox; **não** demonstra reversão de GitHub Pages, DNS, cache/CDN, compatibilidade de dados nem a navegação antiga.

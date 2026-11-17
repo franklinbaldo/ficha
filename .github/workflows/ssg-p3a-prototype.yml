@@ -60,6 +60,11 @@ jobs:
           node scripts/materialize-assets.mjs
           node tests/smoke-built.mjs dist/ficha
 
+      - name: Offline rollback rehearsal (synthetic previous; never deploy)
+        run: |
+          set -euo pipefail
+          node scripts/rollback-drill.mjs dist/ficha
+
       - name: Install pinned browser audit dependencies outside repository
         run: |
           set -euo pipefail
