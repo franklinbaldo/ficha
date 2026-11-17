@@ -89,3 +89,21 @@ O resultado 9/10 não significa que testes de navegador/WCAG passaram.
 Build HTTP local e node --test são obrigatórios antes de corte.
 Ainda faltam: testes reais de teclado, axe, leitor de tela, dados
 DuckDB/Protobuf, paridade, proteção da publicação e deploy autorizado.
+
+## Ensaio de navegador opcional (somente preview local)
+
+Após gerar e finalizar `dist/ficha/`, testar a jornada mock sem dados reais
+em Chromium com Playwright instalado em executor autorizado:
+
+```sh
+FICHA_PLAYWRIGHT_MODULE=/caminho/verificado/node_modules/playwright \
+  node tests/browser-built.mjs dist
+```
+
+O script falha se não houver build ou Chromium; **não transforma
+dependência ausente em PASS**. Valida o foco inicial (skip link), idioma,
+live region, ausência de rolagem horizontal em 320/375/1440 px, CNPJ
+alfanumérico passando pelo formulário, erros de entrada, reset na troca
+de modalidade, ausência de consulta de rede e ausência de exceções JS.
+Este ensaio **não** equivale a auditoria axe/WCAG, leitor de tela, dados
+reais, desempenho WASM/Protobuf ou autorização de deploy.
