@@ -66,6 +66,15 @@ class TestRfbOriginReceipt(unittest.TestCase):
             "wrong source": lambda r: r["source"].__setitem__("url", "https://example.invalid"),
             "missing timestamp": lambda r: r["source"].__setitem__("observed_at_utc", ""),
             "missing server date": lambda r: r["source"].__setitem__("server_date", ""),
+            "observation a day late": lambda r: r["source"].__setitem__(
+                "observed_at_utc", "2026-11-17T21:37:51+00:00"
+            ),
+            "server date a day early": lambda r: r["source"].__setitem__(
+                "server_date", "Sun, 15 Nov 2026 21:37:49 GMT"
+            ),
+            "observed non-UTC": lambda r: r["source"].__setitem__(
+                "observed_at_utc", "2026-11-16T17:37:51-04:00"
+            ),
             "extra digest claim": lambda r: r["files"][0].__setitem__("sha256", "0" * 64),
             "receipt fake digest": lambda r: r.__setitem__("sha256_verified", True),
             "source fake digest": lambda r: r["source"].__setitem__("sha256", "0" * 64),

@@ -32,6 +32,7 @@ _SOURCE_KEYS = frozenset(
 )
 _ENTRY_KEYS = frozenset({"name", "size_bytes", "etag_raw", "content_type", "ia_raw_name_expected"})
 _ETAG = re.compile(r'(?:W/)?"[^"\r\n]+"\Z')
+_MAX_OBSERVATION_DATE_SKEW_SECONDS = 10 * 60
 
 
 def validate_origin_receipt(receipt: object) -> None:
@@ -76,6 +77,8 @@ def validate_origin_receipt(receipt: object) -> None:
         raise ValueError("HTTP server date missing or invalid") from exc
     if server_date.utcoffset() is None:
         raise ValueError("HTTP server date must contain timezone")
+    if abs((instant - server_date).total_seconds()) > _MAX_OBSERVATION_DATE_SKEW_SECONDS:
+        raise ValueError("observation time conflicts with HTTP Date")
 
     if receipt.get("identity_level") != "metadata-only":
         raise ValueError("origin identity must stay metadata-only")
