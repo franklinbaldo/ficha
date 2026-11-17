@@ -200,7 +200,8 @@ describe('P3-B: execução real de SQL parametrizado sobre Parquet sintético', 
           ('00AB12C3', '0001', '91', 'SP', '7107', 'RUA DAS FLORES', '10', 'CENTRO', '01000000'),
           ('00AB12C3', '0002', '76', 'SP', '7108', 'RUA DAS FLORES', '11', 'CENTRO', '01000001'),
           ('00AB12C3', '0003', '50', 'RJ', '7107', 'RUA DAS FLORES', '12', 'CENTRO', '22000000'),
-          ('00000001', '0001', '91', 'SP', '7107', 'RUA DAS FLORES', '13', 'CENTRO', '01000002')
+          ('00000001', '0001', '91', 'SP', '7107', 'RUA DAS FLORES', '13', 'CENTRO', '01000002'),
+          ('00000000', 'E08G', '12', 'SP', '7107', 'RUA DAS FLORES', '14', 'CENTRO', '01000003')
       `);
       conn.query(`
         COPY (
@@ -218,7 +219,8 @@ describe('P3-B: execução real de SQL parametrizado sobre Parquet sintético', 
         "SELECT cnpj, typeof(cnpj) AS tipo FROM read_parquet('p3b-alfa.parquet') ORDER BY cnpj",
       ).toArray().map((row) => row.toJSON() as { cnpj: string; tipo: string });
       expect(tipados.map(({ cnpj }) => cnpj)).toEqual([
-        '00000001000191', '00AB12C3000191', '00AB12C3000276', '00AB12C3000350',
+        '00000000E08G12', '00000001000191', '00AB12C3000191',
+        '00AB12C3000276', '00AB12C3000350',
       ]);
       expect(tipados.every(({ cnpj, tipo }) => tipo === 'VARCHAR' && cnpj.length === 14))
         .toBe(true);
@@ -236,10 +238,16 @@ describe('P3-B: execução real de SQL parametrizado sobre Parquet sintético', 
           stmt.close();
         }
       };
-      expect(consultar('SP', '7107')).toEqual(['00AB12C3000191', '00000001000191']);
+      expect(consultar('SP', '7107')).toEqual([
+        '00AB12C3000191', '00000001000191', '00000000E08G12',
+      ]);
+      // Ordem com letras: substituir E/G por zeros alteraria a identidade.
+      expect(consultar('SP', '7107')).toContain('00000000E08G12');
+      expect(consultar('SP', '7107')).not.toContain('00000000008012');
       expect(consultar('SP', '7108')).toEqual(['00AB12C3000276']);
       expect(consultar('RJ', '7107')).toEqual(['00AB12C3000350']);
       expect(consultar('RJ', '7108')).toEqual([]);
+      expect(consultar('RJ', '7107')).not.toContain('00000000E08G12');
       expect(() => planejarConsultaEnderecos({
         uf: 'SP', municipio: { sistema: 'IBGE', codigo: '3550308' },
       })).toThrow(/IBGE/);
