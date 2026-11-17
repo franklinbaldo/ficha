@@ -83,3 +83,33 @@ test('oracle negativo: link HTTPS arbitrário não é exceção para asset ou or
     validHtml.replace('</body>', '<a href="https://example.invalid/ficha/manifest.json">origem não permitida</a></body>')),
   dir => assert.throws(() => verifyBuiltShell(dir), /URL externa não autorizada/));
 });
+
+test('oracle positivo: srcset local com dois assets existentes passa', () => {
+  withFixture(dir => {
+    mkdirSync(join(dir, 'img'));
+    writeFileSync(join(dir, 'img/a.png'), 'synthetic-a');
+    writeFileSync(join(dir, 'img/b.png'), 'synthetic-b');
+    writeFileSync(join(dir, 'index.html'), validHtml.replace('</body>',
+      '<img alt="fixture" srcset="/ficha/img/a.png 1x, /ficha/img/b.png 2x"></body>'));
+  }, dir => assert.ok(verifyBuiltShell(dir).htmlBytes > 0));
+});
+test('oracle negativo: srcset não pode requisitar recurso externo', () => {
+  withFixture(dir => writeFileSync(join(dir, 'index.html'), validHtml.replace('</body>',
+    '<img alt="fixture" srcset="https://cdn.example.invalid/a.png 1x"></body>')),
+  dir => assert.throws(() => verifyBuiltShell(dir), /URL de mídia fora da base/));
+});
+test('oracle negativo: srcset deve ter o arquivo publicado', () => {
+  withFixture(dir => writeFileSync(join(dir, 'index.html'), validHtml.replace('</body>',
+    '<img alt="fixture" srcset="/ficha/img/missing.png 2x"></body>')),
+  dir => assert.throws(() => verifyBuiltShell(dir), /asset de mídia ausente/));
+});
+test('oracle negativo: poster remoto não pode ignorar allowlist', () => {
+  withFixture(dir => writeFileSync(join(dir, 'index.html'), validHtml.replace('</body>',
+    '<video poster="https://cdn.example.invalid/poster.png"></video></body>')),
+  dir => assert.throws(() => verifyBuiltShell(dir), /URL de mídia fora da base/));
+});
+test('oracle negativo: URL canônica permitida em link não vira script remoto', () => {
+  withFixture(dir => writeFileSync(join(dir, 'index.html'), validHtml.replace('</body>',
+    '<script src="https://franklinbaldo.github.io/ficha/manifest.json"></script></body>')),
+  dir => assert.throws(() => verifyBuiltShell(dir), /URL externa não autorizada/));
+});

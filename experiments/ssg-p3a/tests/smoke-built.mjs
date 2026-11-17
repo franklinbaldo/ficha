@@ -41,7 +41,7 @@ export function verifyBuiltShell(dir) {
   assert.match(js, /createLookupController/, 'módulo de UI não conectado ao adaptador');
   assert.match(consult, /export function createLookupController/, 'módulo de consulta não emitido');
   // Fail closed on broken fragment links and URLs escaping GitHub Pages /ficha/.
-  for (const [, target] of html.matchAll(/\b(?:href|src)=["']([^"']+)["']/g)) {
+  for (const [, attribute, target] of html.matchAll(/\b(href|src)=["']([^"']+)["']/g)) {
     if (target.startsWith('#')) {
       const anchor = target.slice(1);
       assert.ok(anchor && (html.includes(`id="${anchor}"`) || html.includes(`id='${anchor}'`)),
@@ -50,7 +50,7 @@ export function verifyBuiltShell(dir) {
     }
     if (/^https?:\/\//i.test(target)) {
       // SSG also emits an absolute canonical permalink for the mock landing page.
-      assert.ok([
+      assert.ok(attribute === 'href' && [
         'https://franklinbaldo.github.io/ficha/',
         'https://franklinbaldo.github.io/ficha/manifest.json',
       ].includes(target), `URL externa não autorizada na PoC: ${target}`);
@@ -62,6 +62,25 @@ export function verifyBuiltShell(dir) {
     const relative = pathname.slice('/ficha/'.length);
     if (relative && !relative.endsWith('/')) {
       assert.ok(existsSync(join(dir, relative)), `asset local ausente: ${target}`);
+    }
+  }
+  // Image/video resource URLs are independently fetchable even without src.
+  // This PoC intentionally rejects data: and remote srcset/poster URLs.
+  function verifyLocalMedia(target) {
+    assert.ok(target.startsWith('/ficha/'), 'URL de mídia fora da base /ficha/: ' + target);
+    const pathname = new URL(target, 'https://preview.invalid').pathname;
+    assert.ok(pathname.startsWith('/ficha/'), 'URL de mídia escapa da base: ' + target);
+    const relative = pathname.slice('/ficha/'.length);
+    assert.ok(relative && existsSync(join(dir, relative)), 'asset de mídia ausente: ' + target);
+  }
+  for (const [, target] of html.matchAll(/\bposter=["']([^"']+)["']/gi)) {
+    verifyLocalMedia(target);
+  }
+  for (const [, srcset] of html.matchAll(/\bsrcset=["']([^"']+)["']/gi)) {
+    for (const candidate of srcset.split(',')) {
+      const match = /^(\S+)(?:\s+(?:\d+w|(?:\d+(?:\.\d+)?|\.\d+)x))?$/.exec(candidate.trim());
+      assert.ok(match, 'srcset inválido: ' + candidate);
+      verifyLocalMedia(match[1]);
     }
   }
   return { htmlBytes: Buffer.byteLength(html), cssBytes: Buffer.byteLength(css), jsBytes: Buffer.byteLength(js) + Buffer.byteLength(consult) };
