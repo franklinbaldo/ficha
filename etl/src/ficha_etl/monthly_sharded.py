@@ -429,7 +429,6 @@ def _retryable_shard_error(exc: ShardPublishError) -> bool:
     return "mismatch" not in text and "diverge" not in text
 
 
-
 def _require_distinct_finalize_outputs(
     snapshot_entry_path: Path, verification_path: Path, manifest_path: Path
 ) -> None:

@@ -189,6 +189,8 @@ def test_legacy_success_persists_entry_and_verification(
     assert manifest["current"] == args.month
     assert entry["files"]["companies"]["schema_version"] == "1.0.0"
     assert verification["company_shards_verified"] == 100
+
+
 @pytest.mark.parametrize(
     ("left", "right"),
     [
