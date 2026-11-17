@@ -227,7 +227,7 @@
   // Keep letters in both the root and branch order; malformed IDs get no label.
   function tipoEstabelecimento(cnpj: string | number): 'Matriz' | 'Filial' | null {
     const raw = canonicalCNPJ(cnpj);
-    if (!/^[A-Z0-9]{12}\\d{2}$/.test(raw)) return null;
+    if (!/^[A-Z0-9]{12}\d{2}$/.test(raw)) return null;
     return raw.slice(8, 12) === '0001' ? 'Matriz' : 'Filial';
   }
 
