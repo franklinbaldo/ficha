@@ -65,16 +65,18 @@ substituto e política de descarte. Não autorizar novo cache multi-GB ou
 transporte remoto por inferência desta ADR.
 
 **Modelo de decisão a preencher, sem números presumidos:** para o mesmo
-snapshot, runner e gates, medir `ΔT_sucesso = T_A - T_B` e
-`ΔT_recuperação = T_reinício_B - T_reinício_A` sob falha equivalente.
-A camada física A só ganha **em tempo esperado** se
-`ΔT_sucesso < p_falha × ΔT_recuperação`, quando `ΔT_recuperação > 0`;
-se o checkpoint não sobrevive à falha ensaiada, não contabilizar benefício
-de restore. Separadamente, comparar pico de RSS/disco, bytes persistidos,
-minutos de runner, retenção, transferência e custo monetário; **hard limits**
-e integridade prevalecem sobre qualquer desigualdade de tempo. O valor
-de `p_falha` é **desconhecido** e precisa ser explicitado, não escolhido
-para justificar a arquitetura.
+snapshot, runner e gates, medir `T_A/T_B` (tempo sem falha), `p_A/p_B`
+(probabilidade de falha) e `R_A/R_B` (custo incremental de recuperar
+uma falha). Com **no máximo uma falha**, A só ganha em tempo esperado se
+`T_A + p_A × R_A < T_B + p_B × R_B`. A fórmula abreviada
+`T_A - T_B < p × (R_B - R_A)` exige `p_A = p_B = p`;
+**não assumir isso** quando a camada adicional altera risco de OOM/disco.
+Falhas repetidas exigem modelar retries e caudas, não extrapolar a equação.
+Sem checkpoint restaurável, `R_A` inclui recomputação integral, sem
+crédito fictício de restore. Comparar também RSS/disco, bytes persistidos,
+minutos de runner, transferência, retenção e custo monetário; **hard limits**
+e integridade prevalecem sobre desigualdade de tempo. Probabilidades
+são **desconhecidas** até medição, não premissas escolhidas.
 
 **Contraprova barata antes de prometer retomada:** fixture offline,
 checkpoint com SHA e recibo, interrupção controlada após a escrita e nova
