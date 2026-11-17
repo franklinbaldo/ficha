@@ -43,15 +43,32 @@ de **dívida existente**, não autorização para aceitar linhas através do Zod
 gerado. Se o gerador ou os contratos forem corrigidos por decisão posterior,
 a lista deve ser revisada junto à mudança, com teste de valores reais/nulos.
 
+## Fronteira provisória de validação (proposta, não aprovada)
+
+Até a decisão da ADR 0027 e de versionamento, o contrato **público v1**
+é a referência observável para valores recebidos pelas views. O Zod
+gerado OKF é um artefato de modelagem, **não** substituto seguro para
+`safeParse` de linhas v1: há 28 nulos permitidos que ele rejeita e 7
+domínios de enum cujos valores ele alarga. A ausência de campo também é
+diferente de `null`: os 86 campos de dados são obrigatórios no v1 atual.
+Este guard passa a detectar qualquer `.optional()` introduzido sem
+equivalência entre os dois schemas. Campos de metadados do gerado não
+são colunas e ficam fora desse teste.
+
+A futura escolha de contrato por `schema_version`/competência e a
+política de colunas extras nas views requerem decisão coordenada com
+🐙 Polvo e 🐘 Elefante. Nada aqui altera o parser em runtime, o
+Parquet físico, o contrato publicado ou a RFC 0001 aceita.
+
 ## Garantias e lacunas do teste isolado
 
 O teste Python de biblioteca padrão compara as declarações SQL do OKF com
 os schemas Zod v1 e gerado. Falha quando coluna ou tipo muda, quando surge
 uma nova incompatibilidade de nulabilidade, ou quando a lista de desvios
 deixa de descrever o estado do código, ou quando um dos sete domínios
-enum públicos muda sem revisão. Inclui três controles negativos em memória
+enum públicos muda sem revisão. Inclui quatro controles negativos em memória
 (mutação de `cnpj` para número, remoção do `.nullable()` de
-`cpf_mascarado` e exclusão de um valor permitido do enum `tipo`). Não cria Parquet, não acessa RFB/IA e não executa ETL.
+`cpf_mascarado` exclusão de um valor permitido do enum `tipo` e ampliação indevida de campo obrigatório para `.optional()`). Não cria Parquet, não acessa RFB/IA e não executa ETL.
 
 **Não prova** nulabilidade do Parquet observado, contagem de valores nulos,
 versões anteriores do snapshot, integridade de JSON Schema não versionado,

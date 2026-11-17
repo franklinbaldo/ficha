@@ -193,6 +193,18 @@ def _nullability_gap(
     }
 
 
+
+def _optional_mismatch(
+    published: dict[str, str], generated: dict[str, str]
+) -> set[str]:
+    """Catch a new acceptance of undefined/missing fields, distinct from null."""
+    return {
+        name
+        for name, expr in published.items()
+        if (".optional()" in expr) != (".optional()" in generated[name])
+    }
+
+
 class OkfContractCompatibilityTest(unittest.TestCase):
     def test_sql_generated_and_public_v1_column_types_agree(self) -> None:
         for table, (slug, public_name) in SOURCES.items():
@@ -224,6 +236,25 @@ class OkfContractCompatibilityTest(unittest.TestCase):
                     },
                     f"{table}: generated schema unexpectedly widened nullability",
                 )
+
+
+    def test_required_field_presence_matches_public_v1(self) -> None:
+        # Generated Zod metadata (title/description) is intentionally excluded.
+        for table, (_, public_name) in SOURCES.items():
+            with self.subTest(table=table):
+                generated = _generated_fields(table)
+                published = _published_v1_fields(public_name)
+                self.assertEqual(
+                    _optional_mismatch(published, generated),
+                    set(),
+                    f"{table}: unexpected required/optional field drift",
+                )
+
+    def test_negative_optional_field_widening_would_be_detected(self) -> None:
+        published = _published_v1_fields("estabelecimento")
+        generated = _generated_fields("Cnpj")
+        generated["cnpj"] = "z.string().optional()"
+        self.assertEqual(_optional_mismatch(published, generated), {"cnpj"})
 
     def test_public_enum_domains_and_generated_widening_are_explicit(self) -> None:
         for table, (_, public_name) in SOURCES.items():
