@@ -80,6 +80,6 @@ test('oracle negativo: script remoto não é permitido no shell offline', () => 
 });
 test('oracle negativo: link HTTPS arbitrário não é exceção para asset ou origem', () => {
   withFixture(dir => writeFileSync(join(dir, 'index.html'),
-    validHtml.replace('https://franklinbaldo.github.io/ficha/manifest.json', 'https://example.invalid/ficha/manifest.json')),
+    validHtml.replace('</body>', '<a href="https://example.invalid/ficha/manifest.json">origem não permitida</a></body>')),
   dir => assert.throws(() => verifyBuiltShell(dir), /URL externa não autorizada/));
 });
