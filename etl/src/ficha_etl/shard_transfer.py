@@ -193,7 +193,6 @@ def _require_same_bytes(name: str, verdict, prepared: PreparedShard) -> None:
         )
 
 
-
 def plan_opt_in_v11_shard(
     session: ShardPackSession,
     prepared: PreparedShard,
