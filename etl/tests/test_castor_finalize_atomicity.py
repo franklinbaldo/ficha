@@ -189,3 +189,83 @@ def test_legacy_success_persists_entry_and_verification(
     assert manifest["current"] == args.month
     assert entry["files"]["companies"]["schema_version"] == "1.0.0"
     assert verification["company_shards_verified"] == 100
+
+
+@pytest.mark.parametrize(
+    ("left", "right"),
+    [
+        ("snapshot_entry", "verification"),
+        ("snapshot_entry", "manifest"),
+        ("verification", "manifest"),
+    ],
+)
+def test_finalize_rejects_identical_output_paths_before_remote_reads(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    left: str,
+    right: str,
+) -> None:
+    args = _args(tmp_path)
+    setattr(args, right, getattr(args, left))
+    old_manifest = (tmp_path / "manifest.json").read_bytes()
+    monkeypatch.setattr(
+        monthly_sharded,
+        "_load_descriptor",
+        lambda *_: pytest.fail("alias must be rejected before descriptor access"),
+    )
+
+    with pytest.raises(ValueError, match="finalize output paths must be distinct"):
+        monthly_sharded.command_finalize(args)
+
+    assert (tmp_path / "manifest.json").read_bytes() == old_manifest
+    assert not (tmp_path / "snapshot-entry.json").exists()
+    assert not (tmp_path / "verification.json").exists()
+
+
+@pytest.mark.parametrize("link_type", ["symlink", "hardlink"])
+def test_finalize_rejects_linked_output_paths_before_remote_reads(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    link_type: str,
+) -> None:
+    args = _args(tmp_path)
+    old_manifest = args.manifest.read_bytes()
+    try:
+        if link_type == "symlink":
+            args.verification.symlink_to(args.manifest)
+        else:
+            args.verification.hardlink_to(args.manifest)
+    except (OSError, NotImplementedError):
+        pytest.skip(f"{link_type} unavailable on this filesystem")
+    monkeypatch.setattr(
+        monthly_sharded,
+        "_load_descriptor",
+        lambda *_: pytest.fail("alias must be rejected before descriptor access"),
+    )
+
+    with pytest.raises(ValueError, match="finalize output paths must be distinct"):
+        monthly_sharded.command_finalize(args)
+
+    assert args.manifest.read_bytes() == old_manifest
+    assert args.verification.read_bytes() == old_manifest
+    assert not args.snapshot_entry.exists()
+
+
+def test_finalize_rejects_lexical_alias_before_remote_reads(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    args = _args(tmp_path)
+    args.verification = tmp_path / "uncreated-child" / ".." / "manifest.json"
+    old_manifest = args.manifest.read_bytes()
+    monkeypatch.setattr(
+        monthly_sharded,
+        "_load_descriptor",
+        lambda *_: pytest.fail("alias must be rejected before descriptor access"),
+    )
+
+    with pytest.raises(ValueError, match="finalize output paths must be distinct"):
+        monthly_sharded.command_finalize(args)
+
+    assert args.manifest.read_bytes() == old_manifest
+    assert not args.snapshot_entry.exists()

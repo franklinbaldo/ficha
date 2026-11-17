@@ -429,8 +429,32 @@ def _retryable_shard_error(exc: ShardPublishError) -> bool:
     return "mismatch" not in text and "diverge" not in text
 
 
+def _require_distinct_finalize_outputs(
+    snapshot_entry_path: Path, verification_path: Path, manifest_path: Path
+) -> None:
+    """Reject path aliases before any remote reads or local receipt writes.
+
+    A shared pathname, symlink target or hardlinked inode can make a successful
+    finalize overwrite one receipt with another (or with manifest.json).
+    """
+    outputs = (
+        ("snapshot-entry", snapshot_entry_path),
+        ("verification", verification_path),
+        ("manifest", manifest_path),
+    )
+    for index, (name, path) in enumerate(outputs):
+        for other_name, other in outputs[index + 1 :]:
+            same_path = path.resolve() == other.resolve()
+            same_inode = path.exists() and other.exists() and path.samefile(other)
+            if same_path or same_inode:
+                raise ValueError(f"finalize output paths must be distinct: {name} and {other_name}")
+
+
 def command_finalize(args: argparse.Namespace) -> None:
     month = _require_month(args.month)
+    _require_distinct_finalize_outputs(
+        Path(args.snapshot_entry), Path(args.verification), Path(args.manifest)
+    )
     descriptor = _load_descriptor(Path(args.descriptor), month)
     pinned = materialization_inputs_from_descriptor(descriptor)
     receipts = _load_all_receipts(Path(args.receipts_dir), month)

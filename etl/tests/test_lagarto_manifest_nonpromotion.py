@@ -157,6 +157,36 @@ def test_remote_receipt_mismatch_never_promotes(monkeypatch, tmp_path: Path):
     _assert_no_promotion(args, before)
 
 
+@pytest.mark.parametrize(
+    ("field", "changed_value"),
+    [
+        ("name", "companies-42-foreign.zip"),
+        ("materialization_id", "e" * 64),
+        ("size", 43),
+    ],
+)
+def test_verified_shard_identity_mismatch_never_promotes(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    field: str,
+    changed_value: str | int,
+) -> None:
+    """100 VERIFIED results still must match the production receipt exactly.
+
+    Distinct negative cases prevent cross-run identity reuse by name,
+    materialization or byte size. Network and production are not touched.
+    """
+    args, before = _setup(tmp_path)
+    monkeypatch.setattr(monthly_sharded, "wait_for_descriptor_remote", lambda *_a, **_kw: {})
+    results = [_verified(f"{i:02d}") for i in range(100)]
+    setattr(results[42], field, changed_value)
+    monkeypatch.setattr(monthly_sharded, "verify_all_shards", lambda *_a, **_kw: results)
+
+    with pytest.raises(RuntimeError, match="42: remote verified identity diverges"):
+        monthly_sharded.command_finalize(args)
+    _assert_no_promotion(args, before)
+
+
 def test_remote_descriptor_sha_mismatch_blocks_promotion(monkeypatch, tmp_path: Path):
     """A base-file hash divergence must fail before shard verification/promotion."""
     args, before = _setup(tmp_path)
