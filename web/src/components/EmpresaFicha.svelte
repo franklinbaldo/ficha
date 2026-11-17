@@ -85,7 +85,7 @@
   async function toggleSocios() {
     if (showSocios) { showSocios = false; return; }
     showSocios = true;
-    if (socios.length > 0 || sociosError || loadingSocios) return;
+    if (socios.length > 0 || loadingSocios) return;
     if (!db) return;
 
     const requestedCNPJ = activeCNPJ;
@@ -129,7 +129,7 @@
   async function toggleContatos() {
     if (showContatos) { showContatos = false; return; }
     showContatos = true;
-    if (contatos.length > 0 || contatosError || loadingContatos) return;
+    if (contatos.length > 0 || loadingContatos) return;
     if (!db) return;
 
     const requestedCNPJ = activeCNPJ;
@@ -170,7 +170,7 @@
   async function toggleFiliais() {
     if (showFiliais) { showFiliais = false; return; }
     showFiliais = true;
-    if (filiais.length > 0 || filiaisError || loadingFiliais) return;
+    if (filiais.length > 0 || loadingFiliais) return;
     if (!db) return;
 
     const requestedCNPJ = activeCNPJ;

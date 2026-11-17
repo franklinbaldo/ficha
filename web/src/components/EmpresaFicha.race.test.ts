@@ -183,3 +183,79 @@ describe('EmpresaFicha: execution of the context invalidation effect (offline)',
     },
   );
 });
+
+
+// Execute the real handlers with an in-memory fault-once DuckDB stand-in.
+// Does not exercise browser hydration or remote Parquet.
+describe('EmpresaFicha retry after temporary failure (offline)', () => {
+  it.each([
+    ['Socios', 'Contatos', 'socios'],
+    ['Contatos', 'Filiais', 'contatos'],
+    ['Filiais', 'Legacy numeric CNPJs', 'filiais'],
+  ] as const)('retries %s after closing and reopening the error panel', async (
+    section, next, field
+  ) => {
+    const tail = source.split('async function toggle' + section + '()')[1]
+      ?.split(section === 'Filiais'
+        ? '// Legacy numeric CNPJs' : 'async function toggle' + next + '()')[0];
+    if (!tail) throw new Error('Handler not found: ' + section);
+    const code = ts.transpileModule(
+      'async function toggle' + section + '()' + tail,
+      { compilerOptions: { target: ts.ScriptTarget.ES2022 } }
+    ).outputText;
+    let calls = 0, closedStatements = 0, closedConnections = 0;
+    const args: unknown[][] = [];
+    const db = {
+      async connect() {
+        return {
+          async prepare() {
+            return {
+              async query(...params: unknown[]) {
+                args.push(params);
+                if (++calls === 1) throw new Error('offline transient error');
+                return { toArray: () => [{ toJSON: () => ({ marker: 'OK' }) }] };
+              },
+              async close() { closedStatements++; },
+            };
+          },
+          async close() { closedConnections++; },
+        };
+      },
+    };
+    const factory = new Function('database', [
+      "let db = database, activeCNPJ = 'A0000000E08G12', requestEpoch = 1;",
+      'let ' + field + ' = [], ' + field + 'Error = null;',
+      'let show' + section + ' = false, loading' + section + ' = false;',
+      'function isCurrentRequest(cnpj, d, epoch) {',
+      '  return cnpj === activeCNPJ && d === db && epoch === requestEpoch; }',
+      code,
+      'return { toggle: toggle' + section + ',',
+      'state() { return { rows: ' + field + ', error: ' + field + 'Error,',
+      'loading: loading' + section + ', show: show' + section + ' }; } };',
+    ].join('\n'));
+    const ui = factory(db) as {
+      toggle(): Promise<void>;
+      state(): { rows: Array<{ marker: string }>; error: string | null;
+        loading: boolean; show: boolean };
+    };
+    await ui.toggle();
+    expect(ui.state()).toEqual({
+      rows: [], error: 'offline transient error', loading: false, show: true,
+    });
+    await ui.toggle();
+    expect(ui.state().show).toBe(false);
+    await ui.toggle();
+    expect(ui.state()).toEqual({
+      rows: [{ marker: 'OK' }], error: null, loading: false, show: true,
+    });
+    expect(calls).toBe(2);
+    expect(args[0]).toEqual(args[1]);
+    expect(args[0]?.[0]).toBe(
+      section === 'Contatos' ? 'A0000000E08G12' : 'A0000000'
+    );
+    if (section === 'Filiais') {
+      expect(args[0]?.[1]).toBe('A0000000E08G12');
+    }
+    expect([closedStatements, closedConnections]).toEqual([2, 2]);
+  });
+});
