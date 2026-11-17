@@ -7,7 +7,9 @@ import duckdb
 from ficha_etl.transform import write_enderecos_parquet
 
 
-def test_enderecos_writer_preserves_alpha_base_and_order_and_rfb(tmp_path: Path) -> None:
+def test_enderecos_writer_preserves_alpha_base_and_order_and_rfb(
+    tmp_path: Path,
+) -> None:
     con = duckdb.connect(":memory:")
     try:
         con.execute(
