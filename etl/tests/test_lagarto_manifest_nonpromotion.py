@@ -325,25 +325,36 @@ def test_manifest_replace_failure_preserves_bytes_and_no_snapshot_entry(
     assert list(args.manifest.parent.glob(".manifest.json.*.tmp")) == []
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="P0-D: verification.json fails after manifest commit; transaction boundary unresolved",
-)
+@pytest.mark.parametrize("preexisting", [False, True])
+@pytest.mark.parametrize("partial_write", [False, True])
 def test_verification_receipt_failure_must_not_promote_partial_state(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    preexisting: bool,
+    partial_write: bool,
 ) -> None:
-    """Known gap: a failed verification receipt follows a successful commit.
+    """A failed verification receipt must not update the discovery manifest.
 
-    The fault is injected only into the receipt writer after 100 synthetic
-    verified shards, with no network or live publication. This is a contract
-    counterexample, not proof of multi-file rollback.
+    Exercise Castor's real multi-document local compensation with all 100
+    shards verified synthetically. Neither a partial verification write nor
+    preexisting receipts may leave a partial local publication. This does NOT
+    prove crash safety or a remote Internet Archive transaction.
     """
     args, before = _setup(tmp_path)
     _prepare_legacy_finalize(monkeypatch, args)
+    previous_entry = b'{ "old": "snapshot entry bytes" }\\n' if preexisting else None
+    previous_verification = b'{ "old": "verification bytes" }\\n' if preexisting else None
+    if preexisting:
+        assert previous_entry is not None
+        assert previous_verification is not None
+        args.snapshot_entry.write_bytes(previous_entry)
+        args.verification.write_bytes(previous_verification)
     original_write_json = monthly_sharded._write_json
 
     def fail_verification(path: Path, payload: object) -> None:
         if Path(path) == args.verification:
+            if partial_write:
+                Path(path).write_bytes(b'{"incomplete":')
             raise OSError("injected verification.json write failure")
         original_write_json(path, payload)
 
@@ -351,4 +362,11 @@ def test_verification_receipt_failure_must_not_promote_partial_state(
     with pytest.raises(OSError, match="injected verification.json write failure"):
         monthly_sharded.command_finalize(args)
 
-    _assert_no_promotion(args, before)
+    assert args.manifest.read_bytes() == before
+    assert (
+        args.snapshot_entry.read_bytes() if args.snapshot_entry.exists() else None
+    ) == previous_entry
+    assert (
+        args.verification.read_bytes() if args.verification.exists() else None
+    ) == previous_verification
+    assert list(args.manifest.parent.glob(".manifest.json.*.tmp")) == []
