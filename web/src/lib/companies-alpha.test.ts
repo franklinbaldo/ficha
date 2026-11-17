@@ -1,6 +1,45 @@
 import { describe, it, expect } from 'vitest';
 import { ficha } from '../generated/company.pb.js';
-import { companyRoot, estabelecimentoCnpj, socioCnpj, companyArchiveUrl } from './companies';
+import { CompaniesShardedSchema } from '../schemas/v1/manifest';
+import { companyRoot, estabelecimentoCnpj, socioCnpj, companyArchiveUrl, fetchCompany } from './companies';
+
+describe('P0-A: manifest version negotiation at the updated reader boundary', () => {
+  const shards = Array.from({ length: 100 }, (_, number) => ({
+    shard: String(number).padStart(2, '0'),
+    url: `https://example.org/companies-${String(number).padStart(2, '0')}.zip`,
+    sha1: 'a'.repeat(40),
+    size: 100,
+  }));
+
+  it('preserves legacy v1 numeric manifests without a per-layer version', () => {
+    expect(CompaniesShardedSchema.safeParse({
+      shard_by: 'cnpj_base_prefix_2',
+      shards,
+    }).success).toBe(true);
+  });
+
+  it('refuses to validate v1.1 alphanumeric mapping without its wire version', () => {
+    for (const schema_version of [undefined, '1.0.0'] as const) {
+      const result = CompaniesShardedSchema.safeParse({
+        shard_by: 'cnpj_base_prefix_or_base36_mod_100_v1',
+        schema_version,
+        shards,
+      });
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error.issues.some(issue => issue.path.join('.') === 'schema_version')).toBe(true);
+      }
+    }
+  });
+
+  it('accepts a complete explicitly versioned v1.1 manifest layer', () => {
+    expect(CompaniesShardedSchema.safeParse({
+      shard_by: 'cnpj_base_prefix_or_base36_mod_100_v1',
+      schema_version: '1.1.0',
+      shards,
+    }).success).toBe(true);
+  });
+});
 
 describe('schema 1.1 textual identity with v1 numeric fallback', () => {
   it('decodes the Python packer wire for the first real RFB alphanumeric CNPJ', () => {
@@ -25,5 +64,36 @@ describe('schema 1.1 textual identity with v1 numeric fallback', () => {
       shards: [{ shard: '71', url: 'https://example.org/companies-71.zip', sha1: 'a'.repeat(40), size: 1 }],
     } };
     expect(companyArchiveUrl('ABCD1234', { identifier: 'test', files })).toBe('https://example.org/companies-71.zip');
+  });
+  it('fails closed when new bucket semantics omit the 1.1 wire contract', () => {
+    const files = { companies: {
+      shard_by: 'cnpj_base_prefix_or_base36_mod_100_v1' as const,
+      shards: [{ shard: '71', url: 'https://example.org/companies-71.zip', sha1: 'a'.repeat(40), size: 1 }],
+    } };
+    expect(() => companyArchiveUrl('ABCD1234', { identifier: 'test', files }))
+      .toThrow(/schema 1\.1\.0 required/);
+  });
+
+  it('rejects a mismatched legacy wire instead of silently returning root 00000000', async () => {
+    const legacyBytes = ficha.v1.Company.encode({ cnpj_base: 0 }).finish();
+    const fetchImpl = (async () => ({
+      ok: true, status: 200, arrayBuffer: async () => Uint8Array.from(legacyBytes).buffer,
+    })) as unknown as typeof fetch;
+    await expect(fetchCompany('ABCD1234', { identifier: 'test', fetchImpl }))
+      .rejects.toThrow(/root mismatch/);
+  });
+
+  it('accepts matching v1 numeric wire and v1.1 textual wire in the guarded reader', async () => {
+    for (const [root, company] of [
+      ['12345678', { cnpj_base: 12345678 }],
+      ['ABCD1234', { cnpj_base_text: 'ABCD1234' }],
+    ] as const) {
+      const bytes = ficha.v1.Company.encode(company).finish();
+      const fetchImpl = (async () => ({
+        ok: true, status: 200, arrayBuffer: async () => Uint8Array.from(bytes).buffer,
+      })) as unknown as typeof fetch;
+      const decoded = await fetchCompany(root, { identifier: 'test', fetchImpl });
+      expect(decoded && companyRoot(decoded)).toBe(root);
+    }
   });
 });

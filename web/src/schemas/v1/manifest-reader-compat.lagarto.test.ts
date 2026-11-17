@@ -1,6 +1,7 @@
 /** P0-D offline contract tests. No Internet Archive requests or real manifest writes. */
 import { describe, expect, it } from 'vitest';
 import { Field, Root, Type } from 'protobufjs';
+import { z } from 'zod';
 
 import { ficha } from '../../generated/company.pb.js';
 import { companyArchiveUrl, companyRoot, estabelecimentoCnpj, socioCnpj } from '../../lib/companies';
@@ -224,6 +225,63 @@ describe('Lagarto P0-D: manifest v1/v1.1 and reader contract', () => {
       .toBe('00000000E08G12');
     // Observed silent corruption proves forward compatibility is NOT guaranteed.
     // This test cannot force out-of-repository old clients to negotiate a version.
+  });
+
+  it('proves a mixed v1/1.1 discovery manifest breaks legacy routing before current selection', () => {
+    // Extracted routing contract from the v1 manifest parser on main:
+    // its shard_by is z.literal('cnpj_base_prefix_2'), not an enum.
+    // Model the original routing boundary, NOT a deployed external client.
+    const v1ShardSchema = z.object({
+      shard_by: z.literal('cnpj_base_prefix_2'),
+      shards: z.array(z.object({
+        shard: z.string().regex(/^\d{2}$/),
+        url: z.string().url(),
+        sha1: z.string().regex(/^[0-9a-f]{40}$/),
+        size: z.number().int().positive(),
+      })).length(100),
+    });
+    const v1DiscoverySchema = z.object({
+      current: z.string().regex(/^\d{4}-\d{2}$/),
+      snapshots: z.array(z.object({
+        date: z.string().regex(/^\d{4}-\d{2}$/),
+        files: z.object({ companies: v1ShardSchema.optional() }),
+      })),
+    });
+    const legacy = {
+      ...snapshot('2026-07'),
+      files: {
+        ...snapshot('2026-07').files,
+        companies: {
+          shard_by: 'cnpj_base_prefix_2' as const,
+          shards: shards().map((s) => ({
+            ...s,
+            url: s.url.replace('/ficha-2026-08/', '/ficha-2026-07/'),
+          })),
+        },
+      },
+    };
+    const alpha = snapshot11();
+    // A single mixed index is valid to the UPDATED parser but invalid to v1,
+    // even though current still points to the old 2026-07 snapshot.
+    const mixed = { current: '2026-07', snapshots: [legacy, alpha] };
+    expect(ManifestSchema.safeParse(mixed).success).toBe(true);
+    expect(v1DiscoverySchema.safeParse(mixed).success).toBe(false);
+
+    // Explicit discovery separation is a *candidate contract*, not implemented
+    // production routing: a v1 index must not list v1.1 shard URLs.
+    const v1Only = { current: '2026-07', snapshots: [legacy] };
+    const v11Only = { current: '2026-08', snapshots: [alpha] };
+    expect(v1DiscoverySchema.safeParse(v1Only).success).toBe(true);
+    expect(ManifestSchema.safeParse(v11Only).success).toBe(true);
+    const oldUrls = legacy.files.companies.shards.map((s) => s.url);
+    const newUrls = alpha.files.companies.shards.map((s) => s.url);
+    expect(oldUrls).toHaveLength(100);
+    expect(newUrls).toHaveLength(100);
+    expect(oldUrls.every((url) => url.includes('/ficha-2026-07/'))).toBe(true);
+    expect(newUrls.every((url) => url.includes('/ficha-2026-08/'))).toBe(true);
+    expect(oldUrls.filter((url) => newUrls.includes(url))).toHaveLength(0);
+    // A client that manually fetches v1.1 wire still silently loses letters;
+    // separating discovery cannot retroactively change legacy decoders.
   });
 
 });
