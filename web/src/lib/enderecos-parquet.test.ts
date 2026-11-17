@@ -119,6 +119,38 @@ describe('P3-B: execução real de SQL parametrizado sobre Parquet sintético', 
       expect(consultar({ uf: 'SP', municipio: rfb, termo: 'Rua%_Inexistente' }))
         .toEqual([]);
 
+      // Fronteira de cobertura: reproduz o predicado atual do writer em
+      // transform.py. Um logradouro somente com espaços ainda entra no
+      // Parquet, enquanto NULL e string vazia não entram. Sem municipio
+      // a linha também entra, mas não é recuperável pelo filtro municipal.
+      // Isto documenta limites conhecidos, NÃO executa nem altera o ETL.
+      const cobertura = conn.query(`
+        WITH fonte(uf, municipio, logradouro) AS (
+          VALUES
+            ('SP', '7107', 'Av. São João'),
+            ('SP', '7107', NULL),
+            ('SP', '7107', ''),
+            ('SP', '7107', '   '),
+            (NULL, '7107', 'Rua Rio'),
+            ('', '7107', 'Rua Rio'),
+            ('SP', NULL, 'Rua Rio')
+        ), elegiveis AS (
+          SELECT * FROM fonte
+          WHERE logradouro IS NOT NULL AND logradouro <> ''
+            AND uf IS NOT NULL AND uf <> ''
+        )
+        SELECT COUNT(*) AS n,
+          COUNT(*) FILTER (WHERE TRIM(logradouro) = '') AS so_espacos,
+          COUNT(*) FILTER (WHERE municipio IS NULL) AS sem_municipio
+        FROM elegiveis
+      `).toArray()[0]?.toJSON() as {
+        n: number | bigint; so_espacos: number | bigint;
+        sem_municipio: number | bigint;
+      };
+      expect(Number(cobertura.n)).toBe(3);
+      expect(Number(cobertura.so_espacos)).toBe(1);
+      expect(Number(cobertura.sem_municipio)).toBe(1);
+
       // Falso negativo reproduzido em SQL real pela ausência de normalização antiga.
       const antigo = conn.prepare(
         'SELECT cnpj FROM enderecos WHERE uf = ? AND logradouro_normalizado ILIKE ?',
