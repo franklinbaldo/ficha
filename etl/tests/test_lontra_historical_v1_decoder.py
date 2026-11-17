@@ -110,3 +110,41 @@ def test_actual_historical_v1_decoder_cannot_represent_alpha_root_or_partner() -
     assert "cnpj_socio_text" not in decoded_legacy.socios[0].DESCRIPTOR.fields_by_name
     assert decoded_legacy.cnpj_base == 0
     assert decoded_legacy.socios[0].cnpj_socio == 0
+
+
+def test_historical_v1_unknown_fields_survive_opaque_roundtrip_but_not_projection() -> None:
+    """Distinguish opaque protobuf wire preservation from lossy v1 field mapping.
+
+    A raw v1 parse/serialize roundtrip keeps unknown tags with this runtime.
+    A consumer that rebuilds a v1 message from known numeric fields does not.
+    Neither behavior makes a v1 UI capable of displaying the alpha identity.
+    """
+    legacy_company = _company_class("v1")
+    modern_company = _company_class("v11")
+    source = modern_company(cnpj_base_text="0000000A")
+    establishment = source.estabelecimentos.add()
+    establishment.cnpj_ordem_text = "E08G"
+    establishment.cnpj_dv = 12
+    source.socios.add().cnpj_socio_text = "00000000E08G12"
+
+    original_wire = source.SerializeToString()
+    old = legacy_company.FromString(original_wire)
+
+    # Positive control: this historical protobuf runtime preserves opaque tags.
+    opaque_roundtrip = modern_company.FromString(old.SerializeToString())
+    assert opaque_roundtrip.cnpj_base_text == "0000000A"
+    assert opaque_roundtrip.estabelecimentos[0].cnpj_ordem_text == "E08G"
+    assert opaque_roundtrip.socios[0].cnpj_socio_text == "00000000E08G12"
+
+    # Negative control: a v1 app projecting only familiar fields loses identity.
+    projected = legacy_company(cnpj_base=old.cnpj_base)
+    projected_establishment = projected.estabelecimentos.add()
+    projected_establishment.cnpj_ordem = old.estabelecimentos[0].cnpj_ordem
+    projected_establishment.cnpj_dv = old.estabelecimentos[0].cnpj_dv
+    projected.socios.add().cnpj_socio = old.socios[0].cnpj_socio
+    projected_wire = projected.SerializeToString()
+    decoded_projection = modern_company.FromString(projected_wire)
+    assert decoded_projection.cnpj_base_text == ""
+    assert decoded_projection.estabelecimentos[0].cnpj_ordem_text == ""
+    assert decoded_projection.socios[0].cnpj_socio_text == ""
+    assert projected_wire != original_wire
