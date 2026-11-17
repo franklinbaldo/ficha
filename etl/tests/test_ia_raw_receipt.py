@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import copy
+import json
 import unittest
+from pathlib import Path
 
 from ficha_etl.ia_raw_receipt import check_raw_head, reconcile_raw_metadata
 from ficha_etl.sources import canonical_inventory
@@ -19,6 +21,8 @@ def fixtures() -> tuple[dict, dict]:
             "method": "PROPFIND",
             "depth": 1,
             "http_status": 207,
+            "server_date": "Mon, 16 Nov 2026 21:37:49 GMT",
+            "observed_at_utc": "2026-11-16T21:37:51+00:00",
         },
         "identity_level": "metadata-only",
         "content_hash_verified": False,
@@ -101,11 +105,11 @@ class RawReconciliationTests(unittest.TestCase):
     def test_duplicate_or_missing_origin_fails_closed(self):
         origin, archive = fixtures()
         origin["files"][-1] = copy.copy(origin["files"][0])
-        with self.assertRaisesRegex(ValueError, "invalid/duplicate"):
+        with self.assertRaisesRegex(ValueError, "unexpected or duplicated ZIP"):
             reconcile_raw_metadata(origin, archive)
         origin, archive = fixtures()
         origin["files"].pop()
-        with self.assertRaisesRegex(ValueError, "incomplete RFB"):
+        with self.assertRaisesRegex(ValueError, "must contain all 37"):
             reconcile_raw_metadata(origin, archive)
 
     def test_wrong_item_and_incomplete_archive_fail_closed(self):
@@ -124,13 +128,13 @@ class RawReconciliationTests(unittest.TestCase):
         report = reconcile_raw_metadata(origin, archive)
         self.assertFalse(report.content_identity_verified)
         origin["content_hash_verified"] = True
-        with self.assertRaisesRegex(ValueError, "must not claim"):
+        with self.assertRaisesRegex(ValueError, "metadata-only receipt cannot attest"):
             reconcile_raw_metadata(origin, archive)
 
     def test_disagreeing_origin_total_fails_closed(self):
         origin, archive = fixtures()
         origin["total_size_bytes"] -= 1
-        with self.assertRaisesRegex(ValueError, "total disagrees"):
+        with self.assertRaisesRegex(ValueError, "total byte count contradicts"):
             reconcile_raw_metadata(origin, archive)
 
     def test_head_size_only_does_not_attest_remote_content(self):
@@ -222,6 +226,45 @@ class RawReconciliationTests(unittest.TestCase):
         )
         self.assertEqual(observation.status, "catalog_incomplete")
         self.assertFalse(observation.head_size_consistent)
+
+    def test_real_rfb_receipt_fixture_reaches_ia_without_byte_identity(self):
+        fixture = Path(__file__).parent / "fixtures" / "rfb" / "2026-08-propfind.json"
+        origin = json.loads(fixture.read_text(encoding="utf-8"))
+        archive = {
+            "metadata": {"identifier": "ficha-2026-08"},
+            "files": [
+                {
+                    "name": file["ia_raw_name_expected"],
+                    "size": str(file["size_bytes"]),
+                    "sha1": "a" * 40,
+                }
+                for file in origin["files"]
+            ],
+        }
+        report = reconcile_raw_metadata(origin, archive)
+        self.assertEqual(len(report.files), 37)
+        self.assertTrue(report.metadata_consistent)
+        self.assertFalse(report.content_identity_verified)
+
+    def test_reject_rfb_claims_not_covered_by_old_reconciler(self):
+        cases = {
+            "missing server date": lambda r: r["source"].pop("server_date"),
+            "stale observation": lambda r: r["source"].__setitem__(
+                "observed_at_utc", "2026-11-17T21:37:51+00:00"
+            ),
+            "invalid etag": lambda r: r["files"][0].__setitem__(
+                "etag_raw", '"bad' + chr(0) + 'etag"'
+            ),
+            "extra unverified hash claim": lambda r: r.__setitem__("sha256_verified", True),
+            "extra file hash claim": lambda r: r["files"][0].__setitem__("sha256", "0" * 64),
+            "boolean HTTP status": lambda r: r["source"].__setitem__("http_status", True),
+        }
+        for title, mutate in cases.items():
+            with self.subTest(title=title):
+                origin, archive = fixtures()
+                mutate(origin)
+                with self.assertRaises(ValueError):
+                    reconcile_raw_metadata(origin, archive)
 
 
 if __name__ == "__main__":
