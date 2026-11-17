@@ -1,7 +1,7 @@
 """P0-A negative control: finalization must not clobber its input descriptor.
 
-Tests only path validation before descriptor/network I/O. The four adversarial
-cases are known XFAIL until the owning #246 implementation rejects aliases.
+Tests path validation before descriptor/network I/O. All four adversarial
+cases must raise ValueError and preserve the descriptor bytes.
 No ETL, Internet Archive access or publication occurs in these tests.
 """
 
@@ -15,11 +15,6 @@ import pytest
 from ficha_etl import monthly_sharded
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="P0-A #246: output aliases of the input descriptor are not rejected yet",
-)
 @pytest.mark.parametrize(
     ("output_name", "alias_kind"),
     [

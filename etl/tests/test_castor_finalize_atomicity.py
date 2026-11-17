@@ -269,3 +269,54 @@ def test_finalize_rejects_lexical_alias_before_remote_reads(
 
     assert args.manifest.read_bytes() == old_manifest
     assert not args.snapshot_entry.exists()
+
+
+@pytest.mark.parametrize("output", ["snapshot_entry", "verification", "manifest"])
+def test_finalize_rejects_descriptor_as_output_before_io(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, output: str
+) -> None:
+    args = _args(tmp_path)
+    args.descriptor = getattr(args, output)
+    previous_manifest = args.manifest.read_bytes()
+    monkeypatch.setattr(
+        monthly_sharded,
+        "_load_descriptor",
+        lambda *_: pytest.fail("descriptor alias must be rejected before reading"),
+    )
+
+    with pytest.raises(ValueError, match="finalize output paths must be distinct"):
+        monthly_sharded.command_finalize(args)
+
+    assert args.manifest.read_bytes() == previous_manifest
+    assert not args.snapshot_entry.exists()
+    assert not args.verification.exists()
+
+
+@pytest.mark.parametrize("link_type", ["symlink", "hardlink"])
+def test_finalize_rejects_descriptor_linked_to_output_before_io(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, link_type: str
+) -> None:
+    args = _args(tmp_path)
+    original_descriptor = b'{"date":"2026-08","source":"preserve"}\n'
+    args.descriptor.write_bytes(original_descriptor)
+    try:
+        if link_type == "symlink":
+            args.verification.symlink_to(args.descriptor)
+        else:
+            args.verification.hardlink_to(args.descriptor)
+    except (OSError, NotImplementedError):
+        pytest.skip(f"{link_type} unavailable on this filesystem")
+    previous_manifest = args.manifest.read_bytes()
+    monkeypatch.setattr(
+        monthly_sharded,
+        "_load_descriptor",
+        lambda *_: pytest.fail("descriptor alias must be rejected before reading"),
+    )
+
+    with pytest.raises(ValueError, match="finalize output paths must be distinct"):
+        monthly_sharded.command_finalize(args)
+
+    assert args.descriptor.read_bytes() == original_descriptor
+    assert args.verification.read_bytes() == original_descriptor
+    assert args.manifest.read_bytes() == previous_manifest
+    assert not args.snapshot_entry.exists()
