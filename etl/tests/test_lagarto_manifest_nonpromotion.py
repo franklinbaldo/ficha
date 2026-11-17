@@ -191,17 +191,20 @@ def test_submitted_but_unverified_shard_never_promotes(monkeypatch, tmp_path: Pa
     _assert_no_promotion(args, before)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="P0-D known gap: finalize writes snapshot-entry before a failed manifest gate",
+@pytest.mark.parametrize(
+    "previous_entry",
+    [None, b'{ "previous" : "preserve exact bytes" }\\n'],
 )
-def test_manifest_refusal_does_not_leave_orphan_snapshot_entry(monkeypatch, tmp_path: Path):
-    """A failed publication gate must not leave an apparently completed entry.
+def test_manifest_refusal_does_not_leave_orphan_snapshot_entry(
+    monkeypatch, tmp_path: Path, previous_entry: bytes | None
+):
+    """Rejected publication must restore an old entry or leave it absent.
 
-    Expected failure until the producer makes this local publication step
-    transactional. A synthetic gate rejection avoids any network or real IA.
+    The 100 shard inputs and failing manifest gate are synthetic and offline.
     """
     args, before = _setup(tmp_path)
+    if previous_entry is not None:
+        args.snapshot_entry.write_bytes(previous_entry)
     monkeypatch.setattr(monthly_sharded, "wait_for_descriptor_remote", lambda *_a, **_kw: {})
     monkeypatch.setattr(
         monthly_sharded,
@@ -216,7 +219,8 @@ def test_manifest_refusal_does_not_leave_orphan_snapshot_entry(monkeypatch, tmp_
     with pytest.raises(ValueError, match="legacy manifest.json"):
         monthly_sharded.command_finalize(args)
 
-    # Current producer writes snapshot-entry BEFORE calling update_manifest;
-    # the manifest and verification remain untouched, but an orphan is left.
-    # Once producer ordering is corrected, this xfail should be removed.
-    _assert_no_promotion(args, before)
+    assert args.manifest.read_bytes() == before
+    assert (
+        args.snapshot_entry.read_bytes() if args.snapshot_entry.exists() else None
+    ) == previous_entry
+    assert not args.verification.exists()
