@@ -1,7 +1,9 @@
 import { readFileSync } from 'node:fs';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { ManifestSchema as LegacyV1ManifestSchema } from './fixtures/manifest-v1-at-021ec8b5.castor';
 import { ManifestSchema as UpdatedManifestSchema } from '../schemas/v1/manifest';
+import { fetchManifest } from './manifest';
+import { withBase } from './base';
 
 /**
  * This imports the complete, byte-for-byte v1 Zod schema from main@021ec8b5
@@ -73,4 +75,51 @@ describe('Castor P0-A: actual historical v1 manifest parser compatibility', () =
     expect(LegacyV1ManifestSchema.safeParse(separate).success).toBe(false);
     // This test is a contract oracle only. No production discovery route exists yet.
   });
+  it('keeps the actual web discovery on the v1 URL when a v1.1 opt-in index exists', async () => {
+    const { published, future } = compatibilityFixtures();
+    // Proposed paths only: this test uses a local mock, not a published v1.1 manifest.
+    const v1Discovery = withBase('manifest.json');
+    const v11Discovery = withBase('manifest-atomic-v1.1.json');
+    const v11Index = { current: future.date, snapshots: [future] };
+    const requested: string[] = [];
+    const resources: Record<string, unknown> = {
+      [v1Discovery]: published,
+      [v11Discovery]: v11Index,
+    };
+    const fakeFetch = vi.fn(async (url: string) => {
+      requested.push(url);
+      const payload = resources[url];
+      return payload
+        ? { ok: true, status: 200, json: async () => structuredClone(payload) }
+        : { ok: false, status: 404, json: async () => null };
+    });
+    vi.stubGlobal('fetch', fakeFetch);
+    try {
+      const discovered = await fetchManifest();
+      expect(discovered).not.toBeNull();
+      expect(discovered!.current).toBe('2026-07');
+      expect(LegacyV1ManifestSchema.safeParse(discovered).success).toBe(true);
+      expect(requested).toEqual([v1Discovery]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+
+    // Only an explicit request to the distinct v1.1 path could discover it.
+    expect(v11Discovery).not.toBe(v1Discovery);
+    expect(UpdatedManifestSchema.safeParse(v11Index).success).toBe(true);
+    expect(LegacyV1ManifestSchema.safeParse(v11Index).success).toBe(false);
+    const oldUrls = new Set(
+      published.snapshots.flatMap((snapshot: typeof future) =>
+        snapshot.files.companies?.shards.map((s: { url: string }) => s.url) ?? []
+      )
+    );
+    const nextUrls = future.files.companies.shards.map((s: { url: string }) => s.url);
+    expect(nextUrls).toHaveLength(100);
+    expect(new Set(nextUrls).size).toBe(100);
+    expect(nextUrls.every((url: string) =>
+      url.includes('/wire-1.1/') && !oldUrls.has(url)
+    )).toBe(true);
+    // Deliberately does not assert v1 decoder compatibility with v1.1 wire.
+  });
+
 });
