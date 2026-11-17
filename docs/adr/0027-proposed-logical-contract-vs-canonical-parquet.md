@@ -3,7 +3,7 @@
 **Status:** Proposed — não aprovado para implementação  
 **Data:** 2026-11-16  
 **Owner:** 🐙 Polvo (P4-B, [Ficha #247](https://github.com/franklinbaldo/ficha/issues/247))  
-**Base de leitura:** `main@98c5c110d9938d55b40c91d2309c99e40b186758`  
+**Base:** `main@98c5c110` · **Rechecagem:** `main@6f61bcde15bb` (17/11)  
 **Deliberação:** proprietário / 🐘 Elefante, após 🐝 Abelha (P4-A)  
 **Supersessão:** nenhuma enquanto a proposta não for aceita.
 
@@ -154,28 +154,29 @@ a P0 (Castor, Lagarto, Gavião e Elefante), não a esta ADR. Nenhum schema
 Protobuf, manifesto ou endpoint é alterado nesta PR.
 
 **P0-D [#252](https://github.com/franklinbaldo/ficha/pull/252),
-HEAD [`677143f9`](https://github.com/franklinbaldo/ficha/commit/677143f936c6f2666b4023f6094d161a291e150c)
-(base Castor `93702fa2`, 17/11):** sincronizada; diff só dos
-testes Lagarto. A guarda direta deixou de ser XFAIL: três negativos
-obrigatórios **PASS** para `submit_one_shard`,
-`submit_prepared_shard` e `publish_one_shard` antes de I/O simulado.
-[CI #44076734206](https://github.com/franklinbaldo/ficha/actions/runs/44076734206):
-ETL Linux/Windows **684 PASS + 1 XFAIL** cada, web 112 PASS,
-ficha-py SKIPPED. **Novo XFAIL(strict=True):** escrita parcial em
-`Path.write_text` pode corromper o manifesto anterior apesar do
-rollback de `snapshot-entry.json`; falta testar falha posterior em
-`verification.json`. URLs v1/v1.1 com sobreposição 1/100 são
-**sintéticas**, não colisão observada no IA. P0 HOLD por atomicidade,
-opt-in, disjunção de URLs e decoders v1 externos.
+HEAD `5c617341` (17/11), composta sobre Castor `080ed471`:**
+três negativos pré-I/O seguem PASS. A contraprova antiga em
+`Path.write_text` foi retirada, pois o writer mudou.
+A injeção em `os.replace` agora **PASS** com preservação
+do manifesto e rollback de snapshot-entry. **Único
+XFAIL(strict=True):** falha *posterior* de escrita em
+`verification.json`, sem transação multi-arquivo.
+[CI #44086155407](https://github.com/franklinbaldo/ficha/actions/runs/44086155407)
+no SHA: ETL Linux/Windows **691 PASS + 1 XFAIL** cada,
+web **112 PASS**, ficha-py SKIPPED.
+Sobreposição de URLs v1/v1.1 é só fixture sintética;
+decoder legado, opt-in e namespace continuam **P0 HOLD**.
 
 **P0-A [#246](https://github.com/franklinbaldo/ficha/pull/246),
-HEAD `93702fa2` (17/11):** guardas pré-I/O dos três entrypoints
-diretos de publicação e preflight CLI, após sincronizar `main` sem
-delta lógico nessas guardas.
-[CI #44069343949](https://github.com/franklinbaldo/ficha/actions/runs/44069343949):
-Test executado, ETL Linux/Windows 674 PASS cada, web 101,
-ficha-py 21. Não prova URLs disjuntas, leitores v1 externos ou
-publicação. Na `main`, `upload-outputs` precede `submit-shard`.
+HEAD `080ed471` (17/11):** `update_manifest()` escreve
+staging local com `fsync` e `os.replace`; seis testes incluem
+quatro negativos de falha/ausência do manifesto anterior.
+[CI #44079860512](https://github.com/franklinbaldo/ficha/actions/runs/44079860512)
+executou Test SUCCESS em ETL Linux/Windows, web e ficha-py;
+[revisão Gavião](https://github.com/franklinbaldo/ficha/pull/246#pullrequestreview-5938641060).
+Isso não comprova commit atômico de `snapshot-entry.json`,
+manifesto e `verification.json`, nem durabilidade após crash.
+Na `main`, `upload-outputs` precede `submit-shard`.
 **P0 HOLD.**
 
 ## Fronteira de descoberta e artefatos SSG: dois contratos distintos
@@ -228,17 +229,19 @@ ETL nem promover snapshots. **A/B/C continuam independentes desse corte**;
 a implementação pertence a P0-D/P3-A, após aceite e autorização de deploy.
 
 **P3-A [#257](https://github.com/franklinbaldo/ficha/pull/257),
-HEAD `78502f6b` (17/11):** o SSG **não gera** o
-`manifest.json` de dados RFB; trocar diretamente `dist/ficha/`
-eliminaria esse contrato público. O
-[CI #44072244590](https://github.com/franklinbaldo/ficha/actions/runs/44072244590)
-executou **46/46 testes Node**, build SSG, Chromium 320/375/1440,
-axe 12/12 e rollback **offline sintético**. O ensaio rejeita manifesto
-ausente, inválido ou divergente e preserva os bytes antigos apenas em
-sandbox. **Cutover futuro:** montar e verificar byte-a-byte o manifesto
-RFB (`current`, `snapshots`, URLs, base `/ficha/`) e ensaiar GET
-e rollback de Pages após autorização. **Deploy real NOT_RUN**; a ADR
-não autoriza migração.
+HEAD `2ba966df` (17/11):** substituir diretamente
+`dist/ficha/` pelo SSG apagaria `manifest.json` RFB.
+Foi recuperado artefato de **build Astro real** do Pages
+([run #44013291634](https://github.com/franklinbaldo/ficha/actions/runs/44013291634),
+commit `c3e4a3a`, ZIP SHA-256
+`36a4746612a63d41946375474e5b452cd546a7c2eabd4985e510171864e1d4ee`,
+manifesto RFB SHA-256
+`8dcf725ca434a8fde3d4d9403cc8636e6feca1ea6ef53215f3e6130322d494d3`).
+Não comprova a versão atualmente publicada.
+[CI #44081331983](https://github.com/franklinbaldo/ficha/actions/runs/44081331983)
+executou build isolado e 9 casos sintéticos de importação,
+com negativos. **Paridade real, rollback de Pages e deploy:
+NOT_RUN.** SSG e A/B/C são decisões independentes.
 
 ## Revisão cruzada P4-A: contrato sem paridade semântica comprovada
 
