@@ -163,6 +163,13 @@ rejeita 1.1 no manifesto legado, **mas não prova disjunção** dos ZIPs.
 Exigir teste negativo de interseção v1×v1.1 no produtor e leitor
 opt-in, além da unicidade dentro de cada índice.
 
+**17/11, P0:** [#246](https://github.com/franklinbaldo/ficha/pull/246)
+`4aeecc99` agora compensa `snapshot-entry.json` se o gate rejeita 1.1;
+[#252](https://github.com/franklinbaldo/ficha/pull/252) `f5f5e8a4`
+exige restauração byte a byte em fixtures. Os CIs `44044194625` e
+`44049319967` rodaram suites ETL. **Não** provam transação no IA,
+publicação ou disjunção de URLs.
+
 ## Fronteira de descoberta e artefatos SSG: dois contratos distintos
 
 A incompatibilidade de Protobuf não se limita aos bytes. O
@@ -186,12 +193,9 @@ na branch P3-A rejeita formato inesperado, retira o widget conhecido e
 isola o manifesto sintético; **não foi integrado à main**. Build da PoC
 não equivale a ensaio de deploy, consultas reais ou paridade visual.
 
-**Histórico P3-A:** no HEAD `56c8bea4`, o `ssg 0.0.76` emitia
-`Error generating manifest` com exit 0; quality gate nativo: 9/10.
-O [CI #44015083398](https://github.com/franklinbaldo/ficha/actions/runs/44015083398)
-reprovou no diagnóstico final, embora Node/build/Chromium/axe
-executados estivessem verdes. É prova **offline** da PoC, não de
-paridade DuckDB/Protobuf, publicação ou acessibilidade manual.
+**Falha histórica P3-A:** [CI #44015083398](https://github.com/franklinbaldo/ficha/actions/runs/44015083398)
+reprovou `Error generating manifest` com exit 0; o quality gate nativo
+era 9/10. PoC offline não prova buscas reais, deploy ou a11y manual.
 
 **Atualização P3-A em 17/11/2026, [HEAD `0a2db297`](https://github.com/franklinbaldo/ficha/commit/0a2db297c4e6850d98cccf32e6406ef1eb1d7a45):**
 o `staticdatagen v0.0.32` exigia `name` nos metadados da página;
@@ -205,7 +209,7 @@ step **`Detect upstream build diagnostics even on exit code zero` SUCCESS**.
 Isto resolve o defeito **nesta PoC offline**, não transforma exit 0 em
 oráculo universal. O quality gate nativo permanece **9/10** por exigência
 de rodapé promocional; busca DuckDB/Protobuf real, paridade, leitor de tela,
-rollback exercitado e deploy seguem **NOT_RUN**. A #257 permanece Draft.
+rollback **de produção** e deploy seguem **NOT_RUN**. A #257 permanece Draft.
 
 **Gate extra de cutover, a cargo de P3-A:** validar artefatos e diagnósticos,
 não apenas código de saída do processo; esclarecer/corrigir o erro de
@@ -224,10 +228,16 @@ e rollback do Pages anterior. O shell SSG não deve decidir formatos de
 ETL nem promover snapshots. **A/B/C continuam independentes desse corte**;
 a implementação pertence a P0-D/P3-A, após aceite e autorização de deploy.
 
+**17/11, P3-A:** [CI #44045318433](https://github.com/franklinbaldo/ficha/actions/runs/44045318433)
+executou no SHA `8435b5f` rollback **offline** de um artefato
+legado **sintético**: inventários SHA-256, falha pós-troca e
+restauração em sandbox. Negativos cobrem hash errado, adulteração,
+colisão de manifesto e symlink. **Rollback real de Pages: NOT_RUN.**
+
 ## Revisão cruzada P4-A: contrato sem paridade semântica comprovada
 
 A [matriz P4-A da Abelha](https://github.com/franklinbaldo/ficha/blob/e81d2e658988d1dcdb276ef6c47a650ed392fd43/docs/okf-contract-compatibility.md)
-([PR #255 draft](https://github.com/franklinbaldo/ficha/pull/255)) mede **86 colunas**
+([PR #255 integrada](https://github.com/franklinbaldo/ficha/pull/255)) mede **86 colunas**
 em três relações: Cnpj (52), Raiz (18), Socio (16). Os nomes e tipos
 básicos SQL/Zod concordam, mas há **28 diferenças já existentes de
 nulabilidade** (22/1/5) e **sete domínios `z.enum` do contrato público v1
