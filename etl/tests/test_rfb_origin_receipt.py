@@ -51,6 +51,10 @@ class TestRfbOriginReceipt(unittest.TestCase):
             "boolean size": lambda r: r["files"][0].__setitem__("size_bytes", True),
             "empty etag": lambda r: r["files"][0].__setitem__("etag_raw", ""),
             "unquoted etag": lambda r: r["files"][0].__setitem__("etag_raw", "abc"),
+            "NUL in ETag": lambda r: r["files"][0].__setitem__("etag_raw", '"a\x00b"'),
+            "TAB in ETag": lambda r: r["files"][0].__setitem__("etag_raw", '"a\tb"'),
+            "DEL in ETag": lambda r: r["files"][0].__setitem__("etag_raw", '"a\x7fb"'),
+            "non-octet ETag": lambda r: r["files"][0].__setitem__("etag_raw", '"a\u0100b"'),
             "wrong MIME": lambda r: r["files"][0].__setitem__("content_type", "text/html"),
             "wrong IA mapping": lambda r: r["files"][0].__setitem__(
                 "ia_raw_name_expected", "other.zip"

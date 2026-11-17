@@ -31,7 +31,8 @@ _SOURCE_KEYS = frozenset(
     {"url", "method", "depth", "http_status", "server_date", "observed_at_utc"}
 )
 _ENTRY_KEYS = frozenset({"name", "size_bytes", "etag_raw", "content_type", "ia_raw_name_expected"})
-_ETAG = re.compile(r'(?:W/)?"[^"\r\n]+"\Z')
+# RFC 9110 §8.8.3: etagc is VCHAR except DQUOTE, or obs-text (nonempty here).
+_ETAG = re.compile(r'(?:W/)?"[\x21\x23-\x7e\x80-\xff]+"\Z')
 _MAX_OBSERVATION_DATE_SKEW_SECONDS = 10 * 60
 
 
