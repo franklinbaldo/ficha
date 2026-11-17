@@ -193,6 +193,43 @@ def _require_same_bytes(name: str, verdict, prepared: PreparedShard) -> None:
         )
 
 
+
+def plan_opt_in_v11_shard(
+    session: ShardPackSession,
+    prepared: PreparedShard,
+    *,
+    pinned_inputs: Mapping[str, str],
+) -> PreparedShard:
+    """Plan a versioned Protobuf 1.1 artifact from verified LOCAL bytes.
+
+    This is deliberately not a submitter. It performs no network I/O and
+    exposes no upload callback. The legacy submitters must continue refusing
+    1.1 sessions before touching any remote object. A separate fail-closed
+    versioned publisher is needed before this plan may be uploaded.
+    """
+    _validate_session(session)
+    if (
+        getattr(session, "wire_version", None) != "1.1.0"
+        or getattr(session, "shard_by", None) != "cnpj_base_prefix_or_base36_mod_100_v1"
+    ):
+        raise ShardPublishError(
+            "opt-in wire-1.1 shard planning requires Protobuf 1.1.0 "
+            "and cnpj_base_prefix_or_base36_mod_100_v1"
+        )
+
+    prefix, expected, local = _validate_prepared(
+        session, prepared, pinned_inputs=pinned_inputs
+    )
+    return PreparedShard(
+        prefix=prefix,
+        name=f"wire-1.1/{session.geometry.shard_name(prefix)}",
+        path=prepared.path,
+        materialization_id=expected.materialization_id(),
+        size=local.size,
+        sha1=local.sha1,
+    )
+
+
 def submit_prepared_shard(
     session: ShardPackSession,
     prepared: PreparedShard,
