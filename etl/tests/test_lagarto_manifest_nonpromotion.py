@@ -189,3 +189,33 @@ def test_submitted_but_unverified_shard_never_promotes(monkeypatch, tmp_path: Pa
     with pytest.raises(RuntimeError, match="42: verify returned submitted"):
         monthly_sharded.command_finalize(args)
     _assert_no_promotion(args, before)
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="P0-D known gap: finalize writes snapshot-entry before a failed manifest gate",
+)
+def test_manifest_refusal_does_not_leave_orphan_snapshot_entry(monkeypatch, tmp_path: Path):
+    """A failed publication gate must not leave an apparently completed entry.
+
+    Expected failure until the producer makes this local publication step
+    transactional. A synthetic gate rejection avoids any network or real IA.
+    """
+    args, before = _setup(tmp_path)
+    monkeypatch.setattr(monthly_sharded, "wait_for_descriptor_remote", lambda *_a, **_kw: {})
+    monkeypatch.setattr(
+        monthly_sharded,
+        "verify_all_shards",
+        lambda *_a, **_kw: [_verified(f"{i:02d}") for i in range(100)],
+    )
+
+    def reject_legacy_manifest(*_args, **_kwargs):
+        raise ValueError("legacy manifest.json rejects Protobuf 1.1")
+
+    monkeypatch.setattr(monthly_sharded, "update_manifest", reject_legacy_manifest)
+    with pytest.raises(ValueError, match="legacy manifest.json"):
+        monthly_sharded.command_finalize(args)
+
+    # Current producer writes snapshot-entry BEFORE calling update_manifest;
+    # the manifest and verification remain untouched, but an orphan is left.
+    # Once producer ordering is corrected, this xfail should be removed.
+    _assert_no_promotion(args, before)
