@@ -24,15 +24,18 @@ _OLD_SOURCE = Path(__file__).parent / "fixtures" / "company_pb2_v1_at_021ec8b5.t
 
 def _actual_v1_company_class():
     raw = _OLD_SOURCE.read_bytes()
-    git_blob = b"blob " + str(len(raw)).encode("ascii") + b"\\x00" + raw
+    git_blob = b"blob " + str(len(raw)).encode("ascii") + bytes([0]) + raw
     assert hashlib.sha1(git_blob, usedforsecurity=False).hexdigest() == _OLD_BLOB
 
     tree = ast.parse(raw.decode("utf-8"))
     matches = [
-        node for node in tree.body
+        node
+        for node in tree.body
         if isinstance(node, ast.Assign)
-        and any(isinstance(target, ast.Name) and target.id == "DESCRIPTOR"
-                for target in node.targets)
+        and any(
+            isinstance(target, ast.Name) and target.id == "DESCRIPTOR"
+            for target in node.targets
+        )
     ]
     assert len(matches) == 1
     call = matches[0].value
@@ -76,7 +79,10 @@ def test_actual_historical_v1_decoder_cannot_represent_alpha_branch_order() -> N
     decoded_modern = current_pb.Company.FromString(wire)
     decoded_legacy = legacy_company.FromString(wire)
     assert decoded_modern.estabelecimentos[0].cnpj_ordem_text == "E08G"
-    assert "cnpj_ordem_text" not in decoded_legacy.estabelecimentos[0].DESCRIPTOR.fields_by_name
+    assert (
+        "cnpj_ordem_text"
+        not in decoded_legacy.estabelecimentos[0].DESCRIPTOR.fields_by_name
+    )
     assert decoded_legacy.estabelecimentos[0].cnpj_ordem == 0
     legacy_cnpj = (
         f"{decoded_legacy.cnpj_base:08d}"
@@ -100,6 +106,8 @@ def test_actual_historical_v1_decoder_cannot_represent_alpha_root_or_partner() -
     assert decoded_modern.cnpj_base_text == "0000000A"
     assert decoded_modern.socios[0].cnpj_socio_text == "00000000E08G12"
     assert "cnpj_base_text" not in decoded_legacy.DESCRIPTOR.fields_by_name
-    assert "cnpj_socio_text" not in decoded_legacy.socios[0].DESCRIPTOR.fields_by_name
+    assert (
+        "cnpj_socio_text" not in decoded_legacy.socios[0].DESCRIPTOR.fields_by_name
+    )
     assert decoded_legacy.cnpj_base == 0
     assert decoded_legacy.socios[0].cnpj_socio == 0
