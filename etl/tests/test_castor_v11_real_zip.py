@@ -109,6 +109,36 @@ def test_genuine_zip_retains_alphanumeric_root_order_and_partner(tmp_path: Path)
     assert not (tmp_path / "wire-1.1").exists()
 
 
+def test_packer_member_regenerates_the_single_shared_v11_fixture(tmp_path: Path) -> None:
+    """Pin producer bytes for the TS opt-in reader and historic v1 decoder.
+
+    Producer baseline: 0a20f24dbc24cc85b4a3a86b6df8f5a10d50dae2.
+    Schema: proto/ficha/v1/company.proto, 1.1.0 (checked in ZIP metadata).
+    """
+    session, _spec, prepared = _real_local_shard(tmp_path)
+    fixture = Path(__file__).parent / "fixtures" / "company-v11-ca000001.hex"
+    pinned_hex = fixture.read_text(encoding="ascii").strip()
+    pinned_wire = bytes.fromhex(pinned_hex)
+    pinned_sha256 = "041e2b5e6f039959b03fd185021493f422ce884ea155590c9e99916ca769ec48"
+
+    assert len(pinned_wire) == 45
+    assert hashlib.sha256(pinned_wire).hexdigest() == pinned_sha256
+
+    with zipfile.ZipFile(prepared.path) as archive:
+        generated_wire = archive.read("CA/000/001.pb")
+        schema = archive.read("_schema.desc")
+        metadata = json.loads(archive.read("_meta.json"))
+    assert generated_wire == pinned_wire
+    assert hashlib.sha256(generated_wire).hexdigest() == pinned_sha256
+    assert metadata["schema_version"] == "1.1.0"
+    assert hashlib.sha256(schema).hexdigest() == session.schema_sha256
+
+    # Deliberate corruption is detected by the same pinned-byte oracle.
+    changed = bytearray(pinned_wire)
+    changed[-1] ^= 1
+    assert hashlib.sha256(changed).hexdigest() != pinned_sha256
+
+
 def test_genuine_zip_changed_after_receipt_fails_without_publish(tmp_path: Path) -> None:
     session, _spec, prepared = _real_local_shard(tmp_path)
     prepared.path.write_bytes(b"changed after local receipt")
