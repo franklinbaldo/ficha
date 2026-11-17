@@ -5,7 +5,17 @@ import { join } from 'node:path';
 import test from 'node:test';
 import { finalizeOutput } from '../scripts/finalize-output.mjs';
 
-const stub = { display:'standalone', name:'Static Site', short_name:'Site', start_url:'/' };
+const stub = {
+  background_color: '#ffffff',
+  description: 'Ensaio isolado do shell estático do Ficha sem consulta real.',
+  display: 'standalone',
+  name: 'FICHA',
+  orientation: 'portrait-primary',
+  scope: '/',
+  short_name: null,
+  start_url: '.',
+  theme_color: null,
+};
 const widget = '<!-- SSG Search Widget --><div id="ssg-search-widget"><div id="ssg-search-overlay"></div><script src="/ficha/_csp/abc123.js"></script></div>';
 const html = '<!doctype html><html><head><link rel="stylesheet" href="/ficha/_csp/def456.css"></head><body><main id="main-content"><form id="search-form"></form></main>' + widget + '</body></html>';
 
@@ -57,4 +67,19 @@ test('negative: unknown generated web manifest aborts unchanged', () => run(out 
 }, (root,out) => {
   assert.throws(() => finalizeOutput(root), /manifesto SSG desconhecido/);
   assert.match(readFileSync(join(out,'index.html'),'utf8'), /ssg-search-widget/);
+}));
+
+test('negative: old fallback manifest without page name is rejected', () => run(out => {
+  writeFileSync(join(out,'manifest.json'), JSON.stringify({
+    display:'standalone', name:'Static Site', short_name:'Site', start_url:'/',
+  }));
+}, (root,out) => {
+  assert.throws(() => finalizeOutput(root), /formato do manifesto gerado pelo SSG mudou/);
+  assert.ok(existsSync(join(out,'manifest.json')));
+}));
+test('negative: unexpected manifest scope is rejected', () => run(out => {
+  writeFileSync(join(out,'manifest.json'), JSON.stringify({...stub, scope:'/unrelated/'}));
+}, (root,out) => {
+  assert.throws(() => finalizeOutput(root), /manifesto SSG mudou/);
+  assert.ok(existsSync(join(out,'manifest.json')));
 }));
