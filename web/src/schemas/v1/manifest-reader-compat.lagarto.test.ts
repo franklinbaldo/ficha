@@ -284,4 +284,41 @@ describe('Lagarto P0-D: manifest v1/v1.1 and reader contract', () => {
     // separating discovery cannot retroactively change legacy decoders.
   });
 
+
+  it('exposes a cross-version shard URL collision that passes each index in isolation', () => {
+    // Candidate opt-in discovery must compare its URLs against the *v1* index;
+    // uniqueness within v1.1 alone cannot prevent reuse of legacy wire paths.
+    const legacy = {
+      ...snapshot('2026-07'),
+      files: {
+        ...snapshot('2026-07').files,
+        companies: {
+          shard_by: 'cnpj_base_prefix_2' as const,
+          shards: shards().map((entry) => ({
+            ...entry,
+            url: entry.url.replace('/ficha-2026-08/', '/ficha-2026-07/'),
+          })),
+        },
+      },
+    };
+    const optIn = snapshot11();
+    expect(SnapshotEntrySchema.safeParse(legacy).success).toBe(true);
+    expect(SnapshotEntrySchema.safeParse(optIn).success).toBe(true);
+    const v1Urls = new Set(legacy.files.companies.shards.map((entry) => entry.url));
+    expect(optIn.files.companies.shards.filter((entry) => v1Urls.has(entry.url)))
+      .toHaveLength(0);
+
+    // Deliberately reuse ONE legacy archive while retaining 100 distinct
+    // v1.1 bucket URLs. The current parser checks only intra-index uniqueness.
+    const collision = structuredClone(optIn);
+    collision.files.companies.shards[42]!.url = legacy.files.companies.shards[42]!.url;
+    expect(new Set(collision.files.companies.shards.map((entry) => entry.url)).size)
+      .toBe(100);
+    expect(SnapshotEntrySchema.safeParse(collision).success).toBe(true);
+    expect(collision.files.companies.shards.filter((entry) => v1Urls.has(entry.url)))
+      .toHaveLength(1);
+    // This is a documented failing boundary, NOT a passing production guard.
+    // A future opt-in publisher/reader must reject it before promotion or fetch.
+  });
+
 });
