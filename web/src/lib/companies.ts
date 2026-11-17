@@ -68,6 +68,10 @@ export function companyArchiveUrl(
         && files.companies.schema_version !== '1.1.0') {
       throw new Error('companyArchiveUrl: schema 1.1.0 required for alphanumeric shards');
     }
+    if (files.companies.shard_by === 'cnpj_base_prefix_2'
+        && files.companies.schema_version === '1.1.0') {
+      throw new Error('companyArchiveUrl: schema 1.1.0 cannot use legacy numeric shard mapping');
+    }
     const rawPrefix = base.slice(0, 2);
     const prefix = files.companies.shard_by === 'cnpj_base_prefix_or_base36_mod_100_v1'
       && !/^[0-9]{2}$/.test(rawPrefix)

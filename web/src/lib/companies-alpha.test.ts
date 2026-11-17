@@ -32,6 +32,39 @@ describe('P0-A: manifest version negotiation at the updated reader boundary', ()
     }
   });
 
+  it('rejects 1.1 wire mislabeled with the legacy numeric bucket contract', () => {
+    const result = CompaniesShardedSchema.safeParse({
+      shard_by: 'cnpj_base_prefix_2',
+      schema_version: '1.1.0',
+      shards,
+    });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues.some(issue => issue.path.join('.') === 'schema_version')).toBe(true);
+    }
+    // Explicit v1.0 remains supported alongside historical missing versions.
+    expect(CompaniesShardedSchema.safeParse({
+      shard_by: 'cnpj_base_prefix_2',
+      schema_version: '1.0.0',
+      shards,
+    }).success).toBe(true);
+  });
+
+  it('refuses a v1.1 index that aliases two shard numbers to one ZIP URL', () => {
+    const aliasedShards = shards.map(shard => ({ ...shard }));
+    aliasedShards[1]!.url = aliasedShards[0]!.url;
+    const result = CompaniesShardedSchema.safeParse({
+      shard_by: 'cnpj_base_prefix_or_base36_mod_100_v1',
+      schema_version: '1.1.0',
+      shards: aliasedShards,
+    });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues.some(issue => issue.path.join('.') === 'shards'
+        && issue.message.includes('duplicate company shard URL'))).toBe(true);
+    }
+  });
+
   it('accepts a complete explicitly versioned v1.1 manifest layer', () => {
     expect(CompaniesShardedSchema.safeParse({
       shard_by: 'cnpj_base_prefix_or_base36_mod_100_v1',
@@ -81,6 +114,16 @@ describe('schema 1.1 textual identity with v1 numeric fallback', () => {
       },
     } }))
       .toBe('https://example.org/companies-00.zip');
+  });
+
+  it('fails closed for a v1.1 wire label under the old numeric mapping', () => {
+    const files = { companies: {
+      shard_by: 'cnpj_base_prefix_2' as const,
+      schema_version: '1.1.0' as const,
+      shards: [{ shard: '00', url: 'https://example.org/companies-00.zip', sha1: 'a'.repeat(40), size: 1 }],
+    } };
+    expect(() => companyArchiveUrl('00000000', { identifier: 'test', files }))
+      .toThrow(/schema 1.1.0 cannot use legacy numeric shard mapping/);
   });
 
   it('fails closed when new bucket semantics omit the 1.1 wire contract', () => {
