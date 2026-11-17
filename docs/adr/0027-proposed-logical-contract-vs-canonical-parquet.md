@@ -164,11 +164,12 @@ Exigir teste negativo de interseção v1×v1.1 no produtor e leitor
 opt-in, além da unicidade dentro de cada índice.
 
 **17/11, P0:** [#246](https://github.com/franklinbaldo/ficha/pull/246)
-`4aeecc99` agora compensa `snapshot-entry.json` se o gate rejeita 1.1;
-[#252](https://github.com/franklinbaldo/ficha/pull/252) `f5f5e8a4`
-exige restauração byte a byte em fixtures. Os CIs `44044194625` e
-`44049319967` rodaram suites ETL. **Não** provam transação no IA,
-publicação ou disjunção de URLs.
+`faced446d` incluiu guarda pré-I/O apenas no CLI
+`command_submit_shard` para wire 1.1 em `companies-NN.zip`.
+**HOLD:** chamadas diretas a `shard_transfer` contornam a guarda;
+`upload-outputs` corre antes de `submit`. Os [negativos da #252](https://github.com/franklinbaldo/ficha/pull/252)
+e o rollback local (`4aeecc99`) não provam atomicidade IA,
+URLs disjuntas v1/v1.1 ou segurança de publicação.
 
 ## Fronteira de descoberta e artefatos SSG: dois contratos distintos
 
