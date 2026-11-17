@@ -149,6 +149,7 @@ def test_historical_v1_unknown_fields_survive_opaque_roundtrip_but_not_projectio
     assert decoded_projection.socios[0].cnpj_socio_text == ""
     assert projected_wire != original_wire
 
+
 def test_historical_v1_on_exact_castor_packer_fixture() -> None:
     """Cross-check the single packer-produced member, never a second generator.
 
