@@ -447,9 +447,7 @@ def _require_distinct_finalize_outputs(
             same_path = path.resolve() == other.resolve()
             same_inode = path.exists() and other.exists() and path.samefile(other)
             if same_path or same_inode:
-                raise ValueError(
-                    f"finalize output paths must be distinct: {name} and {other_name}"
-                )
+                raise ValueError(f"finalize output paths must be distinct: {name} and {other_name}")
 
 
 def command_finalize(args: argparse.Namespace) -> None:
