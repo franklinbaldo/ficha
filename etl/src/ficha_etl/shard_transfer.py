@@ -27,6 +27,7 @@ from .shard_publish import (
     _metadata_still_matches,
     _reconcile_catalog_absent,
     fetch_direct_artifact_identity,
+    require_legacy_shard_upload_contract,
 )
 from .shard_remote import PUBLIC_COMPANIES_GEOMETRY, ShardReuseState, classify_remote_shard
 from .sharded_pack import ShardPackSession
@@ -208,6 +209,7 @@ def submit_prepared_shard(
     quando ``size + sha1`` também forem idênticos ao recibo. A identidade
     esperada nunca é aprendida do remoto e nenhum estado ambíguo autoriza PUT.
     """
+    require_legacy_shard_upload_contract(session)
     _validate_session(session)
     prefix, expected, _local = _validate_prepared(session, prepared, pinned_inputs=pinned_inputs)
     expected_id = expected.materialization_id()
@@ -284,6 +286,7 @@ def submit_one_shard(
     O pipeline mensal novo usa ``prepare_one_shard`` + ``submit_prepared_shard``
     para conseguir persistir o recibo entre as duas fases.
     """
+    require_legacy_shard_upload_contract(session)
     _validate_session(session)
     prefix = session.geometry.validate_prefix(prefix)
     expected = session.materialization_spec(prefix, input_sha1s=pinned_inputs)
