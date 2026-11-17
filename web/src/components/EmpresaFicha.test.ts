@@ -302,7 +302,7 @@ describe('EmpresaFicha request invalidation (static source contract, no browser)
       ['toggleSocios', 'toggleContatos'],
       ['toggleContatos', 'toggleFiliais'],
       ['toggleFiliais', 'Legacy numeric CNPJs'],
-    ]) {
+    ] as const) {
       const body = source.split(`async function ${fn}()`)[1]?.split(next)[0];
       expect(body, fn).toBeTruthy();
       expect(body).toContain('const requestedCNPJ = activeCNPJ');
