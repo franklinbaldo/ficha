@@ -188,6 +188,7 @@ def test_materialization_must_match_the_exact_shard(tmp_path):
         with pytest.raises(ValueError, match="does not match shard"):
             session.pack("07", tmp_path / "out", materialization=wrong)
 
+
 def test_real_v11_shard_session_selects_alpha_root_and_plans_versioned_name(tmp_path):
     """Full local DuckDB -> pack -> receipt -> opt-in plan, no network or upload."""
     from ficha_etl.proto.ficha.v1.company_pb2 import Company
