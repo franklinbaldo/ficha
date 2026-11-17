@@ -1,6 +1,45 @@
 import { describe, it, expect } from 'vitest';
 import { ficha } from '../generated/company.pb.js';
+import { CompaniesShardedSchema } from '../schemas/v1/manifest';
 import { companyRoot, estabelecimentoCnpj, socioCnpj, companyArchiveUrl, fetchCompany } from './companies';
+
+describe('P0-A: manifest version negotiation at the updated reader boundary', () => {
+  const shards = Array.from({ length: 100 }, (_, number) => ({
+    shard: String(number).padStart(2, '0'),
+    url: `https://example.org/companies-${String(number).padStart(2, '0')}.zip`,
+    sha1: 'a'.repeat(40),
+    size: 100,
+  }));
+
+  it('preserves legacy v1 numeric manifests without a per-layer version', () => {
+    expect(CompaniesShardedSchema.safeParse({
+      shard_by: 'cnpj_base_prefix_2',
+      shards,
+    }).success).toBe(true);
+  });
+
+  it('refuses to validate v1.1 alphanumeric mapping without its wire version', () => {
+    for (const schema_version of [undefined, '1.0.0'] as const) {
+      const result = CompaniesShardedSchema.safeParse({
+        shard_by: 'cnpj_base_prefix_or_base36_mod_100_v1',
+        schema_version,
+        shards,
+      });
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error.issues.some(issue => issue.path.join('.') === 'schema_version')).toBe(true);
+      }
+    }
+  });
+
+  it('accepts a complete explicitly versioned v1.1 manifest layer', () => {
+    expect(CompaniesShardedSchema.safeParse({
+      shard_by: 'cnpj_base_prefix_or_base36_mod_100_v1',
+      schema_version: '1.1.0',
+      shards,
+    }).success).toBe(true);
+  });
+});
 
 describe('schema 1.1 textual identity with v1 numeric fallback', () => {
   it('decodes the Python packer wire for the first real RFB alphanumeric CNPJ', () => {

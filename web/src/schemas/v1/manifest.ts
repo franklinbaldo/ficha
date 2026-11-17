@@ -39,13 +39,23 @@ const CompanyShardSchema = z.object({
   size: z.number().int().positive(),
 });
 
-const CompaniesShardedSchema = z
+export const CompaniesShardedSchema = z
   .object({
     shard_by: z.enum(['cnpj_base_prefix_2', 'cnpj_base_prefix_or_base36_mod_100_v1']),
     schema_version: z.enum(['1.0.0', '1.1.0']).optional(),
     shards: z.array(CompanyShardSchema).length(100),
   })
-  .superRefine(({ shards }, ctx) => {
+  .superRefine(({ shard_by, schema_version, shards }, ctx) => {
+    // This validates the manifest seen by updated clients, not the ability of
+    // an external Protobuf v1 decoder to reject unknown 1.1 textual fields.
+    if (shard_by === 'cnpj_base_prefix_or_base36_mod_100_v1'
+        && schema_version !== '1.1.0') {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['schema_version'],
+        message: 'schema 1.1.0 required for alphanumeric company shards',
+      });
+    }
     const seen = new Set<string>();
     for (const shard of shards) {
       if (seen.has(shard.shard)) {
