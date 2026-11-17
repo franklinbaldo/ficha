@@ -118,7 +118,6 @@ def test_simulated_gate_failure_restores_preexisting_entry(
     assert not args.verification.exists()
 
 
-
 @pytest.mark.parametrize("preexisting", [False, True])
 @pytest.mark.parametrize("partial_write", [False, True])
 def test_verification_write_failure_never_promotes_manifest(
@@ -150,8 +149,12 @@ def test_verification_write_failure_never_promotes_manifest(
         monthly_sharded.command_finalize(args)
 
     assert args.manifest.read_bytes() == previous_manifest
-    assert (args.snapshot_entry.read_bytes() if args.snapshot_entry.exists() else None) == previous_entry
-    assert (args.verification.read_bytes() if args.verification.exists() else None) == previous_verification
+    assert (
+        args.snapshot_entry.read_bytes() if args.snapshot_entry.exists() else None
+    ) == previous_entry
+    assert (
+        args.verification.read_bytes() if args.verification.exists() else None
+    ) == previous_verification
 
 
 def test_manifest_refusal_restores_previous_verification_bytes(
