@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
 
 from ficha_etl.monthly_sharded import (
+    _load_descriptor,
     _remote_descriptor_state,
     materialization_inputs_from_descriptor,
     wait_for_descriptor_remote,
@@ -201,6 +203,31 @@ def test_wait_for_descriptor_remote_retries_then_accepts_unambiguous_catalog(
     monkeypatch.setattr("ficha_etl.monthly_sharded.time.sleep", lambda _: None)
     assert wait_for_descriptor_remote("2026-06", descriptor, attempts=2, interval_s=0) is valid
     assert calls == ["2026-06", "2026-06"]
+
+
+@pytest.mark.parametrize(
+    "bad_size",
+    [11.9, True, "11.0", "+11", " 11", "١١", 0, -11, "9" * 5000],
+)
+def test_local_descriptor_rejects_nonintegral_size(tmp_path: Path, bad_size: object) -> None:
+    """Invalid local size must fail before any remote identity comparison."""
+    descriptor = _descriptor()
+    descriptor["files"]["cnpjs"]["size"] = bad_size
+    path = tmp_path / "descriptor.json"
+    path.write_text(json.dumps(descriptor), encoding="utf-8")
+
+    with pytest.raises(ValueError, match=r"files\.cnpjs: invalid size"):
+        _load_descriptor(path, "2026-06")
+
+
+@pytest.mark.parametrize("valid_size", [11, "11", "00011"])
+def test_local_descriptor_preserves_valid_byte_sizes(tmp_path: Path, valid_size: object) -> None:
+    descriptor = _descriptor()
+    descriptor["files"]["cnpjs"]["size"] = valid_size
+    path = tmp_path / "descriptor.json"
+    path.write_text(json.dumps(descriptor), encoding="utf-8")
+
+    assert _load_descriptor(path, "2026-06") == descriptor
 
 
 def test_monthly_workflow_persists_receipts_before_remote_writes() -> None:
