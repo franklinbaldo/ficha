@@ -38,9 +38,18 @@ export function mountSearch({
   let sessionPromise;
   let active = false;
   let inputVersion = 0;
-  // Keep the field editable while a query runs, but never publish an old
-  // response when the user has already edited the search text.
-  input.addEventListener('input', () => { inputVersion++; });
+  let lastRenderedTerm = null;
+  // A completed result (including "no results") belongs to the old term.
+  // Clear it on the first edit, but avoid live-region announcements on every
+  // keystroke. Pending responses are discarded by the version guard below.
+  input.addEventListener('input', () => {
+    inputVersion++;
+    if (lastRenderedTerm !== null) {
+      lastRenderedTerm = null;
+      list.replaceChildren();
+      status.textContent = 'Termo alterado. Pesquise novamente para atualizar os resultados.';
+    }
+  });
   const openSession = () => {
     if (!sessionPromise) {
       sessionPromise = (async () => {
@@ -74,6 +83,7 @@ export function mountSearch({
     if (active) return;
     const term = input.value.trim();
     if (!planCompanyQuery(term)) {
+      lastRenderedTerm = null;
       list.replaceChildren();
       status.textContent = 'Informe um CNPJ completo ou ao menos três caracteres da razão social.';
       return;
@@ -82,6 +92,7 @@ export function mountSearch({
     const stillCurrent = () => requestVersion === inputVersion && input.value.trim() === term;
     const discardedMessage = 'Termo alterado durante a consulta. Pesquise novamente.';
     active = true;
+    lastRenderedTerm = null;
     submit.disabled = true;
     list.replaceChildren(); // never leave stale results visible during failures
     status.textContent = 'Preparando consulta à competência publicada…';
@@ -102,6 +113,7 @@ export function mountSearch({
         return;
       }
       renderCompanies(documentRef, list, rows);
+      lastRenderedTerm = term;
       status.textContent = 'Competência ' + session.dataset.date + ': ' +
         (rows.length === 0 ? 'nenhum resultado encontrado.' :
           rows.length + (rows.length === 1 ? ' resultado encontrado.' : ' resultados encontrados.'));

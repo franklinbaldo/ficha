@@ -77,3 +77,36 @@ test('edição durante preparação da base impede consulta para CNPJ antigo', a
   assert.equal(queried,1);
   assert.equal(fetched,1, 'sessão válida deve ser reaproveitada');
 });
+
+for (const [label, rows] of [
+  ['com resultado', [{cnpj:'00000000E08G12',razao_social:'EMPRESA A',uf:'RO'}]],
+  ['sem resultado', []],
+]) {
+  test(`editar entrada limpa estado de busca concluída ${label}, sem I/O extra`, async () => {
+    const {nodes,documentRef}=mockDOM();
+    let fetches=0,queries=0;
+    mountSearch({documentRef,
+      fetchDataset:async()=>{fetches++;return dataset;},
+      probeRange:async()=>{},
+      createEngine:async()=>({db:{},duckdb:{}}),
+      attach:async()=>{},
+      query:async()=>{queries++;return rows;},
+    });
+    nodes['busca-termo'].value='EMPRESA A';
+    await nodes['busca-form'].dispatch('submit');
+    assert.match(nodes['consulta-estado'].textContent,/Competência 2026-07/);
+    assert.equal(nodes['consulta-lista'].children.length, rows.length);
+    nodes['busca-termo'].value='EMPRESA B';
+    nodes['busca-termo'].dispatch('input');
+    assert.equal(nodes['consulta-lista'].children.length,0);
+    assert.match(nodes['consulta-estado'].textContent,/Termo alterado.*Pesquise novamente/);
+    const announcement=nodes['consulta-estado'].textContent;
+    nodes['busca-termo'].value='EMPRESA BC';
+    nodes['busca-termo'].dispatch('input');
+    assert.equal(nodes['consulta-estado'].textContent,announcement,
+      'não repetir anúncio da região viva a cada tecla');
+    assert.deepEqual([fetches,queries],[1,1], 'editar não dispara fetch, WASM ou consulta');
+    await nodes['busca-form'].dispatch('submit');
+    assert.deepEqual([fetches,queries],[1,2], 'consulta nova mantém sessão reutilizável');
+  });
+}
