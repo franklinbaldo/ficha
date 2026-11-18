@@ -31,7 +31,8 @@ test('formulário só abre sessão com entrada válida; reutiliza DB e anuncia r
   const { nodes,doc } = mockDOM();
   let fetches=0, probed=0, created=0, attached=0, queried=0;
   mountSearch({documentRef:doc,
-    fetchDataset:async () => {fetches++;return {date:'2026-04'};},
+    fetchDataset:async () => {fetches++;return {date:'2026-04',
+      files:{cnpjs:{url:'https://example.org/cnpjs.parquet',size:1}}};},
     probeRange:async () => {probed++;},
     createEngine:async () => {created++;return {db:{},duckdb:{}};},
     attach:async () => {attached++;},
@@ -73,7 +74,7 @@ test('manifesto 404 não fica em cache: nova tentativa observa HTTP 500 e depois
       attempts++;
       if (attempts === 1) return null;
       if (attempts === 2) throw Error('HTTP 500');
-      return {date:'2026-07'};
+      return {date:'2026-07', files:{cnpjs:{url:'https://example.org/cnpjs.parquet',size:1}}};
     },
     probeRange: async () => {},
     createEngine: async () => ({db:{},duckdb:{}}),
