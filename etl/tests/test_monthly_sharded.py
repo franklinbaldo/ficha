@@ -248,9 +248,7 @@ def _valid_shard_receipt() -> dict:
     "bad_size",
     [11.9, True, "11.0", "+11", " 11", "١١", 0, -11, "9" * 5000],
 )
-def test_shard_receipt_rejects_nonintegral_size(
-    tmp_path: Path, bad_size: object
-) -> None:
+def test_shard_receipt_rejects_nonintegral_size(tmp_path: Path, bad_size: object) -> None:
     receipt = _valid_shard_receipt()
     receipt["size"] = bad_size
     path = tmp_path / "receipt-00.json"
@@ -261,9 +259,7 @@ def test_shard_receipt_rejects_nonintegral_size(
 
 
 @pytest.mark.parametrize("valid_size", [11, "11", "00011"])
-def test_shard_receipt_accepts_integral_size(
-    tmp_path: Path, valid_size: object
-) -> None:
+def test_shard_receipt_accepts_integral_size(tmp_path: Path, valid_size: object) -> None:
     receipt = _valid_shard_receipt()
     receipt["size"] = valid_size
     path = tmp_path / "receipt-00.json"
