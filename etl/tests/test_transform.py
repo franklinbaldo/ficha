@@ -823,6 +823,28 @@ def test_extract_all_rejects_empty_zip(tmp_path, all_zips_dir):
         transform.extract_all("2026-04", chain, tmp_path / "extracted")
 
 
+def test_extract_all_rejects_empty_estabelecimento_csv_when_strict(tmp_path, all_zips_dir):
+    """A ZIP with one zero-byte member is not the same as an empty ZIP.
+
+    The historical fixture deliberately leaves Estabelecimentos1..9 empty.
+    Monthly strict mode must reject that source rather than silently skip it.
+    """
+    zip_path = all_zips_dir / "Estabelecimentos1.zip"
+    with zipfile.ZipFile(zip_path) as zf:
+        members = [member for member in zf.infolist() if not member.is_dir()]
+        assert len(members) == 1
+        assert members[0].file_size == 0
+
+    chain = fetcher.ChainedFetcher(fetchers=[_ZipDirFetcher(all_zips_dir)])
+    with pytest.raises(RuntimeError, match="Estabelecimentos1.zip.*empty estabelecimento CSV"):
+        transform.extract_all(
+            "2026-04",
+            chain,
+            tmp_path / "strict-extracted",
+            reject_empty_estabelecimentos=True,
+        )
+
+
 # -----------------------------------------------------------------------------
 # transform_snapshot end-to-end com strict=True (3 parquets reais)
 # -----------------------------------------------------------------------------
