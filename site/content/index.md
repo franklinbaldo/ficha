@@ -17,6 +17,7 @@ layout: index
     <div class="fact"><span>Origem</span><strong>Cadastro Nacional da Pessoa Jurídica</strong></div>
   </div>
   <div class="actions"><a class="primary-link" href="/ficha/manifest.json">Ver manifesto de dados</a><a class="secondary-link" href="/ficha/sobre/">Entender o projeto</a></div>
+  <p>Fonte arquivística do snapshot: <a href="__FICHA_CURRENT_SOURCE_URL__">arquivo completo de CNPJs (Parquet, __FICHA_CURRENT_SOURCE_SIZE__ GB)</a>. O link aponta para um arquivo grande e pode iniciar download; não é pesquisa no navegador.</p>
 </section>
 <section class="notice" aria-labelledby="notice-title">
   <div class="notice-marker" aria-hidden="true">i</div>
