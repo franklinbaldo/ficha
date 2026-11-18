@@ -29,7 +29,7 @@ O projeto opera em duas camadas de acesso para máxima eficiência:
 - **Tecnologia:** explora a funcionalidade de "unzip" transparente do Internet Archive.
 - **Uso:** consultas diretas por raiz de CNPJ por URL estática previsível.
 - **Vantagem:** acesso pontual sem precisar varrer a base analítica inteira; protobuf é compacto.
-- **Status:** o reader atômico existe no código, e o manifesto versionado declara artefatos atômicos em alguns snapshots. A declaração não prova acesso HTTP live; a home pública atual não usa leitor atômico nem oferece pesquisa. Não pressupor integração do reader atômico à jornada de busca.
+- **Status:** o reader atômico existe no código, e o manifesto versionado declara artefatos atômicos em alguns snapshots. A declaração não prova acesso HTTP live; a home pública oferece um formulário experimental de CNPJ ou razão social, mas não usa o leitor atômico. A consulta analítica real aos Parquets remotos permanece sem comprovação ([Ficha #208](https://github.com/franklinbaldo/ficha/issues/208)); não pressupor integração do reader atômico à jornada de busca.
 
 ### 2. Camada Analítica (Data Lakehouse)
 
