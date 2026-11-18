@@ -37,6 +37,20 @@ o Zod OKF gerado só aceita em 4, 0 e 4, respectivamente. Em especial:
   são nullable somente no público. O exemplo OKF contém um sócio PJ,
   insuficiente para inferir todos os casos PF/estrangeiro.
 
+**Guard adicional do contrato público v1 (18/11/2026):** a lista de
+campos que aceitam `null` é agora fixada independentemente do diff entre Zods:
+26 em Cnpj, 1 em Raiz e 9 em Socio. O inventário de 28 divergências,
+sozinho, não detectava a mudança **simultânea** dos dois contratos (por
+exemplo, `cnpj` passando a `.nullable()` em ambos, ou
+`cpf_mascarado` deixando de aceitar `null` em ambos). Três testes
+adversariais cobrem alargamento e estreitamento simultâneos e uma segunda
+falha: editar o inventário de dívida junto com o Zod público poderia alterar
+indiretamente uma baseline derivada dessa dívida. A lista pública 26/1/9 agora
+é **literal e independente** de `KNOWN_NULLABILITY_GAPS`; alterar qualquer
+uma das duas exige revisão explícita do contrato e do versionamento.
+Isto não valida valores reais, `safeParse` nem nulabilidade física do
+Parquet e não altera a escolha de versão feita por consumidores.
+
 Os 28 desacordos aparecem em
 `knowledge/tests/test_contract_compatibility.py` como inventário explícito
 de **dívida existente**, não autorização para aceitar linhas através do Zod
@@ -64,7 +78,13 @@ Parquet físico, o contrato publicado ou a RFC 0001 aceita.
 ## Garantias e lacunas do teste isolado
 
 O teste Python de biblioteca padrão compara as declarações SQL do OKF com
-os schemas Zod v1 e gerado. Falha quando coluna ou tipo muda, quando surge
+os schemas Zod v1 e gerado. Além dos campos individuais, fixa que cada
+schema público v1 é exportado diretamente como `z.object({...});`, sem
+modificadores no objeto inteiro: `.partial()` tornaria todas as colunas
+opcionais sem alterar suas declarações, enquanto `.passthrough()` passaria
+a aceitar colunas adicionais. Duas contraprovas sintéticas asseguram que
+ambos os atalhos são rejeitados e exigem revisão explícita do contrato.
+Esta proteção é estática, não execução de Zod/`safeParse`. Falha quando coluna ou tipo muda, quando surge
 uma nova incompatibilidade de nulabilidade, ou quando a lista de desvios
 deixa de descrever o estado do código, ou quando um dos sete domínios
 enum públicos muda sem revisão. Inclui cinco controles negativos em memória
@@ -86,6 +106,24 @@ assumir automaticamente cobertura dos demais artefatos Parquet do manifesto.
 O adaptador `web/src/lib/okf-row-schemas.ts` também não seleciona o
 contrato pela versão do snapshot. Ambas são dependências de decisão do
 Elefante/Polvo e não foram alteradas.
+
+## Baseline independente de colunas públicas v1 (18/11/2026)
+
+O teste adicional `knowledge/tests/test_public_v1_column_baseline.py` congela
+**nome e tipo escalar de cada uma das 86 colunas v1** (Cnpj 52, Raiz 18,
+Socio 16) em `knowledge/tests/public-v1-column-kinds.json`. Essa baseline
+literal **não é regenerada** dos SQL ou Zods durante o teste; uma edição
+sincronizada dos três artefatos ainda poderia satisfazer o teste de paridade
+anterior, mas agora falha se alterar o contrato público v1. As duas
+contraprovas em memória simulam (a) renomear `cnpj` e (b) trocar
+`capital_social` de número para string nos três contratos simultaneamente.
+As duas conservam paridade e são rejeitadas pela baseline.
+
+A baseline fixa nomes/tipos básicos; nulabilidade (26/1/9), obrigatoriedade,
+domínios enum e modificadores Zod de objeto continuam cobertos pelos testes
+separados. A atualização intencional de uma coluna pública exige análise de
+versionamento, não regeneração automática desta fixture. Não há validação de
+`safeParse`, de linhas reais ou do Parquet físico nesta fatia.
 
 ## Gate enxuto
 
