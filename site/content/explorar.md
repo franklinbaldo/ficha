@@ -22,6 +22,12 @@ layout: product
   <p id="explorar-contador" class="big-stat"></p>
   <p id="explorar-estado" class="interface-status" role="status" aria-live="polite">Lendo o manifesto…</p>
   <div id="explorar-grafico" class="asset-chart" aria-label="Gráfico de tamanho de arquivos declarados"></div>
+  <div class="series-section">
+    <h2>Linhas declaradas em cada competência</h2>
+    <p class="fineprint">Estes números são contagens de linhas informadas pelo ETL no manifesto. Não representam necessariamente empresas ativas, aberturas ou baixas e não são uma verificação independente.</p>
+    <div class="form-field compact-select"><label for="explorar-serie">Conjunto de registros</label><select id="explorar-serie"></select></div>
+    <div id="explorar-serie-grafico" aria-label="Série histórica de linhas declaradas"></div>
+  </div>
 </section>
 <section class="footnote-section" aria-labelledby="regional-titulo">
   <p class="eyebrow">PRÓXIMA CAMADA / BRASIL</p>
