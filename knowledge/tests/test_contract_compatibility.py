@@ -83,24 +83,51 @@ KNOWN_UNRESTRICTED_ENUM_GAPS = {
 # A joint change to both Zod schemas can leave the mismatch inventory
 # unchanged while silently changing which public-v1 fields accept null.
 # Pin the public contract itself, not just the generated-versus-public gap.
-PUBLIC_V1_SHARED_NULLABLE = {
+# Public-v1 baseline is deliberately independent of KNOWN_NULLABILITY_GAPS.
+# Updating the debt inventory must never silently redefine the public API.
+EXPECTED_PUBLIC_NULLABLE_FIELDS = {
     "Cnpj": {
+        "bairro",
+        "cep",
+        "complemento",
+        "correio_eletronico",
         "data_exclusao_mei",
         "data_exclusao_simples",
         "data_opcao_mei",
+        "data_opcao_simples",
         "data_situacao_especial",
+        "ddd_1",
+        "ddd_2",
+        "ddd_fax",
+        "ente_federativo_responsavel",
+        "fax",
+        "logradouro",
+        "nome_cidade_exterior",
+        "nome_fantasia",
+        "numero",
+        "opcao_mei",
+        "opcao_simples",
+        "pais_codigo",
+        "pais_nome",
+        "situacao_especial",
+        "telefone_1",
+        "telefone_2",
+        "tipo_logradouro",
     },
-    "Raiz": set(),
+    "Raiz": {
+        "ente_federativo_responsavel",
+    },
     "Socio": {
+        "cnpj_socio",
         "cpf_mascarado",
+        "faixa_etaria",
+        "pais_codigo",
+        "pais_nome",
         "representante_legal_cpf",
         "representante_legal_nome",
         "representante_legal_qualificacao_codigo",
+        "representante_legal_qualificacao_descricao",
     },
-}
-EXPECTED_PUBLIC_NULLABLE_FIELDS = {
-    table: KNOWN_NULLABILITY_GAPS[table] | PUBLIC_V1_SHARED_NULLABLE[table]
-    for table in SOURCES
 }
 
 
@@ -310,6 +337,19 @@ class OkfContractCompatibilityTest(unittest.TestCase):
         self.assertNotEqual(
             _nullable_fields(published),
             EXPECTED_PUBLIC_NULLABLE_FIELDS["Socio"],
+        )
+
+    def test_negative_rebaselined_debt_cannot_change_public_v1(self) -> None:
+        published = _published_v1_fields("estabelecimento")
+        generated = _generated_fields("Cnpj")
+        # Updating the debt baseline could hide a public-only narrowing if
+        # the public baseline were derived from that same debt inventory.
+        published["nome_fantasia"] = "z.string()"
+        revised_debt = KNOWN_NULLABILITY_GAPS["Cnpj"] - {"nome_fantasia"}
+        self.assertEqual(_nullability_gap(published, generated), revised_debt)
+        self.assertNotEqual(
+            _nullable_fields(published),
+            EXPECTED_PUBLIC_NULLABLE_FIELDS["Cnpj"],
         )
 
     def test_required_field_presence_matches_public_v1(self) -> None:
