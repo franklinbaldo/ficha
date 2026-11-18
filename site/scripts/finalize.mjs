@@ -19,8 +19,13 @@ if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(manifest.current) || !Array.isArray(manifest
 const dates = manifest.snapshots.map(s => s?.date);
 if (new Set(dates).size !== dates.length) throw new Error('Competências duplicadas');
 const matches = manifest.snapshots.filter(s => s?.date === manifest.current);
-if (matches.length !== 1 || !/^https:\/\//.test(matches[0]?.files?.cnpjs?.url || '')) {
-  throw new Error('Current sem snapshot CNPJ inequívoco');
+const cnpjs = matches[0]?.files?.cnpjs;
+let archiveUrl;
+try { archiveUrl = new URL(cnpjs?.url); } catch { /* falha abaixo */ }
+if (matches.length !== 1 || archiveUrl?.protocol !== 'https:' ||
+    !/^[0-9a-f]{64}$/.test(cnpjs?.sha256 ?? '') ||
+    !Number.isSafeInteger(cnpjs?.size) || cnpjs.size <= 0) {
+  throw new Error('Current sem CNPJ HTTPS e identidade sha256/size completas');
 }
 const expectedPwa = {
   background_color:'#ffffff',
@@ -57,6 +62,15 @@ const label = new Intl.DateTimeFormat('pt-BR', {month:'long',year:'numeric',time
 const marker='__FICHA_CURRENT_COMPETENCE__';
 if (index.split(marker).length !== 2) throw new Error('Marcador de competência ausente ou repetido');
 index=index.replace(marker,label);
+const sourceMarker='__FICHA_CURRENT_SOURCE_URL__';
+const sizeMarker='__FICHA_CURRENT_SOURCE_SIZE__';
+for (const token of [sourceMarker,sizeMarker]) {
+  if (index.split(token).length !== 2) throw new Error('Marcador ausente ou repetido: '+token);
+}
+const safeUrl = archiveUrl.href.replace(/&/g,'&amp;').replace(/"/g,'&quot;')
+  .replace(/</g,'&lt;').replace(/>/g,'&gt;');
+const sizeGB = (cnpjs.size / 1_000_000_000).toFixed(2).replace('.',',');
+index=index.replace(sourceMarker,safeUrl).replace(sizeMarker,sizeGB);
 await writeFile(indexURL,index,'utf8');
 for (const [file,html] of [['index',index],['sobre',about]]) {
   for (const requiredText of ['lang="pt-BR"','href="/ficha/"','href="/ficha/sobre/"','href="/ficha/css/site.css"','id="main"']) {
@@ -65,7 +79,7 @@ for (const [file,html] of [['index',index],['sobre',about]]) {
   if (/astro-island|svelte|<form|type="module"/i.test(html)) throw new Error(file+': elemento de busca/legado indevido');
   if (/\{\{[!\w]|\{%/.test(html)) throw new Error(file + ': template não renderizado');
 }
-for (const token of ['Pesquisa por CNPJ ainda indisponível',label,'/ficha/manifest.json']) {
+for (const token of ['Pesquisa por CNPJ ainda indisponível',label,'/ficha/manifest.json',safeUrl,sizeGB+' GB']) {
   if (!index.includes(token)) throw new Error('Home sem ' + token);
 }
 if (!about.includes('Sobre o FICHA')) throw new Error('Sobre não renderizado');
