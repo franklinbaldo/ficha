@@ -46,7 +46,8 @@ def test_pr_runs_http_fixtures_without_live_upstream_or_ia() -> None:
 
 def test_weekly_and_manual_smoke_remain_live_and_block_on_failure() -> None:
     workflow = _load()
-    events = workflow.get("on", workflow.get(True))  # PyYAML YAML 1.1 treats 'on' as bool.
+    # PyYAML YAML 1.1 treats 'on' as bool.
+    events = workflow.get("on", workflow.get(True))
     assert "pull_request" in events
     assert "workflow_dispatch" in events
     assert events["schedule"] == [{"cron": "0 6 * * 1"}]
@@ -72,7 +73,8 @@ def test_negative_mutations_detect_real_network_reintroduction() -> None:
         step["if"] = "always()"
         assert not _pr_is_fixture_only(mutated), step_name
     mutated = deepcopy(original)
-    _steps(mutated)["PR smoke with fixtures"]["if"] = "github.event_name != 'pull_request'"
+    fixture = _steps(mutated)["PR smoke with fixtures"]
+    fixture["if"] = "github.event_name != 'pull_request'"
     assert not _pr_is_fixture_only(mutated)
     mutated = deepcopy(original)
     _steps(mutated)["PR smoke with fixtures"]["run"] = "echo green"
