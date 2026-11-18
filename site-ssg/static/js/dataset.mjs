@@ -67,3 +67,32 @@ export async function fetchCurrentDataset({
   if (!response.ok) throw new Error(`manifest.json: HTTP ${response.status}`);
   return currentDataset(await response.json());
 }
+
+/**
+ * Verify that the selected archival Parquet can be read by a real browser,
+ * before fetching the relatively large DuckDB-WASM runtime. A single-byte
+ * cross-origin Range GET is enough to test CORS and exposed Content-Range.
+ * This checks transport only, not the file's SHA-256 or query correctness.
+ */
+export async function probeParquetRange({url, size, fetchImpl = fetch} = {}) {
+  dataURL(url, 'Parquet');
+  if (!Number.isSafeInteger(size) || size < 1) {
+    throw new Error('Parquet: tamanho inválido no manifesto');
+  }
+  let response;
+  try {
+    response = await fetchImpl(url, {
+      method: 'GET', mode: 'cors', cache: 'no-store',
+      headers: { Range: 'bytes=0-0' },
+    });
+  } catch {
+    // A browser intentionally hides CORS failures from JavaScript.
+    throw new Error('Origem de dados inacessível no navegador (rede ou CORS)');
+  }
+  if (response.status !== 206 ||
+      response.headers?.get('content-range') !== `bytes 0-0/${size}`) {
+    await response.body?.cancel?.();
+    throw new Error('Origem de dados sem HTTP Range 206/Content-Range compatível');
+  }
+  await response.body?.cancel?.();
+}

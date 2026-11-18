@@ -65,6 +65,21 @@ try {
   assert.equal(await page.locator('#consulta-lista li').count(), 0,
     'erro HTTP não pode preservar resultados antigos');
   assert.equal(await page.locator('#busca-enviar').isEnabled(), true);
+
+  // A valid published manifest must NOT trigger a real remote download in CI.
+  // Emulate failed cross-origin transport and verify failure before WASM CDN.
+  const validManifest = JSON.parse(await readFile(
+    new URL('../../web/public/manifest.json', import.meta.url), 'utf8'));
+  await page.route('**/ficha/manifest.json', route => route.fulfill({
+    status: 200, contentType: 'application/json', body: JSON.stringify(validManifest),
+  }));
+  await page.route('https://archive.org/**', route => route.abort('failed'));
+  await page.locator('#busca-enviar').click();
+  await page.waitForFunction(() =>
+    document.getElementById('consulta-estado')?.textContent?.includes('rede ou CORS'));
+  assert.equal(urls.some(url => url.includes('cdn.jsdelivr.net')), false,
+    'erro de CORS/Range não deve baixar WASM');
+  assert.equal(await page.locator('#busca-enviar').isEnabled(), true);
   assert.deepEqual(errors, [], 'nenhum erro JavaScript não tratado no boot da home');
 
   const noJsContext = await browser.newContext({ javaScriptEnabled: false });
@@ -73,7 +88,7 @@ try {
   assert.equal(await noJsPage.locator('noscript').isVisible(), true);
   await noJsContext.close();
   await page.close();
-  console.log('Chromium local PASS: 375px, skip-link, ESM, 404, 500, sem JS');
+  console.log('Chromium local PASS: 375px, skip-link, ESM, 404, 500, rede/CORS abortada, sem JS');
   console.log('NOT_RUN: Worker/WASM, Parquet real, Protobuf, dados públicos e Pages');
 } finally {
   await browser?.close();

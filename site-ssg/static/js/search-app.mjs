@@ -1,4 +1,4 @@
-import { fetchCurrentDataset } from './dataset.mjs';
+import { fetchCurrentDataset, probeParquetRange } from './dataset.mjs';
 import { attachAnalyticalFiles, planCompanyQuery, queryCompanies } from './query-core.mjs';
 import { createDuckDBEngine } from './duckdb-runtime.mjs';
 
@@ -21,6 +21,7 @@ export function renderCompanies(documentRef, list, rows) {
 export function mountSearch({
   documentRef,
   fetchDataset = fetchCurrentDataset,
+  probeRange = probeParquetRange,
   createEngine = createDuckDBEngine,
   attach = attachAnalyticalFiles,
   query = queryCompanies,
@@ -45,6 +46,9 @@ export function mountSearch({
           sessionPromise = undefined;
           return null;
         }
+        // Fail before loading WASM when the archival origin cannot satisfy
+        // browser CORS + byte-range reads. Never rewrite archival URLs here.
+        await probeRange({url: dataset.files.cnpjs.url, size: dataset.files.cnpjs.size});
         const engine = await createEngine();
         try {
           await attach(engine.db, dataset, engine.duckdb);

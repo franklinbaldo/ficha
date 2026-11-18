@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
-import { currentDataset, fetchCurrentDataset } from '../static/js/dataset.mjs';
+import { currentDataset, fetchCurrentDataset, probeParquetRange } from '../static/js/dataset.mjs';
 import { planCompanyQuery, queryCompanies, attachAnalyticalFiles } from '../static/js/query-core.mjs';
 
 const fixture = async () => JSON.parse(await readFile(
@@ -109,4 +109,31 @@ test('paridade com Astro: curingas não convertem busca textual em CNPJ exato', 
     assert.equal(plan.param, canonical);
     assert.ok(plan.sql.includes('WHERE cnpj = ? LIMIT 1'));
   }
+});
+
+test('probe remoto pede somente um byte e exige CORS/206/Content-Range visível', async () => {
+  const entry = currentDataset(await fixture()).files.cnpjs;
+  const calls = [];
+  let canceled = 0;
+  const success = async (url, options) => {
+    calls.push([url, options]);
+    return {status: 206,
+      headers: {get: name => name.toLowerCase() === 'content-range' ?
+        `bytes 0-0/${entry.size}` : null},
+      body: {cancel: async () => {canceled++;}}};
+  };
+  await probeParquetRange({url: entry.url, size: entry.size, fetchImpl: success});
+  assert.deepEqual(calls, [[entry.url, {
+    method:'GET', mode:'cors', cache:'no-store', headers:{Range:'bytes=0-0'},
+  }]]);
+  assert.equal(canceled, 1);
+  await assert.rejects(probeParquetRange({url:entry.url, size:entry.size,
+    fetchImpl: async () => {throw new TypeError('Failed to fetch');}}), /rede ou CORS/);
+  await assert.rejects(probeParquetRange({url:entry.url, size:entry.size,
+    fetchImpl: async () => ({status:200, headers:{get:()=>null}})}), /Range 206/);
+  await assert.rejects(probeParquetRange({url:entry.url, size:entry.size,
+    fetchImpl: async () => ({status:206, headers:{get:()=>null}})}), /Content-Range/);
+  await assert.rejects(probeParquetRange({url:entry.url, size:entry.size,
+    fetchImpl: async () => ({status:206,
+      headers:{get:()=>`bytes 0-0/${entry.size + 1}`}})}), /compatível/);
 });

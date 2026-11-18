@@ -29,9 +29,10 @@ test('resultados são texto puro, não HTML interpretado', () => {
 });
 test('formulário só abre sessão com entrada válida; reutiliza DB e anuncia resultado', async () => {
   const { nodes,doc } = mockDOM();
-  let fetches=0, created=0, attached=0, queried=0;
+  let fetches=0, probed=0, created=0, attached=0, queried=0;
   mountSearch({documentRef:doc,
     fetchDataset:async () => {fetches++;return {date:'2026-04'};},
+    probeRange:async () => {probed++;},
     createEngine:async () => {created++;return {db:{},duckdb:{}};},
     attach:async () => {attached++;},
     query:async (_,term) => {queried++;return [{cnpj:term,razao_social:'Empresa',uf:'RO'}];},
@@ -47,7 +48,7 @@ test('formulário só abre sessão com entrada válida; reutiliza DB e anuncia r
   assert.match(nodes['consulta-estado'].textContent,/2026-04: 1 resultado/);
   nodes['busca-termo'].value = 'Empresa';
   await submit();
-  assert.deepEqual([fetches,created,attached,queried],[1,1,1,2]);
+  assert.deepEqual([fetches,probed,created,attached,queried],[1,1,1,1,2]);
   assert.equal(nodes['busca-enviar'].disabled,false);
 });
 test('HTTP/engine indisponível é visível, busca seguinte pode repetir', async () => {
@@ -74,6 +75,7 @@ test('manifesto 404 não fica em cache: nova tentativa observa HTTP 500 e depois
       if (attempts === 2) throw Error('HTTP 500');
       return {date:'2026-07'};
     },
+    probeRange: async () => {},
     createEngine: async () => ({db:{},duckdb:{}}),
     attach: async () => {},
     query: async () => [{cnpj:'00000000E08G12',razao_social:'Teste'}],
@@ -109,4 +111,28 @@ test('DuckDB runtime usa bundle selecionado e encerra falha de instanciação', 
     WorkerImpl:FakeWorker, URLImpl:fakeURL, BlobImpl:FakeBlob,
   }),/instantiation failed/);
   assert.deepEqual(observed,[['worker','blob:test'],['revoke','blob:test'],['terminate']]);
+});
+
+test('CORS/Range indisponível impede iniciar WASM e permite nova tentativa', async () => {
+  const {nodes,doc} = mockDOM();
+  let probes=0, created=0;
+  mountSearch({documentRef:doc,
+    fetchDataset:async () => ({date:'2026-07',
+      files:{cnpjs:{url:'https://archive.org/download/ficha-2026-07/cnpjs.parquet',size:6076313170}}}),
+    probeRange:async () => {
+      probes++;
+      if (probes === 1) throw Error('Origem de dados inacessível no navegador (rede ou CORS)');
+    },
+    createEngine:async () => {created++;return {db:{},duckdb:{}};},
+    attach:async () => {},
+    query:async () => [],
+  });
+  nodes['busca-termo'].value='00000000E08G12';
+  const submit = () => nodes['busca-form'].submit({preventDefault() {}});
+  await submit();
+  assert.match(nodes['consulta-estado'].textContent, /rede ou CORS/);
+  assert.deepEqual([created,probes],[0,1], 'não importar WASM na falha de origem');
+  await submit();
+  assert.deepEqual([created,probes],[1,2], 'recuperação sem cachear falha');
+  assert.match(nodes['consulta-estado'].textContent,/nenhum resultado/);
 });
