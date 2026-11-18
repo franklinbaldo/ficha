@@ -835,17 +835,15 @@ def test_extract_all_preserves_homonymous_members_from_two_parts(tmp_path, all_z
 
     chain = fetcher.ChainedFetcher(fetchers=[_ZipDirFetcher(all_zips_dir)])
     extracted = transform.extract_all("2026-04", chain, tmp_path / "extracted")
-    paths = {
-        entry.zip_name: entry.csv_path
-        for entry in extracted
-        if entry.zip_name in expected
-    }
+    paths = {}
+    for entry in extracted:
+        if entry.zip_name in expected:
+            paths[entry.zip_name] = entry.csv_path
 
     assert set(paths) == set(expected)
-    assert (
-        paths["Estabelecimentos0.zip"].resolve()
-        != paths["Estabelecimentos1.zip"].resolve()
-    )
+    first = paths["Estabelecimentos0.zip"].resolve()
+    second = paths["Estabelecimentos1.zip"].resolve()
+    assert first != second
     for zip_name, payload in expected.items():
         assert paths[zip_name].read_bytes() == payload
 
