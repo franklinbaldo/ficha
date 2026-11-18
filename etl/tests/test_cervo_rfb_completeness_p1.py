@@ -367,8 +367,7 @@ def test_equal_name_and_size_do_not_prove_zip_byte_identity(tmp_path: Path) -> N
     receipt_a = _capture(MONTH, name, path)
     raw_a = path.read_bytes()
     receipts_a = tuple(
-        receipt_a if part == name else _capture(MONTH, part, zips[part])
-        for part in PART_NAMES
+        receipt_a if part == name else _capture(MONTH, part, zips[part]) for part in PART_NAMES
     )
 
     _write_zip(path, [key_b], compression=zipfile.ZIP_STORED)
