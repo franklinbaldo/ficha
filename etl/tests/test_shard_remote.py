@@ -75,6 +75,17 @@ def test_materialization_inputs_fail_closed(metadata):
         materialization_input_sha1s(metadata)
 
 
+def test_duplicate_input_name_fails_closed_even_with_comparable_hashes():
+    entries = [
+        _entry(name, size=str(index), sha1=f"{index:040x}")
+        for index, name in enumerate(SHARD_INPUT_NAMES, start=1)
+    ]
+    entries.append(_entry(SHARD_INPUT_NAMES[0], size="999", sha1="f" * 40))
+
+    with pytest.raises(MaterializationInputsUnavailable, match="duplicado"):
+        materialization_input_sha1s(_metadata(*entries))
+
+
 def test_absence_requires_a_valid_files_observation():
     expected = _spec()
     unknown = classify_remote_shard("07", expected, None, fetch_meta=lambda _: None)
@@ -95,6 +106,20 @@ def test_present_shard_needs_comparable_file_identity_before_meta():
         fetch_meta=lambda _: pytest.fail("não deve ler membro sem identidade do objeto"),
     )
     assert verdict.state is ShardReuseState.UNKNOWN
+
+
+@pytest.mark.parametrize("duplicate_sha1", ["a" * 40, "b" * 40])
+def test_duplicate_shard_entries_are_unknown_before_fetch_meta(duplicate_sha1):
+    name = "companies-07.zip"
+    verdict = classify_remote_shard(
+        "07",
+        _spec(),
+        _metadata(_entry(name), _entry(name, sha1=duplicate_sha1)),
+        fetch_meta=lambda _: pytest.fail("metadata duplicado não autoriza ler _meta.json"),
+    )
+
+    assert verdict.state is ShardReuseState.UNKNOWN
+    assert not verdict.may_skip
 
 
 def test_exact_materialization_is_reusable_even_with_pending_tasks_true():
