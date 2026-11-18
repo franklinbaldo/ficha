@@ -38,6 +38,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      - name: Testar finalizador SSG com entradas adversariais
+        run: node --test site/scripts/finalize.test.mjs
       - name: Instalar SSG Rust fixado e conferir SHA-256
         run: |
           set -euo pipefail
