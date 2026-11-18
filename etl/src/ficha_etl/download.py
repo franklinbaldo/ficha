@@ -188,7 +188,6 @@ def _download_streaming(
     return DownloadResult(file=file, path=target, size_bytes=size, resumed=resumed)
 
 
-
 def _require_matching_content_range(response: httpx.Response, existing: int) -> None:
     """Reject a 206 whose advertised slice cannot complete our cached prefix.
 
@@ -201,9 +200,7 @@ def _require_matching_content_range(response: httpx.Response, existing: int) -> 
         raise RuntimeError(f"invalid Content-Range for resumed download: {value!r}")
     start, end, total = (int(part) for part in match.groups())
     if existing <= 0 or start != existing or end != total - 1:
-        raise RuntimeError(
-            f"Content-Range does not match resume offset {existing}: {value!r}"
-        )
+        raise RuntimeError(f"Content-Range does not match resume offset {existing}: {value!r}")
 
 
 def _expected_size(response: httpx.Response, prior_bytes: int) -> int | None:
