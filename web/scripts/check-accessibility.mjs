@@ -10,6 +10,14 @@ const browser = await chromium.launch({ headless: true });
 const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
 await page.goto(url, { waitUntil: 'domcontentloaded' });
 
+// Preserve diagnostics even if the SSG identity or accessibility assertion fails.
+await writeFile(`${outputDir}/served-home.html`, await page.content());
+await page.screenshot({ path: `${outputDir}/home-mobile.png`, fullPage: true });
+if (process.env.FICHA_SITE_MODE === 'ssg') {
+  console.log('SSG headings:', await page.locator('h1, h2').allTextContents());
+  console.log('SSG body excerpt:', (await page.locator('body').innerText()).slice(0, 500));
+}
+
 // The SSG is intentionally static. Do not treat old Astro states as SSG evidence.
 const siteMode = process.env.FICHA_SITE_MODE ?? 'astro';
 if (siteMode === 'ssg') {
@@ -28,7 +36,6 @@ if (siteMode === 'ssg') {
   }, null, { timeout: 45_000 });
 }
 
-await page.screenshot({ path: `${outputDir}/home-mobile.png`, fullPage: true });
 await page.addScriptTag({ content: axe.source });
 const axeResult = await page.evaluate(async () => window.axe.run(document, {
   resultTypes: ['violations'],
