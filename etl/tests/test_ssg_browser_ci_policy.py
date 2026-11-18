@@ -121,7 +121,7 @@ def test_ssg_templates_have_explicit_utf8_charset() -> None:
             encoding="utf-8"
         )
         assert '<meta charset="utf-8">' in source
-        assert '{{charset}}' not in source
+        assert "{{charset}}" not in source
 
 
 def test_reject_mutations_that_restore_false_green() -> None:
