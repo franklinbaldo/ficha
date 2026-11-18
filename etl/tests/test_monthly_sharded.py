@@ -145,9 +145,7 @@ def test_remote_descriptor_rejects_uncomparable_size(bad_size: object) -> None:
 def test_remote_descriptor_does_not_block_on_unrelated_duplicate() -> None:
     descriptor = _descriptor()
     metadata = _metadata_from_descriptor(descriptor)
-    metadata["files"].extend(
-        [{"name": "unrelated.txt", "size": "1"}] * 2
-    )
+    metadata["files"].extend([{"name": "unrelated.txt", "size": "1"}] * 2)
     assert _remote_descriptor_state(descriptor, metadata) == ([], [])
 
 
@@ -159,6 +157,7 @@ def test_remote_descriptor_accepts_integer_and_zero_padded_size() -> None:
     assert _remote_descriptor_state(descriptor, metadata) == ([], [])
     target["size"] = "00011"
     assert _remote_descriptor_state(descriptor, metadata) == ([], [])
+
 
 def test_monthly_workflow_persists_receipts_before_remote_writes() -> None:
     workflow = (Path(__file__).parents[2] / ".github" / "workflows" / "etl-monthly.yml").read_text(
