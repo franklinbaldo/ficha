@@ -69,10 +69,9 @@ export async function fetchCurrentDataset({
 }
 
 /**
- * Verify that the selected archival Parquet can be read by a real browser,
- * before fetching the relatively large DuckDB-WASM runtime. A single-byte
- * cross-origin Range GET is enough to test CORS and exposed Content-Range.
- * This checks transport only, not the file's SHA-256 or query correctness.
+ * Verify CORS + Range on the published origin before loading DuckDB-WASM.
+ * Require exactly one byte, not only a 206 header, and keep the deadline
+ * active through body reads. This is transport evidence, not SHA-256 identity.
  */
 export async function probeParquetRange({url, size, fetchImpl = fetch, timeoutMs = 10000} = {}) {
   dataURL(url, 'Parquet');
@@ -82,30 +81,65 @@ export async function probeParquetRange({url, size, fetchImpl = fetch, timeoutMs
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 60000) {
     throw new Error('Parquet: timeoutMs inválido');
   }
-  // An unreachable origin must not leave the search button disabled forever.
   const controller = new AbortController();
+  const timeoutMessage = 'Origem de dados não respondeu dentro do prazo (timeout)';
   let timedOut = false;
-  const timeout = setTimeout(() => {
-    timedOut = true;
-    controller.abort();
-  }, timeoutMs);
-  let response;
+  let timer;
+  // Promise.race also covers mocks and non-cooperative body streams: a
+  // signal alone does not guarantee that a custom reader will settle.
+  const deadline = new Promise((_, reject) => {
+    timer = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+      reject(new Error(timeoutMessage));
+    }, timeoutMs);
+  });
+  const withinDeadline = operation => Promise.race([operation, deadline]);
   try {
-    response = await fetchImpl(url, {
-      method: 'GET', mode: 'cors', cache: 'no-store',
-      headers: { Range: 'bytes=0-0' }, signal: controller.signal,
-    });
-  } catch {
-    if (timedOut) throw new Error('Origem de dados não respondeu dentro do prazo (timeout)');
-    // A browser intentionally hides CORS failures from JavaScript.
-    throw new Error('Origem de dados inacessível no navegador (rede ou CORS)');
+    let response;
+    try {
+      response = await withinDeadline(fetchImpl(url, {
+        method: 'GET', mode: 'cors', cache: 'no-store',
+        headers: { Range: 'bytes=0-0' }, signal: controller.signal,
+      }));
+    } catch {
+      if (timedOut) throw new Error(timeoutMessage);
+      // A browser intentionally hides CORS failures from JavaScript.
+      throw new Error('Origem de dados inacessível no navegador (rede ou CORS)');
+    }
+
+    // Abort immediately on HTTP 200 so a non-Range origin cannot download
+    // a multi-gigabyte Parquet as a fallback.
+    if (response.status !== 206 ||
+        response.headers?.get('content-range') !== `bytes 0-0/${size}`) {
+      throw new Error('Origem de dados sem HTTP Range 206/Content-Range compatível');
+    }
+    if (!response.body || typeof response.body.getReader !== 'function') {
+      throw new Error('Origem de dados sem corpo de 1 byte');
+    }
+    const reader = response.body.getReader();
+    try {
+      const first = await withinDeadline(reader.read());
+      if (first.done || !(first.value instanceof Uint8Array) ||
+          first.value.byteLength !== 1) {
+        throw new Error('Origem de dados não entregou corpo de exatamente 1 byte');
+      }
+      // Also reject a second chunk, not just an oversized first chunk.
+      const rest = await withinDeadline(reader.read());
+      if (!rest.done) {
+        throw new Error('Origem de dados entregou corpo maior que 1 byte');
+      }
+    } catch (error) {
+      if (timedOut) throw new Error(timeoutMessage);
+      throw error;
+    } finally {
+      // A timeout can leave a custom reader.read() pending; abort below.
+      try { reader.releaseLock(); } catch { /* pending read */ }
+    }
   } finally {
-    clearTimeout(timeout);
+    clearTimeout(timer);
+    // Ends incomplete responses; a fully consumed 1-byte stream is already
+    // closed. Never await cancel() on an untrusted remote body.
+    controller.abort();
   }
-  if (response.status !== 206 ||
-      response.headers?.get('content-range') !== `bytes 0-0/${size}`) {
-    await response.body?.cancel?.();
-    throw new Error('Origem de dados sem HTTP Range 206/Content-Range compatível');
-  }
-  await response.body?.cancel?.();
 }

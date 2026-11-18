@@ -577,10 +577,39 @@ def load_lookup_into_duckdb(
     kind: FileKind,
     csv_path: Path,
 ) -> None:
-    """Carrega lookup RFB pelo mesmo caminho lossless das tabelas principais."""
+    """Carrega lookup RFB sem permitir fan-out em joins por codigo.
+
+    Duplicatas identicas e conflitantes sao rejeitadas antes de qualquer writer:
+    reduzir por dict ou ANY_VALUE ocultaria divergencias e nao protegeria joins
+    de cnpjs, cnpj_cnaes, enderecos, raizes ou socios.
+    """
     table = f"lookup_{kind}"
     spec = registry.CsvSpec(columns=("codigo", "descricao"))
     _create_table_from_csvs(con, table, [csv_path], spec)
+
+    duplicate_keys, excess_rows, conflicting_keys, sample_codes = con.execute(
+        f"""
+        WITH duplicates AS (
+            SELECT codigo, COUNT(*) AS rows_per_code,
+                   COUNT(DISTINCT struct_pack(descricao := descricao)) AS variants
+            FROM {table}
+            GROUP BY codigo
+            HAVING COUNT(*) > 1
+        )
+        SELECT COUNT(*), COALESCE(SUM(rows_per_code - 1), 0),
+               COALESCE(SUM(CASE WHEN variants > 1 THEN 1 ELSE 0 END), 0),
+               list(codigo ORDER BY codigo)[1:5]
+        FROM duplicates
+        """
+    ).fetchone()
+    if duplicate_keys:
+        # Do not expose a rejected lookup table to a caller catching the error.
+        con.execute(f"DROP TABLE {table}")
+        raise ValueError(
+            f"{table}: duplicate codigo; keys={duplicate_keys}, "
+            f"excess_rows={excess_rows}, conflicting_keys={conflicting_keys}, "
+            f"sample_codes={sample_codes!r}"
+        )
 
 
 def lookups_dict(con: duckdb.DuckDBPyConnection, kind: FileKind) -> dict[str, str]:
