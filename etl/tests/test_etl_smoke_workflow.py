@@ -15,7 +15,11 @@ def _load() -> dict:
 
 
 def _steps(workflow: dict) -> dict:
-    return {step.get("name"): step for step in workflow["jobs"]["smoke"]["steps"] if step.get("name")}
+    return {
+        step.get("name"): step
+        for step in workflow["jobs"]["smoke"]["steps"]
+        if step.get("name")
+    }
 
 
 def _pr_is_fixture_only(workflow: dict) -> bool:
