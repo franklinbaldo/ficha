@@ -62,8 +62,10 @@ def violations(workflow: dict, auditor: str) -> list[str]:
         errors.append("no failure-masking or disabled steps")
     try:
         sha_step = _step(steps, "Conferir SHA do checkout")
-        if sha_step.get("env", {}).get("EXPECTED_SHA") != EXPECTED_SHA or (
-            'test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"' not in sha_step.get("run", "")
+        sha_command = 'test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"'
+        if (
+            sha_step.get("env", {}).get("EXPECTED_SHA") != EXPECTED_SHA
+            or sha_command not in sha_step.get("run", "")
         ):
             errors.append("checkout SHA must actually be compared")
         install = _step(steps, "Install pinned SSG Rust and verify SHA-256")
