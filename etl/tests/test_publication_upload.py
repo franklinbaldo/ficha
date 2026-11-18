@@ -144,3 +144,110 @@ def test_local_bytes_must_still_match_descriptor(tmp_path: Path) -> None:
     (tmp_path / "cnpjs.parquet").write_bytes(b"y")
     with pytest.raises(publication.OutputPublishError, match="local bytes changed"):
         publication.local_output_paths(tmp_path, descriptor)
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+def test_duplicate_catalog_entries_never_confirm_identity(reverse: bool) -> None:
+    descriptor = _descriptor()
+    metadata = _metadata(descriptor)
+    good = next(entry for entry in metadata["files"] if entry["name"] == "cnpjs.parquet")
+    conflicting = {**good, "sha1": "0" * 40}
+    if reverse:
+        metadata["files"].append(conflicting)
+    else:
+        metadata["files"].insert(0, conflicting)
+
+    plan = publication.classify_output_upload(
+        descriptor,
+        metadata,
+        head_status=lambda _url: pytest.fail("HEAD must not run on duplicate entries"),
+    )
+    assert not plan.ready
+    assert plan.upload == ()
+    assert plan.mismatches == ()
+    assert len(plan.reuse) == 13
+    assert plan.pending == ("cnpjs.parquet (duplicate catalog entries: 2)",)
+
+    with pytest.raises(publication.OutputPublishError, match="ambiguous"):
+        publication.wait_for_safe_output_plan(
+            descriptor,
+            fetch_metadata=lambda: metadata,
+            head_status=lambda _url: pytest.fail("HEAD must not run"),
+            attempts=1,
+            sleep=lambda _seconds: None,
+        )
+
+
+@pytest.mark.parametrize("raw_size", [True, 1.9, 1.0, "1.0", " 1", "١"])
+def test_uncomparable_remote_sizes_do_not_authorize_reuse(raw_size: object) -> None:
+    descriptor = _descriptor()
+    metadata = _metadata(descriptor)
+    target = next(entry for entry in metadata["files"] if entry["name"] == "cnpjs.parquet")
+    target["size"] = raw_size
+
+    plan = publication.classify_output_upload(
+        descriptor,
+        metadata,
+        head_status=lambda _url: pytest.fail("HEAD must not run for named remote file"),
+    )
+    assert not plan.ready
+    assert plan.upload == ()
+    assert plan.pending == ("cnpjs.parquet",)
+    assert plan.mismatches == ()
+
+
+@pytest.mark.parametrize("raw_size", [True, 1.9, 1.0, "1.0", " 1", "١"])
+def test_uncomparable_descriptor_sizes_fail_closed(raw_size: object, tmp_path: Path) -> None:
+    descriptor = _descriptor()
+    entries = publication.descriptor_file_entries(descriptor)
+    for name, entry in entries.items():
+        path = tmp_path / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"x")
+        entry["sha1"] = publication._sha1_file(path)
+    descriptor["files"]["cnpjs"]["size"] = raw_size
+
+    with pytest.raises(ValueError, match="invalid identity"):
+        publication.classify_output_upload(
+            descriptor,
+            _metadata(descriptor),
+            head_status=lambda _url: pytest.fail("invalid descriptor must not run HEAD"),
+        )
+    with pytest.raises(publication.OutputPublishError, match="local bytes changed"):
+        publication.local_output_paths(tmp_path, descriptor)
+
+
+def test_duplicate_catalog_becoming_unambiguous_allows_reuse() -> None:
+    descriptor = _descriptor()
+    ambiguous = _metadata(descriptor)
+    ambiguous["files"].append(dict(ambiguous["files"][0]))
+    states = iter([ambiguous, _metadata(descriptor)])
+    sleeps: list[float] = []
+
+    plan = publication.wait_for_safe_output_plan(
+        descriptor,
+        fetch_metadata=lambda: next(states),
+        head_status=lambda _url: pytest.fail("cataloged file must not run HEAD"),
+        attempts=2,
+        interval_s=1,
+        sleep=sleeps.append,
+    )
+    assert plan.ready
+    assert len(plan.reuse) == 14
+    assert plan.upload == ()
+    assert sleeps == [1]
+
+
+def test_malformed_catalog_entry_cannot_authorize_put() -> None:
+    descriptor = _descriptor()
+    metadata = _metadata(descriptor, omit={"cnpjs.parquet"})
+    metadata["files"].append(None)
+
+    plan = publication.classify_output_upload(
+        descriptor,
+        metadata,
+        head_status=lambda _url: pytest.fail("incomplete metadata must not run HEAD"),
+    )
+    assert not plan.ready
+    assert len(plan.pending) == 14
+    assert plan.upload == ()
