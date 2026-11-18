@@ -438,3 +438,45 @@ def test_input_change_aborts_before_mixing_materializations(tmp_path):
         )
 
     assert session.pack_calls == []
+
+
+def test_post_put_duplicate_catalog_is_not_a_successful_confirmation(tmp_path):
+    """A stale 404 followed by duplicate catalog names cannot confirm a PUT.
+
+    Direct reads are deliberately unavailable in this synthetic scenario. The
+    fallback catalog is first-wins in the legacy confirmer, so the final shard
+    classifier must reject the duplicate before reporting UPLOADED.
+    """
+    session = _Session()
+    remote = _Remote()
+    pinned = pin_materialization_inputs(remote.metadata)
+    spec = _expected(session, "07", pinned)
+    name = "companies-07.zip"
+
+    def metadata_with_duplicate_after_put() -> dict:
+        metadata = remote.metadata()
+        if name in remote.files:
+            entry = next(item for item in metadata["files"] if item["name"] == name)
+            metadata["files"].append({**entry, "sha1": "f" * 40})
+        return metadata
+
+    with pytest.raises(ShardPublishError):
+        publish_one_shard(
+            session,
+            "07",
+            tmp_path / "out",
+            pinned_inputs=pinned,
+            fetch_metadata=metadata_with_duplicate_after_put,
+            fetch_meta=_fetch_meta(remote, spec),
+            upload=remote.upload,
+            fetch_direct=lambda _: None,
+            confirm_attempts=1,
+            post_put_direct_attempts=1,
+            sleep=lambda _: None,
+        )
+
+    # The first PUT was authorized against an actually absent ZIP; only its
+    # ambiguous postcondition is rejected. Never issue a second write.
+    assert remote.uploads == [name]
+    assert session.pack_calls == ["07"]
+    assert (tmp_path / "out" / name).exists()
