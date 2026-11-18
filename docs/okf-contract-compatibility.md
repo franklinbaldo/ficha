@@ -107,6 +107,24 @@ O adaptador `web/src/lib/okf-row-schemas.ts` também não seleciona o
 contrato pela versão do snapshot. Ambas são dependências de decisão do
 Elefante/Polvo e não foram alteradas.
 
+## Baseline independente de colunas públicas v1 (18/11/2026)
+
+O teste adicional `knowledge/tests/test_public_v1_column_baseline.py` congela
+**nome e tipo escalar de cada uma das 86 colunas v1** (Cnpj 52, Raiz 18,
+Socio 16) em `knowledge/tests/public-v1-column-kinds.json`. Essa baseline
+literal **não é regenerada** dos SQL ou Zods durante o teste; uma edição
+sincronizada dos três artefatos ainda poderia satisfazer o teste de paridade
+anterior, mas agora falha se alterar o contrato público v1. As duas
+contraprovas em memória simulam (a) renomear `cnpj` e (b) trocar
+`capital_social` de número para string nos três contratos simultaneamente.
+As duas conservam paridade e são rejeitadas pela baseline.
+
+A baseline fixa nomes/tipos básicos; nulabilidade (26/1/9), obrigatoriedade,
+domínios enum e modificadores Zod de objeto continuam cobertos pelos testes
+separados. A atualização intencional de uma coluna pública exige análise de
+versionamento, não regeneração automática desta fixture. Não há validação de
+`safeParse`, de linhas reais ou do Parquet físico nesta fatia.
+
 ## Gate enxuto
 
 `.github/workflows/okf-contract.yml` observa `knowledge/**`, os schemas
