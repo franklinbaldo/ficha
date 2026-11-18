@@ -123,9 +123,13 @@ test('probe remoto pede somente um byte e exige CORS/206/Content-Range visível'
       body: {cancel: async () => {canceled++;}}};
   };
   await probeParquetRange({url: entry.url, size: entry.size, fetchImpl: success});
-  assert.deepEqual(calls, [[entry.url, {
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0][0], entry.url);
+  const {signal, ...request} = calls[0][1];
+  assert.ok(signal instanceof AbortSignal);
+  assert.deepEqual(request, {
     method:'GET', mode:'cors', cache:'no-store', headers:{Range:'bytes=0-0'},
-  }]]);
+  });
   assert.equal(canceled, 1);
   await assert.rejects(probeParquetRange({url:entry.url, size:entry.size,
     fetchImpl: async () => {throw new TypeError('Failed to fetch');}}), /rede ou CORS/);
@@ -136,4 +140,31 @@ test('probe remoto pede somente um byte e exige CORS/206/Content-Range visível'
   await assert.rejects(probeParquetRange({url:entry.url, size:entry.size,
     fetchImpl: async () => ({status:206,
       headers:{get:()=>`bytes 0-0/${entry.size + 1}`}})}), /compatível/);
+});
+
+test('probe Range tem prazo máximo, aborta fetch travado e permite retry', async () => {
+  const entry = currentDataset(await fixture()).files.cnpjs;
+  let signal;
+  await assert.rejects(probeParquetRange({
+    url:entry.url, size:entry.size, timeoutMs:25,
+    fetchImpl: (_url, options) => {
+      signal = options.signal;
+      return new Promise((_resolve, reject) => {
+        signal.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), {once:true});
+      });
+    },
+  }), /prazo \(timeout\)/);
+  assert.equal(signal.aborted, true);
+  await assert.rejects(probeParquetRange({
+    url:entry.url, size:entry.size, timeoutMs:0,
+    fetchImpl: () => {throw Error('não deve alcançar a rede');},
+  }), /timeoutMs inválido/);
+  // A later attempt must be able to succeed with a fresh request.
+  await probeParquetRange({
+    url:entry.url, size:entry.size, timeoutMs:25,
+    fetchImpl: async () => ({
+      status:206, headers:{get:()=>`bytes 0-0/${entry.size}`},
+      body:{cancel:async()=>{}},
+    }),
+  });
 });
