@@ -69,6 +69,7 @@ def _pr_is_fixture_only(workflow: dict) -> bool:
         and freshness.get("if") == OPERATIONAL
     )
 
+
 def test_pr_runs_http_fixtures_without_live_upstream_or_ia() -> None:
     assert _pr_is_fixture_only(_load())
 
