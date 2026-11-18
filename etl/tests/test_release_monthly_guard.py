@@ -11,9 +11,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-WORKFLOW_PATH = (
-    Path(__file__).parents[2] / ".github" / "workflows" / "release-monthly-data.yml"
-)
+WORKFLOW_PATH = Path(__file__).parents[2] / ".github" / "workflows" / "release-monthly-data.yml"
 
 
 def _workflow() -> dict:
@@ -25,9 +23,7 @@ def _allows_job(condition: str, event: str, conclusion: str | None) -> bool:
     assert condition.startswith("${{") and condition.endswith("}}")
     expression = condition[3:-2].strip()
     expression = re.sub(r"\bfalse\b", "False", expression)
-    expression = expression.replace(
-        "github.event.workflow_run.conclusion", repr(conclusion)
-    )
+    expression = expression.replace("github.event.workflow_run.conclusion", repr(conclusion))
     expression = expression.replace("github.event_name", repr(event))
     expression = expression.replace("&&", " and ")
     expression = " ".join(expression.split())
@@ -45,9 +41,7 @@ def _allows_job(condition: str, event: str, conclusion: str | None) -> bool:
             and len(part.comparators) == 1
         ):
             return evaluate(part.left) == evaluate(part.comparators[0])
-        raise AssertionError(
-            f"Unsupported or unsafe Actions guard expression: {ast.dump(part)}"
-        )
+        raise AssertionError(f"Unsupported or unsafe Actions guard expression: {ast.dump(part)}")
 
     return evaluate(node) is True
 
@@ -56,9 +50,7 @@ def _guard() -> str:
     workflow = _workflow()
     assert list(workflow["jobs"]) == ["release"]
     job = workflow["jobs"]["release"]
-    assert "gh release create" in "\n".join(
-        step.get("run", "") for step in job["steps"]
-    )
+    assert "gh release create" in "\n".join(step.get("run", "") for step in job["steps"])
     return job["if"]
 
 
@@ -73,17 +65,13 @@ def test_guard_has_required_constraints_and_explicit_approval_hold() -> None:
     assert not _allows_job(_guard(), "workflow_run", "success")
 
 
-@pytest.mark.parametrize(
-    "conclusion", ["failure", "cancelled", "skipped", "success", None]
-)
+@pytest.mark.parametrize("conclusion", ["failure", "cancelled", "skipped", "success", None])
 @pytest.mark.parametrize("tag_exists", [False, True])
 def test_workflow_run_never_creates_release_without_promotion_proof(
     conclusion: str | None, tag_exists: bool
 ) -> None:
     # If the job doesn't run, existence of a tag is immaterial.
-    would_create_release = (
-        _allows_job(_guard(), "workflow_run", conclusion) and not tag_exists
-    )
+    would_create_release = _allows_job(_guard(), "workflow_run", conclusion) and not tag_exists
     assert not would_create_release
 
 
