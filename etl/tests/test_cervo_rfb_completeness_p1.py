@@ -22,6 +22,7 @@ import pytest
 
 
 MONTH = "2026-08"
+RUN_ID = "synthetic-rfb-ingest-a"
 PART_NAMES = tuple(f"Estabelecimentos{i}.zip" for i in range(10))
 KEY_RE = re.compile(r"[0-9A-Z]{12}[0-9]{2}\Z")
 
@@ -31,6 +32,7 @@ class SourceReceipt:
     """Witness collected from *source ZIPs*, never from produced keys."""
 
     month: str
+    run_id: str
     name: str
     zip_sha256: str
     csv_member: str
@@ -80,10 +82,11 @@ def _source_keys(zip_path: Path) -> tuple[list[str], bytes, str]:
     return keys, raw, member.filename
 
 
-def _capture(month: str, name: str, path: Path) -> SourceReceipt:
+def _capture(month: str, name: str, path: Path, *, run_id: str = RUN_ID) -> SourceReceipt:
     keys, csv_raw, member = _source_keys(path)
     return SourceReceipt(
         month=month,
+        run_id=run_id,
         name=name,
         zip_sha256=_digest(path.read_bytes()),
         csv_member=member,
@@ -98,14 +101,18 @@ def _reconcile(
     source_zips: dict[str, Path],
     receipts: tuple[SourceReceipt, ...],
     produced_keys: list[str],
+    *,
+    run_id: str = RUN_ID,
 ) -> None:
-    """Offline reference contract: independent source witness + exact multiset."""
+    """Offline reference contract: source witness, run binding and exact multiset."""
     if set(source_zips) != set(PART_NAMES) or len(source_zips) != len(PART_NAMES):
         raise ValueError("missing or unexpected source part")
     if len(receipts) != len(PART_NAMES) or {r.name for r in receipts} != set(PART_NAMES):
         raise ValueError("missing or duplicate receipt")
     if any(r.month != month for r in receipts):
         raise ValueError("mixed source competence")
+    if any(r.run_id != run_id for r in receipts):
+        raise ValueError("mixed source run")
     if len({str(p.resolve()) for p in source_zips.values()}) != 10:
         raise ValueError("aliased source paths")
     by_name = {r.name: r for r in receipts}
@@ -300,3 +307,34 @@ def test_zip_repack_same_csv_changes_zip_identity(tmp_path: Path) -> None:
     assert updated.zip_sha256 != receipts[0].zip_sha256
     with pytest.raises(ValueError, match="source receipt mismatch"):
         _reconcile(MONTH, zips, receipts, keys)
+
+
+
+def test_other_run_receipt_rejected_even_with_same_competence(tmp_path: Path) -> None:
+    zips, receipts, keys = _fixture(tmp_path)
+    mismatched = (replace(receipts[0], run_id="synthetic-rfb-ingest-b"), *receipts[1:])
+    with pytest.raises(ValueError, match="mixed source run"):
+        _reconcile(MONTH, zips, mismatched, keys)
+
+
+def test_same_key_cross_part_with_distinct_zip_bytes_rejected(tmp_path: Path) -> None:
+    zips, receipts, keys = _fixture(tmp_path)
+    _write_zip(zips[PART_NAMES[1]], [keys[0], keys[1]])
+    altered = _capture(MONTH, PART_NAMES[1], zips[PART_NAMES[1]])
+    assert altered.zip_sha256 != receipts[0].zip_sha256
+    updated_receipts = (receipts[0], altered, *receipts[2:])
+    with pytest.raises(ValueError, match="empty or duplicate source identity"):
+        _reconcile(MONTH, zips, updated_receipts, [*keys, keys[0]])
+
+
+def test_jointly_replaced_origin_receipt_and_output_are_not_authenticated(
+    tmp_path: Path,
+) -> None:
+    """Counterexample: consistent hashes without an external trust anchor can pass."""
+    zips, receipts, keys = _fixture(tmp_path)
+    replacement = _key("999999990001")
+    _write_zip(zips[PART_NAMES[9]], [replacement])
+    fresh = _capture(MONTH, PART_NAMES[9], zips[PART_NAMES[9]])
+    assert fresh.zip_sha256 != receipts[9].zip_sha256
+    assert fresh.key_multiset_sha256 != receipts[9].key_multiset_sha256
+    _reconcile(MONTH, zips, (*receipts[:9], fresh), [*keys[:9], replacement])
