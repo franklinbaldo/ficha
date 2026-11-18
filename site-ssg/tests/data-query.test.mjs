@@ -85,3 +85,29 @@ test('registra cnpjs.parquet pela URL real e rejeita SQL em nomes de lookup', as
   assert.equal(events.at(-1)[0],'close');
   await assert.rejects(attachAnalyticalFiles(db,{...dataset,lookups:{'x; DROP TABLE cnpjs':{url:'https://example.org/x'}}},module),/unsafe lookup/);
 });
+
+
+test('paridade com Astro: curingas não convertem uma busca textual em CNPJ exato', () => {
+  // O legado classifica a entrada original via stripCNPJ(cnpj), antes de
+  // remover %, _ e barras invertidas do parâmetro da busca textual.
+  for (const raw of [
+    '11222333000181%',
+    '00.000.000/E08G-12%',
+    '11222333000181_',
+    '11222333000181\\',
+  ]) {
+    const plan = planCompanyQuery(raw);
+    assert.equal(plan.mode, 'name', `modo divergente para ${JSON.stringify(raw)}`);
+    assert.match(plan.sql, /WHERE razao_social ILIKE \\? LIMIT 20/);
+    assert.equal(plan.param, `%${raw.replace(/[%_\\\\]/g, '')}%`);
+  }
+  for (const [raw, canonical] of [
+    ['11222333000181', '11222333000181'],
+    ['00.000.000/E08G-12', '00000000E08G12'],
+  ]) {
+    const plan = planCompanyQuery(raw);
+    assert.equal(plan.mode, 'cnpj');
+    assert.equal(plan.param, canonical);
+    assert.match(plan.sql, /WHERE cnpj = \\? LIMIT 1/);
+  }
+});
