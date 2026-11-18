@@ -196,7 +196,7 @@ def _require_matching_content_range(response: httpx.Response, existing: int) -> 
     for the cached prefix or the upstream RFB/IA object.
     """
     value = response.headers.get("content-range", "")
-    match = re.fullmatch(r"bytes (\\d+)-(\\d+)/(\\d+)", value)
+    match = re.fullmatch(r"bytes (\d+)-(\d+)/(\d+)", value)
     if match is None:
         raise RuntimeError(f"invalid Content-Range for resumed download: {value!r}")
     start, end, total = (int(part) for part in match.groups())
