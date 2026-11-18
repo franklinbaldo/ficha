@@ -388,3 +388,54 @@ def test_duplicates_of_irrelevant_names_do_not_change_target_decision(tmp_path) 
     with_target = decide(NAME, local, _metadata(unrelated, _entry(content), unrelated))
     assert with_target.state is RemoteIdentityState.IDENTICAL
     assert with_target.action is UploadAction.SKIP
+
+
+# --- identidade remota precisa ser realmente comparável ----------------------
+# int(5.9) == 5 e int(True) == 1: coerção não prova tamanho. Um sha1
+# não-hexadecimal tampouco é evidência de bytes diferentes que autorize REPLACE.
+
+
+@pytest.mark.parametrize(
+    ("raw_size", "raw_sha1"),
+    [
+        (5.9, hashlib.sha1(b"AAAAA").hexdigest()),
+        (True, hashlib.sha1(b"AAAAA").hexdigest()),
+        (-1, hashlib.sha1(b"AAAAA").hexdigest()),
+        ("5.0", hashlib.sha1(b"AAAAA").hexdigest()),
+        ({"size": 5}, hashlib.sha1(b"AAAAA").hexdigest()),
+        ("5", "sha1-invalid"),
+        ("5", "g" * 40),
+        ("5", "0" * 39),
+        ("5", 123),
+        ("5", None),
+    ],
+)
+def test_noncomparable_metadata_neither_skips_nor_writes(tmp_path, raw_size, raw_sha1) -> None:
+    path = _file(tmp_path, b"AAAAA")
+    local = local_identity(path)
+    remote = {"name": NAME, "size": raw_size, "sha1": raw_sha1}
+    metadata = _metadata(remote)
+
+    decision = decide(NAME, local, metadata)
+    assert decision.state is RemoteIdentityState.UNAVAILABLE
+    assert decision.action is UploadAction.RETRY_FAIL
+
+    with pytest.raises(IdentityNotConfirmed):
+        ensure_uploaded(
+            NAME,
+            path,
+            upload=lambda: pytest.fail("metadata incomparável não autoriza PUT"),
+            fetch_metadata=lambda: metadata,
+            sleep=lambda _: None,
+        )
+
+
+@pytest.mark.parametrize("raw_size", [5, "5", "0005"])
+def test_valid_decimal_size_and_uppercase_sha1_still_reuse(tmp_path, raw_size) -> None:
+    content = b"AAAAA"
+    local = local_identity(_file(tmp_path, content))
+    entry = {"name": NAME, "size": raw_size, "sha1": local.sha1.upper()}
+
+    decision = decide(NAME, local, _metadata(entry))
+    assert decision.state is RemoteIdentityState.IDENTICAL
+    assert decision.action is UploadAction.SKIP
