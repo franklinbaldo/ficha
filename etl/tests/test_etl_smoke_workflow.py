@@ -31,7 +31,18 @@ def _pr_is_fixture_only(workflow: dict) -> bool:
     """
     if set(workflow["jobs"]) != {"smoke"}:
         return False
+    events = workflow.get("on", workflow.get(True))  # PyYAML YAML 1.1.
+    expected_pr = {"paths": ["etl/**", ".github/workflows/etl-smoke.yml"]}
+    if (
+        not isinstance(events, dict)
+        or events.get("pull_request") != expected_pr
+        or "pull_request_target" in events
+    ):
+        return False
+
     smoke_job = workflow["jobs"]["smoke"]
+    if smoke_job.get("if") is not None:  # A job-level guard can skip PR fixtures.
+        return False
     if smoke_job.get("continue-on-error") not in (None, False):
         return False
     steps = smoke_job["steps"]
@@ -142,4 +153,26 @@ def test_negative_mutation_rejects_nonblocking_operational_step() -> None:
 def test_negative_mutation_rejects_nonblocking_operational_job() -> None:
     mutated = deepcopy(_load())
     mutated["jobs"]["smoke"]["continue-on-error"] = True
+    assert not _pr_is_fixture_only(mutated)
+
+
+def test_negative_mutation_rejects_job_level_pr_skip() -> None:
+    for condition in (False, "github.event_name != 'pull_request'"):
+        mutated = deepcopy(_load())
+        mutated["jobs"]["smoke"]["if"] = condition
+        assert not _pr_is_fixture_only(mutated)
+
+
+def test_negative_mutation_rejects_pr_event_scope_changes() -> None:
+    original = _load()
+    for bad_event in (
+        {"paths": ["docs/**"]},
+        {"paths": ["etl/**", ".github/workflows/etl-smoke.yml"], "paths-ignore": ["etl/**"]},
+    ):
+        mutated = deepcopy(original)
+        mutated.get("on", mutated.get(True))["pull_request"] = bad_event
+        assert not _pr_is_fixture_only(mutated)
+
+    mutated = deepcopy(original)
+    mutated.get("on", mutated.get(True))["pull_request_target"] = {}
     assert not _pr_is_fixture_only(mutated)
