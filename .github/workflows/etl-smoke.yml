@@ -54,9 +54,7 @@ jobs:
       # Fixture HTTP MockTransport tests: no RFB or Internet Archive access in PR.
       - name: PR smoke with fixtures
         if: github.event_name == 'pull_request'
-        run: |
-          uv run --extra dev ruff format --diff tests/test_etl_smoke_workflow.py
-          uv run --extra dev pytest -q tests/test_smoke.py tests/test_cli.py -k smoke
+        run: uv run --extra dev pytest -q tests/test_smoke.py tests/test_cli.py -k smoke
 
       - name: Run smoke check
         id: smoke

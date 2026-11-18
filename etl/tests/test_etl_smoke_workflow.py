@@ -52,10 +52,7 @@ def _pr_is_fixture_only(workflow: dict) -> bool:
     expected_fixture = {
         "name": "PR smoke with fixtures",
         "if": PR,
-        "run": (
-            "uv run --extra dev pytest -q "
-            "tests/test_smoke.py tests/test_cli.py -k smoke"
-        ),
+        "run": ("uv run --extra dev pytest -q tests/test_smoke.py tests/test_cli.py -k smoke"),
     }
     return (
         upstream.get("name") == "Upstream latest snapshot (list-snapshots)"
