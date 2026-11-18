@@ -167,4 +167,95 @@ describe('P3-B: execução real de SQL parametrizado sobre Parquet sintético', 
       conn.close();
     }
   });
+
+  it('preserva CNPJ alfanumérico como VARCHAR de 14 posições e isola municípios RFB', async () => {
+    const duckdb = require('@duckdb/duckdb-wasm/blocking') as
+      typeof import('@duckdb/duckdb-wasm/blocking');
+    const db = await duckdb.createDuckDB(
+      {
+        mvp: {
+          mainModule: require.resolve('@duckdb/duckdb-wasm/dist/duckdb-mvp.wasm'),
+          mainWorker: require.resolve('@duckdb/duckdb-wasm/dist/duckdb-node-mvp.worker.cjs'),
+        },
+      },
+      new duckdb.VoidLogger(),
+      duckdb.NODE_RUNTIME,
+    );
+    await db.instantiate();
+    db.open({ path: ':memory:' });
+    const conn = db.connect();
+
+    try {
+      // Espelha a concatenação do writer transform.py, partindo de três
+      // campos VARCHAR separados. CNPJs/DVs são sintéticos, não registros RFB.
+      conn.query(`
+        CREATE TABLE estabelecimento (
+          cnpj_basico VARCHAR, cnpj_ordem VARCHAR, cnpj_dv VARCHAR,
+          uf VARCHAR, municipio VARCHAR, logradouro_normalizado VARCHAR,
+          numero VARCHAR, bairro VARCHAR, cep VARCHAR
+        )
+      `);
+      conn.query(`
+        INSERT INTO estabelecimento VALUES
+          ('00AB12C3', '0001', '91', 'SP', '7107', 'RUA DAS FLORES', '10', 'CENTRO', '01000000'),
+          ('00AB12C3', '0002', '76', 'SP', '7108', 'RUA DAS FLORES', '11', 'CENTRO', '01000001'),
+          ('00AB12C3', '0003', '50', 'RJ', '7107', 'RUA DAS FLORES', '12', 'CENTRO', '22000000'),
+          ('00000001', '0001', '91', 'SP', '7107', 'RUA DAS FLORES', '13', 'CENTRO', '01000002'),
+          ('00000000', 'E08G', '12', 'SP', '7107', 'RUA DAS FLORES', '14', 'CENTRO', '01000003')
+      `);
+      conn.query(`
+        COPY (
+          SELECT est.cnpj_basico || est.cnpj_ordem || est.cnpj_dv AS cnpj,
+                 est.uf, est.municipio AS municipio_codigo,
+                 est.logradouro_normalizado, est.numero, est.bairro, est.cep
+          FROM estabelecimento est
+          ORDER BY est.uf, est.municipio, est.numero
+        ) TO 'p3b-alfa.parquet' (FORMAT PARQUET, COMPRESSION ZSTD)
+      `);
+      const bytes = db.copyFileToBuffer('p3b-alfa.parquet').byteLength;
+      expect(bytes).toBeGreaterThan(0);
+      expect(bytes).toBeLessThan(100_000);
+      const tipados = conn.query(
+        "SELECT cnpj, typeof(cnpj) AS tipo FROM read_parquet('p3b-alfa.parquet') ORDER BY cnpj",
+      ).toArray().map((row) => row.toJSON() as { cnpj: string; tipo: string });
+      expect(tipados.map(({ cnpj }) => cnpj)).toEqual([
+        '00000000E08G12', '00000001000191', '00AB12C3000191',
+        '00AB12C3000276', '00AB12C3000350',
+      ]);
+      expect(tipados.every(({ cnpj, tipo }) => tipo === 'VARCHAR' && cnpj.length === 14))
+        .toBe(true);
+
+      conn.query("CREATE VIEW enderecos AS SELECT * FROM 'p3b-alfa.parquet'");
+      const consultar = (uf: string, codigo: string): string[] => {
+        const plano = planejarConsultaEnderecos({
+          uf, municipio: { sistema: 'RFB', codigo }, termo: 'Rua das Flores',
+        });
+        const stmt = conn.prepare(plano.sql);
+        try {
+          return stmt.query(...plano.parametros).toArray()
+            .map((row) => row.toJSON().cnpj as string);
+        } finally {
+          stmt.close();
+        }
+      };
+      expect(consultar('SP', '7107')).toEqual([
+        '00AB12C3000191', '00000001000191', '00000000E08G12',
+      ]);
+      // Ordem com letras: substituir E/G por zeros alteraria a identidade.
+      expect(consultar('SP', '7107')).toContain('00000000E08G12');
+      expect(consultar('SP', '7107')).not.toContain('00000000008012');
+      expect(consultar('SP', '7108')).toEqual(['00AB12C3000276']);
+      expect(consultar('RJ', '7107')).toEqual(['00AB12C3000350']);
+      expect(consultar('RJ', '7108')).toEqual([]);
+      expect(consultar('RJ', '7107')).not.toContain('00000000E08G12');
+      expect(() => planejarConsultaEnderecos({
+        uf: 'SP', municipio: { sistema: 'IBGE', codigo: '3550308' },
+      })).toThrow(/IBGE/);
+      expect(() => planejarConsultaEnderecos({
+        uf: 'SP', municipio: { sistema: 'RFB', codigo: '3550308' },
+      })).toThrow(/RFB inválido/);
+    } finally {
+      conn.close();
+    }
+  });
 });
