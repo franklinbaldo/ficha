@@ -80,6 +80,29 @@ KNOWN_UNRESTRICTED_ENUM_GAPS = {
     table: set(domains) for table, domains in EXPECTED_PUBLIC_ENUM_DOMAINS.items()
 }
 
+# A joint change to both Zod schemas can leave the mismatch inventory
+# unchanged while silently changing which public-v1 fields accept null.
+# Pin the public contract itself, not just the generated-versus-public gap.
+PUBLIC_V1_SHARED_NULLABLE = {
+    "Cnpj": {
+        "data_exclusao_mei",
+        "data_exclusao_simples",
+        "data_opcao_mei",
+        "data_situacao_especial",
+    },
+    "Raiz": set(),
+    "Socio": {
+        "cpf_mascarado",
+        "representante_legal_cpf",
+        "representante_legal_nome",
+        "representante_legal_qualificacao_codigo",
+    },
+}
+EXPECTED_PUBLIC_NULLABLE_FIELDS = {
+    table: KNOWN_NULLABILITY_GAPS[table] | PUBLIC_V1_SHARED_NULLABLE[table]
+    for table in SOURCES
+}
+
 
 def _sql_fields(table: str, slug: str) -> dict[str, str]:
     source = (ROOT / f"knowledge/types/{slug}.schema.sql").read_text(encoding="utf-8")
@@ -181,6 +204,12 @@ def _public_enum_domains(fields: dict[str, str]) -> dict[str, tuple[str, ...]]:
     }
 
 
+def _nullable_fields(fields: dict[str, str]) -> set[str]:
+    return {
+        name for name, expr in fields.items() if expr.endswith(".nullable()")
+    }
+
+
 def _nullability_gap(
     published: dict[str, str], generated: dict[str, str]
 ) -> set[str]:
@@ -242,6 +271,46 @@ class OkfContractCompatibilityTest(unittest.TestCase):
                     f"{table}: generated schema unexpectedly widened nullability",
                 )
 
+
+    def test_public_v1_nullable_set_is_frozen(self) -> None:
+        for table, (_, public_name) in SOURCES.items():
+            with self.subTest(table=table):
+                published = _published_v1_fields(public_name)
+                self.assertEqual(
+                    _nullable_fields(published),
+                    EXPECTED_PUBLIC_NULLABLE_FIELDS[table],
+                    f"{table}: public v1 null acceptance changed; review versioning",
+                )
+
+    def test_negative_joint_nullable_widening_is_detected(self) -> None:
+        published = _published_v1_fields("estabelecimento")
+        generated = _generated_fields("Cnpj")
+        published["cnpj"] = "z.string().nullable()"
+        generated["cnpj"] = "z.string().nullable()"
+        # The old gap-only check would pass because both sides agree.
+        self.assertEqual(
+            _nullability_gap(published, generated),
+            KNOWN_NULLABILITY_GAPS["Cnpj"],
+        )
+        self.assertNotEqual(
+            _nullable_fields(published),
+            EXPECTED_PUBLIC_NULLABLE_FIELDS["Cnpj"],
+        )
+
+    def test_negative_joint_nullable_narrowing_is_detected(self) -> None:
+        published = _published_v1_fields("socio")
+        generated = _generated_fields("Socio")
+        published["cpf_mascarado"] = "z.string()"
+        generated["cpf_mascarado"] = "z.string()"
+        # Removing null support from both versions is also breaking.
+        self.assertEqual(
+            _nullability_gap(published, generated),
+            KNOWN_NULLABILITY_GAPS["Socio"],
+        )
+        self.assertNotEqual(
+            _nullable_fields(published),
+            EXPECTED_PUBLIC_NULLABLE_FIELDS["Socio"],
+        )
 
     def test_required_field_presence_matches_public_v1(self) -> None:
         # Generated Zod metadata (title/description) is intentionally excluded.
