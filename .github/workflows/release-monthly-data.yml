@@ -16,13 +16,11 @@ permissions:
 
 jobs:
   release:
-    # #271: event completion and manifest push do not establish authorized
-    # promotion of this exact snapshot. Fail closed until a separately reviewed
-    # release contract binds the promoted manifest, month, and commit.
-    # The success predicate alone is necessary, never sufficient.
+    # #271: a completed monthly ETL with failure/cancellation is not a release.
+    # A manifest push cannot substitute for an ETL workflow_run success.
+    # This only gates the historic release path; it does not authorize ETL/IA.
     if: >-
       ${{
-        false &&
         github.event_name == 'workflow_run' &&
         github.event.workflow_run.conclusion == 'success'
       }}

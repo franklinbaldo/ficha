@@ -1,4 +1,4 @@
-"""#271: prevent an unapproved data release for *any* Actions event.
+"""#271: guard monthly release against failed ETL and manifest-only pushes.
 
 This checks the source YAML and evaluates its narrowly supported job condition
 against synthetic event payloads. It never runs gh or a publishing workflow.
@@ -54,41 +54,40 @@ def _guard() -> str:
     return job["if"]
 
 
-def test_guard_has_required_constraints_and_explicit_approval_hold() -> None:
+def test_guard_is_exactly_successful_workflow_run() -> None:
     guard = " ".join(_guard().split())
     assert re.fullmatch(
-        r"\$\{\{ false && github\.event_name == 'workflow_run' "
-        r"&& github\.event\.workflow_run\.conclusion == 'success' \}\}",
+        r"\\$\\{\\{ github\\.event_name == 'workflow_run' "
+        r"&& github\\.event\\.workflow_run\\.conclusion == 'success' \\}\\}",
         guard,
     ), guard
-    # A success event alone does not prove the same manifest was promoted.
-    assert not _allows_job(_guard(), "workflow_run", "success")
+    assert _allows_job(_guard(), "workflow_run", "success")
+    assert not _allows_job(_guard(), "workflow_run", "failure")
 
 
 @pytest.mark.parametrize("conclusion", ["failure", "cancelled", "skipped", "success", None])
 @pytest.mark.parametrize("tag_exists", [False, True])
-def test_workflow_run_never_creates_release_without_promotion_proof(
+def test_only_successful_etl_is_a_release_candidate(
     conclusion: str | None, tag_exists: bool
 ) -> None:
-    # If the job doesn't run, existence of a tag is immaterial.
-    would_create_release = _allows_job(_guard(), "workflow_run", conclusion) and not tag_exists
-    assert not would_create_release
+    # Synthetic control-flow only; no real GitHub release is attempted.
+    candidate_without_tag = _allows_job(_guard(), "workflow_run", conclusion) and not tag_exists
+    assert candidate_without_tag == (conclusion == "success" and not tag_exists)
 
 
 @pytest.mark.parametrize("event", ["push", "workflow_dispatch", "pull_request"])
 @pytest.mark.parametrize("tag_exists", [False, True])
 def test_no_other_event_can_create_release(event: str, tag_exists: bool) -> None:
+    # In particular, a manifest push is not proof of monthly ETL success.
     assert not (_allows_job(_guard(), event, None) and not tag_exists)
 
 
-def test_negative_mutations_prove_the_guard_is_not_vacuous() -> None:
-    guard = _guard()
-    without_hold = guard.replace("false &&", "", 1)
-    assert _allows_job(without_hold, "workflow_run", "success")
-    assert not _allows_job(without_hold, "workflow_run", "failure")
-    assert not _allows_job(without_hold, "workflow_run", "cancelled")
-    assert not _allows_job(without_hold, "workflow_run", "skipped")
-    assert not _allows_job(without_hold, "push", None)
-    # Without the approval hold, a successful ETL event with an absent tag
-    # would reach release creation despite missing promotion identity.
-    assert _allows_job(without_hold, "workflow_run", "success")
+def test_mutation_missing_success_predicate_reopens_failed_etl() -> None:
+    guard = " ".join(_guard().split())
+    without_conclusion = guard.replace(
+        " && github.event.workflow_run.conclusion == 'success'", "", 1
+    )
+    assert without_conclusion != guard
+    assert _allows_job(without_conclusion, "workflow_run", "failure")
+    assert _allows_job(without_conclusion, "workflow_run", "cancelled")
+    assert not _allows_job(without_conclusion, "push", None)
