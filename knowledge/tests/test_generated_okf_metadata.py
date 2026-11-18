@@ -9,7 +9,12 @@ from __future__ import annotations
 
 import unittest
 
-from test_contract_compatibility import ROOT, SOURCES, _parse_generated_fields
+from test_contract_compatibility import (
+    ROOT,
+    SOURCES,
+    _parse_generated_fields,
+    _parse_published_v1_object,
+)
 
 
 SOURCE = (ROOT / "web/src/generated/ficha-okf.zod.ts").read_text(encoding="utf-8")
@@ -48,6 +53,46 @@ class GeneratedOkfMetadataTest(unittest.TestCase):
         mutated = SOURCE.replace(original, '"description": z.number(),', 1)
         with self.assertRaisesRegex(AssertionError, "generated OKF metadata changed"):
             _parse_generated_fields(mutated, "Cnpj")
+
+
+    def test_negative_commented_shadow_cannot_hide_real_generated_drift(self) -> None:
+        # Old re.search selected this stale valid declaration in a block
+        # comment, silently overlooking the live wrong discriminator below.
+        first = SOURCE.index("export const CnpjSchema = z.object({")
+        end = SOURCE.index("\n});", first) + len("\n});")
+        stale = SOURCE[first:end]
+        changed = SOURCE.replace(
+            '"type": z.literal("Cnpj"),',
+            '"type": z.literal("Raiz"),',
+            1,
+        )
+        self.assertNotEqual(changed, SOURCE)
+        shadowed = "/*\n" + stale + "\n*/\n" + changed
+        with self.assertRaisesRegex(AssertionError, "generated OKF metadata changed"):
+            _parse_generated_fields(shadowed, "Cnpj")
+
+    def test_negative_commented_shadow_cannot_hide_real_public_drift(self) -> None:
+        path = ROOT / "web/src/schemas/v1/estabelecimento.ts"
+        source = path.read_text(encoding="utf-8")
+        start = source.index("export const EstabelecimentoSchema = z.object({")
+        end = source.index("\n});", start) + len("\n});")
+        stale = source[start:end]
+        changed = source.replace("  cnpj: z.string(),", "  cnpj: z.number(),", 1)
+        self.assertNotEqual(changed, source)
+        shadowed = "/*\n" + stale + "\n*/\n" + changed
+        fields = _parse_published_v1_object(shadowed, "estabelecimento")
+        self.assertEqual(fields["cnpj"], "z.number()")
+
+    def test_negative_duplicate_live_exports_fail_closed(self) -> None:
+        start = SOURCE.index("export const CnpjSchema = z.object({")
+        end = SOURCE.index("\n});", start) + len("\n});")
+        duplicate = SOURCE + "\n" + SOURCE[start:end]
+        with self.assertRaisesRegex(AssertionError, "exactly one live"):
+            _parse_generated_fields(duplicate, "Cnpj")
+
+    def test_negative_unbalanced_block_comment_fails_closed(self) -> None:
+        with self.assertRaisesRegex(AssertionError, "Unbalanced TypeScript"):
+            _parse_generated_fields("/*\n" + SOURCE, "Cnpj")
 
 
 if __name__ == "__main__":
