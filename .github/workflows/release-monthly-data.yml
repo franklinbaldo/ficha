@@ -16,6 +16,16 @@ permissions:
 
 jobs:
   release:
+    # #271: event completion and manifest push do not establish authorized
+    # promotion of this exact snapshot. Fail closed until a separately reviewed
+    # release contract binds the promoted manifest, month, and commit.
+    # The success predicate alone is necessary, never sufficient.
+    if: >-
+      ${{
+        false &&
+        github.event_name == 'workflow_run' &&
+        github.event.workflow_run.conclusion == 'success'
+      }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
