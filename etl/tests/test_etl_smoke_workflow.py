@@ -15,11 +15,12 @@ def _load() -> dict:
 
 
 def _steps(workflow: dict) -> dict:
-    return {
-        step.get("name"): step
-        for step in workflow["jobs"]["smoke"]["steps"]
-        if step.get("name")
-    }
+    result = {}
+    for step in workflow["jobs"]["smoke"]["steps"]:
+        name = step.get("name")
+        if name:
+            result[name] = step
+    return result
 
 
 def _pr_is_fixture_only(workflow: dict) -> bool:
@@ -52,9 +53,8 @@ def test_weekly_and_manual_smoke_remain_live_and_block_on_failure() -> None:
     assert events["schedule"] == [{"cron": "0 6 * * 1"}]
     steps = _steps(workflow)
     assert steps["Run smoke check"]["run"].rstrip().endswith('exit "$rc"')
-    assert steps["Check manifest freshness"]["if"] == (
-        "always() && github.event_name != 'pull_request'"
-    )
+    freshness = steps["Check manifest freshness"]["if"]
+    assert freshness == OPERATIONAL
 
 
 def test_pr_job_has_no_write_permission_or_silent_success() -> None:
