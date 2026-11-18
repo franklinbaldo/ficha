@@ -21,3 +21,5 @@ decisão definitiva.
 | # | Título | Status |
 |---|---|---|
 | [0001](0001-etl-v2-canonical-pipeline.md) | ETL V2: pipeline canônico tipado sob computação restrita | Accepted |
+| [0001A](0001a-okf-relational-model.md) | Emenda: modelo relacional OKF sobre Parquets publicados | Draft; decisão física pendente |
+| [Visão de produto, 2026-11](ficha-greenfield-visao-produto-2026-11.md) | FICHA: fichário público e acervo por competência | Direção aprovada; implementação incremental pendente |
