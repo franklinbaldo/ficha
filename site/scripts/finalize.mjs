@@ -13,7 +13,7 @@ async function required(url) {
 }
 const original = await required(canonicalURL);
 const manifest = JSON.parse(original.toString('utf8'));
-if (!/^\\d{4}-(0[1-9]|1[0-2])$/.test(manifest.current) || !Array.isArray(manifest.snapshots)) {
+if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(manifest.current) || !Array.isArray(manifest.snapshots)) {
   throw new Error('Manifesto RFB sem current/snapshots válidos');
 }
 const dates = manifest.snapshots.map(s => s?.date);
@@ -63,7 +63,7 @@ for (const [file,html] of [['index',index],['sobre',about]]) {
     if (!html.includes(requiredText)) throw new Error(file + ': falta ' + requiredText);
   }
   if (/astro-island|svelte|<form|type="module"/i.test(html)) throw new Error(file+': elemento de busca/legado indevido');
-  if (/\\{\\{[!\\w]|\\{%/.test(html)) throw new Error(file + ': template não renderizado');
+  if (/\{\{[!\w]|\{%/.test(html)) throw new Error(file + ': template não renderizado');
 }
 for (const token of ['Pesquisa por CNPJ ainda indisponível',label,'/ficha/manifest.json']) {
   if (!index.includes(token)) throw new Error('Home sem ' + token);
