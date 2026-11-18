@@ -16,6 +16,7 @@ from pathlib import Path
 import httpx
 
 from . import mirror
+from .cnpj import SHARD_RANGE_KIND
 from .materialization import canonical_json
 from .sharded_pack import ShardGeometry
 
@@ -46,12 +47,13 @@ class ShardSidecar:
     artifact_name: str
     artifact: ArtifactIdentity
     sidecar_version: int = SIDECAR_VERSION
+    range_kind: str = SHARD_RANGE_KIND
 
     def as_document(self) -> dict:
         return {
             "sidecar_version": self.sidecar_version,
             "snapshot": self.snapshot,
-            "range": {"kind": "cnpj_base_prefix", "value": self.shard},
+            "range": {"kind": self.range_kind, "value": self.shard},
             "materialization_id": self.materialization_id,
             "artifact": {"name": self.artifact_name, **self.artifact.as_document()},
         }
@@ -94,12 +96,13 @@ def parse_sidecar(payload: object) -> ShardSidecar | None:
     artifact_doc = payload.get("artifact")
     if not isinstance(range_doc, dict) or not isinstance(artifact_doc, dict):
         return None
-    if range_doc.get("kind") != "cnpj_base_prefix":
+    if range_doc.get("kind") not in ("cnpj_base_prefix", SHARD_RANGE_KIND):
         return None
     try:
         size = int(artifact_doc["size"])
         parsed = ShardSidecar(
             snapshot=str(payload["snapshot"]),
+            range_kind=range_doc["kind"],
             shard=str(range_doc["value"]),
             materialization_id=str(payload["materialization_id"]),
             artifact_name=str(artifact_doc["name"]),

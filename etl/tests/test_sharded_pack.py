@@ -171,7 +171,7 @@ def test_one_shard_is_self_describing_and_materialized(tmp_path, digits, prefix)
     assert meta["count"] == 1
     assert meta["materialization"]["id"] == spec.materialization_id()
     assert meta["materialization"]["spec"]["range"] == {
-        "kind": "cnpj_base_prefix",
+        "kind": "cnpj_base_prefix_or_base36_mod_v1",
         "value": prefix,
     }
     assert meta["artifact"] is None
@@ -187,3 +187,43 @@ def test_materialization_must_match_the_exact_shard(tmp_path):
         wrong = session.materialization_spec("08", input_sha1s={"cnpjs.parquet": "a" * 40})
         with pytest.raises(ValueError, match="does not match shard"):
             session.pack("07", tmp_path / "out", materialization=wrong)
+
+
+def test_real_v11_shard_session_selects_alpha_root_and_plans_versioned_name(tmp_path):
+    """Full local DuckDB -> pack -> receipt -> opt-in plan, no network or upload."""
+    from ficha_etl.proto.ficha.v1.company_pb2 import Company
+    from ficha_etl.shard_transfer import prepare_one_shard, plan_opt_in_v11_shard
+
+    _write_fixture(tmp_path, ["42000001", "CA000001"])
+    pins = {
+        "cnpjs.parquet": "1" * 40,
+        "raizes.parquet": "2" * 40,
+        "socios.parquet": "3" * 40,
+    }
+    geometry = ShardGeometry(2)
+    assert geometry.shard_of("42000001") == "42"  # numeric v1 bucket
+    assert geometry.shard_of("CA000001") == "42"  # base36(CA) % 100
+    with ShardPackSession("2026-08", geometry, parquets_base=str(tmp_path)) as session:
+        prepared = prepare_one_shard(session, "42", tmp_path / "out", pinned_inputs=pins)
+        planned = plan_opt_in_v11_shard(session, prepared, pinned_inputs=pins)
+
+    assert planned.name == "wire-1.1/companies-42.zip"
+    assert prepared.path.name == "companies-42.zip"
+    assert prepared.size == planned.size
+    assert prepared.sha1 == planned.sha1
+    assert prepared.materialization_id == planned.materialization_id
+    assert not (tmp_path / "out" / "wire-1.1").exists()
+
+    with zipfile.ZipFile(prepared.path) as archive:
+        assert archive.testzip() is None
+        names = set(archive.namelist())
+        assert {"42/000/001.pb", "CA/000/001.pb", "_schema.desc"}.issubset(names)
+        company = Company.FromString(archive.read("CA/000/001.pb"))
+        assert company.cnpj_base_text == "CA000001"
+        assert company.snapshot_yyyymm == 202608
+        legacy = Company.FromString(archive.read("42/000/001.pb"))
+        assert legacy.cnpj_base == 42000001
+        meta = json.loads(archive.read("_meta.json"))
+        assert meta["count"] == 2
+        assert meta["schema_version"] == "1.1.0"
+        assert meta["materialization"]["id"] == planned.materialization_id
