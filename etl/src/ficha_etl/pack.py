@@ -32,6 +32,7 @@ from google.protobuf import descriptor_pb2
 from google.protobuf.descriptor import FileDescriptor
 
 from ficha_etl import mirror
+from ficha_etl.cnpj import root_text
 from ficha_etl.proto.ficha.v1.company_pb2 import (
     Company,
     Estabelecimento,
@@ -50,7 +51,7 @@ log = logging.getLogger(__name__)
 _PROTO_DIR = Path(__file__).parent.parent.parent.parent / "proto"
 _PROTO_PATH = _PROTO_DIR / "ficha" / "v1" / "company.proto"
 
-SCHEMA_VERSION = "1.0.0"
+SCHEMA_VERSION = "1.1.0"
 
 # Lookup kind names — must match upload.py _LOOKUP_KINDS
 LOOKUP_KINDS = ["cnaes", "motivos", "municipios", "naturezas", "paises", "qualificacoes"]
@@ -201,7 +202,11 @@ def em_ordem(itens, chaves: tuple[str, ...]) -> list[dict]:
 def row_to_company(row: dict) -> Company:
     """Convert a joined DuckDB row (cnpjs ⊕ raizes ⊕ socios) to Company."""
     c = Company()
-    c.cnpj_base = _int(row.get("cnpj_base"))
+    base = root_text(row.get("cnpj_base"))
+    if base.isdigit():
+        c.cnpj_base = int(base)
+    else:
+        c.cnpj_base_text = base
     c.razao_social = _str(row.get("razao_social"))
     c.razao_social_normalizada = _str(row.get("razao_social_normalizada"))
     c.natureza_juridica_codigo = _int(row.get("natureza_juridica_codigo"))
@@ -213,7 +218,13 @@ def row_to_company(row: dict) -> Company:
 
     for estab_dict in em_ordem(row.get("estabelecimentos"), ORDEM_ESTABELECIMENTOS):
         e = Estabelecimento()
-        e.cnpj_ordem = _int(estab_dict.get("cnpj_ordem"))
+        order = _str(estab_dict.get("cnpj_ordem"))
+        if order and not order.isdigit():
+            if not re.fullmatch(r"[A-Z0-9]{4}", order):
+                raise ValueError(f"invalid cnpj_ordem: {order!r}")
+            e.cnpj_ordem_text = order
+        else:
+            e.cnpj_ordem = _int(order)
         e.cnpj_dv = _int(estab_dict.get("cnpj_dv"))
         e.tipo = _tipo_estab(estab_dict.get("identificador_matriz_filial"))
         e.nome_fantasia = _str(estab_dict.get("nome_fantasia"))
@@ -259,7 +270,13 @@ def row_to_company(row: dict) -> Company:
         s.tipo = _tipo_socio(socio_dict.get("tipo"))
         s.nome_socio_razao_social = _str(socio_dict.get("nome_socio_razao_social"))
         s.cpf_mascarado_meio = _cpf_meio(socio_dict.get("cpf_mascarado"))
-        s.cnpj_socio = _int(socio_dict.get("cnpj_socio"))
+        partner = _str(socio_dict.get("cnpj_socio"))
+        if partner and not partner.isdigit():
+            if not re.fullmatch(r"[A-Z0-9]{12}[0-9]{2}", partner):
+                raise ValueError(f"invalid cnpj_socio: {partner!r}")
+            s.cnpj_socio_text = partner
+        else:
+            s.cnpj_socio = _int(partner)
         s.qualificacao_codigo = _int(socio_dict.get("qualificacao_codigo"))
         s.data_entrada_sociedade = _date(socio_dict.get("data_entrada_sociedade"))
         s.pais_codigo = _int(socio_dict.get("pais_codigo"))
@@ -274,9 +291,13 @@ def row_to_company(row: dict) -> Company:
     return c
 
 
-def cnpjpath(cnpj_base: int) -> str:
+def company_root(company: Company) -> str:
+    return company.cnpj_base_text or f"{company.cnpj_base:08d}"
+
+
+def cnpjpath(cnpj_base: int | str) -> str:
     """'12/345/678.pb' — mirrors the 00.000.000 punctuation of CNPJ."""
-    s = str(cnpj_base).zfill(8)
+    s = root_text(cnpj_base)
     return f"{s[0:2]}/{s[2:5]}/{s[5:8]}.pb"
 
 
@@ -374,7 +395,7 @@ def pack_companies(
     # O(1) duplicate guard: requires input sorted by cnpj_base (pack_from_parquets
     # guarantees this via ORDER BY; external callers must sort too). A full set
     # would grow to tens of millions of entries on production snapshots.
-    prev_cnpj_base: int | None = None
+    prev_cnpj_base: str | None = None
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     # Escreve num `.part` e renomeia só no fim. Assim a existência de
@@ -400,6 +421,7 @@ def pack_companies(
         # company docs
         for row in rows:
             company = row_to_company(row)
+            base = company_root(company)
             # Enforce strictly-increasing cnpj_base. Two reasons:
             #   1. Duplicates: zipfile silently writes both entries under the
             #      same name and different ZIP readers resolve conflicts
@@ -407,20 +429,20 @@ def pack_companies(
             #   2. Sorted-input contract: the adjacent-only duplicate check
             #      above would miss non-adjacent duplicates in unsorted input.
             #      Requiring strictly-increasing keys makes the guard complete.
-            if prev_cnpj_base is not None and company.cnpj_base <= prev_cnpj_base:
-                if company.cnpj_base == prev_cnpj_base:
+            if prev_cnpj_base is not None and base <= prev_cnpj_base:
+                if base == prev_cnpj_base:
                     raise ValueError(
-                        f"duplicate cnpj_base in input rows: {company.cnpj_base:08d} "
+                        f"duplicate cnpj_base in input rows: {base} "
                         f"— caller must sort and deduplicate by cnpj_base before packing"
                     )
                 raise ValueError(
-                    f"unsorted input rows: cnpj_base {company.cnpj_base:08d} "
-                    f"< previous {prev_cnpj_base:08d} — caller must sort by cnpj_base"
+                    f"unsorted input rows: cnpj_base {base} "
+                    f"< previous {prev_cnpj_base} — caller must sort by cnpj_base"
                 )
-            prev_cnpj_base = company.cnpj_base
+            prev_cnpj_base = base
             company.snapshot_yyyymm = snapshot_yyyymm
             pb_bytes = company.SerializeToString()
-            zf.writestr(_membro(zf, cnpjpath(company.cnpj_base), data_zip), pb_bytes)
+            zf.writestr(_membro(zf, cnpjpath(base), data_zip), pb_bytes)
             count += 1
 
         # meta (written last so count is accurate)
@@ -552,10 +574,11 @@ def _iter_company_rows(
     state, while range order plus per-bucket ORDER BY preserves the strict
     ordering required by pack_companies' O(1) duplicate guard.
     """
-    for i in range(100):
-        prefix = f"{i:02d}"
-        lower = f"{prefix}000000"
-        upper = f"{i + 1:02d}000000" if i < 99 else "A0000000"
+    alphabet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    prefixes = [a + b for a in alphabet for b in alphabet]
+    for i, prefix in enumerate(prefixes):
+        lower = prefix + "000000"
+        upper = prefixes[i + 1] + "000000" if i + 1 < len(prefixes) else "[0000000"
         log.info(
             "pack_from_parquets: querying company rows range=[%s,%s)",
             lower,

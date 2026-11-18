@@ -61,3 +61,19 @@ describe('cnpj.format', () => {
     expect(format('abc')).toBe('abc');
   });
 });
+
+// RFB's first issued alphanumeric CNPJ, 31 July 2026 (Banco do Brasil filial).
+describe('CNPJ alfanumérico RFB', () => {
+  it('preserves letters and validates the official ASCII-minus-48 check digits', () => {
+    expect(strip('00.000.000/e08g-12')).toBe('00000000E08G12');
+    expect(isValid('00000000E08G12')).toBe(true);
+    expect(isValid('12.ABC.345/01DE-35')).toBe(true); // RFB worked example
+    expect(asCNPJ('00.000.000/E08G-12')).toBe('00000000E08G12');
+    expect(format('00000000E08G12')).toBe('00.000.000/E08G-12');
+  });
+  it('rejects wrong DV, letters in DV and symbols rather than silently deleting them', () => {
+    for (const bad of ['00000000E08G13', '00000000E08G1A', '00000000E08@12', '$11222333000181']) {
+      expect(isValid(bad)).toBe(false);
+    }
+  });
+});

@@ -27,6 +27,7 @@ from .shard_publish import (
     _metadata_still_matches,
     _reconcile_catalog_absent,
     fetch_direct_artifact_identity,
+    require_legacy_shard_upload_contract,
 )
 from .shard_remote import PUBLIC_COMPANIES_GEOMETRY, ShardReuseState, classify_remote_shard
 from .sharded_pack import ShardPackSession
@@ -192,6 +193,40 @@ def _require_same_bytes(name: str, verdict, prepared: PreparedShard) -> None:
         )
 
 
+def plan_opt_in_v11_shard(
+    session: ShardPackSession,
+    prepared: PreparedShard,
+    *,
+    pinned_inputs: Mapping[str, str],
+) -> PreparedShard:
+    """Plan a versioned Protobuf 1.1 artifact from verified LOCAL bytes.
+
+    This is deliberately not a submitter. It performs no network I/O and
+    exposes no upload callback. The legacy submitters must continue refusing
+    1.1 sessions before touching any remote object. A separate fail-closed
+    versioned publisher is needed before this plan may be uploaded.
+    """
+    _validate_session(session)
+    if (
+        getattr(session, "wire_version", None) != "1.1.0"
+        or getattr(session, "shard_by", None) != "cnpj_base_prefix_or_base36_mod_100_v1"
+    ):
+        raise ShardPublishError(
+            "opt-in wire-1.1 shard planning requires Protobuf 1.1.0 "
+            "and cnpj_base_prefix_or_base36_mod_100_v1"
+        )
+
+    prefix, expected, local = _validate_prepared(session, prepared, pinned_inputs=pinned_inputs)
+    return PreparedShard(
+        prefix=prefix,
+        name=f"wire-1.1/{session.geometry.shard_name(prefix)}",
+        path=prepared.path,
+        materialization_id=expected.materialization_id(),
+        size=local.size,
+        sha1=local.sha1,
+    )
+
+
 def submit_prepared_shard(
     session: ShardPackSession,
     prepared: PreparedShard,
@@ -208,6 +243,7 @@ def submit_prepared_shard(
     quando ``size + sha1`` também forem idênticos ao recibo. A identidade
     esperada nunca é aprendida do remoto e nenhum estado ambíguo autoriza PUT.
     """
+    require_legacy_shard_upload_contract(session)
     _validate_session(session)
     prefix, expected, _local = _validate_prepared(session, prepared, pinned_inputs=pinned_inputs)
     expected_id = expected.materialization_id()
@@ -284,6 +320,7 @@ def submit_one_shard(
     O pipeline mensal novo usa ``prepare_one_shard`` + ``submit_prepared_shard``
     para conseguir persistir o recibo entre as duas fases.
     """
+    require_legacy_shard_upload_contract(session)
     _validate_session(session)
     prefix = session.geometry.validate_prefix(prefix)
     expected = session.materialization_spec(prefix, input_sha1s=pinned_inputs)
