@@ -4,6 +4,17 @@ import * as ts from 'typescript';
 
 const source = readFileSync(new URL('./EmpresaFicha.svelte', import.meta.url), 'utf8');
 
+// Transpile the production guard itself, not a copy kept by the test.
+// If its return statement becomes an unconditional true, the deferred
+// request assertions below must fail.
+const guardTail = source.split('  function isCurrentRequest(')[1]
+  ?.split('\n  async function toggleSocios()')[0];
+if (!guardTail) throw new Error('Missing production isCurrentRequest declaration');
+const productionGuard = ts.transpileModule(
+  'function isCurrentRequest(' + guardTail,
+  { compilerOptions: { target: ts.ScriptTarget.ES2022 } },
+).outputText;
+
 // Exercise real handler bodies with deferred DuckDB mocks. The Svelte browser
 // lifecycle is not mounted here; this is an async-ordering regression only.
 describe('EmpresaFicha: stale socios/contatos (offline)', () => {
@@ -14,7 +25,7 @@ describe('EmpresaFicha: stale socios/contatos (offline)', () => {
     ['Contatos', 'Filiais', 'contatos', 'A0000000E08G12', 'B0000000E08G12'],
   ] as const).flatMap(([section, next, field, a, b]) =>
     (['success', 'error'] as const).flatMap((staleOutcome) =>
-      (['cnpj', 'db'] as const).map((changeMode) =>
+      (['cnpj', 'db', 'epoch'] as const).map((changeMode) =>
         [section, next, field, a, b, staleOutcome, changeMode] as const
       )
     )
@@ -51,8 +62,7 @@ describe('EmpresaFicha: stale socios/contatos (offline)', () => {
       let db = initialDb, activeCNPJ = 'A0000000E08G12', requestEpoch = 1;
       let ${field} = [], ${field}Error = null;
       let loading${section} = false, show${section} = false;
-      const isCurrentRequest = (cnpj, requestDb, epoch) =>
-        cnpj === activeCNPJ && requestDb === db && epoch === requestEpoch;
+      ${productionGuard}
       ${code}
       return {
         toggle: toggle${section},
@@ -78,7 +88,7 @@ describe('EmpresaFicha: stale socios/contatos (offline)', () => {
     await vi.waitFor(() => expect(pending).toHaveLength(1));
     ui.change(
       changeMode === 'cnpj' ? 'B0000000E08G12' : 'A0000000E08G12',
-      changeMode === 'cnpj' ? firstDb : secondDb,
+      changeMode === 'db' ? secondDb : firstDb,
     );
     const second = ui.toggle();
     await vi.waitFor(() => expect(pending).toHaveLength(2));
@@ -226,8 +236,7 @@ describe('EmpresaFicha retry after temporary failure (offline)', () => {
       "let db = database, activeCNPJ = 'A0000000E08G12', requestEpoch = 1;",
       'let ' + field + ' = [], ' + field + 'Error = null;',
       'let show' + section + ' = false, loading' + section + ' = false;',
-      'function isCurrentRequest(cnpj, d, epoch) {',
-      '  return cnpj === activeCNPJ && d === db && epoch === requestEpoch; }',
+      productionGuard,
       code,
       'return { toggle: toggle' + section + ',',
       'state() { return { rows: ' + field + ', error: ' + field + 'Error,',
