@@ -296,10 +296,8 @@ def _load_receipt(path: Path, month: str, prefix: str) -> dict:
         or payload.get("name") != expected_name
     ):
         raise ValueError(f"invalid receipt for {month}/{prefix}: {path}")
-    if (
-        _remote_positive_size(payload.get("size")) is None
-        or not _valid_hex(payload.get("sha1"), 40)
-    ):
+    size = _remote_positive_size(payload.get("size"))
+    if size is None or not _valid_hex(payload.get("sha1"), 40):
         raise ValueError(f"invalid byte identity in receipt: {path}")
     if not _valid_hex(payload.get("materialization_id"), 64):
         raise ValueError(f"invalid materialization_id in receipt: {path}")
