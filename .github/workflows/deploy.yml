@@ -53,7 +53,8 @@ jobs:
 
   verify:
     needs: deploy
-    runs-on: ubuntu-latest
+    # Playwright 1.54.2 nao suporta Chromium no Ubuntu 26.04.
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - name: Smoke test deployed site
