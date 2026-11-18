@@ -165,7 +165,9 @@ def test_wait_for_descriptor_remote_refuses_ambiguous_catalog(
     """The actual wait gate must not pass a last-wins catalog to finalize."""
     descriptor = _descriptor()
     metadata = _metadata_from_descriptor(descriptor)
-    duplicate = next(entry for entry in metadata["files"] if entry["name"] == "cnpjs.parquet").copy()
+    duplicate = next(
+        entry for entry in metadata["files"] if entry["name"] == "cnpjs.parquet"
+    ).copy()
     duplicate["sha1"] = "0" * 40
     metadata["files"].insert(0, duplicate)
     calls: list[str] = []
@@ -176,7 +178,7 @@ def test_wait_for_descriptor_remote_refuses_ambiguous_catalog(
 
     monkeypatch.setattr("ficha_etl.monthly_sharded.fetch_item_metadata", fake_fetch)
     monkeypatch.setattr("ficha_etl.monthly_sharded.time.sleep", lambda _: None)
-    with pytest.raises(RuntimeError, match=r"cnpjs\\.parquet \\(duplicado\\)"):
+    with pytest.raises(RuntimeError, match=r"cnpjs\.parquet \(duplicado\)"):
         wait_for_descriptor_remote("2026-06", descriptor, attempts=2, interval_s=0)
     assert calls == ["2026-06", "2026-06"]
 
