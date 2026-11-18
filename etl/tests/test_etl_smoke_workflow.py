@@ -32,6 +32,43 @@ exit "$rc"
 """
 
 
+# Pin the weekly/manual diagnostic and stale-manifest alarm as well: a no-op
+# echo must not satisfy the PR-only policy while degrading the live schedule.
+UPSTREAM_RUN = r"""{
+  echo "## Upstream (RFB) — list-snapshots"
+  echo ""
+  echo '```'
+  uv run ficha-etl list-snapshots 2>&1 | tee list-snapshots.txt
+  echo '```'
+} >> "$GITHUB_STEP_SUMMARY"
+LATEST=$(grep -Eo '[0-9]{4}-[0-9]{2}' list-snapshots.txt | sort | tail -n1 || true)
+echo "Latest upstream month: \`${LATEST:-<none>}\`" >> "$GITHUB_STEP_SUMMARY"
+"""
+FRESHNESS_RUN = r"""python3 - <<'EOF'
+import datetime, json, sys
+
+manifest = json.load(open("web/public/manifest.json"))
+current = manifest.get("current", "")
+if not current:
+    print("::error::manifest.json sem campo 'current'")
+    sys.exit(1)
+
+year, month = map(int, current.split("-"))
+today = datetime.date.today()
+lag = (today.year - year) * 12 + (today.month - month)
+print(f"snapshot atual: {current} — {lag} mês(es) atrás de {today:%Y-%m}")
+
+# RFB publica o mês M durante o próprio M (às vezes M+1), e o cron
+# roda dia 5 — lag saudável é 0-1, e 2 é tolerável no começo do mês.
+if lag >= 3:
+    print(f"::error::Snapshot {current} está {lag} meses atrasado — o cron mensal (etl-monthly) provavelmente está falhando. Verifique as últimas execuções e rode com inputs.month se necessário.")
+    sys.exit(1)
+if lag == 2:
+    print(f"::warning::Snapshot {current} está 2 meses atrás do calendário — verifique se o próximo cron mensal roda com sucesso.")
+EOF
+"""
+
+
 def _load() -> dict:
     return yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
 
@@ -93,7 +130,7 @@ def _pr_is_fixture_only(workflow: dict) -> bool:
     return (
         upstream.get("name") == "Upstream latest snapshot (list-snapshots)"
         and upstream.get("if") == OPERATIONAL
-        and "ficha-etl list-snapshots" in upstream.get("run", "")
+        and upstream.get("run") == UPSTREAM_RUN
         and fixture == expected_fixture
         and live.get("name") == "Run smoke check"
         and live.get("if") == OPERATIONAL
@@ -103,6 +140,7 @@ def _pr_is_fixture_only(workflow: dict) -> bool:
         and freshness.get("name") == "Check manifest freshness"
         and freshness.get("if") == OPERATIONAL
         and freshness.get("continue-on-error") in (None, False)
+        and freshness.get("run") == FRESHNESS_RUN
     )
 
 
@@ -233,4 +271,17 @@ def test_negative_mutation_rejects_live_rc_reset() -> None:
     mutated = deepcopy(_load())
     live = _steps(mutated)["Run smoke check"]
     live["run"] = live["run"].replace("rc=${PIPESTATUS[0]}", "rc=${PIPESTATUS[0]}\nrc=0")
+    assert not _pr_is_fixture_only(mutated)
+
+def test_negative_mutation_rejects_upstream_probe_as_echo() -> None:
+    mutated = deepcopy(_load())
+    _steps(mutated)["Upstream latest snapshot (list-snapshots)"]["run"] = (
+        "echo uv run ficha-etl list-snapshots"
+    )
+    assert not _pr_is_fixture_only(mutated)
+
+
+def test_negative_mutation_rejects_disabled_freshness_alarm() -> None:
+    mutated = deepcopy(_load())
+    _steps(mutated)["Check manifest freshness"]["run"] = 'echo "manifest freshness OK"'
     assert not _pr_is_fixture_only(mutated)
