@@ -167,7 +167,10 @@ def test_negative_mutation_rejects_pr_event_scope_changes() -> None:
     original = _load()
     for bad_event in (
         {"paths": ["docs/**"]},
-        {"paths": ["etl/**", ".github/workflows/etl-smoke.yml"], "paths-ignore": ["etl/**"]},
+        {
+            "paths": ["etl/**", ".github/workflows/etl-smoke.yml"],
+            "paths-ignore": ["etl/**"],
+        },
     ):
         mutated = deepcopy(original)
         mutated.get("on", mutated.get(True))["pull_request"] = bad_event
