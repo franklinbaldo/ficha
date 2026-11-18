@@ -106,11 +106,10 @@ def _load_descriptor(path: Path, month: str) -> dict:
 def _validate_identity(label: str, entry: object) -> None:
     if not isinstance(entry, dict):
         raise ValueError(f"{label}: identity entry missing")
-    try:
-        size = int(entry.get("size"))
-    except (TypeError, ValueError):
-        size = 0
-    if size <= 0:
+    # A local production descriptor must obey the same strict byte-size
+    # contract as the remote IA catalog; int(11.9) and int(True) are unsafe.
+    size = _remote_positive_size(entry.get("size"))
+    if size is None:
         raise ValueError(f"{label}: invalid size")
     if not _valid_hex(entry.get("sha1"), 40):
         raise ValueError(f"{label}: invalid sha1")
@@ -149,6 +148,19 @@ def materialization_inputs_from_descriptor(descriptor: dict) -> dict[str, str]:
     return result
 
 
+def _remote_positive_size(value: object) -> int | None:
+    """Parse IA byte sizes without accepting fractional or boolean coercion."""
+    if type(value) is int:
+        return value if value > 0 else None
+    if isinstance(value, str) and value.isascii() and value.isdecimal():
+        try:
+            parsed = int(value)
+        except ValueError:  # Python's integer-string digit limit
+            return None
+        return parsed if parsed > 0 else None
+    return None
+
+
 def _remote_descriptor_state(
     descriptor: dict,
     metadata: dict | None,
@@ -156,24 +168,33 @@ def _remote_descriptor_state(
     """Retorna (pending, mismatches) para os outputs-base no catálogo IA."""
     if metadata is None or not isinstance(metadata.get("files"), list):
         return ["<metadata>"], []
-    by_name = {
-        entry.get("name"): entry
-        for entry in metadata["files"]
-        if isinstance(entry, dict) and isinstance(entry.get("name"), str)
-    }
+    expected = _expected_remote_files(descriptor)
+    by_name: dict[str, dict] = {}
+    duplicates: set[str] = set()
+    for entry in metadata["files"]:
+        if not isinstance(entry, dict):
+            continue
+        name = entry.get("name")
+        if not isinstance(name, str) or name not in expected:
+            continue
+        if name in by_name:
+            duplicates.add(name)
+        else:
+            by_name[name] = entry
+
     pending: list[str] = []
     mismatches: list[str] = []
-    for name, (expected_size, expected_sha1) in _expected_remote_files(descriptor).items():
+    for name, (expected_size, expected_sha1) in expected.items():
+        if name in duplicates:
+            pending.append(f"{name} (duplicado)")
+            continue
         entry = by_name.get(name)
         if entry is None:
             pending.append(name)
             continue
-        try:
-            actual_size = int(entry.get("size"))
-        except (TypeError, ValueError):
-            actual_size = 0
+        actual_size = _remote_positive_size(entry.get("size"))
         actual_sha1 = entry.get("sha1")
-        if actual_size <= 0 or not _valid_hex(actual_sha1, 40):
+        if actual_size is None or not _valid_hex(actual_sha1, 40):
             pending.append(name)
             continue
         if actual_size != expected_size or actual_sha1 != expected_sha1:
@@ -275,7 +296,8 @@ def _load_receipt(path: Path, month: str, prefix: str) -> dict:
         or payload.get("name") != expected_name
     ):
         raise ValueError(f"invalid receipt for {month}/{prefix}: {path}")
-    if int(payload.get("size", 0)) <= 0 or not _valid_hex(payload.get("sha1"), 40):
+    size = _remote_positive_size(payload.get("size"))
+    if size is None or not _valid_hex(payload.get("sha1"), 40):
         raise ValueError(f"invalid byte identity in receipt: {path}")
     if not _valid_hex(payload.get("materialization_id"), 64):
         raise ValueError(f"invalid materialization_id in receipt: {path}")
