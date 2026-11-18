@@ -40,7 +40,11 @@ export function mountSearch({
     if (!sessionPromise) {
       sessionPromise = (async () => {
         const dataset = await fetchDataset();
-        if (!dataset) return null;
+        if (!dataset) {
+          // A competência pode ser publicada depois: não fixar HTTP 404 na sessão.
+          sessionPromise = undefined;
+          return null;
+        }
         const engine = await createEngine();
         try {
           await attach(engine.db, dataset, engine.duckdb);
