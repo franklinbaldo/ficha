@@ -106,11 +106,10 @@ def _load_descriptor(path: Path, month: str) -> dict:
 def _validate_identity(label: str, entry: object) -> None:
     if not isinstance(entry, dict):
         raise ValueError(f"{label}: identity entry missing")
-    try:
-        size = int(entry.get("size"))
-    except (TypeError, ValueError):
-        size = 0
-    if size <= 0:
+    # A local production descriptor must obey the same strict byte-size
+    # contract as the remote IA catalog; int(11.9) and int(True) are unsafe.
+    size = _remote_positive_size(entry.get("size"))
+    if size is None:
         raise ValueError(f"{label}: invalid size")
     if not _valid_hex(entry.get("sha1"), 40):
         raise ValueError(f"{label}: invalid sha1")
