@@ -114,13 +114,15 @@ test('paridade com Astro: curingas não convertem busca textual em CNPJ exato', 
 test('probe remoto pede somente um byte e exige CORS/206/Content-Range visível', async () => {
   const entry = currentDataset(await fixture()).files.cnpjs;
   const calls = [];
-  let canceled = 0;
+  const oneByteBody = () => new ReadableStream({
+    start(controller) { controller.enqueue(Uint8Array.of(0x50)); controller.close(); },
+  });
   const success = async (url, options) => {
     calls.push([url, options]);
     return {status: 206,
       headers: {get: name => name.toLowerCase() === 'content-range' ?
         `bytes 0-0/${entry.size}` : null},
-      body: {cancel: async () => {canceled++;}}};
+      body: oneByteBody()};
   };
   await probeParquetRange({url: entry.url, size: entry.size, fetchImpl: success});
   assert.equal(calls.length, 1);
@@ -130,7 +132,7 @@ test('probe remoto pede somente um byte e exige CORS/206/Content-Range visível'
   assert.deepEqual(request, {
     method:'GET', mode:'cors', cache:'no-store', headers:{Range:'bytes=0-0'},
   });
-  assert.equal(canceled, 1);
+  assert.equal(signal.aborted, true);
   await assert.rejects(probeParquetRange({url:entry.url, size:entry.size,
     fetchImpl: async () => {throw new TypeError('Failed to fetch');}}), /rede ou CORS/);
   await assert.rejects(probeParquetRange({url:entry.url, size:entry.size,
@@ -164,7 +166,50 @@ test('probe Range tem prazo máximo, aborta fetch travado e permite retry', asyn
     url:entry.url, size:entry.size, timeoutMs:25,
     fetchImpl: async () => ({
       status:206, headers:{get:()=>`bytes 0-0/${entry.size}`},
-      body:{cancel:async()=>{}},
+      body:oneByteBody(),
     }),
   });
+});
+
+test('206 com headers corretos precisa entregar um byte, jamais vazio ou excessivo', async () => {
+  const entry = currentDataset(await fixture()).files.cnpjs;
+  const reply = body => ({
+    status:206,
+    headers:{get:name => name.toLowerCase() === 'content-range' ?
+      `bytes 0-0/${entry.size}` : null},
+    body,
+  });
+  const body = chunks => new ReadableStream({
+    start(controller) {
+      for (const chunk of chunks) controller.enqueue(Uint8Array.from(chunk));
+      controller.close();
+    },
+  });
+  const check = fakeBody => probeParquetRange({
+    url:entry.url, size:entry.size, fetchImpl:async () => reply(fakeBody),
+  });
+  await assert.rejects(check(null), /sem corpo/);
+  await assert.rejects(check(body([])), /exatamente 1 byte/);
+  await assert.rejects(check(body([[0x50, 0x41]])), /exatamente 1 byte/);
+  await assert.rejects(check(body([[0x50], [0x41]])), /maior que 1 byte/);
+  await check(body([[0x50]])); // Positive control: one byte followed by EOF.
+});
+
+test('timeout cobre corpo travado mesmo quando o mock ignora AbortSignal', async () => {
+  const entry = currentDataset(await fixture()).files.cnpjs;
+  let signal;
+  await assert.rejects(probeParquetRange({
+    url:entry.url, size:entry.size, timeoutMs:25,
+    fetchImpl:async (_url, options) => {
+      signal = options.signal;
+      return {
+        status:206, headers:{get:()=>`bytes 0-0/${entry.size}`},
+        body:new ReadableStream({
+          start(controller) { controller.enqueue(Uint8Array.of(0x50)); },
+          // No close(): second read remains pending indefinitely.
+        }),
+      };
+    },
+  }), /prazo \(timeout\)/);
+  assert.equal(signal.aborted, true);
 });
