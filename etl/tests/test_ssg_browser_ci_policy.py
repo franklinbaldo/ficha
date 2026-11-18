@@ -181,9 +181,7 @@ def test_reject_mutations_that_restore_false_green() -> None:
     assert violations(baseline, broken)
 
     # These two mutants previously escaped a Tab-count-only accessibility gate.
-    static_border = auditor.replace(
-        "focused.border !== unfocused.border", "focused.border !== ''"
-    )
+    static_border = auditor.replace("focused.border !== unfocused.border", "focused.border !== ''")
     assert violations(baseline, static_border)
     missing_skip_enter = auditor.replace(
         "await page.keyboard.press('Enter')", "await page.keyboard.press('Tab')"
