@@ -49,6 +49,44 @@ de rede, espelho, retenção e cadeia de custódia precisam ser evidenciadas.
 Um recibo e seu ZIP reescritos em conjunto sem âncora independente não são
 identificáveis como fraude só por SHA-256.
 
+### Risco de duas aquisições sem vínculo (auditoria de código, 18/11/2026)
+
+No caminho existente de `monthly_sharded.command_produce`, a chamada a
+`upload.stream_raw_zips_to_ia` antecede `transform.transform_snapshot`.
+O primeiro caminho faz **GET RFB → PUT IA diretamente em streaming**, sem gravar
+os bytes recebidos em um arquivo local comum com a transformação. Além disso,
+`stream_raw_zips_to_ia` pode **pular** um `raw/<nome>.zip` já anunciado no
+catálogo IA com tamanho positivo, sem comparar SHA-256 de seus bytes. A etapa
+de transformação usa outra resolução, `fetcher.default_chain`:
+**cache local → IA raw → RFB**. São duas decisões de origem potencialmente
+distintas, não uma única aquisição imutável. Fontes no mesmo mês e com o
+mesmo nome **não demonstram** identidade de conteúdo.
+
+Esta é uma lacuna de vínculo no **desenho atual**, não evidência de que algum
+snapshot real tenha sofrido divergência. Regras de imutabilidade histórica
+declaradas na ADR não substituem conferência de bytes; ETag/PROPFIND também
+não fornece o SHA-256. O preflight de wire da #277 protege a **ordem dos PUTs**
+para nomes incompatíveis, mas não elimina esta segunda lacuna de custódia.
+
+**Requisito para a implementação produtiva:** fixar, em armazenamento local
+imutável durante a rodada, os **mesmos bytes ZIP** aceitos pela transformação
+e destinados a `raw/`; calcular hashes nessa aquisição e vincular cada
+recibo a `run_id`, competência, nome, origem e destino. Reuso de `raw/`
+precisa de prova da identidade dos bytes (ou falhar fechado), nunca somente
+de nome e tamanho. Qualquer diferença entre cache, IA e RFB deve ser
+explicitamente resolvida **antes de novo PUT**, sem recalcular o testemunho
+a partir da saída produzida.
+
+**Contraprovas offline exigidas:** duas versões sintéticas do mesmo
+`EstabelecimentosN.zip`, com nome e tamanho iguais e SHA-256 distinto;
+cache A versus IA B; `raw/` remoto preexistente sem identidade confiável;
+retomada que mistura lotes; e substituição de arquivo entre captura e
+transformação. Instrumentar `PUT` por sentinelas e exigir zero chamadas
+remotas em qualquer inconsistência, sem acessar RFB ou IA reais. A prova
+deve exercitar `command_produce`/o caminho real, não apenas o oráculo
+`Counter` desta PR. Medir o impacto de fixar até 37 ZIPs na política de
+disco/memória e liberar execução produtiva somente com autorização específica.
+
 ## Algoritmo de integração proposto, sem efeitos remotos
 
 A sequência produtiva futura deve ser analisada conjuntamente com #277:
