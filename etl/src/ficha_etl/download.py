@@ -155,6 +155,10 @@ def _download_streaming(
         # cached offset. Validate the exact open-ended range *before* append.
         if response.status_code == 206:
             _require_matching_content_range(response, existing)
+        elif response.status_code != 200:
+            raise RuntimeError(
+                f"{file.name}: unexpected HTTP {response.status_code} for full GET"
+            )
 
         with target.open(mode) as fh:
             downloaded = existing
@@ -202,7 +206,7 @@ def _require_matching_content_range(response: httpx.Response, existing: int) -> 
     if match is None:
         raise RuntimeError(f"invalid Content-Range for resumed download: {value!r}")
     start, end, total = (int(part) for part in match.groups())
-    if existing <= 0 or start != existing or end != total - 1:
+    if not (0 <= start <= end < total) or existing <= 0 or start != existing or end != total - 1:
         raise RuntimeError(f"Content-Range does not match resume offset {existing}: {value!r}")
 
 

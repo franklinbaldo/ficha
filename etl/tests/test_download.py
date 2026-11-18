@@ -75,6 +75,7 @@ def test_resumes_partial_download(tmp_path):
         ("bytes 0-2999/5000", PAYLOAD[:3000]),  # different start, same final size
         ("bytes 2000-4998/5000", PAYLOAD[2000:]),  # truncated advertised end
         ("bytes 2000-4999/*", PAYLOAD[2000:]),  # unknown total
+        ("bytes 2000-1999/2000", b""),  # mathematically impossible interval
         ("", PAYLOAD[2000:]),  # omitted range evidence
     ],
 )
@@ -110,6 +111,20 @@ def test_resume_rejects_other_success_status_codes(tmp_path, status):
     with pytest.raises(RuntimeError, match="unexpected HTTP"):
         download.download_one(file, tmp_path, client=client, max_attempts=1)
     assert target.read_bytes() == prefix
+
+
+@pytest.mark.parametrize("status", [201, 204])
+def test_new_download_rejects_other_success_status_codes(tmp_path, status):
+    file = _file()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert "range" not in request.headers
+        return httpx.Response(status, content=b"" if status == 204 else PAYLOAD)
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    with pytest.raises(RuntimeError, match="unexpected HTTP"):
+        download.download_one(file, tmp_path, client=client, max_attempts=1)
+    assert not (tmp_path / file.name).exists()
 
 
 def test_unrequested_partial_response_is_rejected(tmp_path):
