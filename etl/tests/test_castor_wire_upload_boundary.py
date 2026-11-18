@@ -112,16 +112,30 @@ def test_monthly_produce_refuses_wire_before_raw_upload_or_transform(
     monkeypatch.setattr(monthly_sharded, "COMPANIES_WIRE_VERSION", wire_version)
     monkeypatch.setattr(monthly_sharded, "COMPANIES_SHARD_BY", shard_mapping)
 
-    def no_io(*_args: object, **_kwargs: object) -> None:
-        pytest.fail("monthly produce reached IO before wire preflight")
+    observed_io: list[str] = []
 
-    monkeypatch.setattr(monthly_sharded, "_require_secret", no_io)
-    monkeypatch.setattr(monthly_sharded.upload, "stream_raw_zips_to_ia", no_io)
-    monkeypatch.setattr(monthly_sharded.transform, "transform_snapshot", no_io)
+    def forbid(label: str):
+        def forbidden(*_args: object, **_kwargs: object) -> None:
+            observed_io.append(label)
+            pytest.fail(f"produce crossed IO boundary before wire preflight: {label}")
+
+        return forbidden
+
+    monkeypatch.setattr(monthly_sharded, "_require_secret", forbid("secrets"))
+    monkeypatch.setattr(monthly_sharded.upload, "stream_raw_zips_to_ia", forbid("raw IA PUT"))
+    monkeypatch.setattr(monthly_sharded.transform, "transform_snapshot", forbid("transform"))
+    monkeypatch.setattr(
+        monthly_sharded, "build_production_descriptor", forbid("descriptor construction")
+    )
+    monkeypatch.setattr(
+        monthly_sharded, "write_production_descriptor", forbid("descriptor write")
+    )
 
     with pytest.raises(ShardPublishError, match="unversioned companies-NN.zip"):
         monthly_sharded.command_produce(args)
+    assert observed_io == []
     assert not args.descriptor.exists()
+    assert not args.output_dir.exists()
 
 
 @pytest.mark.parametrize(
@@ -142,15 +156,24 @@ def test_monthly_output_upload_refuses_wire_before_descriptor_or_secrets(
     monkeypatch.setattr(monthly_sharded, "COMPANIES_WIRE_VERSION", wire_version)
     monkeypatch.setattr(monthly_sharded, "COMPANIES_SHARD_BY", shard_mapping)
 
-    def no_io(*_args: object, **_kwargs: object) -> None:
-        pytest.fail("output upload reached IO before wire preflight")
+    observed_io: list[str] = []
 
-    monkeypatch.setattr(monthly_sharded, "_load_descriptor", no_io)
-    monkeypatch.setattr(monthly_sharded, "_require_secret", no_io)
-    monkeypatch.setattr(monthly_sharded, "submit_outputs_fail_closed", no_io)
+    def forbid(label: str):
+        def forbidden(*_args: object, **_kwargs: object) -> None:
+            observed_io.append(label)
+            pytest.fail(f"upload-outputs crossed IO boundary before wire preflight: {label}")
+
+        return forbidden
+
+    monkeypatch.setattr(monthly_sharded, "_load_descriptor", forbid("descriptor read"))
+    monkeypatch.setattr(monthly_sharded, "_require_secret", forbid("secrets"))
+    monkeypatch.setattr(
+        monthly_sharded, "submit_outputs_fail_closed", forbid("Parquet IA PUT")
+    )
 
     with pytest.raises(ShardPublishError, match="unversioned companies-NN.zip"):
         monthly_sharded.command_upload_outputs(args)
+    assert observed_io == []
 
 
 def test_monthly_dry_run_still_reaches_transform_under_v11(
@@ -168,6 +191,11 @@ def test_monthly_dry_run_still_reaches_transform_under_v11(
     def stop_at_transform(*_args: object, **_kwargs: object) -> None:
         raise ReachedTransform
 
+    def no_upload(*_args: object, **_kwargs: object) -> None:
+        pytest.fail("skip-raw-upload must not access secrets or trigger IA PUT")
+
+    monkeypatch.setattr(monthly_sharded, "_require_secret", no_upload)
+    monkeypatch.setattr(monthly_sharded.upload, "stream_raw_zips_to_ia", no_upload)
     monkeypatch.setattr(monthly_sharded.transform, "transform_snapshot", stop_at_transform)
     with pytest.raises(ReachedTransform):
         monthly_sharded.command_produce(args)
