@@ -79,6 +79,19 @@ def _valid_sha1(value: object) -> str | None:
     return lowered
 
 
+def _positive_size(value: object) -> int | None:
+    """Aceita só tamanho de bytes inteiro positivo (não float/bool truncado)."""
+    if type(value) is int:
+        return value if value > 0 else None
+    if isinstance(value, str) and value.isascii() and value.isdecimal():
+        try:
+            size = int(value)
+        except ValueError:  # limite de dígitos de int em Python
+            return None
+        return size if size > 0 else None
+    return None
+
+
 def materialization_input_sha1s(metadata: dict | None) -> dict[str, str]:
     """Extrai os SHA-1 dos nove inputs que realmente entram no shard.
 
@@ -91,19 +104,23 @@ def materialization_input_sha1s(metadata: dict | None) -> dict[str, str]:
     files = files_list(metadata)
     if files is None:
         raise MaterializationInputsUnavailable("metadata sem lista files utilizável")
-    by_name = {entry.get("name"): entry for entry in files}
+    by_name: dict[str, dict] = {}
+    for entry in files:
+        name = entry.get("name")
+        if name not in SHARD_INPUT_NAMES:
+            continue
+        if name in by_name:
+            raise MaterializationInputsUnavailable(f"input remoto duplicado: {name}")
+        by_name[name] = entry
 
     result: dict[str, str] = {}
     for name in SHARD_INPUT_NAMES:
         entry = by_name.get(name)
         if entry is None:
             raise MaterializationInputsUnavailable(f"input remoto ausente: {name}")
-        try:
-            size = int(entry.get("size"))
-        except (TypeError, ValueError):
-            size = 0
+        size = _positive_size(entry.get("size"))
         sha1 = _valid_sha1(entry.get("sha1"))
-        if size <= 0 or sha1 is None:
+        if size is None or sha1 is None:
             raise MaterializationInputsUnavailable(
                 f"input remoto sem identidade comparável: {name} "
                 f"size={entry.get('size')!r} sha1={entry.get('sha1')!r}"
@@ -130,16 +147,20 @@ def classify_remote_shard(
     if files is None:
         return ShardReuseVerdict(name, ShardReuseState.UNKNOWN, "lista files ilegível")
 
-    entry = next((candidate for candidate in files if candidate.get("name") == name), None)
-    if entry is None:
+    matches = [candidate for candidate in files if candidate.get("name") == name]
+    if len(matches) > 1:
+        return ShardReuseVerdict(
+            name,
+            ShardReuseState.UNKNOWN,
+            "arquivo duplicado na lista files",
+        )
+    if not matches:
         return ShardReuseVerdict(name, ShardReuseState.ABSENT, "ausente em lista files válida")
+    entry = matches[0]
 
-    try:
-        size = int(entry.get("size"))
-    except (TypeError, ValueError):
-        size = 0
+    size = _positive_size(entry.get("size"))
     sha1 = _valid_sha1(entry.get("sha1"))
-    if size <= 0 or sha1 is None:
+    if size is None or sha1 is None:
         return ShardReuseVerdict(
             name,
             ShardReuseState.UNKNOWN,

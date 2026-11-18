@@ -8,6 +8,29 @@ import yaml
 WORKFLOW = Path(__file__).parents[2] / ".github" / "workflows" / "etl-smoke.yml"
 PR = "github.event_name == 'pull_request'"
 OPERATIONAL = "always() && github.event_name != 'pull_request'"
+# A weekly/manual smoke must execute the complete, reviewed script. In
+# particular a printed command, an rc reset, or a no-op shell must not
+# preserve a green policy test while disabling the real probe.
+LIVE_RUN = r"""{
+  echo "## ETL smoke check"
+  echo ""
+  echo '```'
+} >> "$GITHUB_STEP_SUMMARY"
+uv run ficha-etl smoke 2>&1 | tee smoke-output.txt | tee -a "$GITHUB_STEP_SUMMARY"
+rc=${PIPESTATUS[0]}
+{
+  echo '```'
+  echo ""
+  echo "Exit code: \`$rc\`"
+} >> "$GITHUB_STEP_SUMMARY"
+{
+  echo 'output<<SMOKE_EOF'
+  cat smoke-output.txt
+  echo 'SMOKE_EOF'
+} >> "$GITHUB_OUTPUT"
+exit "$rc"
+"""
+
 
 
 def _load() -> dict:
@@ -76,7 +99,7 @@ def _pr_is_fixture_only(workflow: dict) -> bool:
         and live.get("name") == "Run smoke check"
         and live.get("if") == OPERATIONAL
         and live.get("continue-on-error") in (None, False)
-        and "ficha-etl smoke" in live.get("run", "")
+        and live.get("run") == LIVE_RUN
         and "|| true" not in live.get("run", "")
         and freshness.get("name") == "Check manifest freshness"
         and freshness.get("if") == OPERATIONAL
@@ -195,4 +218,20 @@ def test_negative_mutation_rejects_masked_live_smoke_pipeline() -> None:
 def test_negative_mutation_rejects_nonblocking_freshness_alarm() -> None:
     mutated = deepcopy(_load())
     _steps(mutated)["Check manifest freshness"]["continue-on-error"] = True
+    assert not _pr_is_fixture_only(mutated)
+
+
+def test_negative_mutation_rejects_echo_instead_of_live_probe() -> None:
+    mutated = deepcopy(_load())
+    live = _steps(mutated)["Run smoke check"]
+    live["run"] = live["run"].replace(
+        "uv run ficha-etl smoke 2>&1", "echo uv run ficha-etl smoke 2>&1"
+    )
+    assert not _pr_is_fixture_only(mutated)
+
+
+def test_negative_mutation_rejects_live_rc_reset() -> None:
+    mutated = deepcopy(_load())
+    live = _steps(mutated)["Run smoke check"]
+    live["run"] = live["run"].replace("rc=${PIPESTATUS[0]}", "rc=${PIPESTATUS[0]}\nrc=0")
     assert not _pr_is_fixture_only(mutated)
