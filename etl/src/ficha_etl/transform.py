@@ -1582,7 +1582,7 @@ def write_enderecos_parquet(
     prefixos = set(_LOGRADOURO_ABBREVS) | set(_LOGRADOURO_ABBREVS.values())
     tipo_prefix_pattern = (
         r"^(?:"
-        + "|".join(re.escape(p) for p in sorted(prefixos, key=len, reverse=True))
+        + "|".join(re.escape(p) for p in sorted(prefixos, key=lambda p: (-len(p), p)))
         + r")\.?\s+"
     )
     has_lookup = _has_lookup_table(con, "lookup_municipios")
