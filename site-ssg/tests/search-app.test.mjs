@@ -64,6 +64,33 @@ test('HTTP/engine indisponível é visível, busca seguinte pode repetir', async
   await submit();
   assert.equal(attempts,2);
 });
+test('manifesto 404 não fica em cache: nova tentativa observa HTTP 500 e depois recuperação', async () => {
+  const {nodes,doc} = mockDOM();
+  let attempts = 0;
+  mountSearch({documentRef:doc,
+    fetchDataset: async () => {
+      attempts++;
+      if (attempts === 1) return null;
+      if (attempts === 2) throw Error('HTTP 500');
+      return {date:'2026-07'};
+    },
+    createEngine: async () => ({db:{},duckdb:{}}),
+    attach: async () => {},
+    query: async () => [{cnpj:'00000000E08G12',razao_social:'Teste'}],
+  });
+  nodes['busca-termo'].value = '00000000E08G12';
+  const submit = () => nodes['busca-form'].submit({preventDefault() {}});
+  await submit();
+  assert.match(nodes['consulta-estado'].textContent, /manifesto ausente/);
+  await submit();
+  assert.equal(attempts, 2, 'HTTP 404 anterior deve permitir novo fetch');
+  assert.match(nodes['consulta-estado'].textContent, /HTTP 500/);
+  await submit();
+  assert.equal(attempts, 3);
+  assert.match(nodes['consulta-estado'].textContent, /2026-07: 1 resultado/);
+  assert.equal(nodes['busca-enviar'].disabled, false);
+});
+
 test('DuckDB runtime usa bundle selecionado e encerra falha de instanciação', async () => {
   const observed=[];
   class FakeWorker {constructor(url){observed.push(['worker',url]);}}
