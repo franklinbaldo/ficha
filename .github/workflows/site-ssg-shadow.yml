@@ -41,7 +41,7 @@ jobs:
           node-version: '22'
 
       - name: Run SSG source contracts
-        run: node --test tests/source.test.mjs
+        run: node --test tests/*.test.mjs
 
       - name: Install verified SSG Rust 0.0.75
         run: |
@@ -61,14 +61,8 @@ jobs:
           ssg check --config config.toml
           ssg build --config config.toml
 
-      - name: Inspect generated SSG manifest schema
-        run: |
-          python3 - <<'PY'
-          import json
-          from pathlib import Path
-          path = Path("dist/ficha/manifest.json")
-          print(json.dumps(json.loads(path.read_text(encoding="utf-8")), ensure_ascii=False, indent=2))
-          PY
+      - name: Remove exact SSG PWA manifest from shadow output
+        run: node scripts/remove-ssg-manifest.mjs
 
       - name: Verify actual output and CSS
         run: |
