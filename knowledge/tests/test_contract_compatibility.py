@@ -162,17 +162,21 @@ def _zod_fields(source: str, *, quoted: bool) -> dict[str, str]:
         else r"^\s*(\w+):\s*(z\..+),$"
     )
     for line in source.splitlines():
-        parsed = re.match(pattern, line)
-        if parsed is not None:
-            name, value = parsed.groups()
-            if name in fields:
-                raise AssertionError(f"Duplicate Zod field: {name}")
-            fields[name] = value.removesuffix(",")
+        if not line.strip() or line.lstrip().startswith("//"):
+            continue
+        parsed = re.fullmatch(pattern, line)
+        if parsed is None:
+            raise AssertionError(
+                f"Unrecognized Zod object member; review static guard: {line}"
+            )
+        name, value = parsed.groups()
+        if name in fields:
+            raise AssertionError(f"Duplicate Zod field: {name}")
+        fields[name] = value.removesuffix(",")
     return fields
 
 
-def _generated_fields(table: str) -> dict[str, str]:
-    source = (ROOT / "web/src/generated/ficha-okf.zod.ts").read_text(encoding="utf-8")
+def _parse_generated_fields(source: str, table: str) -> dict[str, str]:
     match = re.search(
         rf"export const {table}Schema = z\.object\(\{{(.*?)\}}\);",
         source,
@@ -181,9 +185,24 @@ def _generated_fields(table: str) -> dict[str, str]:
     if match is None:
         raise AssertionError(f"Missing generated Zod schema: {table}")
     fields = _zod_fields(match.group(1), quoted=True)
-    for metadata in ("type", "title", "description"):
-        fields.pop(metadata, None)
+    # Metadata is outside the public SQL row, but remains part of the
+    # generated OKF contract. Do not silently discard a wrong discriminator.
+    expected = {
+        "type": f'z.literal("{table}")',
+        "title": "z.string().optional()",
+        "description": "z.string().optional()",
+    }
+    actual = {name: fields.pop(name, None) for name in expected}
+    if actual != expected:
+        raise AssertionError(
+            f"{table}: generated OKF metadata changed: {actual!r}"
+        )
     return fields
+
+
+def _generated_fields(table: str) -> dict[str, str]:
+    source = (ROOT / "web/src/generated/ficha-okf.zod.ts").read_text(encoding="utf-8")
+    return _parse_generated_fields(source, table)
 
 
 def _parse_published_v1_object(source: str, type_name: str) -> dict[str, str]:

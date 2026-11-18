@@ -44,6 +44,7 @@ from __future__ import annotations
 import enum
 import hashlib
 import logging
+import re
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -189,20 +190,43 @@ def decide(name: str, local: LocalIdentity, metadata: dict | None) -> IdentityDe
             "metadata sem lista `files` utilizável — ausência não observada",
         )
 
-    entry = next((candidate for candidate in files if candidate.get("name") == name), None)
-    if entry is None:
+    matching = [candidate for candidate in files if candidate.get("name") == name]
+    if len(matching) > 1:
+        # O catálogo não garante unicidade. Mesmo duplicatas iguais não podem
+        # autorizar SKIP ou REPLACE com base na ordem das entradas.
+        return IdentityDecision(
+            name,
+            RemoteIdentityState.UNAVAILABLE,
+            UploadAction.RETRY_FAIL,
+            f"metadata com {len(matching)} entradas para o mesmo nome — identidade ambígua",
+        )
+
+    if not matching:
         # Lista válida e o arquivo não está nela: ausência **observada**.
         return IdentityDecision(
             name, RemoteIdentityState.MISSING, UploadAction.UPLOAD, "ausente no item remoto"
         )
 
+    entry = matching[0]
     raw_size, remote_sha1 = entry.get("size"), entry.get("sha1")
-    try:
-        remote_size = int(raw_size)
-    except (TypeError, ValueError):
+    # int(float) truncates and int(bool) accepts True/False. Neither proves
+    # the byte size reported by the archive. Only decimal strings or genuine
+    # nonnegative integers are comparable.
+    if type(raw_size) is int and raw_size >= 0:
+        remote_size = raw_size
+    elif isinstance(raw_size, str) and raw_size.isascii() and raw_size.isdecimal():
+        try:
+            remote_size = int(raw_size)
+        except ValueError:  # limite de dígitos de int em Python
+            remote_size = None
+    else:
         remote_size = None
 
-    if remote_size is None or not remote_sha1:
+    if (
+        remote_size is None
+        or not isinstance(remote_sha1, str)
+        or re.fullmatch(r"[0-9a-fA-F]{40}", remote_sha1) is None
+    ):
         # Entrada existe mas sem identidade comparável: desconhecido, não
         # divergente. Substituir aqui seria destruir por falta de observabilidade.
         return IdentityDecision(
@@ -212,6 +236,7 @@ def decide(name: str, local: LocalIdentity, metadata: dict | None) -> IdentityDe
             f"metadata sem identidade comparável (size={raw_size!r}, sha1={remote_sha1!r})",
         )
 
+    remote_sha1 = remote_sha1.lower()
     if remote_size == local.size and remote_sha1 == local.sha1:
         return IdentityDecision(
             name,
