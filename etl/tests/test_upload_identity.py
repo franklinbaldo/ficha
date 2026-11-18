@@ -402,6 +402,7 @@ def test_duplicates_of_irrelevant_names_do_not_change_target_decision(tmp_path) 
         (True, hashlib.sha1(b"AAAAA").hexdigest()),
         (-1, hashlib.sha1(b"AAAAA").hexdigest()),
         ("5.0", hashlib.sha1(b"AAAAA").hexdigest()),
+        ("9" * 5000, hashlib.sha1(b"AAAAA").hexdigest()),  # acima do limite int() do Python
         ({"size": 5}, hashlib.sha1(b"AAAAA").hexdigest()),
         ("5", "sha1-invalid"),
         ("5", "g" * 40),
