@@ -10,16 +10,26 @@ layout: page
 
 # Sobre o FICHA
 
-O **FICHA**, Fichário de Identificação de CNPJ Hospedado no Archive, organiza referências aos dados públicos do Cadastro Nacional da Pessoa Jurídica (CNPJ) da Receita Federal, preservados por competência.
+**Cada empresa tem uma história.** O FICHA, *Fichário de Identificação de CNPJ Hospedado no Archive*, é um projeto de acesso a dados públicos do CNPJ da Receita Federal, preservados por competência.
 
-## Duas camadas de dados
+O que interessa não é apenas descobrir como uma empresa aparece em uma lista. É saber **de quando é o registro**, de onde veio e quais observações sobrevivem no acervo histórico.
 
-A camada atômica armazena registros por raiz de CNPJ em arquivos Protobuf/ZIP quando declarados pelo snapshot. A camada analítica utiliza arquivos Parquet e DuckDB-WASM para cruzamentos no navegador. A disponibilidade e a versão de cada artefato dependem do manifesto publicado; sua declaração não é prova de acesso remoto.
+## As duas portas de entrada
 
-## O que já está disponível
+O [fichário](/ficha/empresa/) permite consultar uma empresa em determinada competência. A [história](/ficha/historia/) permite selecionar snapshots existentes e comparar diferenças observadas. Uma diferença entre arquivos não prova quando ocorreu um evento cadastral.
 
-A [página inicial](/ficha/) apresenta a competência apontada pelo manifesto público e a interface de busca. O [manifesto de dados](/ficha/manifest.json) contém referências aos arquivos e seus metadados. A origem arquivística e a disponibilidade de acesso podem variar com o tempo.
+O [acervo](/ficha/acervo/) apresenta os arquivos, tamanhos e hashes declarados no manifesto. [Explorar](/ficha/explorar/) exibe uma visualização dos tamanhos dos conjuntos realmente publicados, sem confundi-los com estatísticas populacionais sobre empresas.
 
-## Código e documentação
+## O que o sistema armazena
 
-O código e as decisões técnicas estão em [franklinbaldo/ficha](https://github.com/franklinbaldo/ficha). A publicação do site é independente das rotinas de ETL, upload ao Internet Archive ou promoção de competências.
+A camada atômica organiza registros por raiz de CNPJ em Protobuf/ZIP nos snapshots que declaram esses artefatos. A camada analítica utiliza Parquet e DuckDB-WASM para consulta no navegador. O projeto preserva arquivos no Internet Archive e publica o contrato de dados pelo [manifesto](/ficha/manifest.json).
+
+A disponibilidade de um artefato no manifesto **não é prova de acesso remoto**. Nem o êxito do deploy significa que uma consulta real funcionará: o Internet Archive pode não permitir as leituras CORS/HTTP Range exigidas pelo navegador. Nessa situação o FICHA deve exibir indisponibilidade, nunca registros inventados.
+
+## Origem, atualidade e limitações
+
+Cada ficha deve identificar a competência utilizada. A competência de referência do manifesto não implica que seja a última competência divulgada pela Receita. Dados de competências distintas não autorizam presumir continuidade entre períodos não arquivados, nem substituem certidões atuais.
+
+## Código aberto
+
+O projeto e as decisões técnicas estão em [franklinbaldo/ficha](https://github.com/franklinbaldo/ficha). Este site usa SSG Rust, HTML e JavaScript modular, com preservação dos dados separada da apresentação.

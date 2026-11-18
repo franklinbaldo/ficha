@@ -35,7 +35,8 @@ async function fixture(mutator = async () => {}) {
   for (const dir of ['web/public', 'site/scripts', 'site/static/css', 'site/static/js', 'site/dist/ficha/sobre']) {
     await mkdir(file(dir), { recursive: true });
   }
-  for (const jsFile of ['boot.mjs', 'search-app.mjs', 'duckdb-runtime.mjs', 'query-core.mjs', 'dataset.mjs']) {
+  for (const jsFile of ['boot.mjs', 'search-app.mjs', 'duckdb-runtime.mjs', 'query-core.mjs',
+    'dataset.mjs', 'catalog.mjs', 'record.mjs', 'pages.mjs']) {
     await writeFile(file('site/static/js/' + jsFile), '// mock');
   }
   const manifest = sample();
