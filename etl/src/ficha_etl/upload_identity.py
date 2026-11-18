@@ -189,13 +189,24 @@ def decide(name: str, local: LocalIdentity, metadata: dict | None) -> IdentityDe
             "metadata sem lista `files` utilizável — ausência não observada",
         )
 
-    entry = next((candidate for candidate in files if candidate.get("name") == name), None)
-    if entry is None:
+    matching = [candidate for candidate in files if candidate.get("name") == name]
+    if len(matching) > 1:
+        # O catálogo não garante unicidade. Mesmo duplicatas iguais não podem
+        # autorizar SKIP ou REPLACE com base na ordem das entradas.
+        return IdentityDecision(
+            name,
+            RemoteIdentityState.UNAVAILABLE,
+            UploadAction.RETRY_FAIL,
+            f"metadata com {len(matching)} entradas para o mesmo nome — identidade ambígua",
+        )
+
+    if not matching:
         # Lista válida e o arquivo não está nela: ausência **observada**.
         return IdentityDecision(
             name, RemoteIdentityState.MISSING, UploadAction.UPLOAD, "ausente no item remoto"
         )
 
+    entry = matching[0]
     raw_size, remote_sha1 = entry.get("size"), entry.get("sha1")
     try:
         remote_size = int(raw_size)

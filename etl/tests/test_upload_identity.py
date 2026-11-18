@@ -317,3 +317,74 @@ def test_incomplete_metadata_never_triggers_a_write(tmp_path) -> None:
             ensure_uploaded(
                 NAME, path, upload=upload, fetch_metadata=lambda m=metadata: m, sleep=lambda _: None
             )
+
+
+# --- catálogo com duplicatas do nome alvo ------------------------------------
+# Mesmo quando as duas identidades coincidem, o catálogo não prova unicidade.
+
+
+@pytest.mark.parametrize("first_matches", [True, False])
+@pytest.mark.parametrize("same_identity", [True, False])
+def test_duplicate_target_fails_closed(tmp_path, first_matches, same_identity) -> None:
+    content = b"AAAAA"
+    local = local_identity(_file(tmp_path, content))
+    valid = _entry(content)
+    second = valid.copy() if same_identity else _entry(b"BBBBB")
+    entries = [valid, second] if first_matches else [second, valid]
+
+    decision = decide(NAME, local, _metadata(*entries))
+    assert decision.state is RemoteIdentityState.UNAVAILABLE
+    assert decision.action is UploadAction.RETRY_FAIL
+    assert "2 entradas" in decision.detail
+
+
+@pytest.mark.parametrize("same_identity", [True, False])
+def test_duplicate_target_never_calls_uploader(tmp_path, same_identity) -> None:
+    content = b"AAAAA"
+    path = _file(tmp_path, content)
+    valid = _entry(content)
+    duplicate = valid.copy() if same_identity else _entry(b"BBBBB")
+    uploaded: list[str] = []
+
+    with pytest.raises(IdentityNotConfirmed):
+        ensure_uploaded(
+            NAME,
+            path,
+            upload=lambda: uploaded.append("PUT"),
+            fetch_metadata=lambda: _metadata(valid, duplicate),
+            sleep=lambda _: None,
+        )
+    assert uploaded == []
+
+
+@pytest.mark.parametrize("first_matches", [True, False])
+def test_duplicate_target_cannot_confirm_after_put(tmp_path, first_matches) -> None:
+    content = b"AAAAA"
+    local = local_identity(_file(tmp_path, content))
+    entries = [_entry(content), _entry(b"BBBBB")]
+    if not first_matches:
+        entries.reverse()
+    fetches: list[int] = []
+
+    def fetch_metadata() -> dict:
+        fetches.append(1)
+        return _metadata(*entries)
+
+    assert not confirm_remote_identity(
+        NAME, local, fetch_metadata=fetch_metadata, attempts=2, sleep=lambda _: None
+    )
+    assert len(fetches) == 2
+
+
+def test_duplicates_of_irrelevant_names_do_not_change_target_decision(tmp_path) -> None:
+    content = b"AAAAA"
+    local = local_identity(_file(tmp_path, content))
+    unrelated = _entry(b"other", name="unrelated.parquet")
+    repeated = _metadata(unrelated, unrelated.copy())
+    missing = decide(NAME, local, repeated)
+    assert missing.state is RemoteIdentityState.MISSING
+    assert missing.action is UploadAction.UPLOAD
+
+    with_target = decide(NAME, local, _metadata(unrelated, _entry(content), unrelated))
+    assert with_target.state is RemoteIdentityState.IDENTICAL
+    assert with_target.action is UploadAction.SKIP
