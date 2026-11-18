@@ -117,9 +117,7 @@ def test_ssg_gate_policy() -> None:
 
 def test_ssg_templates_have_explicit_utf8_charset() -> None:
     for template_name in ("index.html", "page.html"):
-        source = (ROOT / "site" / "templates" / template_name).read_text(
-            encoding="utf-8"
-        )
+        source = (ROOT / "site" / "templates" / template_name).read_text(encoding="utf-8")
         assert '<meta charset="utf-8">' in source
         assert "{{charset}}" not in source
 
