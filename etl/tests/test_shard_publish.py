@@ -40,6 +40,8 @@ class _Artifact:
 class _Session:
     geometry = PUBLIC_COMPANIES_GEOMETRY
     month = "2026-05"
+    wire_version = "1.0.0"
+    shard_by = "cnpj_base_prefix_2"
 
     def __init__(self):
         self.pack_calls: list[str] = []

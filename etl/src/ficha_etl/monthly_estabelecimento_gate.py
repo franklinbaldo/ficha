@@ -5,6 +5,7 @@ parts when this gate runs.  Instead of downloading or parsing those sources a
 second time, the gate reads the exact ``cnpjs.parquet`` produced by that run.
 The published ``cnpj`` column is the lossless fixed-width concatenation
 ``cnpj_basico(8) + cnpj_ordem(4) + cnpj_dv(2)`` used by the production writer.
+Validate both ASCII format and the RFB modulo-11 check digits before publication.
 
 This module deliberately does *not* define another duplicate algorithm.  It
 adapts the published 14-digit key back to the three columns expected by
@@ -34,7 +35,32 @@ import duckdb
 from . import canonical_history
 from . import estabelecimento_key_audit as key_audit
 from . import registry
+from .cnpj import CNPJ_PATTERN
 from .sources import is_valid_month
+
+
+_DV_WEIGHTS_1 = (5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2)
+_DV_WEIGHTS_2 = (6, 5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2)
+
+
+def _dv_sql(weights: tuple[int, ...]) -> str:
+    """Vectorized DuckDB expression for Receita's ASCII-minus-48 modulo-11 DV."""
+    terms = " + ".join(
+        f"(ascii(substr(cnpj, {index}, 1)) - 48) * {weight}"
+        for index, weight in enumerate(weights, start=1)
+    )
+    remainder = f"(({terms}) % 11)"
+    return f"(CASE WHEN {remainder} < 2 THEN 0 ELSE 11 - {remainder} END)"
+
+
+def _valid_cnpj_sql() -> str:
+    """Validate format, non-repeated identity, and DVs without a Python UDF."""
+    return (
+        f"regexp_full_match(cnpj, '{CNPJ_PATTERN}')"
+        " AND cnpj <> repeat(substr(cnpj, 1, 1), 14)"
+        f" AND (ascii(substr(cnpj, 13, 1)) - 48) = {_dv_sql(_DV_WEIGHTS_1)}"
+        f" AND (ascii(substr(cnpj, 14, 1)) - 48) = {_dv_sql(_DV_WEIGHTS_2)}"
+    )
 
 
 class MonthlyEstabelecimentoKeyGateError(RuntimeError):
@@ -60,14 +86,14 @@ def _project_production_keys(
         raise FileNotFoundError(cnpjs_path)
 
     source = _literal(str(cnpjs_path))
+    valid_cnpj_sql = _valid_cnpj_sql()
     source_rows, invalid_rows = con.execute(
         f"""
         SELECT
             COUNT(*)::BIGINT,
             COUNT(*) FILTER (
                 WHERE cnpj IS NULL
-                   OR length(cnpj) <> 14
-                   OR NOT regexp_full_match(cnpj, '[0-9]{{14}}')
+                   OR NOT ({valid_cnpj_sql})
             )::BIGINT
         FROM read_parquet({source})
         """
@@ -118,6 +144,15 @@ def run_monthly_gate(
     con = key_audit._connection(database, temp)  # noqa: SLF001
     try:
         source_rows, invalid_cnpj_rows = _project_production_keys(con, cnpjs_path, key_projection)
+        invalid_sample = (
+            con.execute(
+                f"SELECT cnpj FROM read_parquet({_literal(str(cnpjs_path))}) "
+                f"WHERE cnpj IS NULL OR NOT ({_valid_cnpj_sql()}) "
+                "ORDER BY cnpj NULLS FIRST LIMIT 20"
+            ).fetchall()
+            if invalid_cnpj_rows
+            else []
+        )
         audit = key_audit.run_global_key_audit(con, [key_projection])
     finally:
         con.close()
@@ -130,7 +165,7 @@ def run_monthly_gate(
     blanks = sum(audit.blank_or_null_counts_by_component.values())
     violations: list[str] = []
     if invalid_cnpj_rows:
-        violations.append(f"{invalid_cnpj_rows} malformed published CNPJ row(s)")
+        violations.append(f"{invalid_cnpj_rows} malformed published CNPJ row(s) (format or DV)")
     if audit.total_rows_scanned != source_rows:
         violations.append(
             "key projection row count diverged from produced cnpjs.parquet: "
@@ -166,6 +201,9 @@ def run_monthly_gate(
         },
         "source_rows": source_rows,
         "invalid_cnpj_rows": invalid_cnpj_rows,
+        "cnpj_validation": "ASCII A-Z/0-9, non-repeated digits and two RFB modulo-11 check digits",
+        "invalid_cnpj_sample": [row[0] for row in invalid_sample],
+        "invalid_cnpj_sample_limit": 20,
         "audit": asdict(audit),
         "violations": violations,
     }

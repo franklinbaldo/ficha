@@ -143,9 +143,9 @@ def test_socios_de_returns_only_matching_raiz(local_con):
 
 
 def test_socios_de_validates_cnpj_base():
-    with pytest.raises(ValueError, match="8 digits"):
+    with pytest.raises(ValueError, match="8 uppercase ASCII characters"):
         ficha_py.socios_de(None, "abc")
-    with pytest.raises(ValueError, match="8 digits"):
+    with pytest.raises(ValueError, match="8 uppercase ASCII characters"):
         ficha_py.socios_de(None, "1234567")  # too short
 
 
@@ -214,7 +214,7 @@ def test_filiais_de_returns_only_matching_raiz(local_con):
 
 
 def test_filiais_de_validates_cnpj_base():
-    with pytest.raises(ValueError, match="8 digits"):
+    with pytest.raises(ValueError, match="8 uppercase ASCII characters"):
         ficha_py.filiais_de(None, "abc")
 
 
@@ -233,3 +233,13 @@ def test_lookup_normalized_strips_accents_and_uppercases(local_con):
     df = ficha_py.lookup_normalized(local_con, "cnaes").execute()
     assert list(df["codigo"]) == ["01", "02"]  # sorted by codigo
     assert df.loc[df["codigo"] == "01", "descricao_normalizada"].iloc[0] == "DESCRICAO 01 CAO"
+
+
+def test_alpha_roots_are_valid_view_keys(local_con):
+    # These roots need not exist to be valid query keys; lazy expressions
+    # must preserve the uppercase identifier instead of dropping letters.
+    assert len(ficha_py.filiais_de(local_con, "ABCD1234").execute()) == 0
+    assert len(ficha_py.socios_de(local_con, "12AB3456").execute()) == 0
+    for invalid in ("abcd1234", "１２３４５６７８", "ABCD123!"):
+        with pytest.raises(ValueError):
+            ficha_py.filiais_de(local_con, invalid)

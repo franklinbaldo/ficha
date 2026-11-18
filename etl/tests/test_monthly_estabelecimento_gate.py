@@ -28,7 +28,7 @@ def _write_cnpjs(path: Path, values: list[str]) -> None:
 def test_monthly_gate_accepts_unique_production_bytes_and_records_identity(tmp_path: Path) -> None:
     cnpjs = tmp_path / "cnpjs.parquet"
     evidence = tmp_path / "evidence.json"
-    _write_cnpjs(cnpjs, ["12345678000190", "12345678000270", "87654321000110"])
+    _write_cnpjs(cnpjs, ["12345678000195", "12345678000276", "87654321000198"])
 
     payload = run_monthly_gate("2026-08", cnpjs, evidence, tmp_path / "work")
 
@@ -52,8 +52,8 @@ def test_monthly_gate_rejects_duplicate_that_survives_cross_part_merge(tmp_path:
     """
     cnpjs = tmp_path / "cnpjs.parquet"
     evidence = tmp_path / "evidence.json"
-    duplicated = "12345678000190"
-    _write_cnpjs(cnpjs, [duplicated, "87654321000110", duplicated])
+    duplicated = "12345678000195"
+    _write_cnpjs(cnpjs, [duplicated, "87654321000198", duplicated])
 
     with pytest.raises(MonthlyEstabelecimentoKeyGateError, match="1 duplicate full"):
         run_monthly_gate("2026-08", cnpjs, evidence, tmp_path / "work")
@@ -67,10 +67,47 @@ def test_monthly_gate_rejects_duplicate_that_survives_cross_part_merge(tmp_path:
 def test_monthly_gate_rejects_malformed_published_cnpj(tmp_path: Path) -> None:
     cnpjs = tmp_path / "cnpjs.parquet"
     evidence = tmp_path / "evidence.json"
-    _write_cnpjs(cnpjs, ["12345678000190", "short"])
+    _write_cnpjs(cnpjs, ["12345678000195", "short"])
 
     with pytest.raises(MonthlyEstabelecimentoKeyGateError, match="malformed published CNPJ"):
         run_monthly_gate("2026-08", cnpjs, evidence, tmp_path / "work")
 
     payload = json.loads(evidence.read_text(encoding="utf-8"))
     assert payload["invalid_cnpj_rows"] == 1
+
+
+def test_malformed_samples_remain_durable_in_failed_gate(tmp_path: Path) -> None:
+    cnpjs = tmp_path / "cnpjs.parquet"
+    evidence = tmp_path / "evidence.json"
+    _write_cnpjs(cnpjs, ["00000000E08G12", "00000000E08G1A", "invalid"])
+    with pytest.raises(MonthlyEstabelecimentoKeyGateError):
+        run_monthly_gate("2026-08", cnpjs, evidence, tmp_path / "work")
+    payload = json.loads(evidence.read_text())
+    assert payload["invalid_cnpj_rows"] == 2
+    assert payload["invalid_cnpj_sample"] == ["00000000E08G1A", "invalid"]
+
+
+@pytest.mark.parametrize(
+    "invalid",
+    [
+        "00000000000000",  # checksum-only validation would accept this sentinel
+        "11111111111111",  # equal-digit identities must also fail
+        "00000000E08G13",
+        "00000000E08G22",
+        "12345678000196",
+        "1234567800019A",
+    ],
+)
+def test_monthly_gate_rejects_wrong_mod11_or_format(tmp_path: Path, invalid: str) -> None:
+    cnpjs = tmp_path / "cnpjs.parquet"
+    evidence = tmp_path / "evidence.json"
+    _write_cnpjs(cnpjs, ["00000000E08G12", invalid])
+
+    with pytest.raises(MonthlyEstabelecimentoKeyGateError, match="malformed published CNPJ"):
+        run_monthly_gate("2026-08", cnpjs, evidence, tmp_path / "work")
+
+    payload = json.loads(evidence.read_text(encoding="utf-8"))
+    assert payload["invalid_cnpj_rows"] == 1
+    assert payload["invalid_cnpj_sample"] == [invalid]
+    assert payload["status"] == "failed"
+    assert "modulo-11" in payload["cnpj_validation"]

@@ -38,16 +38,13 @@ def test_company_row_iterator_processes_disjoint_ranges_in_order():
         )
     )
 
-    expected_ranges = []
-    expected_rows = []
-    for i in range(100):
-        prefix = f"{i:02d}"
-        lower = f"{prefix}000000"
-        upper = f"{i + 1:02d}000000" if i < 99 else "A0000000"
-        expected_ranges.append((lower, upper, lower, upper, lower, upper))
-        expected_rows.extend((f"{prefix}000001", f"{prefix}000002"))
-
-    assert con.ranges == expected_ranges
-    assert [row["cnpj_base"] for row in rows] == expected_rows
+    # Coverage includes roots with letters, is ordered and never overlaps.
+    assert len(con.ranges) == 36**2
+    assert con.ranges[0][0] == "00000000"
+    assert con.ranges[-1][1] == "[0000000"
+    for previous, current in zip(con.ranges, con.ranges[1:]):
+        assert previous[1] == current[0]
+    assert [row["cnpj_base"] for row in rows] == sorted(row["cnpj_base"] for row in rows)
+    assert any(row["cnpj_base"].startswith("AB") for row in rows)
     # Each of the three large inputs is range-filtered before GROUP BY/join.
     assert pack._COMPANIES_SQL.count("WHERE cnpj_base >= ? AND cnpj_base < ?") == 3
