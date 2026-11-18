@@ -39,6 +39,31 @@ WEB_TO_PYTHON = (
 )
 
 
+# Não confundir "caminhos de prova cobertos" com filtros seletivos: adicionar
+# etl/src/** ou web/src/lib/** cobriria os exemplos e ainda dispararia
+# suites cruzadas em alterações alheias ao wire. A allowlist torna o
+# custo/alcance deliberados e exige revisão quando o contrato crescer.
+WEB_CROSS_SELECTORS = frozenset(
+    {
+        "etl/tests/fixtures/company-v11-ca000001.hex",
+        "etl/tests/fixtures/company_pb2_*.txt",
+        "etl/tests/test_lontra_historical_v1_decoder.py",
+        "etl/tests/test_castor_shared_wire_boundary.py",
+        "etl/tests/test_castor_v11_real_zip.py",
+        "etl/src/ficha_etl/proto/**",
+        "etl/src/ficha_etl/pack.py",
+        "etl/src/ficha_etl/sharded_pack.py",
+    }
+)
+ETL_CROSS_SELECTORS = frozenset(
+    {
+        "web/src/generated/company.pb.*",
+        "web/src/lib/companies*.ts",
+        "web/src/schemas/v1/manifest*.ts",
+    }
+)
+
+
 def _workflow() -> dict:
     return yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
 
@@ -57,6 +82,7 @@ def _covers(patterns: list[str], path: str) -> bool:
 
 def _assert_contract(workflow: dict) -> None:
     web = _filters(workflow, "web")
+    assert {pattern for pattern in web if pattern.startswith("etl/")} == WEB_CROSS_SELECTORS
     for path in PYTHON_TO_WEB:
         assert _covers(web, path), f"web Test skipped for shared wire input: {path}"
     assert not _covers(web, "etl/tests/test_download.py")
@@ -65,6 +91,7 @@ def _assert_contract(workflow: dict) -> None:
     linux = _filters(workflow, "etl")
     windows = _filters(workflow, "etl-windows")
     assert linux == windows, "Linux/Windows cross-wire selectors differ"
+    assert {pattern for pattern in linux if pattern.startswith("web/")} == ETL_CROSS_SELECTORS
     for path in WEB_TO_PYTHON:
         assert _covers(linux, path), f"Python Test skipped for TS wire input: {path}"
     assert not _covers(linux, "web/src/pages/index.astro")
@@ -122,6 +149,26 @@ def test_removing_cross_contract_selector_is_caught(job: str, pattern: str) -> N
     name = "web" if job == "web" else "etl"
     assert pattern in filters[name]
     filters[name].remove(pattern)
+    filter_step["with"]["filters"] = yaml.safe_dump(filters, sort_keys=False)
+    with pytest.raises(AssertionError):
+        _assert_contract(changed)
+
+
+@pytest.mark.parametrize(
+    ("job", "broad_selector"),
+    [
+        ("web", "etl/src/**"),
+        ("etl", "web/src/lib/**"),
+    ],
+)
+def test_added_broad_cross_selector_is_caught(job: str, broad_selector: str) -> None:
+    """A broad extra selector must not hide behind the positive path examples."""
+    changed = deepcopy(_workflow())
+    steps = changed["jobs"][job]["steps"]
+    filter_step = next(step for step in steps if step.get("uses") == "dorny/paths-filter@v3")
+    filters = yaml.safe_load(filter_step["with"]["filters"])
+    name = "web" if job == "web" else "etl"
+    filters[name].append(broad_selector)
     filter_step["with"]["filters"] = yaml.safe_dump(filters, sort_keys=False)
     with pytest.raises(AssertionError):
         _assert_contract(changed)
