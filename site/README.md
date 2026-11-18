@@ -18,3 +18,4 @@ Site estático construído com **SSG Rust v0.0.75**, HTML nativo, CSS e JavaScri
 - `tests/`: Bateria de testes de integridade e regressão do site e módulos de dados.
 
 O workflow `.github/workflows/deploy.yml` valida os testes em PRs que alteram `site/**`; após merge na `main`, publica automaticamente no GitHub Pages e executa HTTP smoke de integridade.
+
