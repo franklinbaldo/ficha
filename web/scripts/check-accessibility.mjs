@@ -20,10 +20,15 @@ if (siteMode === 'ssg') {
   if (charset.toUpperCase() !== 'UTF-8') {
     throw new Error(`SSG served with invalid charset: ${charset}`);
   }
-  await page.getByRole('heading', {
-    name: 'Pesquisa por CNPJ ainda indisponível',
-    exact: true,
-  }).waitFor({ timeout: 15_000 });
+  const hasSearch = (await page.$('#busca-form')) !== null;
+  if (hasSearch) {
+    await page.waitForSelector('#busca-form', { timeout: 15_000 });
+  } else {
+    await page.getByRole('heading', {
+      name: 'Pesquisa por CNPJ ainda indisponível',
+      exact: true,
+    }).waitFor({ timeout: 15_000 });
+  }
 } else {
   // Keep the legacy Astro diagnosis usable for historical replays.
   await page.waitForFunction(() => {

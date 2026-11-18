@@ -21,18 +21,22 @@ const pwa = {
   scope: '/', short_name: null, start_url: '.', theme_color: null,
 };
 const nav = '<a href="/ficha/">Início</a><a href="/ficha/sobre/">Sobre</a><link href="/ficha/css/site.css">';
-const index = `<!doctype html><html lang="pt-BR"><body>${nav}<main id="main">Pesquisa por CNPJ ainda indisponível
+const index = `<!doctype html><html lang="pt-BR"><body>${nav}<main id="main">
+  <form id="busca-form"></form>
   <span>__FICHA_CURRENT_COMPETENCE__</span><a href="/ficha/manifest.json">Dados</a>
   <a href="__FICHA_CURRENT_SOURCE_URL__">Fonte</a><span>__FICHA_CURRENT_SOURCE_SIZE__ GB</span>
-</main></body></html>`;
+</main><script type="module" src="/ficha/js/boot.mjs"></script></body></html>`;
 const about = `<!doctype html><html lang="pt-BR"><body>${nav}<main id="main">Sobre o FICHA</main></body></html>`;
 
 async function fixture(mutator = async () => {}) {
   const root = await mkdtemp(join(tmpdir(), 'ficha-finalize-'));
   dirs.push(root);
   const file = path => join(root, path);
-  for (const dir of ['web/public', 'site/scripts', 'site/static/css', 'site/dist/ficha/sobre']) {
+  for (const dir of ['web/public', 'site/scripts', 'site/static/css', 'site/static/js', 'site/dist/ficha/sobre']) {
     await mkdir(file(dir), { recursive: true });
+  }
+  for (const jsFile of ['boot.mjs', 'search-app.mjs', 'duckdb-runtime.mjs', 'query-core.mjs', 'dataset.mjs']) {
+    await writeFile(file('site/static/js/' + jsFile), '// mock');
   }
   const manifest = sample();
   await mutator({ manifest, file });
@@ -76,14 +80,14 @@ test('rejeita manifesto PWA inesperado sem sobrescrevê-lo', async () => {
   assert.equal(await readFile(f.file('site/dist/ficha/manifest.json'), 'utf8'), other);
 });
 
-test('rejeita manifesto de destino como link simbólico', async () => {
+test('rejeita manifesto de destino como link simbólico', { skip: process.platform === 'win32' }, async () => {
   const f = await fixture();
   await rm(f.file('site/dist/ficha/manifest.json'));
   await symlink(f.file('web/public/manifest.json'), f.file('site/dist/ficha/manifest.json'));
   rejected(f, /Arquivo regular exigido/);
 });
 
-test('rejeita fonte canônica como link simbólico', async () => {
+test('rejeita fonte canônica como link simbólico', { skip: process.platform === 'win32' }, async () => {
   const f = await fixture();
   await writeFile(f.file('web/public/source.json'), f.canonical);
   await rm(f.file('web/public/manifest.json'));

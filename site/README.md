@@ -1,15 +1,20 @@
 ---
 type: Documentation
-title: Site público mínimo do FICHA (SSG Rust)
-description: Primeira publicação estática, sem busca remota e com manifesto RFB intacto
+title: Site público do FICHA (SSG Rust)
+description: Publicação estática com busca client-side desacoplada e manifesto RFB intacto
 ---
 
-# Site público mínimo
+# Site público FICHA (SSG Rust)
 
-Primeira fatia do FICHA: home, Sobre, competência indicada pelo manifesto e links de dados. SSG Rust v0.0.75, sem Astro, Svelte, DuckDB, JavaScript no navegador ou consulta simulada. [Direção Ficha #269](https://github.com/franklinbaldo/ficha/issues/269).
+Site estático construído com **SSG Rust v0.0.75**, HTML nativo, CSS e JavaScript modular para busca client-side ([Direção Ficha #269](https://github.com/franklinbaldo/ficha/issues/269)).
 
-O workflow `.github/workflows/deploy.yml` testa SSG check/build em PRs que alteram `site/**`; após merge na `main`, publica Pages automaticamente e verifica HTTP, links, CSS e a identidade **byte a byte** do `web/public/manifest.json`. O PWA `manifest.json` gerado pelo SSG deve coincidir com a estrutura conhecida antes de ser removido. A competência aparece no HTML a partir do próprio manifesto versionado.
+## Estrutura
 
-Rollback: revert do merge desta fatia. O workflow anterior Astro pode ser restaurado pelo mesmo revert. Nenhuma rotina de ETL, upload ao Internet Archive, publicação de dados ou cron foi alterada.
+- `content/`: Páginas Markdown (`index.md` com a home e busca, `sobre.md`).
+- `templates/`: Templates HTML Tera (`index.html`, `page.html`, etc.).
+- `static/css/`: Folhas de estilo nativas (`site.css`).
+- `static/js/`: Módulos ES de busca e dados (`boot.mjs`, `search-app.mjs`, `duckdb-runtime.mjs`, `query-core.mjs`, `dataset.mjs`).
+- `scripts/`: Finalizador de build (`finalize.mjs`), cópia de assets, remoção de PWA e validações.
+- `tests/`: Bateria de testes de integridade e regressão do site e módulos de dados.
 
-A busca real e seus gates (CORS/Range, Protobuf, DuckDB-WASM, alfa, corrida A→B) seguem em [#208](https://github.com/franklinbaldo/ficha/issues/208) e [#276](https://github.com/franklinbaldo/ficha/pull/276). Não são anunciados como funcionais nesta versão.
+O workflow `.github/workflows/deploy.yml` valida os testes em PRs que alteram `site/**`; após merge na `main`, publica automaticamente no GitHub Pages e executa HTTP smoke de integridade.
