@@ -147,7 +147,10 @@ def test_mudar_a_competencia_muda_o_id():
 
 
 def test_mudar_o_packer_format_version_muda_o_id():
-    assert spec(packer_format_version=2).materialization_id() != spec().materialization_id()
+    assert (
+        spec(packer_format_version=spec().packer_format_version + 1).materialization_id()
+        != spec().materialization_id()
+    )
 
 
 def test_mudar_o_descriptor_sha256_muda_o_id():

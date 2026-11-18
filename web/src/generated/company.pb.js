@@ -117,6 +117,7 @@ export const ficha = $root.ficha = (() => {
              * Properties of a Company.
              * @typedef {Object} ficha.v1.Company.$Properties
              * @property {number|null} [cnpj_base] Company cnpj_base
+             * @property {string|null} [cnpj_base_text] Company cnpj_base_text
              * @property {string|null} [razao_social] Company razao_social
              * @property {string|null} [razao_social_normalizada] Company razao_social_normalizada
              * @property {number|null} [natureza_juridica_codigo] Company natureza_juridica_codigo
@@ -168,6 +169,14 @@ export const ficha = $root.ficha = (() => {
              * @instance
              */
             Company.prototype.cnpj_base = 0;
+
+            /**
+             * Company cnpj_base_text.
+             * @member {string} cnpj_base_text
+             * @memberof ficha.v1.Company
+             * @instance
+             */
+            Company.prototype.cnpj_base_text = "";
 
             /**
              * Company razao_social.
@@ -291,6 +300,8 @@ export const ficha = $root.ficha = (() => {
                     writer.uint32(/* id 2, wireType 2 =*/18).string(message.razao_social);
                 if (message.razao_social_normalizada != null && Object.hasOwnProperty.call(message, "razao_social_normalizada"))
                     writer.uint32(/* id 3, wireType 2 =*/26).string(message.razao_social_normalizada);
+                if (message.cnpj_base_text != null && Object.hasOwnProperty.call(message, "cnpj_base_text"))
+                    writer.uint32(/* id 4, wireType 2 =*/34).string(message.cnpj_base_text);
                 if (message.natureza_juridica_codigo != null && Object.hasOwnProperty.call(message, "natureza_juridica_codigo"))
                     writer.uint32(/* id 10, wireType 0 =*/80).uint32(message.natureza_juridica_codigo);
                 if (message.porte_empresa != null && Object.hasOwnProperty.call(message, "porte_empresa"))
@@ -365,6 +376,15 @@ export const ficha = $root.ficha = (() => {
                                 message.cnpj_base = value;
                             else
                                 delete message.cnpj_base;
+                            continue;
+                        }
+                    case 4: {
+                            if (wireType !== 2)
+                                break;
+                            if ((value = reader.string()).length)
+                                message.cnpj_base_text = value;
+                            else
+                                delete message.cnpj_base_text;
                             continue;
                         }
                     case 2: {
@@ -508,6 +528,9 @@ export const ficha = $root.ficha = (() => {
                 if (message.cnpj_base != null && message.hasOwnProperty("cnpj_base"))
                     if (!$util.isInteger(message.cnpj_base))
                         return "cnpj_base: integer expected";
+                if (message.cnpj_base_text != null && message.hasOwnProperty("cnpj_base_text"))
+                    if (!$util.isString(message.cnpj_base_text))
+                        return "cnpj_base_text: string expected";
                 if (message.razao_social != null && message.hasOwnProperty("razao_social"))
                     if (!$util.isString(message.razao_social))
                         return "razao_social: string expected";
@@ -583,6 +606,9 @@ export const ficha = $root.ficha = (() => {
                 if (object.cnpj_base != null)
                     if (Number(object.cnpj_base) !== 0)
                         message.cnpj_base = object.cnpj_base >>> 0;
+                if (object.cnpj_base_text != null)
+                    if (typeof object.cnpj_base_text !== "string" || object.cnpj_base_text.length)
+                        message.cnpj_base_text = String(object.cnpj_base_text);
                 if (object.razao_social != null)
                     if (typeof object.razao_social !== "string" || object.razao_social.length)
                         message.razao_social = String(object.razao_social);
@@ -680,6 +706,7 @@ export const ficha = $root.ficha = (() => {
                     object.cnpj_base = 0;
                     object.razao_social = "";
                     object.razao_social_normalizada = "";
+                    object.cnpj_base_text = "";
                     object.natureza_juridica_codigo = 0;
                     object.porte_empresa = options.enums === String ? "PORTE_UNSPECIFIED" : 0;
                     object.capital_social = 0;
@@ -694,6 +721,8 @@ export const ficha = $root.ficha = (() => {
                     object.razao_social = message.razao_social;
                 if (message.razao_social_normalizada != null && message.hasOwnProperty("razao_social_normalizada"))
                     object.razao_social_normalizada = message.razao_social_normalizada;
+                if (message.cnpj_base_text != null && message.hasOwnProperty("cnpj_base_text"))
+                    object.cnpj_base_text = message.cnpj_base_text;
                 if (message.natureza_juridica_codigo != null && message.hasOwnProperty("natureza_juridica_codigo"))
                     object.natureza_juridica_codigo = message.natureza_juridica_codigo;
                 if (message.porte_empresa != null && message.hasOwnProperty("porte_empresa"))
@@ -755,6 +784,7 @@ export const ficha = $root.ficha = (() => {
              * Properties of an Estabelecimento.
              * @typedef {Object} ficha.v1.Estabelecimento.$Properties
              * @property {number|null} [cnpj_ordem] Estabelecimento cnpj_ordem
+             * @property {string|null} [cnpj_ordem_text] Estabelecimento cnpj_ordem_text
              * @property {number|null} [cnpj_dv] Estabelecimento cnpj_dv
              * @property {ficha.v1.TipoEstabelecimento|null} [tipo] Estabelecimento tipo
              * @property {string|null} [nome_fantasia] Estabelecimento nome_fantasia
@@ -828,6 +858,14 @@ export const ficha = $root.ficha = (() => {
              * @instance
              */
             Estabelecimento.prototype.cnpj_ordem = 0;
+
+            /**
+             * Estabelecimento cnpj_ordem_text.
+             * @member {string} cnpj_ordem_text
+             * @memberof ficha.v1.Estabelecimento
+             * @instance
+             */
+            Estabelecimento.prototype.cnpj_ordem_text = "";
 
             /**
              * Estabelecimento cnpj_dv.
@@ -1137,6 +1175,8 @@ export const ficha = $root.ficha = (() => {
                     writer.uint32(/* id 3, wireType 0 =*/24).int32(message.tipo);
                 if (message.nome_fantasia != null && Object.hasOwnProperty.call(message, "nome_fantasia"))
                     writer.uint32(/* id 4, wireType 2 =*/34).string(message.nome_fantasia);
+                if (message.cnpj_ordem_text != null && Object.hasOwnProperty.call(message, "cnpj_ordem_text"))
+                    writer.uint32(/* id 5, wireType 2 =*/42).string(message.cnpj_ordem_text);
                 if (message.situacao_cadastral != null && Object.hasOwnProperty.call(message, "situacao_cadastral"))
                     writer.uint32(/* id 10, wireType 0 =*/80).uint32(message.situacao_cadastral);
                 if (message.data_situacao_cadastral != null && Object.hasOwnProperty.call(message, "data_situacao_cadastral"))
@@ -1257,6 +1297,15 @@ export const ficha = $root.ficha = (() => {
                                 message.cnpj_ordem = value;
                             else
                                 delete message.cnpj_ordem;
+                            continue;
+                        }
+                    case 5: {
+                            if (wireType !== 2)
+                                break;
+                            if ((value = reader.string()).length)
+                                message.cnpj_ordem_text = value;
+                            else
+                                delete message.cnpj_ordem_text;
                             continue;
                         }
                     case 2: {
@@ -1616,6 +1665,9 @@ export const ficha = $root.ficha = (() => {
                 if (message.cnpj_ordem != null && message.hasOwnProperty("cnpj_ordem"))
                     if (!$util.isInteger(message.cnpj_ordem))
                         return "cnpj_ordem: integer expected";
+                if (message.cnpj_ordem_text != null && message.hasOwnProperty("cnpj_ordem_text"))
+                    if (!$util.isString(message.cnpj_ordem_text))
+                        return "cnpj_ordem_text: string expected";
                 if (message.cnpj_dv != null && message.hasOwnProperty("cnpj_dv"))
                     if (!$util.isInteger(message.cnpj_dv))
                         return "cnpj_dv: integer expected";
@@ -1750,6 +1802,9 @@ export const ficha = $root.ficha = (() => {
                 if (object.cnpj_ordem != null)
                     if (Number(object.cnpj_ordem) !== 0)
                         message.cnpj_ordem = object.cnpj_ordem >>> 0;
+                if (object.cnpj_ordem_text != null)
+                    if (typeof object.cnpj_ordem_text !== "string" || object.cnpj_ordem_text.length)
+                        message.cnpj_ordem_text = String(object.cnpj_ordem_text);
                 if (object.cnpj_dv != null)
                     if (Number(object.cnpj_dv) !== 0)
                         message.cnpj_dv = object.cnpj_dv >>> 0;
@@ -1897,6 +1952,7 @@ export const ficha = $root.ficha = (() => {
                     object.cnpj_dv = 0;
                     object.tipo = options.enums === String ? "TIPO_ESTAB_UNSPECIFIED" : 0;
                     object.nome_fantasia = "";
+                    object.cnpj_ordem_text = "";
                     object.situacao_cadastral = 0;
                     object.data_situacao_cadastral = 0;
                     object.motivo_situacao_cadastral_codigo = 0;
@@ -1936,6 +1992,8 @@ export const ficha = $root.ficha = (() => {
                     object.tipo = options.enums === String ? $root.ficha.v1.TipoEstabelecimento[message.tipo] === undefined ? message.tipo : $root.ficha.v1.TipoEstabelecimento[message.tipo] : message.tipo;
                 if (message.nome_fantasia != null && message.hasOwnProperty("nome_fantasia"))
                     object.nome_fantasia = message.nome_fantasia;
+                if (message.cnpj_ordem_text != null && message.hasOwnProperty("cnpj_ordem_text"))
+                    object.cnpj_ordem_text = message.cnpj_ordem_text;
                 if (message.situacao_cadastral != null && message.hasOwnProperty("situacao_cadastral"))
                     object.situacao_cadastral = message.situacao_cadastral;
                 if (message.data_situacao_cadastral != null && message.hasOwnProperty("data_situacao_cadastral"))
@@ -2040,6 +2098,7 @@ export const ficha = $root.ficha = (() => {
              * @property {ficha.v1.TipoSocio|null} [tipo] Socio tipo
              * @property {string|null} [nome_socio_razao_social] Socio nome_socio_razao_social
              * @property {number|null} [cpf_mascarado_meio] Socio cpf_mascarado_meio
+             * @property {string|null} [cnpj_socio_text] Socio cnpj_socio_text
              * @property {number|null} [cnpj_socio] Socio cnpj_socio
              * @property {number|null} [qualificacao_codigo] Socio qualificacao_codigo
              * @property {number|null} [data_entrada_sociedade] Socio data_entrada_sociedade
@@ -2102,6 +2161,14 @@ export const ficha = $root.ficha = (() => {
              * @instance
              */
             Socio.prototype.cpf_mascarado_meio = 0;
+
+            /**
+             * Socio cnpj_socio_text.
+             * @member {string} cnpj_socio_text
+             * @memberof ficha.v1.Socio
+             * @instance
+             */
+            Socio.prototype.cnpj_socio_text = "";
 
             /**
              * Socio cnpj_socio.
@@ -2211,6 +2278,8 @@ export const ficha = $root.ficha = (() => {
                     writer.uint32(/* id 7, wireType 0 =*/56).uint32(message.pais_codigo);
                 if (message.faixa_etaria != null && Object.hasOwnProperty.call(message, "faixa_etaria"))
                     writer.uint32(/* id 8, wireType 0 =*/64).int32(message.faixa_etaria);
+                if (message.cnpj_socio_text != null && Object.hasOwnProperty.call(message, "cnpj_socio_text"))
+                    writer.uint32(/* id 9, wireType 2 =*/74).string(message.cnpj_socio_text);
                 if (message.representante_legal_cpf_meio != null && Object.hasOwnProperty.call(message, "representante_legal_cpf_meio"))
                     writer.uint32(/* id 10, wireType 0 =*/80).uint32(message.representante_legal_cpf_meio);
                 if (message.representante_legal_nome != null && Object.hasOwnProperty.call(message, "representante_legal_nome"))
@@ -2289,6 +2358,15 @@ export const ficha = $root.ficha = (() => {
                                 message.cpf_mascarado_meio = value;
                             else
                                 delete message.cpf_mascarado_meio;
+                            continue;
+                        }
+                    case 9: {
+                            if (wireType !== 2)
+                                break;
+                            if ((value = reader.string()).length)
+                                message.cnpj_socio_text = value;
+                            else
+                                delete message.cnpj_socio_text;
                             continue;
                         }
                     case 4: {
@@ -2420,6 +2498,9 @@ export const ficha = $root.ficha = (() => {
                 if (message.cpf_mascarado_meio != null && message.hasOwnProperty("cpf_mascarado_meio"))
                     if (!$util.isInteger(message.cpf_mascarado_meio))
                         return "cpf_mascarado_meio: integer expected";
+                if (message.cnpj_socio_text != null && message.hasOwnProperty("cnpj_socio_text"))
+                    if (!$util.isString(message.cnpj_socio_text))
+                        return "cnpj_socio_text: string expected";
                 if (message.cnpj_socio != null && message.hasOwnProperty("cnpj_socio"))
                     if (!$util.isInteger(message.cnpj_socio) && !(message.cnpj_socio && $util.isInteger(message.cnpj_socio.low) && $util.isInteger(message.cnpj_socio.high)))
                         return "cnpj_socio: integer|Long expected";
@@ -2508,6 +2589,9 @@ export const ficha = $root.ficha = (() => {
                 if (object.cpf_mascarado_meio != null)
                     if (Number(object.cpf_mascarado_meio) !== 0)
                         message.cpf_mascarado_meio = object.cpf_mascarado_meio >>> 0;
+                if (object.cnpj_socio_text != null)
+                    if (typeof object.cnpj_socio_text !== "string" || object.cnpj_socio_text.length)
+                        message.cnpj_socio_text = String(object.cnpj_socio_text);
                 if (object.cnpj_socio != null)
                     if (typeof object.cnpj_socio === "object" ? object.cnpj_socio.low || object.cnpj_socio.high : Number(object.cnpj_socio) !== 0)
                         if ($util.Long)
@@ -2618,6 +2702,7 @@ export const ficha = $root.ficha = (() => {
                     object.data_entrada_sociedade = 0;
                     object.pais_codigo = 0;
                     object.faixa_etaria = options.enums === String ? "FAIXA_ETARIA_UNSPECIFIED" : 0;
+                    object.cnpj_socio_text = "";
                     object.representante_legal_cpf_meio = 0;
                     object.representante_legal_nome = "";
                     object.representante_legal_qualificacao_codigo = 0;
@@ -2641,6 +2726,8 @@ export const ficha = $root.ficha = (() => {
                     object.pais_codigo = message.pais_codigo;
                 if (message.faixa_etaria != null && message.hasOwnProperty("faixa_etaria"))
                     object.faixa_etaria = options.enums === String ? $root.ficha.v1.FaixaEtaria[message.faixa_etaria] === undefined ? message.faixa_etaria : $root.ficha.v1.FaixaEtaria[message.faixa_etaria] : message.faixa_etaria;
+                if (message.cnpj_socio_text != null && message.hasOwnProperty("cnpj_socio_text"))
+                    object.cnpj_socio_text = message.cnpj_socio_text;
                 if (message.representante_legal_cpf_meio != null && message.hasOwnProperty("representante_legal_cpf_meio"))
                     object.representante_legal_cpf_meio = message.representante_legal_cpf_meio;
                 if (message.representante_legal_nome != null && message.hasOwnProperty("representante_legal_nome"))

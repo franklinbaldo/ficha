@@ -1,0 +1,117 @@
+import { z } from 'zod';
+
+/**
+ * `web/public/manifest.json` — single source of truth dos snapshots disponíveis.
+ *
+ * Ver ADR 0003 (versionamento) e ADR 0008 (estrutura de arquivos por snapshot).
+ */
+const CurrentFileEntrySchema = z.object({
+  url: z.string().url(),
+  // SHA-1 é o checksum operacional comparável diretamente com o catálogo do IA.
+  sha1: z.string().regex(/^[0-9a-f]{40}$/),
+  // SHA-256 continua disponível como digest forte para consumidores.
+  sha256: z.string().regex(/^[0-9a-f]{64}$/),
+  size: z.number().int().nonnegative(),
+});
+
+// Compatibilidade de leitura com snapshots já publicados antes do contrato dual.
+const LegacySha256FileEntrySchema = z.object({
+  url: z.string().url(),
+  sha256: z.string().regex(/^[0-9a-f]{64}$/),
+  size: z.number().int().nonnegative(),
+});
+
+const FileEntrySchema = z.union([CurrentFileEntrySchema, LegacySha256FileEntrySchema]);
+
+// Os lookups históricos (incluindo 2026-04) foram publicados apenas com URL.
+// Novos snapshots usam CurrentFileEntrySchema; URL-only é ponte de leitura.
+const LookupEntrySchema = z.union([
+  CurrentFileEntrySchema,
+  LegacySha256FileEntrySchema,
+  z.object({ url: z.string().url() }),
+]);
+
+const CompanyShardSchema = z.object({
+  shard: z.string().regex(/^\d{2}$/),
+  url: z.string().url(),
+  // Checksum operacional do IA; autenticidade semântica é validada no ETL.
+  sha1: z.string().regex(/^[0-9a-f]{40}$/),
+  size: z.number().int().positive(),
+});
+
+const CompaniesShardedSchema = z
+  .object({
+    shard_by: z.literal('cnpj_base_prefix_2'),
+    shards: z.array(CompanyShardSchema).length(100),
+  })
+  .superRefine(({ shards }, ctx) => {
+    const seen = new Set<string>();
+    for (const shard of shards) {
+      if (seen.has(shard.shard)) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['shards'],
+          message: `duplicate company shard: ${shard.shard}`,
+        });
+      }
+      seen.add(shard.shard);
+    }
+    for (let value = 0; value < 100; value += 1) {
+      const expected = String(value).padStart(2, '0');
+      if (!seen.has(expected)) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['shards'],
+          message: `missing company shard: ${expected}`,
+        });
+      }
+    }
+  });
+
+export const SnapshotEntrySchema = z.object({
+  date: z.string().regex(/^\d{4}-\d{2}$/),
+  schema_version: z.string(),
+  rfb_layout_date: z.string().nullable(),
+  generated_at: z.string(),
+  generator: z.string(),
+  row_counts: z.object({
+    cnpjs: z.number().int().nonnegative(),
+    cnpj_contatos: z.number().int().nonnegative().optional(),
+    cnpj_cnaes: z.number().int().nonnegative().optional(),
+    raizes: z.number().int().nonnegative(),
+    socios: z.number().int().nonnegative(),
+    enderecos: z.number().int().nonnegative().optional(),
+    pessoas: z.number().int().nonnegative().optional(),
+  }),
+  files: z.object({
+    cnpjs: FileEntrySchema,
+    // Opcional: um upload individual pro Internet Archive pode falhar
+    // depois do commit do manifest (ver 2026-04 — cnpj_contatos/cnpj_cnaes
+    // ficaram 404). O frontend já degrada a seção correspondente quando
+    // ausente; o manifest não deve afirmar que um arquivo existe se a URL
+    // não responde.
+    cnpj_contatos: FileEntrySchema.optional(),
+    cnpj_cnaes: FileEntrySchema.and(z.object({ sort: z.array(z.string()) })).optional(),
+    raizes: FileEntrySchema,
+    socios: FileEntrySchema,
+    enderecos: FileEntrySchema.and(z.object({ sort: z.array(z.string()) })).optional(),
+    pessoas: FileEntrySchema.and(z.object({ sort: z.array(z.string()) })).optional(),
+    lookups: FileEntrySchema,
+    // Camada atômica histórica: um ZIP monolítico. Continua opcional para
+    // compatibilidade com snapshots que já existem (incluindo 2026-04).
+    companies_zip: FileEntrySchema.optional(),
+    // Camada atômica retomável: conjunto completo 00..99. Cada entrada usa o
+    // SHA-1 que o próprio Internet Archive calcula e expõe para o objeto; a
+    // identidade semântica da materialização é validada separadamente no ETL.
+    companies: CompaniesShardedSchema.optional(),
+  }),
+  lookups: z.record(z.string(), LookupEntrySchema).optional(),
+});
+
+export const ManifestSchema = z.object({
+  current: z.string().regex(/^\d{4}-\d{2}$/),
+  snapshots: z.array(SnapshotEntrySchema),
+});
+
+export type Snapshot = z.infer<typeof SnapshotEntrySchema>;
+export type Manifest = z.infer<typeof ManifestSchema>;
