@@ -38,6 +38,10 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      - name: Testar finalizador e regras SSG com entradas adversariais
+        run: |
+          node --test site/scripts/finalize.test.mjs
+          node --test site/tests/*.test.mjs
       - name: Instalar SSG Rust fixado e conferir SHA-256
         run: |
           set -euo pipefail
@@ -91,9 +95,11 @@ jobs:
           curl -fsSL --retry 3 "$BASE/" -o index.html
           curl -fsSL --retry 3 "$BASE/sobre/" -o sobre.html
           curl -fsSL --retry 3 "$BASE/css/site.css" -o site.css
+          curl -fsSL --retry 3 "$BASE/js/boot.mjs" -o boot.mjs
           curl -fsSL --retry 3 "$BASE/manifest.json" -o manifest-live.json
-          grep -q 'Pesquisa por CNPJ ainda indisponível' index.html
+          grep -q 'id="busca-form"' index.html
           grep -q 'Sobre o FICHA' sobre.html
           grep -q 'focus-visible' site.css
+          grep -q 'mountSearch' boot.mjs
           cmp web/public/manifest.json manifest-live.json
           node -e "const d=require('./manifest-live.json');if(!d.current||!d.snapshots?.some(s=>s.date===d.current))process.exit(1); console.log('Pages MVP + manifest OK: '+d.current)"
