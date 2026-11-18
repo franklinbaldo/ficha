@@ -273,6 +273,7 @@ def test_negative_mutation_rejects_live_rc_reset() -> None:
     live["run"] = live["run"].replace("rc=${PIPESTATUS[0]}", "rc=${PIPESTATUS[0]}\nrc=0")
     assert not _pr_is_fixture_only(mutated)
 
+
 def test_negative_mutation_rejects_upstream_probe_as_echo() -> None:
     mutated = deepcopy(_load())
     _steps(mutated)["Upstream latest snapshot (list-snapshots)"]["run"] = (
