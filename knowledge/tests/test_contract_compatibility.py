@@ -177,11 +177,7 @@ def _zod_fields(source: str, *, quoted: bool) -> dict[str, str]:
 
 
 def _without_block_comments(source: str) -> str:
-    """Do not treat stale declarations inside /* ... */ as live contracts.
-
-    Preserve newlines so ^-anchored declarations retain their boundaries.
-    Ambiguous/unbalanced comments fail closed instead of being ignored.
-    """
+    """Strip commented-out Zod declarations; reject unbalanced comments."""
     if source.count("/*") != source.count("*/"):
         raise AssertionError("Unbalanced TypeScript block comment")
     return re.sub(
