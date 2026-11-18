@@ -159,6 +159,11 @@ button:disabled { opacity:.6; cursor:progress; }
 .asset-row-label strong { overflow-wrap:anywhere; }
 .asset-track { background:#dce5dc; height:.75rem; margin-top:.4rem; }
 .asset-bar { display:block; background:var(--green); height:100%; min-width:0; }
+.series-section { margin-top:3.5rem; padding-top:2rem; border-top:1px solid var(--line); }
+.series-row { margin:1rem 0; }
+.series-label { display:flex; gap:1rem; justify-content:space-between; font-size:.88rem; }
+.series-track { height:.8rem; background:#dce5dc; margin-top:.4rem; }
+.series-bar { display:block; height:100%; background:#b26b46; }
 .footnote-section { border-top:1px solid var(--line); padding:2.5rem 0 3rem; }
 .footnote-section h2 { max-width:35ch; }
 footer { border-top:1px solid var(--line); font-size:.82rem; color:var(--muted); }
