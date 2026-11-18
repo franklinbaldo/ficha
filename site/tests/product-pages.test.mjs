@@ -48,7 +48,7 @@ test('um HTTP 404 não é interpretado como catálogo vazio', async () => {
 test('CNPJ alfanumérico é textual, com validação antes de qualquer I/O', async () => {
   assert.equal(canonicalCnpj('00.000.000/e08g-12'),'00000000E08G12');
   assert.equal(canonicalCnpj('12.ABC.345/01DE-35'),'12ABC34501DE35');
-  assert.equal(canonicalCnpj('123'),'');
+  assert.equal(canonicalCnpj('123'),null);
 });
 
 test('leitor de ficha usa snapshot pedido, sonda transporte, consulta e libera WASM', async () => {
