@@ -1,32 +1,23 @@
-"""Regressão da retirada do bootstrap histórico (#268).
-
-O pipeline atual é etl-monthly.yml; o bootstrap one-shot possuía
-workflow_dispatch, contents: write e capacidade de upload. Não pode voltar
-por engano como atalho de publicação.
-"""
+"""Regressão: não reintroduzir bootstrap de publicação (#268)."""
 
 from pathlib import Path
 
 WORKFLOWS_DIR = Path(__file__).parents[2] / ".github" / "workflows"
 
 
-def _legacy_bootstrap_absent(directory: Path) -> bool:
-    return not (directory / "etl-bootstrap.yml").exists()
+def legacy_bootstrap_absent(directory: Path) -> bool:
+    return not (directory / "etl-bootstrap.yml").is_file()
 
 
 def test_legacy_bootstrap_is_retired() -> None:
-    assert _legacy_bootstrap_absent(WORKFLOWS_DIR), (
-        "etl-bootstrap.yml foi aposentado; não reintroduzir publicação "
-        "com workflow_dispatch/contents: write fora do ETL mensal"
-    )
+    assert legacy_bootstrap_absent(WORKFLOWS_DIR)
 
 
-def test_negative_control_detects_reintroduced_bootstrap(tmp_path: Path) -> None:
-    (tmp_path / "etl-bootstrap.yml").write_text(
-        "name: bootstrap legado\n", encoding="utf-8"
-    )
-    assert not _legacy_bootstrap_absent(tmp_path)
+def test_negative_control_rejects_reintroduction(tmp_path: Path) -> None:
+    path = tmp_path / "etl-bootstrap.yml"
+    path.write_text("name: obsolete bootstrap\n", encoding="utf-8")
+    assert not legacy_bootstrap_absent(tmp_path)
 
 
-def test_supported_monthly_workflow_still_exists() -> None:
+def test_monthly_workflow_is_still_present() -> None:
     assert (WORKFLOWS_DIR / "etl-monthly.yml").is_file()
