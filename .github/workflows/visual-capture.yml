@@ -6,6 +6,8 @@ on:
       - 'site/**'
       - 'web/public/manifest.json'
       - 'web/scripts/check-accessibility.mjs'
+      - 'web/package.json'
+      - 'web/bun.lock'
       - '.github/workflows/visual-capture.yml'
   workflow_dispatch:
 

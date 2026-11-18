@@ -35,6 +35,8 @@ def violations(workflow: dict, auditor: str) -> list[str]:
         "site/**",
         "web/public/manifest.json",
         "web/scripts/check-accessibility.mjs",
+        "web/package.json",
+        "web/bun.lock",
         ".github/workflows/visual-capture.yml",
     }
     if not required_paths.issubset(paths) or "web/**" in paths:
@@ -138,6 +140,12 @@ def test_reject_mutations_that_restore_false_green() -> None:
     w = mutated()
     w.get("on", w.get(True))["pull_request"]["paths"] = ["web/**"]
     variants["old astro paths"] = w
+    # The browser auditor installs through web/package.json + web/bun.lock.
+    # Their changes must not bypass the actual SSG audit.
+    for missing in ("web/package.json", "web/bun.lock"):
+        w = mutated()
+        w.get("on", w.get(True))["pull_request"]["paths"].remove(missing)
+        variants[f"missing browser audit dependency: {missing}"] = w
     w = mutated()
     w.get("on", w.get(True))["push"] = {"branches": ["main"]}
     variants["duplicate browser on main"] = w
