@@ -16,6 +16,12 @@ jobs:
         working-directory: web
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Verify exact CI checkout SHA
+        run: test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha || github.sha }}"
 
       - name: Detect changes in web/
         id: changes
@@ -25,6 +31,16 @@ jobs:
             web:
               - 'web/**'
               - '.github/workflows/ci.yml'
+              # Contrato wire compartilhado com Python (P0 #246/#252/#264).
+              # Reexecutar Vitest com o mesmo membro real de 45 B.
+              - 'etl/tests/fixtures/company-v11-ca000001.hex'
+              - 'etl/tests/fixtures/company_pb2_*.txt'
+              - 'etl/tests/test_lontra_historical_v1_decoder.py'
+              - 'etl/tests/test_castor_shared_wire_boundary.py'
+              - 'etl/tests/test_castor_v11_real_zip.py'
+              - 'etl/src/ficha_etl/proto/**'
+              - 'etl/src/ficha_etl/pack.py'
+              - 'etl/src/ficha_etl/sharded_pack.py'
 
       - uses: actions/setup-node@v4
         if: steps.changes.outputs.web == 'true'
@@ -62,6 +78,12 @@ jobs:
         working-directory: etl
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Verify exact CI checkout SHA
+        run: test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha || github.sha }}"
 
       - name: Detect changes in etl/
         id: changes
@@ -79,6 +101,10 @@ jobs:
               # workflows aqui, alterar um deles não roda o teste que o
               # guarda — que é exatamente quando ele precisa rodar.
               - '.github/workflows/**'
+              # Reexecutar Python quando o leitor TS do mesmo wire mudar.
+              - 'web/src/generated/company.pb.*'
+              - 'web/src/lib/companies*.ts'
+              - 'web/src/schemas/v1/manifest*.ts'
 
       - name: Install uv
         if: steps.changes.outputs.etl == 'true'
@@ -153,6 +179,12 @@ jobs:
         shell: bash
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Verify exact CI checkout SHA
+        run: test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha || github.sha }}"
 
       - name: Detect changes in etl/
         id: changes
@@ -168,6 +200,10 @@ jobs:
               # workflows aqui, alterar um deles não roda o teste que o
               # guarda — que é exatamente quando ele precisa rodar.
               - '.github/workflows/**'
+              # Reexecutar Python quando o leitor TS do mesmo wire mudar.
+              - 'web/src/generated/company.pb.*'
+              - 'web/src/lib/companies*.ts'
+              - 'web/src/schemas/v1/manifest*.ts'
 
       - name: Install uv
         if: steps.changes.outputs.etl == 'true'
@@ -230,6 +266,12 @@ jobs:
         working-directory: ficha-py
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Verify exact CI checkout SHA
+        run: test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha || github.sha }}"
 
       - name: Detect changes in ficha-py/
         id: changes
