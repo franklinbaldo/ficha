@@ -89,12 +89,13 @@ def violations(workflow: dict, auditor: str) -> list[str]:
         if "playwright install chromium" not in browser.get("run", ""):
             errors.append("Chromium installation required")
         audit = _step(steps, "Audit actual SSG home with Chromium, axe and keyboard")
+        expected_audit_run = (
+            "bun run scripts/check-accessibility.mjs "
+            "http://127.0.0.1:4321/ficha/ ../accessibility-evidence"
+        )
         if (
             audit.get("env", {}).get("FICHA_SITE_MODE") != "ssg"
-            or audit.get("run", "") != (
-                "bun run scripts/check-accessibility.mjs "
-                "http://127.0.0.1:4321/ficha/ ../accessibility-evidence"
-            )
+            or audit.get("run", "") != expected_audit_run
         ):
             errors.append("real browser auditor must run in SSG mode")
         upload = _step(steps, "Upload browser accessibility evidence")
