@@ -215,7 +215,10 @@ def decide(name: str, local: LocalIdentity, metadata: dict | None) -> IdentityDe
     if type(raw_size) is int and raw_size >= 0:
         remote_size = raw_size
     elif isinstance(raw_size, str) and raw_size.isascii() and raw_size.isdecimal():
-        remote_size = int(raw_size)
+        try:
+            remote_size = int(raw_size)
+        except ValueError:  # limite de dígitos de int em Python
+            remote_size = None
     else:
         remote_size = None
 
