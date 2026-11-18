@@ -12,11 +12,11 @@ menores, cada um registrando uma decisão concreta.
 
 | # | Título | Status |
 |---|---|---|
-| [0001](0001-astro-svelte-stack.md) | Stack frontend: Astro + Svelte 5 + TS + Zod | Accepted |
+| [0001](0001-astro-svelte-stack.md) | Stack frontend: Astro + Svelte 5 + TS + Zod | Superseded for public site by 0029; histórico do protótipo |
 | [0002](0002-no-tanstack-db.md) | Não adotar TanStack DB | Accepted |
 | [0003](0003-schema-versioning.md) | Versionamento de schema em três camadas | Accepted |
 | [0004](0004-internet-archive-as-storage.md) | Internet Archive como storage primário | Accepted |
-| [0005](0005-monorepo-web-etl.md) | Monorepo `web/` + `etl/` simétrico | Accepted |
+| [0005](0005-monorepo-web-etl.md) | Monorepo `web/` + `etl/` simétrico | Accepted; frontend público atualizado por 0029 |
 | [0006](0006-data-quality-pragmatic.md) | Validação pragmática (não Great Expectations) | Accepted |
 | [0007](0007-tanstack-query-atomic-only.md) | TanStack Query só para camada atômica | Accepted |
 | [0008](0008-three-parquet-architecture.md) | Arquitetura de três Parquets + lookups.json | Accepted |
@@ -37,3 +37,5 @@ menores, cada um registrando uma decisão concreta.
 | [0023](0023-enderecos-parquet.md) | `enderecos.parquet`: reverse lookup por endereço e município | Accepted |
 | [0024](0024-pessoas-parquet.md) | `pessoas.parquet`: reverse lookup PF por CPF mascarado + nome | Accepted |
 | [0025](0025-publication-state-vocabulary.md) | Vocabulário de estados de publicação (tentativa/materialização/candidato/promovido/público) | Accepted |
+| [0026](0026-production-time-snapshot-identity.md) | Identidade do snapshot nasce na produção | Accepted |
+| [0029](0029-ssg-rust-public-site.md) | SSG Rust como gerador do site público | Accepted (implantada em 18/11/2026) |
