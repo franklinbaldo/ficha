@@ -848,7 +848,6 @@ def test_extract_all_preserves_homonymous_members_from_two_parts(tmp_path, all_z
         assert paths[zip_name].read_bytes() == payload
 
 
-
 def test_extract_all_homonymous_members_remain_distinct_in_duckdb(tmp_path, all_zips_dir):
     """Two ZIP members with one internal name must remain two source rows."""
     for zip_name, row in (
