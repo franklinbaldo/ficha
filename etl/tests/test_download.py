@@ -69,6 +69,47 @@ def test_resumes_partial_download(tmp_path):
     assert target.read_bytes() == PAYLOAD
 
 
+
+@pytest.mark.parametrize(
+    ("bad_range", "suffix"),
+    [
+        ("bytes 0-2999/5000", PAYLOAD[:3000]),  # different start, same final size
+        ("bytes 2000-4998/5000", PAYLOAD[2000:]),  # truncated advertised end
+        ("bytes 2000-4999/*", PAYLOAD[2000:]),  # unknown total
+        ("", PAYLOAD[2000:]),  # omitted range evidence
+    ],
+)
+def test_resume_rejects_incompatible_content_range(tmp_path, bad_range, suffix):
+    file = _file()
+    target = tmp_path / file.name
+    original_prefix = PAYLOAD[:2000]
+    target.write_bytes(original_prefix)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.headers["range"] == "bytes=2000-"
+        return httpx.Response(206, content=suffix, headers={"content-range": bad_range})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    with pytest.raises(RuntimeError, match="Content-Range"):
+        download.download_one(file, tmp_path, client=client, max_attempts=1)
+    # A misleading 206 must not append a single byte to the prior file.
+    assert target.read_bytes() == original_prefix
+
+
+def test_unrequested_partial_response_is_rejected(tmp_path):
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert "range" not in request.headers
+        return httpx.Response(
+            206,
+            content=PAYLOAD,
+            headers={"content-range": "bytes 0-4999/5000"},
+        )
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    with pytest.raises(RuntimeError, match="Content-Range"):
+        download.download_one(_file(), tmp_path, client=client, max_attempts=1)
+    assert not (tmp_path / _file().name).exists()
+
 def test_restarts_when_server_ignores_range(tmp_path):
     """Some servers reply 200 to a Range request — we must overwrite, not append."""
     file = _file()
