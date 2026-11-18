@@ -25,6 +25,8 @@ from pathlib import Path
 import internetarchive as ia
 
 from . import transform, upload
+from .cnpj import SHARD_BY as COMPANIES_SHARD_BY
+from .pack import SCHEMA_VERSION as COMPANIES_WIRE_VERSION
 from .manifest import (
     CompanyShardIdentity,
     build_production_descriptor,
@@ -355,9 +357,26 @@ def command_prepare_shard(args: argparse.Namespace) -> None:
     )
 
 
+def _require_safe_legacy_shard_upload() -> None:
+    """Do not publish 1.1 wire under ZIP names discoverable by v1 decoders.
+
+    The monthly submit path still targets unversioned companies-NN.zip. An
+    updated manifest gate runs only *after* submit, too late to protect v1
+    consumers from a newly created 1.1 ZIP. Block before any remote access
+    until a separate, versioned artifact namespace is implemented.
+    """
+    if COMPANIES_WIRE_VERSION != "1.0.0" or COMPANIES_SHARD_BY != "cnpj_base_prefix_2":
+        raise ShardPublishError(
+            "refusing unversioned companies-NN.zip upload of Protobuf "
+            f"{COMPANIES_WIRE_VERSION} with shard mapping {COMPANIES_SHARD_BY}; "
+            "separate versioned artifact URLs and opt-in discovery are required"
+        )
+
+
 def command_submit_shard(args: argparse.Namespace) -> None:
     month = _require_month(args.month)
     prefix = PUBLIC_COMPANIES_GEOMETRY.validate_prefix(args.prefix)
+    _require_safe_legacy_shard_upload()
     descriptor = _load_descriptor(Path(args.descriptor), month)
     pinned = materialization_inputs_from_descriptor(descriptor)
     receipt = _load_receipt(Path(args.receipt), month, prefix)
@@ -410,8 +429,53 @@ def _retryable_shard_error(exc: ShardPublishError) -> bool:
     return "mismatch" not in text and "diverge" not in text
 
 
+def _require_distinct_finalize_outputs(
+    snapshot_entry_path: Path,
+    verification_path: Path,
+    manifest_path: Path,
+    descriptor_path: Path,
+    receipts_dir: Path,
+) -> None:
+    """Reject aliasing of outputs with each other or immutable inputs.
+
+    The descriptor and all 100 input shard receipts are protected before any
+    descriptor read, receipt load, or remote verification starts.
+    """
+    paths = (
+        ("descriptor", descriptor_path),
+        ("snapshot-entry", snapshot_entry_path),
+        ("verification", verification_path),
+        ("manifest", manifest_path),
+    )
+    for index, (name, path) in enumerate(paths):
+        for other_name, other in paths[index + 1 :]:
+            same_path = path.resolve() == other.resolve()
+            same_inode = path.exists() and other.exists() and path.samefile(other)
+            if same_path or same_inode:
+                raise ValueError(f"finalize output paths must be distinct: {name} and {other_name}")
+
+    # A receipt is read-only input. Guard it before _load_all_receipts so that
+    # a successful finalize cannot overwrite its own production checkpoint.
+    for prefix in PUBLIC_COMPANIES_GEOMETRY.prefixes():
+        receipt = receipts_dir / f"receipt-{prefix}.json"
+        for name, output in paths[1:]:
+            same_path = output.resolve() == receipt.resolve()
+            same_inode = output.exists() and receipt.exists() and output.samefile(receipt)
+            if same_path or same_inode:
+                raise ValueError(
+                    f"finalize output paths must be distinct: {name} and receipt-{prefix}"
+                )
+
+
 def command_finalize(args: argparse.Namespace) -> None:
     month = _require_month(args.month)
+    _require_distinct_finalize_outputs(
+        Path(args.snapshot_entry),
+        Path(args.verification),
+        Path(args.manifest),
+        Path(args.descriptor),
+        Path(args.receipts_dir),
+    )
     descriptor = _load_descriptor(Path(args.descriptor), month)
     pinned = materialization_inputs_from_descriptor(descriptor)
     receipts = _load_all_receipts(Path(args.receipts_dir), month)
@@ -474,17 +538,37 @@ def command_finalize(args: argparse.Namespace) -> None:
         )
 
     entry = finalize_sharded_snapshot_entry(descriptor, identities)
-    _write_json(Path(args.snapshot_entry), entry)
-    update_manifest(Path(args.manifest), entry)
-    _write_json(
-        Path(args.verification),
-        {
-            "month": month,
-            "base_files_verified": len(_expected_remote_files(descriptor)),
-            "company_shards_verified": len(identities),
-            "identity_source": "production-descriptor-and-pre-upload-shard-receipts",
-        },
-    )
+    snapshot_entry_path = Path(args.snapshot_entry)
+    verification_path = Path(args.verification)
+    manifest_path = Path(args.manifest)
+    # The manifest is the discovery commit point. Both local receipts must
+    # exist before it changes; a failed receipt/manifest write rolls back
+    # previous bytes instead of exposing an apparently finalized snapshot.
+    previous_documents = {
+        path: path.read_bytes() if path.exists() else None
+        for path in (snapshot_entry_path, verification_path)
+    }
+    try:
+        _write_json(snapshot_entry_path, entry)
+        _write_json(
+            verification_path,
+            {
+                "month": month,
+                "base_files_verified": len(_expected_remote_files(descriptor)),
+                "company_shards_verified": len(identities),
+                "identity_source": "production-descriptor-and-pre-upload-shard-receipts",
+            },
+        )
+        update_manifest(manifest_path, entry)
+    except Exception:
+        # Local compensation only. This is not a crash-safe transaction across
+        # three files or a remote IA promotion.
+        for path, previous in previous_documents.items():
+            if previous is None:
+                path.unlink(missing_ok=True)
+            else:
+                path.write_bytes(previous)
+        raise
     print(f"snapshot {month} finalized from production identities: 100/100 shards")
 
 
