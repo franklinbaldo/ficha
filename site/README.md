@@ -6,7 +6,9 @@ description: Publicação estática com busca client-side desacoplada e manifest
 
 # Site público FICHA (SSG Rust)
 
-Site estático construído com **SSG Rust v0.0.75**, HTML nativo, CSS e JavaScript modular para busca client-side ([Direção Ficha #269](https://github.com/franklinbaldo/ficha/issues/269)).
+Site estático construído com **SSG Rust v0.0.75**, HTML nativo, CSS e JavaScript modular para busca client-side ([Direção Ficha #269](https://github.com/franklinbaldo/ficha/issues/269)). A [#297](https://github.com/franklinbaldo/ficha/pull/297) consolidou os módulos da antiga árvore shadow `site-ssg/` em `site/`, eliminando a duplicação.
+
+**Estado de prova (18/11/2026):** o [workflow pós-merge #44347752600](https://github.com/franklinbaldo/ficha/actions/runs/44347752600), já com o ajuste do smoke na [#298](https://github.com/franklinbaldo/ficha/pull/298), concluiu build, deploy e verificação HTTP com sucesso. Isso atesta o shell publicado, JS encontrado e identidade do manifesto conforme o smoke; **não atesta consulta real** com DuckDB-WASM/Worker, CORS+Range ou Parquets arquivados. A lacuna funcional permanece na [#208](https://github.com/franklinbaldo/ficha/issues/208). Não confundir formulário com busca utilizável.
 
 ## Estrutura
 
