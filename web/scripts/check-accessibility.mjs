@@ -50,6 +50,7 @@ const expectedControls = await page.evaluate((selector) => {
       return style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0 && rect.height > 0;
     })
     .map((el, index) => {
+      const style = getComputedStyle(el);
       const id = `cobogo-a11y-${index}`;
       el.dataset.cobogoA11yId = id;
       return {
