@@ -156,9 +156,7 @@ def _download_streaming(
         if response.status_code == 206:
             _require_matching_content_range(response, existing)
         elif response.status_code != 200:
-            raise RuntimeError(
-                f"{file.name}: unexpected HTTP {response.status_code} for full GET"
-            )
+            raise RuntimeError(f"{file.name}: unexpected HTTP {response.status_code} for full GET")
 
         with target.open(mode) as fh:
             downloaded = existing
