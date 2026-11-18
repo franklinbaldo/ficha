@@ -182,7 +182,8 @@ def _without_block_comments(source: str) -> str:
         raise AssertionError("Unbalanced TypeScript block comment")
     return re.sub(
         r"/\*.*?\*/",
-        lambda match: "\n" * match.group(0).count("\n"),
+        # A comment *inside* z.object remains an invalid member (fail closed).
+        lambda match: "\n__TS_BLOCK_COMMENT__\n" + "\n" * match.group(0).count("\n"),
         source,
         flags=re.DOTALL,
     )
