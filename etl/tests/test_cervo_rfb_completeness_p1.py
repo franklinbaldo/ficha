@@ -388,9 +388,7 @@ def test_equal_name_and_size_do_not_prove_zip_byte_identity(tmp_path: Path) -> N
 
 
 @pytest.mark.parametrize("part_index", [0, 1])
-def test_invalid_source_dv_rejected_before_receipt_capture(
-    tmp_path: Path, part_index: int
-) -> None:
+def test_invalid_source_dv_rejected_before_receipt_capture(tmp_path: Path, part_index: int) -> None:
     """A coherent but malformed alphanumeric/numeric CNPJ cannot be receipted."""
     zips, _, keys = _fixture(tmp_path)
     key = keys[part_index]
