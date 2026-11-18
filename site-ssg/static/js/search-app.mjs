@@ -37,6 +37,10 @@ export function mountSearch({
 
   let sessionPromise;
   let active = false;
+  let inputVersion = 0;
+  // Keep the field editable while a query runs, but never publish an old
+  // response when the user has already edited the search text.
+  input.addEventListener('input', () => { inputVersion++; });
   const openSession = () => {
     if (!sessionPromise) {
       sessionPromise = (async () => {
@@ -74,24 +78,36 @@ export function mountSearch({
       status.textContent = 'Informe um CNPJ completo ou ao menos três caracteres da razão social.';
       return;
     }
+    const requestVersion = inputVersion;
+    const stillCurrent = () => requestVersion === inputVersion && input.value.trim() === term;
+    const discardedMessage = 'Termo alterado durante a consulta. Pesquise novamente.';
     active = true;
     submit.disabled = true;
     list.replaceChildren(); // never leave stale results visible during failures
     status.textContent = 'Preparando consulta à competência publicada…';
     try {
       const session = await openSession();
+      if (!stillCurrent()) {
+        status.textContent = discardedMessage;
+        return;
+      }
       if (!session) {
         status.textContent = 'Os dados ainda não foram publicados (manifesto ausente).';
         return;
       }
       status.textContent = 'Consultando a base analítica…';
       const rows = await query(session.db, term);
+      if (!stillCurrent()) {
+        status.textContent = discardedMessage;
+        return;
+      }
       renderCompanies(documentRef, list, rows);
       status.textContent = 'Competência ' + session.dataset.date + ': ' +
         (rows.length === 0 ? 'nenhum resultado encontrado.' :
           rows.length + (rows.length === 1 ? ' resultado encontrado.' : ' resultados encontrados.'));
     } catch (error) {
-      status.textContent = 'Consulta indisponível: ' + (error?.message || 'erro desconhecido');
+      status.textContent = stillCurrent() ?
+        'Consulta indisponível: ' + (error?.message || 'erro desconhecido') : discardedMessage;
     } finally {
       active = false;
       submit.disabled = false;
