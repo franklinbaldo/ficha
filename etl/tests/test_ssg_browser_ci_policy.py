@@ -89,9 +89,13 @@ def violations(workflow: dict, auditor: str) -> list[str]:
         if "playwright install chromium" not in browser.get("run", ""):
             errors.append("Chromium installation required")
         audit = _step(steps, "Audit actual SSG home with Chromium, axe and keyboard")
-        if audit.get("env", {}).get("FICHA_SITE_MODE") != "ssg" or not audit.get(
-            "run", ""
-        ).startswith("bun run scripts/check-accessibility.mjs "):
+        if (
+            audit.get("env", {}).get("FICHA_SITE_MODE") != "ssg"
+            or audit.get("run", "") != (
+                "bun run scripts/check-accessibility.mjs "
+                "http://127.0.0.1:4321/ficha/ ../accessibility-evidence"
+            )
+        ):
             errors.append("real browser auditor must run in SSG mode")
         upload = _step(steps, "Upload browser accessibility evidence")
         if (
@@ -178,6 +182,14 @@ def test_reject_mutations_that_restore_false_green() -> None:
     )
     audit["continue-on-error"] = True
     variants["masked failure"] = w
+    for suffix in (" || true", " || echo ignored"):
+        w = mutated()
+        audit = _step(
+            w["jobs"]["capture"]["steps"],
+            "Audit actual SSG home with Chromium, axe and keyboard",
+        )
+        audit["run"] += suffix
+        variants[f"auditor command tolerates failure: {suffix}"] = w
     w = mutated()
     _step(w["jobs"]["capture"]["steps"], "Install Chromium")["run"] = "echo chromium"
     variants["no real browser"] = w
