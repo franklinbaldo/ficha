@@ -1,7 +1,5 @@
 import { copyFile, lstat, mkdir, readFile } from 'node:fs/promises';
-import { join } from 'node:path';
 
-const root = new URL('../', import.meta.url);
 const html = new URL('../dist/ficha/index.html', import.meta.url);
 const css = new URL('../dist/ficha/css/site.css', import.meta.url);
 const source = new URL('../static/css/site.css', import.meta.url);
