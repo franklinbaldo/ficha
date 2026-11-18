@@ -105,7 +105,6 @@ def test_remote_descriptor_state_never_adopts_remote_mismatch() -> None:
     assert "cnpjs.parquet" in mismatches[0]
 
 
-
 @pytest.mark.parametrize("opposite_first", [True, False])
 @pytest.mark.parametrize("same_identity", [True, False])
 def test_remote_descriptor_rejects_duplicate_target_regardless_of_order(
