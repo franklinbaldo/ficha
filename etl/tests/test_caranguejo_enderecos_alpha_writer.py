@@ -15,7 +15,7 @@ def test_enderecos_writer_preserves_alpha_base_and_order_and_rfb(
         con.execute(
             "CREATE TABLE estabelecimento ("
             "cnpj_basico VARCHAR, cnpj_ordem VARCHAR, cnpj_dv VARCHAR, "
-            "uf VARCHAR, municipio VARCHAR, logradouro VARCHAR, "
+            "uf VARCHAR, municipio VARCHAR, logradouro VARCHAR, tipo_logradouro VARCHAR, "
             "numero VARCHAR, bairro VARCHAR, cep VARCHAR)"
         )
         con.executemany(
