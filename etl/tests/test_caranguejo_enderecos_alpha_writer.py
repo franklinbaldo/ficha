@@ -19,7 +19,9 @@ def test_enderecos_writer_preserves_alpha_base_and_order_and_rfb(
             "numero VARCHAR, bairro VARCHAR, cep VARCHAR)"
         )
         con.executemany(
-            "INSERT INTO estabelecimento VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            ("INSERT INTO estabelecimento (cnpj_basico, cnpj_ordem, cnpj_dv, uf, "
+             "municipio, logradouro, numero, bairro, cep) "
+             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"),
             [
                 (
                     "00000000",
