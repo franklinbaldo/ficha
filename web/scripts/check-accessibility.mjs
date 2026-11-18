@@ -13,14 +13,13 @@ await page.goto(url, { waitUntil: 'domcontentloaded' });
 // Preserve diagnostics even if the SSG identity or accessibility assertion fails.
 await writeFile(`${outputDir}/served-home.html`, await page.content());
 await page.screenshot({ path: `${outputDir}/home-mobile.png`, fullPage: true });
-if (process.env.FICHA_SITE_MODE === 'ssg') {
-  console.log('SSG headings:', await page.locator('h1, h2').allTextContents());
-  console.log('SSG body excerpt:', (await page.locator('body').innerText()).slice(0, 500));
-}
-
 // The SSG is intentionally static. Do not treat old Astro states as SSG evidence.
 const siteMode = process.env.FICHA_SITE_MODE ?? 'astro';
 if (siteMode === 'ssg') {
+  const charset = await page.evaluate(() => document.characterSet);
+  if (charset.toUpperCase() !== 'UTF-8') {
+    throw new Error(`SSG served with invalid charset: ${charset}`);
+  }
   await page.getByRole('heading', {
     name: 'Pesquisa por CNPJ ainda indisponível',
     exact: true,
