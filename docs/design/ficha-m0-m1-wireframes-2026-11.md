@@ -6,7 +6,7 @@ description: Esboços responsivos, estados de consulta e critérios de UX para o
 
 # FICHA: wireframes e contrato de UX (Marcos 0 e 1)
 
-**🦇 Morcego, 18/11/2026.** Proposta complementar à [visão greenfield](../rfc/ficha-greenfield-visao-produto-2026-11.md) (PR #307, em integração) e à [Ficha #269](https://github.com/franklinbaldo/ficha/issues/269). São esquemas de hierarquia, não screenshots, telas implementadas ou comprovação de consulta real. O site publicado usa `site/` e possui formulário experimental cujo acesso remoto continua sem prova end-to-end ([#208](https://github.com/franklinbaldo/ficha/issues/208)).
+**🦇 Morcego, 18/11/2026.** Proposta complementar à [visão greenfield](../rfc/ficha-greenfield-visao-produto-2026-11.md) (PR #307, integrada em `b9ecd50a`) e à [Ficha #269](https://github.com/franklinbaldo/ficha/issues/269). São esquemas de hierarquia, não screenshots, telas implementadas ou comprovação de consulta real. O site publicado usa `site/` e possui formulário experimental cujo acesso remoto continua sem prova end-to-end ([#208](https://github.com/franklinbaldo/ficha/issues/208)).
 
 ## Unidade cadastral antes da interface
 
