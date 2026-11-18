@@ -84,6 +84,15 @@ modificadores no objeto inteiro: `.partial()` tornaria todas as colunas
 opcionais sem alterar suas declarações, enquanto `.passthrough()` passaria
 a aceitar colunas adicionais. Duas contraprovas sintéticas asseguram que
 ambos os atalhos são rejeitados e exigem revisão explícita do contrato.
+O leitor estático agora recusa qualquer linha não reconhecida dentro de
+`z.object({...})`, exceto linhas vazias e comentários `//`. Antes ele
+ignorava silenciosamente uma linha `/*` ou `*/` e podia **contar como ativa**
+uma coluna situada dentro de um comentário de bloco; também ignorava spreads
+`...outrosCampos` que acrescentam colunas não declaradas. Três mutantes
+adversariais em `test_zod_static_parser_fail_closed.py` cobrem o campo
+comentado no contrato público e no gerado e um spread público. Syntax
+TypeScript nova/complexa exige revisão explícita em vez de um verde implícito.
+
 Esta proteção é estática, não execução de Zod/`safeParse`. Falha quando coluna ou tipo muda, quando surge
 uma nova incompatibilidade de nulabilidade, ou quando a lista de desvios
 deixa de descrever o estado do código, ou quando um dos sete domínios
