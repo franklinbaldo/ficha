@@ -823,6 +823,27 @@ def test_extract_all_rejects_empty_zip(tmp_path, all_zips_dir):
         transform.extract_all("2026-04", chain, tmp_path / "extracted")
 
 
+
+def test_extract_all_preserves_homonymous_members_from_two_parts(tmp_path, all_zips_dir):
+    """Different ZIPs can legitimately contain the same internal CSV name."""
+    expected = {
+        "Estabelecimentos0.zip": b"part-0-only\n",
+        "Estabelecimentos1.zip": b"part-1-only\n",
+    }
+    for zip_name, payload in expected.items():
+        with zipfile.ZipFile(all_zips_dir / zip_name, "w") as zf:
+            zf.writestr("shared.csv", payload)
+
+    chain = fetcher.ChainedFetcher(fetchers=[_ZipDirFetcher(all_zips_dir)])
+    extracted = transform.extract_all("2026-04", chain, tmp_path / "extracted")
+    paths = {entry.zip_name: entry.csv_path for entry in extracted if entry.zip_name in expected}
+
+    assert set(paths) == set(expected)
+    assert paths["Estabelecimentos0.zip"].resolve() != paths["Estabelecimentos1.zip"].resolve()
+    for zip_name, payload in expected.items():
+        assert paths[zip_name].read_bytes() == payload
+
+
 # -----------------------------------------------------------------------------
 # transform_snapshot end-to-end com strict=True (3 parquets reais)
 # -----------------------------------------------------------------------------
