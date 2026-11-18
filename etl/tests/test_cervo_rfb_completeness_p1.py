@@ -78,6 +78,9 @@ def _source_keys(zip_path: Path) -> tuple[list[str], bytes, str]:
         key = "".join(row[:3])  # RFB: basico VARCHAR8 + ordem VARCHAR4 + DV VARCHAR2
         if not KEY_RE.fullmatch(key) or any(len(f) != n for f, n in zip(row[:3], (8, 4, 2))):
             raise ValueError("invalid or non-textual source key")
+        # Test oracle checks DV too; this is not the monthly production gate.
+        if key[-2:] != _key(key[:12])[-2:]:
+            raise ValueError("invalid source CNPJ DV")
         keys.append(key)
     return keys, raw, member.filename
 
@@ -382,3 +385,17 @@ def test_equal_name_and_size_do_not_prove_zip_byte_identity(tmp_path: Path) -> N
     # That is a trust-boundary counterexample, NOT a production RFB custody test.
     receipts_b = tuple(_capture(MONTH, part, zips[part]) for part in PART_NAMES)
     _reconcile(MONTH, zips, receipts_b, [*expected[:5], key_b, *expected[6:]])
+
+
+@pytest.mark.parametrize("part_index", [0, 1])
+def test_invalid_source_dv_rejected_before_receipt_capture(
+    tmp_path: Path, part_index: int
+) -> None:
+    """A coherent but malformed alphanumeric/numeric CNPJ cannot be receipted."""
+    zips, _, keys = _fixture(tmp_path)
+    key = keys[part_index]
+    bad = key[:-1] + ("0" if key[-1] != "0" else "1")
+    assert KEY_RE.fullmatch(bad)  # format alone accepts it
+    _write_zip(zips[PART_NAMES[part_index]], [bad])
+    with pytest.raises(ValueError, match="invalid source CNPJ DV"):
+        _capture(MONTH, PART_NAMES[part_index], zips[PART_NAMES[part_index]])
