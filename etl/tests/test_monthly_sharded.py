@@ -7,6 +7,7 @@ import pytest
 from ficha_etl.monthly_sharded import (
     _remote_descriptor_state,
     materialization_inputs_from_descriptor,
+    wait_for_descriptor_remote,
 )
 from ficha_etl.shard_remote import SHARD_INPUT_NAMES
 
@@ -156,6 +157,48 @@ def test_remote_descriptor_accepts_integer_and_zero_padded_size() -> None:
     assert _remote_descriptor_state(descriptor, metadata) == ([], [])
     target["size"] = "00011"
     assert _remote_descriptor_state(descriptor, metadata) == ([], [])
+
+
+def test_wait_for_descriptor_remote_refuses_ambiguous_catalog(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The actual wait gate must not pass a last-wins catalog to finalize."""
+    descriptor = _descriptor()
+    metadata = _metadata_from_descriptor(descriptor)
+    duplicate = next(entry for entry in metadata["files"] if entry["name"] == "cnpjs.parquet").copy()
+    duplicate["sha1"] = "0" * 40
+    metadata["files"].insert(0, duplicate)
+    calls: list[str] = []
+
+    def fake_fetch(month: str) -> dict:
+        calls.append(month)
+        return metadata
+
+    monkeypatch.setattr("ficha_etl.monthly_sharded.fetch_item_metadata", fake_fetch)
+    monkeypatch.setattr("ficha_etl.monthly_sharded.time.sleep", lambda _: None)
+    with pytest.raises(RuntimeError, match=r"cnpjs\\.parquet \\(duplicado\\)"):
+        wait_for_descriptor_remote("2026-06", descriptor, attempts=2, interval_s=0)
+    assert calls == ["2026-06", "2026-06"]
+
+
+def test_wait_for_descriptor_remote_retries_then_accepts_unambiguous_catalog(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A transient ambiguous view can recover, without adopting either duplicate."""
+    descriptor = _descriptor()
+    valid = _metadata_from_descriptor(descriptor)
+    ambiguous = {"files": [*valid["files"], valid["files"][0].copy()]}
+    catalogs = iter((ambiguous, valid))
+    calls: list[str] = []
+
+    def fake_fetch(month: str) -> dict:
+        calls.append(month)
+        return next(catalogs)
+
+    monkeypatch.setattr("ficha_etl.monthly_sharded.fetch_item_metadata", fake_fetch)
+    monkeypatch.setattr("ficha_etl.monthly_sharded.time.sleep", lambda _: None)
+    assert wait_for_descriptor_remote("2026-06", descriptor, attempts=2, interval_s=0) is valid
+    assert calls == ["2026-06", "2026-06"]
 
 
 def test_monthly_workflow_persists_receipts_before_remote_writes() -> None:
