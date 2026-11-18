@@ -1,5 +1,6 @@
 import { archiveView, archivalFileEntries, catalogueTotals, competenceLabel,
-  fetchManifest, formatBytes, safeExternalURL, snapshotsDescending } from './catalog.mjs';
+  countKinds, fetchManifest, formatBytes, rowCountSeries, safeExternalURL,
+  snapshotsDescending } from './catalog.mjs';
 import { canonicalCnpj, compareRecords, displayValue, fetchRecordAt, RECORD_FIELDS } from './record.mjs';
 
 const BASE = '/ficha/';
@@ -211,7 +212,8 @@ export function renderArchiveSelection(doc, parent, manifest, date) {
     add(doc,head,'span',formatBytes(file.size));
     const body=add(doc,detail,'div','','archive-detail');
     if(file.sha256) add(doc,body,'code','SHA-256 declarado: '+file.sha256);
-    else add(doc,body,'p','Digest SHA-256 não declarado.');
+    else if(file.sha1) add(doc,body,'code','SHA-1 declarado: '+file.sha1);
+    else add(doc,body,'p','Digest não declarado.');
     if(file.url) anchor(doc,body,'Abrir arquivo no repositório de origem',file.url,true);
     else add(doc,body,'p','URL HTTPS não declarada.');
   }
@@ -269,15 +271,40 @@ export function renderExploreAssets(doc,parent,manifest,date,filter='') {
   if(!entries.length) add(doc,parent,'p','Nenhum conjunto corresponde ao filtro.');
 }
 
+export function renderCountSeries(doc,parent,manifest,kind) {
+  parent.replaceChildren();
+  const rows=rowCountSeries(manifest,kind);
+  const max=Math.max(1,...rows.map(row=>row.count ?? 0));
+  const fmt=new Intl.NumberFormat('pt-BR');
+  for(const row of rows) {
+    const item=add(doc,parent,'div','','series-row');
+    const header=add(doc,item,'div','','series-label');
+    add(doc,header,'span',row.date,'mono');
+    add(doc,header,'strong',row.count===null ? 'Não declarado' : fmt.format(row.count)+' linhas');
+    const track=add(doc,item,'div','','series-track');
+    const bar=add(doc,track,'span','','series-bar');
+    bar.style.width=(row.count===null ? 0 : Math.max(1,Math.round(100*row.count/max)))+'%';
+    track.setAttribute('role','img');
+    track.setAttribute('aria-label',row.date+': '+(row.count===null ? 'não declarado' : fmt.format(row.count)+' linhas'));
+  }
+}
+
 export async function mountExplore(doc,{loadManifest=fetchManifest}={}) {
   const select=byId(doc,'explorar-competencia'), filter=byId(doc,'explorar-filtro');
   const state=byId(doc,'explorar-estado'), output=byId(doc,'explorar-grafico');
   const counter=byId(doc,'explorar-contador');
-  if(![select,filter,state,output,counter].every(Boolean)) return;
+  const kindSelect=byId(doc,'explorar-serie'), series=byId(doc,'explorar-serie-grafico');
+  if(![select,filter,state,output,counter,kindSelect,series].every(Boolean)) return;
   try{
     const manifest=await loadManifest();
     const snaps=snapshotsDescending(manifest);
     populateDateSelect(doc,select,manifest,params().get('competencia') || manifest.current);
+    const kinds=countKinds(manifest);
+    for(const kind of kinds) option(doc,kindSelect,kind,kind.replaceAll('_',' '));
+    if(kinds.includes('cnpjs')) kindSelect.value='cnpjs';
+    const repaintSeries=()=>renderCountSeries(doc,series,manifest,kindSelect.value);
+    kindSelect.addEventListener('change',repaintSeries);
+    repaintSeries();
     const paint=()=>{
       const snap=snaps.find(s=>s.date===select.value);
       const totals=catalogueTotals(snap);
