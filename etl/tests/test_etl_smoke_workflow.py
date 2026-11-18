@@ -31,7 +31,10 @@ def _pr_is_fixture_only(workflow: dict) -> bool:
     """
     if set(workflow["jobs"]) != {"smoke"}:
         return False
-    steps = workflow["jobs"]["smoke"]["steps"]
+    smoke_job = workflow["jobs"]["smoke"]
+    if smoke_job.get("continue-on-error") not in (None, False):
+        return False
+    steps = smoke_job["steps"]
     if len(steps) != 8:
         return False
 
@@ -61,6 +64,7 @@ def _pr_is_fixture_only(workflow: dict) -> bool:
         and fixture == expected_fixture
         and live.get("name") == "Run smoke check"
         and live.get("if") == OPERATIONAL
+        and live.get("continue-on-error") in (None, False)
         and "ficha-etl smoke" in live.get("run", "")
         and freshness.get("name") == "Check manifest freshness"
         and freshness.get("if") == OPERATIONAL
@@ -126,4 +130,16 @@ def test_negative_mutations_detect_real_network_reintroduction() -> None:
         "runs-on": "ubuntu-latest",
         "steps": [{"run": "uv run ficha-etl smoke"}],
     }
+    assert not _pr_is_fixture_only(mutated)
+
+
+def test_negative_mutation_rejects_nonblocking_operational_step() -> None:
+    mutated = deepcopy(_load())
+    _steps(mutated)["Run smoke check"]["continue-on-error"] = True
+    assert not _pr_is_fixture_only(mutated)
+
+
+def test_negative_mutation_rejects_nonblocking_operational_job() -> None:
+    mutated = deepcopy(_load())
+    mutated["jobs"]["smoke"]["continue-on-error"] = True
     assert not _pr_is_fixture_only(mutated)
