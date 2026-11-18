@@ -140,7 +140,9 @@ def classify_remote_shard(
     matches = [candidate for candidate in files if candidate.get("name") == name]
     if len(matches) > 1:
         return ShardReuseVerdict(
-            name, ShardReuseState.UNKNOWN, "arquivo duplicado na lista files"
+            name,
+            ShardReuseState.UNKNOWN,
+            "arquivo duplicado na lista files",
         )
     if not matches:
         return ShardReuseVerdict(name, ShardReuseState.ABSENT, "ausente em lista files válida")
