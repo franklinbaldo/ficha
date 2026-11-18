@@ -757,8 +757,8 @@ class _ZipDirFetcher:
 def _build_full_fixture_zips(zips_dir: Path) -> None:
     """Cria os 37 ZIPs canônicos com fixtures realistas.
 
-    Internal filename é único por ZIP (spec.name sem .zip + sufixo) pra que
-    extrações múltiplas pra mesma pasta não se sobrescrevam.
+    O nome interno deriva do nome canônico para identificar as fixtures.
+    A extração não depende de nomes internos distintos entre ZIPs.
     """
     zips_dir.mkdir(parents=True, exist_ok=True)
 
@@ -784,7 +784,7 @@ def _build_full_fixture_zips(zips_dir: Path) -> None:
         if spec.kind in seen_kinds:
             rows = []
         seen_kinds.add(spec.kind)
-        # Internal filename único por ZIP — evita colisão na extração.
+        # Filename identificável por fixture; colisões cross-ZIP têm teste próprio.
         inside = f"{spec.name.removesuffix('.zip')}.CSV"
         _zip_with_csv(zp, inside, rows)
 
