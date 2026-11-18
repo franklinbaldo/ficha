@@ -125,9 +125,7 @@ def _pr_is_fixture_only(workflow: dict) -> bool:
     expected_fixture = {
         "name": "PR smoke with fixtures",
         "if": PR,
-        "run": (
-            "uv run --extra dev pytest -q tests/test_smoke.py tests/test_cli.py -k smoke"
-        ),
+        "run": ("uv run --extra dev pytest -q tests/test_smoke.py tests/test_cli.py -k smoke"),
     }
     return (
         upstream.get("name") == "Upstream latest snapshot (list-snapshots)"
@@ -152,9 +150,7 @@ def test_pr_runs_http_fixtures_without_live_upstream_or_ia() -> None:
 
 def test_weekly_and_manual_smoke_remain_live_and_block_on_failure() -> None:
     workflow = _load()
-    events = workflow.get(
-        "on", workflow.get(True)
-    )  # PyYAML YAML 1.1 treats 'on' as bool.
+    events = workflow.get("on", workflow.get(True))  # PyYAML YAML 1.1 treats 'on' as bool.
     assert "pull_request" in events
     assert "workflow_dispatch" in events
     assert events["schedule"] == [{"cron": "0 6 * * 1"}]
@@ -179,9 +175,7 @@ def test_negative_mutations_detect_real_network_reintroduction() -> None:
         step["if"] = "always()"
         assert not _pr_is_fixture_only(mutated), step_name
     mutated = deepcopy(original)
-    _steps(mutated)["PR smoke with fixtures"]["if"] = (
-        "github.event_name != 'pull_request'"
-    )
+    _steps(mutated)["PR smoke with fixtures"]["if"] = "github.event_name != 'pull_request'"
     assert not _pr_is_fixture_only(mutated)
     mutated = deepcopy(original)
     _steps(mutated)["PR smoke with fixtures"]["run"] = "echo green"
@@ -276,9 +270,7 @@ def test_negative_mutation_rejects_echo_instead_of_live_probe() -> None:
 def test_negative_mutation_rejects_live_rc_reset() -> None:
     mutated = deepcopy(_load())
     live = _steps(mutated)["Run smoke check"]
-    live["run"] = live["run"].replace(
-        "rc=${PIPESTATUS[0]}", "rc=${PIPESTATUS[0]}\nrc=0"
-    )
+    live["run"] = live["run"].replace("rc=${PIPESTATUS[0]}", "rc=${PIPESTATUS[0]}\nrc=0")
     assert not _pr_is_fixture_only(mutated)
 
 
