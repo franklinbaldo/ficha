@@ -162,12 +162,17 @@ def _zod_fields(source: str, *, quoted: bool) -> dict[str, str]:
         else r"^\s*(\w+):\s*(z\..+),$"
     )
     for line in source.splitlines():
-        parsed = re.match(pattern, line)
-        if parsed is not None:
-            name, value = parsed.groups()
-            if name in fields:
-                raise AssertionError(f"Duplicate Zod field: {name}")
-            fields[name] = value.removesuffix(",")
+        if not line.strip() or line.lstrip().startswith("//"):
+            continue
+        parsed = re.fullmatch(pattern, line)
+        if parsed is None:
+            raise AssertionError(
+                f"Unrecognized Zod object member; review static guard: {line}"
+            )
+        name, value = parsed.groups()
+        if name in fields:
+            raise AssertionError(f"Duplicate Zod field: {name}")
+        fields[name] = value.removesuffix(",")
     return fields
 
 
