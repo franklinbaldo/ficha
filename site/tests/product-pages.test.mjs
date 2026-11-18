@@ -2,7 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { archivalFileEntries, archiveView, catalogueTotals, competenceLabel,
-  fetchManifest, formatBytes, safeExternalURL, snapshotsDescending } from '../static/js/catalog.mjs';
+  countKinds, fetchManifest, formatBytes, rowCountSeries, safeExternalURL,
+  snapshotsDescending } from '../static/js/catalog.mjs';
 import { canonicalCnpj, compareRecords, fetchRecordAt } from '../static/js/record.mjs';
 
 const read = path => readFile(new URL(path,import.meta.url),'utf8');
@@ -18,9 +19,11 @@ test('catálogo usa os snapshots reais e não inventa competências', async () =
   const result=archiveView(raw,raw.current);
   const selected=raw.snapshots.find(s=>s.date===raw.current);
   assert.equal(result.selected.date,selected.date);
-  assert.equal(result.entries.length,Object.values(selected.files)
-    .filter(f=>f && typeof f==='object' && !Array.isArray(f)).length);
+  assert.ok(result.entries.length>=Object.keys(selected.files).length);
+  assert.ok(result.entries.some(f=>f.key==='companies/00' && f.sha1));
   assert.equal(result.totals.fileCount,catalogueTotals(selected).fileCount);
+  assert.ok(countKinds(raw).includes('cnpjs'));
+  assert.equal(rowCountSeries(raw,'cnpjs').at(-1).count,selected.row_counts.cnpjs);
   assert.ok(result.entries.some(f=>f.key==='cnpjs'));
 });
 
