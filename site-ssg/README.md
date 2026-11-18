@@ -21,14 +21,15 @@ Usar exatamente **ssg 0.0.75**, como no Conde, arquivo `ssg-v0.0.75-x86_64-unkno
 A partir da raiz de `site-ssg/`, com Node 22 e o binário verificado no `PATH`:
 
 ```sh
-node --test tests/source.test.mjs
+node --test tests/*.test.mjs
 ssg check --config config.toml
 ssg build --config config.toml
+node scripts/remove-ssg-manifest.mjs
 node scripts/materialize-assets.mjs
 node scripts/check-built.mjs
 ```
 
-**Este commit não tem prova de build real:** SSG/Chromium/Prek/OKF permanecem NOT_RUN até a execução em executor autorizado e no SHA exato. A fonte `static/css/site.css` é copiada somente depois de o SSG produzir o HTML. O verificador exige prefixo `/ficha/`, páginas inicial e Sobre e CSS; falha se aparecer manifesto incompatível com o contrato da Receita. Não mascarar o erro de manifest já observado na PoC #257 apenas porque `ssg build` retorna zero.
+**Gate shadow:** `.github/workflows/site-ssg-shadow.yml` executa Node 22 e SSG Rust 0.0.75 com SHA-256 fixado, no SHA exato da PR, sem deploy. Consulte o resultado e os steps do workflow antes de afirmar PASS. Chromium, paridade da busca, Prek/OKF e publicação permanecem gates separados. A fonte `static/css/site.css` é copiada somente depois de o SSG produzir o HTML. O verificador exige prefixo `/ficha/`, páginas inicial e Sobre e CSS; falha se aparecer manifesto incompatível com o contrato da Receita. Não mascarar o erro de manifest já observado na PoC #257 apenas porque `ssg build` retorna zero.
 
 ## Próximas fatias antes da troca
 
@@ -37,4 +38,4 @@ node scripts/check-built.mjs
 3. Comparar resultados da busca atual e nova com fixtures comuns, negativos de rede, Chromium 320/375/1440 e axe; medir KB sem confundir shell com busca completa; testar rollback com artifact real.
 4. Só depois abrir PR de corte do Pages com revisão independente e gates. Remover Astro/Svelte/Bun quando a busca nova realmente substituir a antiga. Não mudar ETL, IA, cron nem promover manifesto.
 
-O arquivo `manifest.json` do gerador, se existir, **não é** o `manifest.json` da RFB. O check rejeita um PWA manifest no lugar do contrato público. Não existe plano de colocar dados sintéticos no Pages.
+O gerador SSG 0.0.75 **emite** um `manifest.json` PWA em `dist/ficha/manifest.json`, confirmado em build real no CI. `remove-ssg-manifest.mjs` exige igualdade estrutural exata com o PWA observado e só então o apaga **na saída shadow**. Testes negativos comprovam que o manifesto de dados da RFB, payloads inesperados e symlinks são preservados com falha explícita; a ausência do PWA é tolerada. Não se cria nem se publica um manifesto RFB nesta PR. O check final rejeita qualquer PWA remanescente. Não existe plano de colocar dados sintéticos no Pages.
