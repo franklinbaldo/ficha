@@ -63,8 +63,25 @@ for (const viewport of viewports) {
         throw new Error(`technical error leaked into the visible recovery state: ${forbidden}`);
       }
     }
-    if (!bodyText.includes('manifest.json')) {
-      throw new Error('recovery state does not expose the public manifest.json alternative');
+    // The page has another manifest.json link outside the failure state.
+    // Checking body text alone is a false positive when recovery disappears
+    // or its insertion lags behind the status update on a narrow viewport.
+    const recovery = page.locator('[data-remote-recovery]');
+    await recovery.waitFor({ state: 'visible', timeout: 5_000 });
+    const links = recovery.locator('a');
+    if (await links.count() !== 1) {
+      throw new Error('recovery state must expose exactly one visible manifest link');
+    }
+    const link = links.first();
+    const href = await link.getAttribute('href');
+    const expectedPath = new URL('./manifest.json', page.url()).pathname;
+    if (!href || new URL(href, page.url()).pathname !== expectedPath ||
+        (await link.textContent())?.trim() !== 'manifest.json') {
+      throw new Error('recovery link does not point to the published manifest.json');
+    }
+    bodyText = await page.locator('body').innerText();
+    if (bodyText.split('\n').some((line) => line.trim().startsWith('Erro:'))) {
+      throw new Error('raw initialization error reappeared after recovery became visible');
     }
   }
 
