@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import json
 from pathlib import Path
 
@@ -7,7 +8,9 @@ import pytest
 
 from ficha_etl.monthly_sharded import (
     _load_descriptor,
+    _load_receipt,
     _remote_descriptor_state,
+    command_finalize,
     materialization_inputs_from_descriptor,
     wait_for_descriptor_remote,
 )
@@ -267,6 +270,41 @@ def test_shard_receipt_accepts_integral_size(
     path.write_text(json.dumps(receipt), encoding="utf-8")
 
     assert _load_receipt(path, "2026-06", "00") == receipt
+
+
+def test_finalize_rejects_malformed_receipt_before_remote_probe(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The finalizer must reject local receipt identity before contacting IA."""
+    descriptor_path = tmp_path / "descriptor.json"
+    descriptor_path.write_text(json.dumps(_descriptor()), encoding="utf-8")
+    receipts_dir = tmp_path / "receipts"
+    receipts_dir.mkdir()
+    receipt = _valid_shard_receipt()
+    receipt["size"] = 11.9
+    (receipts_dir / "receipt-00.json").write_text(json.dumps(receipt), encoding="utf-8")
+    calls: list[str] = []
+
+    def must_not_fetch(*args: object, **kwargs: object) -> None:
+        calls.append("remote")
+        raise AssertionError("invalid local receipt must not touch remote metadata")
+
+    monkeypatch.setattr(
+        "ficha_etl.monthly_sharded.wait_for_descriptor_remote", must_not_fetch
+    )
+    args = argparse.Namespace(
+        month="2026-06",
+        descriptor=str(descriptor_path),
+        receipts_dir=str(receipts_dir),
+        snapshot_entry=str(tmp_path / "snapshot.json"),
+        verification=str(tmp_path / "verification.json"),
+        manifest=str(tmp_path / "manifest.json"),
+        attempts=2,
+        interval_seconds=0,
+    )
+    with pytest.raises(ValueError, match="invalid byte identity in receipt"):
+        command_finalize(args)
+    assert calls == []
 
 
 def test_monthly_workflow_persists_receipts_before_remote_writes() -> None:
