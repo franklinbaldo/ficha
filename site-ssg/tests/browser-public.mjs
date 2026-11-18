@@ -28,7 +28,17 @@ try {
       serviceWorkers: 'block',
     });
     page.setDefaultTimeout(15000);
-    const report = {viewport, status: 'NOT_RUN', console: [], failures: [], archiveRequests: []};
+    const report = {viewport, status: 'NOT_RUN', console: [], failures: [], archiveRequests: [], blockedArchiveRequests: []};
+    // The live Astro app may request many ranges or even a full Parquet if CORS
+    // becomes available. Block that application's Archive traffic. A separate
+    // sterile page below performs the *only* permitted remote one-byte probe.
+    await page.route(/^https:\/\/[^/]*archive\.org\//, async route => {
+      report.blockedArchiveRequests.push({
+        url: route.request().url(),
+        range: route.request().headers().range ?? null,
+      });
+      await route.abort('blockedbyclient');
+    });
     page.on('console', message => {
       const line = `${message.type()}: ${message.text()}`;
       if (/cors|archive\.org|parquet|duckdb|error/i.test(line)) report.console.push(line.slice(0, 500));
@@ -79,7 +89,16 @@ try {
       // This is a genuine browser CORS/Range probe of ONE BYTE.
       // Do not read, buffer or download the Parquet.
       if (manifest.parquetUrl && Number.isSafeInteger(manifest.parquetSize)) {
-        report.rangeProbe = await page.evaluate(async url => {
+        // Synthetic document *at the real Pages origin*: no Astro script can
+        // race this probe, and only the explicit bytes=0-0 fetch reaches IA.
+        const probePage = await browser.newPage({serviceWorkers:'block'});
+        try {
+          await probePage.route(publicUrl, route => route.fulfill({
+            status:200, contentType:'text/html',
+            body:'<!doctype html><html lang="pt-BR"><title>Probe</title></html>',
+          }));
+          await probePage.goto(publicUrl, {waitUntil:'domcontentloaded'});
+          report.rangeProbe = await probePage.evaluate(async url => {
           const controller = new AbortController();
           const deadline = setTimeout(() => controller.abort(), 10000);
           try {
@@ -99,7 +118,10 @@ try {
             return {blocked: true, errorName: error?.name ?? 'Error',
               message: String(error?.message ?? error).slice(0, 240)};
           } finally { clearTimeout(deadline); }
-        }, manifest.parquetUrl);
+          }, manifest.parquetUrl);
+        } finally {
+          await probePage.close();
+        }
       }
 
       // Give initialization a chance to reach a terminal user-visible state.
