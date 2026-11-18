@@ -53,27 +53,21 @@ def violations(workflow: dict, auditor: str) -> list[str]:
         errors.append("first step must check out source")
         return errors
     checkout = steps[0].get("with") or {}
-    if (
-        checkout.get("ref") != EXPECTED_SHA
-        or checkout.get("persist-credentials") is not False
-    ):
+    if checkout.get("ref") != EXPECTED_SHA or checkout.get("persist-credentials") is not False:
         errors.append("checkout must pin PR head and discard credentials")
     if any(s.get("continue-on-error") or s.get("if") == "${{ false }}" for s in steps):
         errors.append("no failure-masking or disabled steps")
     try:
         sha_step = _step(steps, "Conferir SHA do checkout")
         sha_command = 'test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"'
-        if (
-            sha_step.get("env", {}).get("EXPECTED_SHA") != EXPECTED_SHA
-            or sha_command not in sha_step.get("run", "")
-        ):
+        if sha_step.get("env", {}).get(
+            "EXPECTED_SHA"
+        ) != EXPECTED_SHA or sha_command not in sha_step.get("run", ""):
             errors.append("checkout SHA must actually be compared")
         install = _step(steps, "Install pinned SSG Rust and verify SHA-256")
-        if (
-            "f6305109e9bec5895e9c90f97a5c569c74048b3d50823d40175e15ca99c50843"
-            not in install.get("run", "")
-            or "sha256sum --check -" not in install.get("run", "")
-        ):
+        if "f6305109e9bec5895e9c90f97a5c569c74048b3d50823d40175e15ca99c50843" not in install.get(
+            "run", ""
+        ) or "sha256sum --check -" not in install.get("run", ""):
             errors.append("SSG v0.0.75 artifact must be digest pinned")
         build = _step(steps, "Build the published SSG artifact (not Astro)")
         cmd = build.get("run", "")
@@ -87,21 +81,15 @@ def violations(workflow: dict, auditor: str) -> list[str]:
         ):
             errors.append("must build and finalize the real SSG Pages artifact")
         serve = _step(steps, "Serve built Pages artifact locally")
-        if (
-            "site/dist/ficha/." not in serve.get("run", "")
-            or "web/dist" in serve.get("run", "")
-        ):
+        if "site/dist/ficha/." not in serve.get("run", "") or "web/dist" in serve.get("run", ""):
             errors.append("must serve site/dist, not historical Astro")
         browser = _step(steps, "Install Chromium")
         if "playwright install chromium" not in browser.get("run", ""):
             errors.append("Chromium installation required")
         audit = _step(steps, "Audit actual SSG home with Chromium, axe and keyboard")
-        if (
-            audit.get("env", {}).get("FICHA_SITE_MODE") != "ssg"
-            or not audit.get("run", "").startswith(
-                "bun run scripts/check-accessibility.mjs "
-            )
-        ):
+        if audit.get("env", {}).get("FICHA_SITE_MODE") != "ssg" or not audit.get(
+            "run", ""
+        ).startswith("bun run scripts/check-accessibility.mjs "):
             errors.append("real browser auditor must run in SSG mode")
         upload = _step(steps, "Upload browser accessibility evidence")
         if (
@@ -149,9 +137,7 @@ def test_reject_mutations_that_restore_false_green() -> None:
     sha_check["run"] = 'echo "$(git rev-parse HEAD)"'
     variants["fake SHA check"] = w
     w = mutated()
-    build = _step(
-        w["jobs"]["capture"]["steps"], "Build the published SSG artifact (not Astro)"
-    )
+    build = _step(w["jobs"]["capture"]["steps"], "Build the published SSG artifact (not Astro)")
     build["run"] = "echo ssg build"
     variants["fake SSG build"] = w
     w = mutated()
