@@ -309,7 +309,6 @@ def test_zip_repack_same_csv_changes_zip_identity(tmp_path: Path) -> None:
         _reconcile(MONTH, zips, receipts, keys)
 
 
-
 def test_other_run_receipt_rejected_even_with_same_competence(tmp_path: Path) -> None:
     zips, receipts, keys = _fixture(tmp_path)
     mismatched = (replace(receipts[0], run_id="synthetic-rfb-ingest-b"), *receipts[1:])
