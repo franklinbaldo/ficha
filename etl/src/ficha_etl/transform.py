@@ -116,7 +116,11 @@ def extract_all(
         for i, spec in enumerate(inventory, 1):
             t0 = time.monotonic()
             zip_path = zip_paths[spec.name]
-            kind_dir = extract_dir / spec.kind
+            # Give each canonical ZIP its own extraction root: different RFB
+            # parts may contain a member with the same internal filename.
+            # A shared kind directory would overwrite the earlier part before
+            # DuckDB reads it, silently duplicating the later part instead.
+            kind_dir = extract_dir / spec.kind / spec.name
             extracted = extract_zip(zip_path, kind_dir)
             files = [p for p in extracted if p.is_file()]
             if not files:
