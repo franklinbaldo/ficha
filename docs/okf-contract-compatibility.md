@@ -78,7 +78,13 @@ Parquet físico, o contrato publicado ou a RFC 0001 aceita.
 ## Garantias e lacunas do teste isolado
 
 O teste Python de biblioteca padrão compara as declarações SQL do OKF com
-os schemas Zod v1 e gerado. Falha quando coluna ou tipo muda, quando surge
+os schemas Zod v1 e gerado. Além dos campos individuais, fixa que cada
+schema público v1 é exportado diretamente como `z.object({...});`, sem
+modificadores no objeto inteiro: `.partial()` tornaria todas as colunas
+opcionais sem alterar suas declarações, enquanto `.passthrough()` passaria
+a aceitar colunas adicionais. Duas contraprovas sintéticas asseguram que
+ambos os atalhos são rejeitados e exigem revisão explícita do contrato.
+Esta proteção é estática, não execução de Zod/`safeParse`. Falha quando coluna ou tipo muda, quando surge
 uma nova incompatibilidade de nulabilidade, ou quando a lista de desvios
 deixa de descrever o estado do código, ou quando um dos sete domínios
 enum públicos muda sem revisão. Inclui cinco controles negativos em memória
