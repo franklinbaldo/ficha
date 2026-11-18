@@ -77,8 +77,10 @@ def _pr_is_fixture_only(workflow: dict) -> bool:
         and live.get("if") == OPERATIONAL
         and live.get("continue-on-error") in (None, False)
         and "ficha-etl smoke" in live.get("run", "")
+        and "|| true" not in live.get("run", "")
         and freshness.get("name") == "Check manifest freshness"
         and freshness.get("if") == OPERATIONAL
+        and freshness.get("continue-on-error") in (None, False)
     )
 
 
@@ -178,4 +180,19 @@ def test_negative_mutation_rejects_pr_event_scope_changes() -> None:
 
     mutated = deepcopy(original)
     mutated.get("on", mutated.get(True))["pull_request_target"] = {}
+    assert not _pr_is_fixture_only(mutated)
+
+
+def test_negative_mutation_rejects_masked_live_smoke_pipeline() -> None:
+    mutated = deepcopy(_load())
+    live = _steps(mutated)["Run smoke check"]
+    command = 'uv run ficha-etl smoke 2>&1 | tee smoke-output.txt | tee -a "$GITHUB_STEP_SUMMARY"'
+    assert command in live["run"]
+    live["run"] = live["run"].replace(command, command + " || true")
+    assert not _pr_is_fixture_only(mutated)
+
+
+def test_negative_mutation_rejects_nonblocking_freshness_alarm() -> None:
+    mutated = deepcopy(_load())
+    _steps(mutated)["Check manifest freshness"]["continue-on-error"] = True
     assert not _pr_is_fixture_only(mutated)
