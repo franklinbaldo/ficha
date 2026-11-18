@@ -18,7 +18,7 @@ jobs:
   build-shadow:
     name: SSG Rust source and output contract
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 15
     defaults:
       run:
         shell: bash
@@ -68,6 +68,12 @@ jobs:
         run: |
           node scripts/materialize-assets.mjs
           node scripts/check-built.mjs
+
+      - name: Chromium on generated shadow (offline 404 and 500 only)
+        run: |
+          npm install --no-save --package-lock=false playwright@1.54.2
+          npx playwright install chromium --with-deps
+          node tests/browser-shadow.mjs
 
       - name: Confirm no publishing happened
         run: |
