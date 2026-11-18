@@ -37,6 +37,17 @@ o Zod OKF gerado só aceita em 4, 0 e 4, respectivamente. Em especial:
   são nullable somente no público. O exemplo OKF contém um sócio PJ,
   insuficiente para inferir todos os casos PF/estrangeiro.
 
+**Guard adicional do contrato público v1 (18/11/2026):** a lista de
+campos que aceitam `null` é agora fixada independentemente do diff entre Zods:
+26 em Cnpj, 1 em Raiz e 9 em Socio. O inventário de 28 divergências,
+sozinho, não detectava a mudança **simultânea** dos dois contratos (por
+exemplo, `cnpj` passando a `.nullable()` em ambos, ou
+`cpf_mascarado` deixando de aceitar `null` em ambos). Dois testes
+adversariais demonstram essa lacuna no comparador antigo; o novo gate
+exige revisão explícita quando o conjunto público de nulabilidade muda.
+Isto não valida valores reais, `safeParse` nem nulabilidade física do
+Parquet e não altera a escolha de versão feita por consumidores.
+
 Os 28 desacordos aparecem em
 `knowledge/tests/test_contract_compatibility.py` como inventário explícito
 de **dívida existente**, não autorização para aceitar linhas através do Zod
