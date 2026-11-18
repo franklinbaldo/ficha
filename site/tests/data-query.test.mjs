@@ -7,6 +7,10 @@ import { planCompanyQuery, queryCompanies, attachAnalyticalFiles } from '../stat
 const fixture = async () => JSON.parse(await readFile(
   new URL('../../web/public/manifest.json', import.meta.url), 'utf8'));
 
+const oneByteBody = () => new ReadableStream({
+  start(controller) { controller.enqueue(Uint8Array.of(0x50)); controller.close(); },
+});
+
 test('usa a competência current do manifesto verdadeiro da aplicação', async () => {
   const raw = await fixture();
   const selected = currentDataset(raw);
@@ -114,9 +118,7 @@ test('paridade com Astro: curingas não convertem busca textual em CNPJ exato', 
 test('probe remoto pede somente um byte e exige CORS/206/Content-Range visível', async () => {
   const entry = currentDataset(await fixture()).files.cnpjs;
   const calls = [];
-  const oneByteBody = () => new ReadableStream({
-    start(controller) { controller.enqueue(Uint8Array.of(0x50)); controller.close(); },
-  });
+  
   const success = async (url, options) => {
     calls.push([url, options]);
     return {status: 206,
