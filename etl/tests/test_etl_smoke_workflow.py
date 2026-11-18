@@ -32,7 +32,6 @@ exit "$rc"
 """
 
 
-
 def _load() -> dict:
     return yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
 
