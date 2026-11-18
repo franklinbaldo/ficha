@@ -58,6 +58,12 @@ const expectedControls = await page.evaluate((selector) => {
         href: el.getAttribute('href'),
         name: el.getAttribute('name'),
         text: (el.textContent || '').trim().slice(0, 80),
+        unfocusedStyle: {
+          outline: `${style.outlineStyle} ${style.outlineWidth} ${style.outlineColor}`,
+          boxShadow: style.boxShadow,
+          border: `${style.borderWidth} ${style.borderColor}`,
+          background: style.backgroundColor,
+        },
       };
     });
 }, interactiveSelector);
@@ -76,26 +82,64 @@ for (let i = 0; i < expected + 4; i += 1) {
     const style = getComputedStyle(el);
     const rect = el.getBoundingClientRect();
     const id = el.dataset.cobogoA11yId || null;
-    const visibleIndicator = style.outlineStyle !== 'none' && parseFloat(style.outlineWidth || '0') > 0 ||
-      style.boxShadow !== 'none' || parseFloat(style.borderWidth || '0') > 0;
+    const focusedStyle = {
+      outline: `${style.outlineStyle} ${style.outlineWidth} ${style.outlineColor}`,
+      outlineVisible: style.outlineStyle !== 'none' && parseFloat(style.outlineWidth || '0') > 0,
+      boxShadow: style.boxShadow,
+      border: `${style.borderWidth} ${style.borderColor}`,
+      background: style.backgroundColor,
+    };
     return {
       id,
       tag: el.tagName,
       href: el.getAttribute('href'),
       name: el.getAttribute('name'),
       text: (el.textContent || '').trim().slice(0, 80),
-      visibleIndicator,
+      focusedStyle,
       width: rect.width,
       height: rect.height,
     };
   });
   if (!focus) continue;
   if (focus.id) visited.add(focus.id);
+  const unfocused = expectedControls.find((control) => control.id === focus.id)?.unfocusedStyle;
+  const focused = focus.focusedStyle;
+  // A permanent border or shadow is not a keyboard-focus indicator.
+  const outlineChanged = focused.outlineVisible && focused.outline !== unfocused?.outline;
+  const shadowChanged = focused.boxShadow !== 'none' && focused.boxShadow !== unfocused?.boxShadow;
+  const borderChanged = unfocused && focused.border !== unfocused.border;
+  const backgroundChanged = unfocused && focused.background !== unfocused.background;
+  focus.visibleIndicator = Boolean(unfocused && (
+    outlineChanged || shadowChanged || borderChanged || backgroundChanged
+  ));
   focusTrace.push(focus);
   if (!focus.visibleIndicator) invisibleFocus += 1;
 }
 
 const unreachedControls = expectedControls.filter((control) => !visited.has(control.id));
+let skipLinkResult = null;
+if (siteMode === 'ssg') {
+  // A skip link that is visible on Tab but does not move the keyboard path is broken.
+  await page.goto(url, { waitUntil: 'domcontentloaded' });
+  await page.keyboard.press('Tab');
+  const skipLinkFocused = await page.evaluate(() =>
+    document.activeElement?.matches('a.skip-link[href="#main"]') === true
+  );
+  await page.keyboard.press('Enter');
+  const skipTargetFocused = await page.evaluate(() =>
+    location.hash === '#main' && document.activeElement?.id === 'main'
+  );
+  await page.keyboard.press('Tab');
+  const nextTabInsideMain = await page.evaluate(() =>
+    document.querySelector('main')?.contains(document.activeElement) === true
+  );
+  skipLinkResult = {
+    skip_link_focused: skipLinkFocused,
+    main_focused_after_enter: skipTargetFocused,
+    next_tab_inside_main: nextTabInsideMain,
+    passed: skipLinkFocused && skipTargetFocused && nextTabInsideMain,
+  };
+}
 const result = {
   site_mode: siteMode,
   url,
@@ -105,6 +149,7 @@ const result = {
   reached_keyboard_controls: visited.size,
   unreached_keyboard_controls: unreachedControls,
   invisible_focus_steps: invisibleFocus,
+  skip_link: skipLinkResult,
   focus_trace: focusTrace,
 };
 await writeFile(`${outputDir}/accessibility-evidence.json`, `${JSON.stringify(result, null, 2)}\n`);
@@ -112,4 +157,7 @@ await browser.close();
 
 if (serious.length) throw new Error(`axe encontrou ${serious.length} violação(ões) séria(s)/crítica(s)`);
 if (visited.size < expected) throw new Error(`teclado alcançou ${visited.size} de ${expected} controles esperados`);
-if (invisibleFocus) throw new Error(`${invisibleFocus} passo(s) de foco sem indicador perceptível`);
+if (invisibleFocus) throw new Error(`${invisibleFocus} passo(s) de foco sem alteração visual`);
+if (skipLinkResult && !skipLinkResult.passed) {
+  throw new Error('Skip-link não moveu foco e Tab seguinte para dentro de main');
+}
