@@ -2,7 +2,7 @@
 type: Page
 name: FICHA
 title: FICHA — Cada empresa tem uma história
-description: Consulte registros cadastrais públicos de empresas brasileiras por competência e explore os arquivos abertos.
+description: Dados públicos de CNPJ por competência, preservados no Internet Archive.
 language: pt-BR
 permalink: https://franklinbaldo.github.io/ficha/
 layout: index
