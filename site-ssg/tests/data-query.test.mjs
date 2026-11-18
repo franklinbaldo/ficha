@@ -87,19 +87,18 @@ test('registra cnpjs.parquet pela URL real e rejeita SQL em nomes de lookup', as
 });
 
 
-test('paridade com Astro: curingas não convertem uma busca textual em CNPJ exato', () => {
-  // O legado classifica a entrada original via stripCNPJ(cnpj), antes de
-  // remover %, _ e barras invertidas do parâmetro da busca textual.
-  for (const raw of [
-    '11222333000181%',
-    '00.000.000/E08G-12%',
-    '11222333000181_',
-    '11222333000181\\',
+test('paridade com Astro: curingas não convertem busca textual em CNPJ exato', () => {
+  // Classificar o input original, ANTES de remover curingas para o ILIKE.
+  for (const [raw, expected] of [
+    ['11222333000181%', '%11222333000181%'],
+    ['00.000.000/E08G-12%', '%00.000.000/E08G-12%'],
+    ['11222333000181_', '%11222333000181%'],
+    ['11222333000181\\', '%11222333000181%'],
   ]) {
     const plan = planCompanyQuery(raw);
     assert.equal(plan.mode, 'name', `modo divergente para ${JSON.stringify(raw)}`);
-    assert.match(plan.sql, /WHERE razao_social ILIKE \\? LIMIT 20/);
-    assert.equal(plan.param, `%${raw.replace(/[%_\\\\]/g, '')}%`);
+    assert.ok(plan.sql.includes('WHERE razao_social ILIKE ? LIMIT 20'));
+    assert.equal(plan.param, expected);
   }
   for (const [raw, canonical] of [
     ['11222333000181', '11222333000181'],
@@ -108,6 +107,6 @@ test('paridade com Astro: curingas não convertem uma busca textual em CNPJ exat
     const plan = planCompanyQuery(raw);
     assert.equal(plan.mode, 'cnpj');
     assert.equal(plan.param, canonical);
-    assert.match(plan.sql, /WHERE cnpj = \\? LIMIT 1/);
+    assert.ok(plan.sql.includes('WHERE cnpj = ? LIMIT 1'));
   }
 });
