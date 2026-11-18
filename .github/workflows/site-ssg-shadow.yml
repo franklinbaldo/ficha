@@ -61,6 +61,15 @@ jobs:
           ssg check --config config.toml
           ssg build --config config.toml
 
+      - name: Inspect generated SSG manifest schema
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          path = Path("dist/ficha/manifest.json")
+          print(json.dumps(json.loads(path.read_text(encoding="utf-8")), ensure_ascii=False, indent=2))
+          PY
+
       - name: Verify actual output and CSS
         run: |
           node scripts/materialize-assets.mjs
