@@ -24,22 +24,50 @@ def _steps(workflow: dict) -> dict:
 
 
 def _pr_is_fixture_only(workflow: dict) -> bool:
-    steps = _steps(workflow)
-    fixture = steps.get("PR smoke with fixtures", {})
-    upstream = steps.get("Upstream latest snapshot (list-snapshots)", {})
-    live = steps.get("Run smoke check", {})
+    """Allow only the reviewed PR scripts; every other step is operational.
+
+    This intentionally rejects new/duplicated steps and jobs until reviewed.
+    Network access for package installation is outside this RFB/IA smoke guard.
+    """
+    if set(workflow["jobs"]) != {"smoke"}:
+        return False
+    steps = workflow["jobs"]["smoke"]["steps"]
+    if len(steps) != 8:
+        return False
+
+    expected_setup = [
+        {"uses": "actions/checkout@v4"},
+        {
+            "name": "Install uv",
+            "uses": "astral-sh/setup-uv@v3",
+            "with": {"enable-cache": True},
+        },
+        {"run": "uv python install 3.11"},
+        {"run": "uv sync"},
+    ]
+    if steps[:4] != expected_setup:
+        return False
+
+    upstream, fixture, live, freshness = steps[4:]
+    expected_fixture = {
+        "name": "PR smoke with fixtures",
+        "if": PR,
+        "run": (
+            "uv run --extra dev pytest -q "
+            "tests/test_smoke.py tests/test_cli.py -k smoke"
+        ),
+    }
     return (
-        fixture.get("if") == PR
-        and "pytest" in fixture.get("run", "")
-        and "tests/test_smoke.py" in fixture.get("run", "")
-        and "tests/test_cli.py" in fixture.get("run", "")
-        and "-k smoke" in fixture.get("run", "")
+        upstream.get("name") == "Upstream latest snapshot (list-snapshots)"
         and upstream.get("if") == OPERATIONAL
         and "ficha-etl list-snapshots" in upstream.get("run", "")
+        and fixture == expected_fixture
+        and live.get("name") == "Run smoke check"
         and live.get("if") == OPERATIONAL
         and "ficha-etl smoke" in live.get("run", "")
+        and freshness.get("name") == "Check manifest freshness"
+        and freshness.get("if") == OPERATIONAL
     )
-
 
 def test_pr_runs_http_fixtures_without_live_upstream_or_ia() -> None:
     assert _pr_is_fixture_only(_load())
@@ -76,4 +104,28 @@ def test_negative_mutations_detect_real_network_reintroduction() -> None:
     assert not _pr_is_fixture_only(mutated)
     mutated = deepcopy(original)
     _steps(mutated)["PR smoke with fixtures"]["run"] = "echo green"
+    assert not _pr_is_fixture_only(mutated)
+    # Gavião #280: substrings alone accepted both of these live-PR mutants.
+    mutated = deepcopy(original)
+    _steps(mutated)["PR smoke with fixtures"]["run"] += "\nuv run ficha-etl smoke"
+    assert not _pr_is_fixture_only(mutated)
+
+    mutated = deepcopy(original)
+    mutated["jobs"]["smoke"]["steps"].append(
+        {"name": "Extra PR live smoke", "if": PR, "run": "uv run ficha-etl smoke"}
+    )
+    assert not _pr_is_fixture_only(mutated)
+
+    # A duplicate name or a second job must not hide from the dict of steps.
+    mutated = deepcopy(original)
+    mutated["jobs"]["smoke"]["steps"].append(
+        {"name": "PR smoke with fixtures", "if": PR, "run": "uv run ficha-etl smoke"}
+    )
+    assert not _pr_is_fixture_only(mutated)
+
+    mutated = deepcopy(original)
+    mutated["jobs"]["extra"] = {
+        "runs-on": "ubuntu-latest",
+        "steps": [{"run": "uv run ficha-etl smoke"}],
+    }
     assert not _pr_is_fixture_only(mutated)
