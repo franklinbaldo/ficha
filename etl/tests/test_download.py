@@ -69,7 +69,6 @@ def test_resumes_partial_download(tmp_path):
     assert target.read_bytes() == PAYLOAD
 
 
-
 @pytest.mark.parametrize(
     ("bad_range", "suffix"),
     [
@@ -109,6 +108,7 @@ def test_unrequested_partial_response_is_rejected(tmp_path):
     with pytest.raises(RuntimeError, match="Content-Range"):
         download.download_one(_file(), tmp_path, client=client, max_attempts=1)
     assert not (tmp_path / _file().name).exists()
+
 
 def test_restarts_when_server_ignores_range(tmp_path):
     """Some servers reply 200 to a Range request — we must overwrite, not append."""
