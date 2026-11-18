@@ -91,7 +91,14 @@ def materialization_input_sha1s(metadata: dict | None) -> dict[str, str]:
     files = files_list(metadata)
     if files is None:
         raise MaterializationInputsUnavailable("metadata sem lista files utilizável")
-    by_name = {entry.get("name"): entry for entry in files}
+    by_name: dict[str, dict] = {}
+    for entry in files:
+        name = entry.get("name")
+        if name not in SHARD_INPUT_NAMES:
+            continue
+        if name in by_name:
+            raise MaterializationInputsUnavailable(f"input remoto duplicado: {name}")
+        by_name[name] = entry
 
     result: dict[str, str] = {}
     for name in SHARD_INPUT_NAMES:
@@ -130,9 +137,14 @@ def classify_remote_shard(
     if files is None:
         return ShardReuseVerdict(name, ShardReuseState.UNKNOWN, "lista files ilegível")
 
-    entry = next((candidate for candidate in files if candidate.get("name") == name), None)
-    if entry is None:
+    matches = [candidate for candidate in files if candidate.get("name") == name]
+    if len(matches) > 1:
+        return ShardReuseVerdict(
+            name, ShardReuseState.UNKNOWN, "arquivo duplicado na lista files"
+        )
+    if not matches:
         return ShardReuseVerdict(name, ShardReuseState.ABSENT, "ausente em lista files válida")
+    entry = matches[0]
 
     try:
         size = int(entry.get("size"))
