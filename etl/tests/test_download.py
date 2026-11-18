@@ -95,8 +95,6 @@ def test_resume_rejects_incompatible_content_range(tmp_path, bad_range, suffix):
     assert target.read_bytes() == original_prefix
 
 
-
-
 @pytest.mark.parametrize("status", [201, 204])
 def test_resume_rejects_other_success_status_codes(tmp_path, status):
     file = _file()
@@ -112,6 +110,7 @@ def test_resume_rejects_other_success_status_codes(tmp_path, status):
     with pytest.raises(RuntimeError, match="unexpected HTTP"):
         download.download_one(file, tmp_path, client=client, max_attempts=1)
     assert target.read_bytes() == prefix
+
 
 def test_unrequested_partial_response_is_rejected(tmp_path):
     def handler(request: httpx.Request) -> httpx.Response:
