@@ -3,6 +3,7 @@
 // Every conclusion is observational and scoped to this run.
 import { chromium } from 'playwright';
 import { mkdir, writeFile, appendFile } from 'node:fs/promises';
+import { execFileSync } from 'node:child_process';
 
 const publicUrl = 'https://franklinbaldo.github.io/ficha/';
 const output = 'evidence-public';
@@ -11,7 +12,8 @@ await mkdir(output, { recursive: true });
 const evidence = {
   observedAt: new Date().toISOString(),
   publicUrl,
-  branchSHA: process.env.GITHUB_HEAD_SHA || process.env.GITHUB_SHA || null,
+  // GITHUB_SHA on pull_request is often a synthetic merge ref, not the checked-out head.
+  branchSHA: execFileSync('git', ['rev-parse', 'HEAD'], {encoding:'utf8'}).trim(),
   mode: 'PUBLICADO_VERIFICADO: browser, read-only',
   viewports: [],
 };
@@ -157,7 +159,7 @@ try {
       report.statusText = await page.locator('.status').first().textContent().catch(() => null);
       report.recoveryText = await page.locator('[data-remote-recovery]').first()
         .textContent().catch(() => null);
-      report.recoveryLinkVisible = await page.locator('a[href*="manifest.json"]').first()
+      report.recoveryLinkVisible = await page.locator('[data-remote-recovery] a[href*="manifest.json"]').first()
         .isVisible().catch(() => false);
       report.resultsCount = await page.locator('.results-list > *').count();
       await page.screenshot({path:`${output}/public-${viewport.name}.png`});
