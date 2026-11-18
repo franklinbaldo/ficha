@@ -823,7 +823,6 @@ def test_extract_all_rejects_empty_zip(tmp_path, all_zips_dir):
         transform.extract_all("2026-04", chain, tmp_path / "extracted")
 
 
-
 def test_extract_all_preserves_homonymous_members_from_two_parts(tmp_path, all_zips_dir):
     """Different ZIPs can legitimately contain the same internal CSV name."""
     expected = {
@@ -836,10 +835,17 @@ def test_extract_all_preserves_homonymous_members_from_two_parts(tmp_path, all_z
 
     chain = fetcher.ChainedFetcher(fetchers=[_ZipDirFetcher(all_zips_dir)])
     extracted = transform.extract_all("2026-04", chain, tmp_path / "extracted")
-    paths = {entry.zip_name: entry.csv_path for entry in extracted if entry.zip_name in expected}
+    paths = {
+        entry.zip_name: entry.csv_path
+        for entry in extracted
+        if entry.zip_name in expected
+    }
 
     assert set(paths) == set(expected)
-    assert paths["Estabelecimentos0.zip"].resolve() != paths["Estabelecimentos1.zip"].resolve()
+    assert (
+        paths["Estabelecimentos0.zip"].resolve()
+        != paths["Estabelecimentos1.zip"].resolve()
+    )
     for zip_name, payload in expected.items():
         assert paths[zip_name].read_bytes() == payload
 
