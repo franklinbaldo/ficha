@@ -6,12 +6,14 @@ O **FICHA** é um fichário aberto das empresas brasileiras e um Data Lakehouse 
 
 ## Usar agora
 
-- **Abrir o site público (home informativa, sem busca):** https://franklinbaldo.github.io/ficha/
+- **Abrir o site público (home SSG com formulário experimental):** https://franklinbaldo.github.io/ficha/. A presença do formulário não comprova acesso aos dados remotos.
 - **Inspecionar o contrato público do snapshot vigente:** https://franklinbaldo.github.io/ficha/manifest.json
 
 **Manifesto ≠ disponibilidade live.** O JSON versionado declara competências, URLs e identidades dos artefatos; isso **não comprova** que as URLs do Internet Archive estejam acessíveis, que a busca no navegador funcione ou que o mês mais recente da RFB já esteja publicado. No corte de **16/11/2026** (`main@98329ff`), `manifest.current` declara **2026-07**, não 2026-08. A investigação e a recuperação de agosto estão na [issue #247](https://github.com/franklinbaldo/ficha/issues/247). A disponibilidade exige conferência independente de URLs, dados e interface.
 
-**Site público atual:** home e Sobre, geradas com SSG Rust. A home exibe a competência do manifesto e links para os dados, mas **a pesquisa por CNPJ, empresa, pessoa/sócio, endereço ou CNAE ainda não está disponível**. O código experimental com DuckDB-WASM permanece em `web/` e, em branch de desenvolvimento, `site-ssg/`. A integração real depende da [#208](https://github.com/franklinbaldo/ficha/issues/208) e da [#276](https://github.com/franklinbaldo/ficha/pull/276).
+**Site público atual (18/11/2026):** home e Sobre geradas com SSG Rust. A [PR #297](https://github.com/franklinbaldo/ficha/pull/297) incorporou à fonte `site/` um **formulário experimental** para CNPJ numérico/alfanumérico ou razão social e módulos JavaScript derivados do shadow da [#276](https://github.com/franklinbaldo/ficha/pull/276). O diretório duplicado `site-ssg/` foi removido; `web/` conserva o protótipo Astro/Svelte, não publicado. Pesquisas por pessoa/sócio, endereço e CNAE não foram integradas à home SSG.
+
+Depois da correção do smoke na [PR #298](https://github.com/franklinbaldo/ficha/pull/298), o [deploy pós-merge #44347752600](https://github.com/franklinbaldo/ficha/actions/runs/44347752600) concluiu **build, deploy e verify com sucesso**. Esse resultado comprova a entrega e os checks HTTP previstos pelo workflow, **não** consultas CNPJ funcionais. A carga real de DuckDB-WASM/Worker, CORS+Range sobre os Parquets remotos, identidade dos dados e paridade ainda carecem de prova independente ([issue #208](https://github.com/franklinbaldo/ficha/issues/208)). **Não anunciar resultados de busca como disponíveis até essa comprovação.**
 
 O `manifest.json` é a porta para reutilização fora do site: ele declara a competência vigente, snapshots publicados e URLs dos artefatos preservados, com identidade verificável quando disponível. Assim, quem precisa analisar a base inteira não depende da interface do Ficha.
 
@@ -32,7 +34,7 @@ O projeto opera em duas camadas de acesso para máxima eficiência:
 ### 2. Camada Analítica (Data Lakehouse)
 
 - **Formato:** Apache Parquet, com relações para CNPJs e conjuntos complementares publicados por snapshot.
-- **Tecnologia:** DuckDB-WASM (protótipo experimental, ainda não disponível no site publicado).
+- **Tecnologia:** DuckDB-WASM (adaptador experimental incluído em `site/`; consulta remota ainda não comprovada).
 - **Uso:** análises externas dos Parquets e futura pesquisa por empresa, pessoa, endereço e CNAE.
 - **Vantagem:** permite explorar e reutilizar dados sem backend próprio do Ficha.
 
@@ -40,7 +42,7 @@ O projeto opera em duas camadas de acesso para máxima eficiência:
 
 - **Site público:** SSG Rust (páginas estáticas), HTML e CSS.
 - **Protótipo de busca não publicado:** Astro + Svelte 5 + TypeScript + Zod (`web/`).
-- **Motor de Dados:** DuckDB-WASM.
+- **Motor de Dados (busca experimental):** DuckDB-WASM.
 - **Storage/preservação:** Internet Archive.
 - **Formatos públicos:** Parquet, protobuf/ZIP e `manifest.json`.
 - **ETL:** Python + DuckDB + GitHub Actions.
@@ -49,7 +51,7 @@ O projeto opera em duas camadas de acesso para máxima eficiência:
 
 ```text
 ficha/
-├── site/            # Site público SSG Rust (deploy → GitHub Pages)
+├── site/            # Site público SSG Rust e módulos experimentais de busca
 ├── web/             # Protótipo Astro/Svelte de busca (não publicado)
 ├── etl/             # Pipeline Python (RFB → artefatos → Internet Archive)
 ├── experiments/     # PoCs e benchmarks numerados
