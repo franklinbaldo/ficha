@@ -1,0 +1,452 @@
+"""P0-D: fail-closed offline tests for no promotion of partial monthly shards.
+
+Every path is a tmp_path fixture. No ETL, HTTP, Internet Archive or live manifest.
+This file is independent of the implementation on the Castor #246 branch.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+
+from ficha_etl import manifest as manifest_mod
+from ficha_etl import monthly_sharded, shard_transfer
+from ficha_etl.shard_publish import ShardPublishError, publish_one_shard
+from ficha_etl.shard_remote import PUBLIC_COMPANIES_GEOMETRY
+from ficha_etl.shard_transfer import ShardTransferAction
+
+MONTH = "2026-08"
+
+# Single producer-owned fixture, read by both Python and TS P0-D tests.
+PACKER_CA_MEMBER_HEX = (
+    (Path(__file__).parent / "fixtures" / "company-v11-ca000001.hex")
+    .read_text(encoding="ascii")
+    .strip()
+)
+PACKER_CA_MEMBER_SHA256 = "041e2b5e6f039959b03fd185021493f422ce884ea155590c9e99916ca769ec48"
+
+
+def _identity(seed: str) -> dict:
+    return {"size": 11, "sha1": seed * 40, "sha256": seed * 64}
+
+
+def _descriptor() -> dict:
+    return {
+        "date": MONTH,
+        "files": {
+            name: _identity(str(i))
+            for i, name in enumerate(
+                (
+                    "cnpjs",
+                    "cnpj_contatos",
+                    "cnpj_cnaes",
+                    "raizes",
+                    "socios",
+                    "enderecos",
+                    "pessoas",
+                    "lookups",
+                ),
+                start=1,
+            )
+        },
+        "lookups": {
+            name: _identity(letter)
+            for name, letter in zip(
+                (
+                    "cnaes",
+                    "motivos",
+                    "municipios",
+                    "naturezas",
+                    "paises",
+                    "qualificacoes",
+                ),
+                "abcdef",
+                strict=True,
+            )
+        },
+    }
+
+
+def _receipt(prefix: str) -> dict:
+    return {
+        "month": MONTH,
+        "prefix": prefix,
+        "name": f"companies-{prefix}.zip",
+        "materialization_id": "f" * 64,
+        "size": 42,
+        "sha1": "d" * 40,
+    }
+
+
+def _setup(tmp_path: Path, *, missing_receipt: str | None = None):
+    receipts = tmp_path / "receipts"
+    receipts.mkdir()
+    for i in range(100):
+        prefix = f"{i:02d}"
+        if prefix != missing_receipt:
+            (receipts / f"receipt-{prefix}.json").write_text(
+                json.dumps(_receipt(prefix)), encoding="utf-8"
+            )
+
+    descriptor = tmp_path / "descriptor.json"
+    descriptor.write_text(json.dumps(_descriptor()), encoding="utf-8")
+    manifest = tmp_path / "manifest.json"
+    # Noncanonical bytes expose rewrites even if JSON semantics stay unchanged.
+    before = b'{"current":"2026-07","snapshots":[{"date":"2026-07"}]}\n'
+    manifest.write_bytes(before)
+    args = argparse.Namespace(
+        month=MONTH,
+        descriptor=descriptor,
+        receipts_dir=receipts,
+        attempts=1,
+        interval_seconds=0,
+        snapshot_entry=tmp_path / "snapshot-entry.json",
+        manifest=manifest,
+        verification=tmp_path / "verification.json",
+    )
+    return args, before
+
+
+def _assert_no_promotion(args: argparse.Namespace, before: bytes) -> None:
+    assert args.manifest.read_bytes() == before
+    assert not args.snapshot_entry.exists()
+    assert not args.verification.exists()
+
+
+def _verified(prefix: str):
+    return SimpleNamespace(
+        prefix=prefix,
+        name=f"companies-{prefix}.zip",
+        materialization_id="f" * 64,
+        size=42,
+        sha1="d" * 40,
+        action=ShardTransferAction.VERIFIED,
+    )
+
+
+def test_missing_receipt_never_accesses_network_or_promotes(monkeypatch, tmp_path: Path):
+    args, before = _setup(tmp_path, missing_receipt="42")
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("network verification must not run with missing receipt")
+
+    monkeypatch.setattr(monthly_sharded, "wait_for_descriptor_remote", forbidden)
+    monkeypatch.setattr(monthly_sharded, "verify_all_shards", forbidden)
+    with pytest.raises(FileNotFoundError):
+        monthly_sharded.command_finalize(args)
+    _assert_no_promotion(args, before)
+
+
+def test_partial_remote_verification_never_promotes(monkeypatch, tmp_path: Path):
+    args, before = _setup(tmp_path)
+    monkeypatch.setattr(monthly_sharded, "wait_for_descriptor_remote", lambda *_a, **_kw: {})
+    monkeypatch.setattr(
+        monthly_sharded,
+        "verify_all_shards",
+        lambda *_a, **_kw: [_verified(f"{i:02d}") for i in range(100) if i != 42],
+    )
+    with pytest.raises((KeyError, RuntimeError, ValueError)):
+        monthly_sharded.command_finalize(args)
+    _assert_no_promotion(args, before)
+
+
+def test_remote_receipt_mismatch_never_promotes(monkeypatch, tmp_path: Path):
+    args, before = _setup(tmp_path)
+    monkeypatch.setattr(monthly_sharded, "wait_for_descriptor_remote", lambda *_a, **_kw: {})
+    results = [_verified(f"{i:02d}") for i in range(100)]
+    results[42].sha1 = "e" * 40
+    monkeypatch.setattr(monthly_sharded, "verify_all_shards", lambda *_a, **_kw: results)
+    with pytest.raises(RuntimeError, match="diverges from production receipt"):
+        monthly_sharded.command_finalize(args)
+    _assert_no_promotion(args, before)
+
+
+@pytest.mark.parametrize(
+    ("field", "changed_value"),
+    [
+        ("name", "companies-42-foreign.zip"),
+        ("materialization_id", "e" * 64),
+        ("size", 43),
+    ],
+)
+def test_verified_shard_identity_mismatch_never_promotes(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    field: str,
+    changed_value: str | int,
+) -> None:
+    """100 VERIFIED results still must match the production receipt exactly.
+
+    Distinct negative cases prevent cross-run identity reuse by name,
+    materialization or byte size. Network and production are not touched.
+    """
+    args, before = _setup(tmp_path)
+    monkeypatch.setattr(monthly_sharded, "wait_for_descriptor_remote", lambda *_a, **_kw: {})
+    results = [_verified(f"{i:02d}") for i in range(100)]
+    setattr(results[42], field, changed_value)
+    monkeypatch.setattr(monthly_sharded, "verify_all_shards", lambda *_a, **_kw: results)
+
+    with pytest.raises(RuntimeError, match="42: remote verified identity diverges"):
+        monthly_sharded.command_finalize(args)
+    _assert_no_promotion(args, before)
+
+
+def test_remote_descriptor_sha_mismatch_blocks_promotion(monkeypatch, tmp_path: Path):
+    """A base-file hash divergence must fail before shard verification/promotion."""
+    args, before = _setup(tmp_path)
+    expected = monthly_sharded._expected_remote_files(_descriptor())
+    remote_files = [
+        {"name": name, "size": size, "sha1": sha1} for name, (size, sha1) in expected.items()
+    ]
+    for entry in remote_files:
+        if entry["name"] == "cnpjs.parquet":
+            entry["sha1"] = "e" * 40
+    monkeypatch.setattr(
+        monthly_sharded,
+        "fetch_item_metadata",
+        lambda *_args, **_kwargs: {"files": remote_files},
+    )
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("shards must not be checked after descriptor mismatch")
+
+    monkeypatch.setattr(monthly_sharded, "verify_all_shards", forbidden)
+    with pytest.raises(RuntimeError, match="remote bytes diverge from production descriptor"):
+        monthly_sharded.command_finalize(args)
+    _assert_no_promotion(args, before)
+
+
+def test_submitted_but_unverified_shard_never_promotes(monkeypatch, tmp_path: Path):
+    """All 100 names being present is insufficient without VERIFIED action."""
+    args, before = _setup(tmp_path)
+    monkeypatch.setattr(monthly_sharded, "wait_for_descriptor_remote", lambda *_a, **_kw: {})
+    results = [_verified(f"{i:02d}") for i in range(100)]
+    results[42].action = ShardTransferAction.SUBMITTED
+    monkeypatch.setattr(monthly_sharded, "verify_all_shards", lambda *_a, **_kw: results)
+    with pytest.raises(RuntimeError, match="42: verify returned submitted"):
+        monthly_sharded.command_finalize(args)
+    _assert_no_promotion(args, before)
+
+
+@pytest.mark.parametrize(
+    "previous_entry",
+    [None, b'{ "previous" : "preserve exact bytes" }\\n'],
+)
+def test_manifest_refusal_does_not_leave_orphan_snapshot_entry(
+    monkeypatch, tmp_path: Path, previous_entry: bytes | None
+):
+    """Rejected publication must restore an old entry or leave it absent.
+
+    The 100 shard inputs and failing manifest gate are synthetic and offline.
+    """
+    args, before = _setup(tmp_path)
+    if previous_entry is not None:
+        args.snapshot_entry.write_bytes(previous_entry)
+    monkeypatch.setattr(monthly_sharded, "wait_for_descriptor_remote", lambda *_a, **_kw: {})
+    monkeypatch.setattr(
+        monthly_sharded,
+        "verify_all_shards",
+        lambda *_a, **_kw: [_verified(f"{i:02d}") for i in range(100)],
+    )
+
+    def reject_legacy_manifest(*_args, **_kwargs):
+        raise ValueError("legacy manifest.json rejects Protobuf 1.1")
+
+    monkeypatch.setattr(monthly_sharded, "update_manifest", reject_legacy_manifest)
+    with pytest.raises(ValueError, match="legacy manifest.json"):
+        monthly_sharded.command_finalize(args)
+
+    assert args.manifest.read_bytes() == before
+    assert (
+        args.snapshot_entry.read_bytes() if args.snapshot_entry.exists() else None
+    ) == previous_entry
+    assert not args.verification.exists()
+
+
+@pytest.mark.parametrize("entrypoint", ("submit-one", "submit-prepared", "publish-one"))
+def test_direct_transfer_api_must_refuse_unversioned_v11_wire(
+    tmp_path: Path, entrypoint: str
+) -> None:
+    """All three public APIs must reject wire 1.1 before local/remote IO.
+
+    No preflight CLI, network, pack, metadata, filesystem write or IA PUT.
+    This tests the shared guard on the currently legacy companies-NN.zip API,
+    NOT safe publication/discovery of a separate 1.1 namespace.
+    """
+
+    class V11Session:
+        geometry = PUBLIC_COMPANIES_GEOMETRY
+        month = MONTH
+        wire_version = "1.1.0"
+        shard_by = "cnpj_base_prefix_or_base36_mod_100_v1"
+
+        def materialization_spec(self, *_args, **_kwargs):
+            pytest.fail("materialization must not start before v1.1 rejection")
+
+    def forbidden(*_args, **_kwargs):
+        pytest.fail("I/O must not start before v1.1 rejection")
+
+    kwargs = {
+        "pinned_inputs": {},
+        "fetch_metadata": forbidden,
+        "fetch_meta": forbidden,
+        "fetch_direct": forbidden,
+        "upload": forbidden,
+    }
+    session = V11Session()
+    with pytest.raises(ShardPublishError, match="unversioned companies-NN.zip"):
+        if entrypoint == "submit-one":
+            shard_transfer.submit_one_shard(session, "00", tmp_path, **kwargs)
+        elif entrypoint == "submit-prepared":
+            prepared = shard_transfer.PreparedShard(
+                prefix="00",
+                name="companies-00.zip",
+                path=tmp_path / "must-not-read.zip",
+                materialization_id="synthetic",
+                size=12,
+                sha1="a" * 40,
+            )
+            shard_transfer.submit_prepared_shard(session, prepared, **kwargs)
+        else:
+            publish_one_shard(session, "00", tmp_path, **kwargs)
+
+    assert list(tmp_path.iterdir()) == []
+
+
+def _prepare_legacy_finalize(monkeypatch: pytest.MonkeyPatch, args: argparse.Namespace) -> None:
+    """Reach the real legacy manifest writer using 100 offline verified shards."""
+    monkeypatch.setattr(monthly_sharded, "wait_for_descriptor_remote", lambda *_a, **_kw: {})
+    monkeypatch.setattr(
+        monthly_sharded,
+        "verify_all_shards",
+        lambda *_a, **_kw: [_verified(f"{i:02d}") for i in range(100)],
+    )
+    # Keep the real writer reachable; production wire 1.1 is deliberately
+    # rejected by the legacy gate and is not published by these tests.
+    monkeypatch.setattr(
+        monthly_sharded,
+        "finalize_sharded_snapshot_entry",
+        lambda *_a, **_kw: {
+            "date": MONTH,
+            "schema_version": "1.0.0",
+            "files": {"companies": {"shard_by": "cnpj_base_prefix_2"}},
+        },
+    )
+
+
+def test_manifest_replace_failure_preserves_bytes_and_no_snapshot_entry(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Exercise the new staged writer at os.replace through command_finalize.
+
+    Unlike the old Path.write_text injection, this reaches the Castor #246
+    implementation. The test fails if the staging/rollback is bypassed.
+    """
+    args, before = _setup(tmp_path)
+    _prepare_legacy_finalize(monkeypatch, args)
+
+    def interrupted_replace(src: str | Path, dst: str | Path) -> None:
+        assert Path(src).parent == args.manifest.parent
+        assert Path(src).is_file(), "staged manifest must exist before replacement"
+        assert Path(dst) == args.manifest
+        raise OSError("injected manifest os.replace failure")
+
+    monkeypatch.setattr(manifest_mod.os, "replace", interrupted_replace)
+    with pytest.raises(OSError, match="injected manifest os.replace failure"):
+        monthly_sharded.command_finalize(args)
+
+    _assert_no_promotion(args, before)
+    assert list(args.manifest.parent.glob(".manifest.json.*.tmp")) == []
+
+
+@pytest.mark.parametrize("preexisting", [False, True])
+@pytest.mark.parametrize("partial_write", [False, True])
+def test_verification_receipt_failure_must_not_promote_partial_state(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    preexisting: bool,
+    partial_write: bool,
+) -> None:
+    """A failed verification receipt must not update the discovery manifest.
+
+    Exercise Castor's real multi-document local compensation with all 100
+    shards verified synthetically. Neither a partial verification write nor
+    preexisting receipts may leave a partial local publication. This does NOT
+    prove crash safety or a remote Internet Archive transaction.
+    """
+    args, before = _setup(tmp_path)
+    _prepare_legacy_finalize(monkeypatch, args)
+    previous_entry = b'{ "old": "snapshot entry bytes" }\\n' if preexisting else None
+    previous_verification = b'{ "old": "verification bytes" }\\n' if preexisting else None
+    if preexisting:
+        assert previous_entry is not None
+        assert previous_verification is not None
+        args.snapshot_entry.write_bytes(previous_entry)
+        args.verification.write_bytes(previous_verification)
+    original_write_json = monthly_sharded._write_json
+
+    def fail_verification(path: Path, payload: object) -> None:
+        if Path(path) == args.verification:
+            if partial_write:
+                Path(path).write_bytes(b'{"incomplete":')
+            raise OSError("injected verification.json write failure")
+        original_write_json(path, payload)
+
+    monkeypatch.setattr(monthly_sharded, "_write_json", fail_verification)
+    with pytest.raises(OSError, match="injected verification.json write failure"):
+        monthly_sharded.command_finalize(args)
+
+    assert args.manifest.read_bytes() == before
+    assert (
+        args.snapshot_entry.read_bytes() if args.snapshot_entry.exists() else None
+    ) == previous_entry
+    assert (
+        args.verification.read_bytes() if args.verification.exists() else None
+    ) == previous_verification
+    assert list(args.manifest.parent.glob(".manifest.json.*.tmp")) == []
+
+
+def test_actual_python_packer_member_matches_pinned_ts_fixture(tmp_path: Path) -> None:
+    """Pin the same genuine .pb member later decoded by the TS opt-in test.
+
+    The local producer and web reader agree on a byte fixture. Nothing is
+    uploaded, and this is not evidence of a remote ZIP or external v1 client.
+    """
+    import hashlib
+    import zipfile
+
+    from ficha_etl import pack, sharded_pack
+
+    session = sharded_pack.ShardPackSession(
+        MONTH, PUBLIC_COMPANIES_GEOMETRY, parquets_base=str(tmp_path)
+    )
+    spec = session.materialization_spec("42", input_sha1s={})
+    archive = tmp_path / "companies-42.zip"
+    rows = iter(
+        [
+            {"cnpj_base": "42000001"},
+            {
+                "cnpj_base": "CA000001",
+                "estabelecimentos": [{"cnpj_ordem": "E08G", "cnpj_dv": "12"}],
+                "socios": [{"cnpj_socio": "00000000E08G12"}],
+            },
+        ]
+    )
+    count, _size = sharded_pack._pack_rows(
+        rows,
+        {kind: [] for kind in pack.LOOKUP_KINDS},
+        archive,
+        snapshot_month=MONTH,
+        materialization=spec,
+        schema_desc=pack._schema_desc_bytes(),
+        schema_sha256=session.schema_sha256,
+    )
+    assert count == 2
+    with zipfile.ZipFile(archive) as zipped:
+        wire = zipped.read("CA/000/001.pb")
+    assert wire.hex() == PACKER_CA_MEMBER_HEX
+    assert hashlib.sha256(wire).hexdigest() == PACKER_CA_MEMBER_SHA256

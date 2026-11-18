@@ -284,6 +284,10 @@ def _load_receipt(path: Path, month: str, prefix: str) -> dict:
 
 def command_produce(args: argparse.Namespace) -> None:
     month = _require_month(args.month)
+    # The default path uploads raw ZIPs *before* the shard submit phase.
+    # Reject an incompatible wire contract before the first remote write.
+    if not args.skip_raw_upload:
+        _require_safe_legacy_shard_upload()
     output_dir = Path(args.output_dir)
     cache_dir = Path(args.cache_dir)
     descriptor_path = Path(args.descriptor)
@@ -310,6 +314,8 @@ def command_produce(args: argparse.Namespace) -> None:
 
 def command_upload_outputs(args: argparse.Namespace) -> None:
     month = _require_month(args.month)
+    # A separately produced snapshot must not bypass the early guard.
+    _require_safe_legacy_shard_upload()
     descriptor = _load_descriptor(Path(args.descriptor), month)
     plan = submit_outputs_fail_closed(
         month,

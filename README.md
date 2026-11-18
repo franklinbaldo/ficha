@@ -6,12 +6,14 @@ O **FICHA** é um fichário aberto das empresas brasileiras e um Data Lakehouse 
 
 ## Usar agora
 
-- **Consultar no navegador:** https://franklinbaldo.github.io/ficha/
+- **Abrir o site público (home SSG com formulário experimental):** https://franklinbaldo.github.io/ficha/. A presença do formulário não comprova acesso aos dados remotos.
 - **Inspecionar o contrato público do snapshot vigente:** https://franklinbaldo.github.io/ficha/manifest.json
 
 **Manifesto ≠ disponibilidade live.** O JSON versionado declara competências, URLs e identidades dos artefatos; isso **não comprova** que as URLs do Internet Archive estejam acessíveis, que a busca no navegador funcione ou que o mês mais recente da RFB já esteja publicado. No corte de **16/11/2026** (`main@98329ff`), `manifest.current` declara **2026-07**, não 2026-08. A investigação e a recuperação de agosto estão na [issue #247](https://github.com/franklinbaldo/ficha/issues/247). A disponibilidade exige conferência independente de URLs, dados e interface.
 
-A interface atual consulta os Parquets no navegador com DuckDB-WASM e permite buscar por **empresa**, **pessoa/sócio**, **endereço** e **CNAE** quando os respectivos artefatos estão disponíveis no snapshot. A própria página mostra a competência em uso, origem, preservação e estado de verificação do conjunto publicado.
+**Site público atual (18/11/2026):** home e Sobre geradas com SSG Rust. A [PR #297](https://github.com/franklinbaldo/ficha/pull/297) incorporou à fonte `site/` um **formulário experimental** para CNPJ numérico/alfanumérico ou razão social e módulos JavaScript derivados do shadow da [#276](https://github.com/franklinbaldo/ficha/pull/276). O diretório duplicado `site-ssg/` foi removido; `web/` conserva o protótipo Astro/Svelte, não publicado. Pesquisas por pessoa/sócio, endereço e CNAE não foram integradas à home SSG.
+
+Depois da correção do smoke na [PR #298](https://github.com/franklinbaldo/ficha/pull/298), o [deploy pós-merge #44347752600](https://github.com/franklinbaldo/ficha/actions/runs/44347752600) concluiu **build, deploy e verify com sucesso**. Esse resultado comprova a entrega e os checks HTTP previstos pelo workflow, **não** consultas CNPJ funcionais. A carga real de DuckDB-WASM/Worker, CORS+Range sobre os Parquets remotos, identidade dos dados e paridade ainda carecem de prova independente ([issue #208](https://github.com/franklinbaldo/ficha/issues/208)). **Não anunciar resultados de busca como disponíveis até essa comprovação.**
 
 O `manifest.json` é a porta para reutilização fora do site: ele declara a competência vigente, snapshots publicados e URLs dos artefatos preservados, com identidade verificável quando disponível. Assim, quem precisa analisar a base inteira não depende da interface do Ficha.
 
@@ -27,19 +29,20 @@ O projeto opera em duas camadas de acesso para máxima eficiência:
 - **Tecnologia:** explora a funcionalidade de "unzip" transparente do Internet Archive.
 - **Uso:** consultas diretas por raiz de CNPJ por URL estática previsível.
 - **Vantagem:** acesso pontual sem precisar varrer a base analítica inteira; protobuf é compacto.
-- **Status:** o reader atômico existe no código, e o manifesto versionado declara artefatos atômicos em alguns snapshots. A declaração não prova acesso HTTP live; a busca pública atual usa a camada analítica descrita abaixo. Não pressupor integração do reader atômico à jornada de busca.
+- **Status:** o reader atômico existe no código, e o manifesto versionado declara artefatos atômicos em alguns snapshots. A declaração não prova acesso HTTP live; a home pública oferece um formulário experimental de CNPJ ou razão social, mas não usa o leitor atômico. A consulta analítica real aos Parquets remotos permanece sem comprovação ([Ficha #208](https://github.com/franklinbaldo/ficha/issues/208)); não pressupor integração do reader atômico à jornada de busca.
 
 ### 2. Camada Analítica (Data Lakehouse)
 
 - **Formato:** Apache Parquet, com relações para CNPJs e conjuntos complementares publicados por snapshot.
-- **Tecnologia:** DuckDB-WASM no navegador.
-- **Uso:** consulta pública por empresa, pessoa, endereço e CNAE, além de análises e cruzamentos externos sobre os Parquets.
+- **Tecnologia:** DuckDB-WASM (adaptador experimental incluído em `site/`; consulta remota ainda não comprovada).
+- **Uso:** análises externas dos Parquets e futura pesquisa por empresa, pessoa, endereço e CNAE.
 - **Vantagem:** permite explorar e reutilizar dados sem backend próprio do Ficha.
 
 ## 🛠️ Stack Tecnológica
 
-- **Frontend:** Astro + Svelte 5 + TypeScript + Zod.
-- **Motor de Dados:** DuckDB-WASM.
+- **Site público:** SSG Rust (páginas estáticas), HTML e CSS.
+- **Protótipo de busca não publicado:** Astro + Svelte 5 + TypeScript + Zod (`web/`).
+- **Motor de Dados (busca experimental):** DuckDB-WASM.
 - **Storage/preservação:** Internet Archive.
 - **Formatos públicos:** Parquet, protobuf/ZIP e `manifest.json`.
 - **ETL:** Python + DuckDB + GitHub Actions.
@@ -48,19 +51,20 @@ O projeto opera em duas camadas de acesso para máxima eficiência:
 
 ```text
 ficha/
-├── web/             # Frontend Astro (deploy → GitHub Pages)
+├── site/            # Site público SSG Rust e módulos experimentais de busca
+├── web/             # Protótipo Astro/Svelte de busca (não publicado)
 ├── etl/             # Pipeline Python (RFB → artefatos → Internet Archive)
 ├── experiments/     # PoCs e benchmarks numerados
 ├── docs/            # Documentação técnica, ADRs e RFCs
 └── .github/         # Workflows de CI, deploy e publicação
 ```
 
-`web/` e `etl/` são projetos auto-contidos. O contrato público entre produção e consumo é materializado pelo manifesto e pelos schemas/artefatos publicados; o frontend valida e consulta esse contrato sem introduzir um backend de aplicação.
+`site/` é a home pública estática. `web/` contém a interface Astro preservada como protótipo; `etl/` produz os artefatos. O contrato entre produção e consumo é o manifesto e os schemas/artefatos publicados, mas sua presença não comprova a acessibilidade remota dos arquivos.
 
 ## 🚀 Desenvolvimento
 
 ```bash
-# Frontend (a partir da raiz do repositório)
+# Protótipo legado de busca (não é o site publicado)
 cd web
 bun install
 bun dev
