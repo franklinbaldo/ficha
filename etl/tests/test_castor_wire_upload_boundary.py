@@ -127,9 +127,7 @@ def test_monthly_produce_refuses_wire_before_raw_upload_or_transform(
     monkeypatch.setattr(
         monthly_sharded, "build_production_descriptor", forbid("descriptor construction")
     )
-    monkeypatch.setattr(
-        monthly_sharded, "write_production_descriptor", forbid("descriptor write")
-    )
+    monkeypatch.setattr(monthly_sharded, "write_production_descriptor", forbid("descriptor write"))
 
     with pytest.raises(ShardPublishError, match="unversioned companies-NN.zip"):
         monthly_sharded.command_produce(args)
@@ -167,9 +165,7 @@ def test_monthly_output_upload_refuses_wire_before_descriptor_or_secrets(
 
     monkeypatch.setattr(monthly_sharded, "_load_descriptor", forbid("descriptor read"))
     monkeypatch.setattr(monthly_sharded, "_require_secret", forbid("secrets"))
-    monkeypatch.setattr(
-        monthly_sharded, "submit_outputs_fail_closed", forbid("Parquet IA PUT")
-    )
+    monkeypatch.setattr(monthly_sharded, "submit_outputs_fail_closed", forbid("Parquet IA PUT"))
 
     with pytest.raises(ShardPublishError, match="unversioned companies-NN.zip"):
         monthly_sharded.command_upload_outputs(args)
