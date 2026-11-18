@@ -75,6 +75,18 @@ jobs:
           npx playwright install chromium --with-deps
           node tests/browser-shadow.mjs
 
+      - name: Observe published Astro Pages in Chromium (read-only, one-byte Range)
+        run: node tests/browser-public.mjs
+
+      - name: Upload bounded public-browser evidence (never deploy)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: public-pages-browser-${{ github.run_id }}
+          path: site-ssg/evidence-public/
+          retention-days: 3
+          if-no-files-found: ignore
+
       - name: Confirm no publishing happened
         run: |
           test -f dist/ficha/index.html
