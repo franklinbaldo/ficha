@@ -104,6 +104,11 @@ def violations(workflow: dict, auditor: str) -> list[str]:
         "Pesquisa por CNPJ ainda indisponível",
         "axe.run(document",
         "keyboard.press('Tab')",
+        "focused.border !== unfocused.border",
+        "focused.outline !== unfocused?.outline",
+        "await page.keyboard.press('Enter')",
+        "nextTabInsideMain",
+        "skipLinkResult && !skipLinkResult.passed",
     ):
         if token not in auditor:
             errors.append("auditor must recognize SSG and really check axe and Tab")
@@ -174,3 +179,13 @@ def test_reject_mutations_that_restore_false_green() -> None:
 
     broken = auditor.replace("siteMode === 'ssg'", "siteMode === 'astro'")
     assert violations(baseline, broken)
+
+    # These two mutants previously escaped a Tab-count-only accessibility gate.
+    static_border = auditor.replace(
+        "focused.border !== unfocused.border", "focused.border !== ''"
+    )
+    assert violations(baseline, static_border)
+    missing_skip_enter = auditor.replace(
+        "await page.keyboard.press('Enter')", "await page.keyboard.press('Tab')"
+    )
+    assert violations(baseline, missing_skip_enter)
