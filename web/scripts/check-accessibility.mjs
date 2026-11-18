@@ -10,15 +10,25 @@ const browser = await chromium.launch({ headless: true });
 const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
 await page.goto(url, { waitUntil: 'domcontentloaded' });
 
-// Wait for the same public states accepted by the visual contract.
-await page.waitForFunction(() => {
-  const text = document.body.innerText;
-  return text.includes('Pronto para consultas') ||
-    text.includes('A consulta está temporariamente indisponível.') ||
-    text.includes('Os dados ainda não foram publicados') ||
-    text.includes('Manifest inválido');
-}, null, { timeout: 45_000 });
+// The SSG is intentionally static. Do not treat old Astro states as SSG evidence.
+const siteMode = process.env.FICHA_SITE_MODE ?? 'astro';
+if (siteMode === 'ssg') {
+  await page.getByRole('heading', {
+    name: 'Pesquisa por CNPJ ainda indisponível',
+    exact: true,
+  }).waitFor({ timeout: 15_000 });
+} else {
+  // Keep the legacy Astro diagnosis usable for historical replays.
+  await page.waitForFunction(() => {
+    const text = document.body.innerText;
+    return text.includes('Pronto para consultas') ||
+      text.includes('A consulta está temporariamente indisponível.') ||
+      text.includes('Os dados ainda não foram publicados') ||
+      text.includes('Manifest inválido');
+  }, null, { timeout: 45_000 });
+}
 
+await page.screenshot({ path: `${outputDir}/home-mobile.png`, fullPage: true });
 await page.addScriptTag({ content: axe.source });
 const axeResult = await page.evaluate(async () => window.axe.run(document, {
   resultTypes: ['violations'],
@@ -81,6 +91,7 @@ for (let i = 0; i < expected + 4; i += 1) {
 
 const unreachedControls = expectedControls.filter((control) => !visited.has(control.id));
 const result = {
+  site_mode: siteMode,
   url,
   commit: process.env.GITHUB_HEAD_SHA || process.env.GITHUB_SHA || null,
   axe_serious_or_critical: serious,
