@@ -74,20 +74,33 @@ export async function fetchCurrentDataset({
  * cross-origin Range GET is enough to test CORS and exposed Content-Range.
  * This checks transport only, not the file's SHA-256 or query correctness.
  */
-export async function probeParquetRange({url, size, fetchImpl = fetch} = {}) {
+export async function probeParquetRange({url, size, fetchImpl = fetch, timeoutMs = 10000} = {}) {
   dataURL(url, 'Parquet');
   if (!Number.isSafeInteger(size) || size < 1) {
     throw new Error('Parquet: tamanho inválido no manifesto');
   }
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 60000) {
+    throw new Error('Parquet: timeoutMs inválido');
+  }
+  // An unreachable origin must not leave the search button disabled forever.
+  const controller = new AbortController();
+  let timedOut = false;
+  const timeout = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, timeoutMs);
   let response;
   try {
     response = await fetchImpl(url, {
       method: 'GET', mode: 'cors', cache: 'no-store',
-      headers: { Range: 'bytes=0-0' },
+      headers: { Range: 'bytes=0-0' }, signal: controller.signal,
     });
   } catch {
+    if (timedOut) throw new Error('Origem de dados não respondeu dentro do prazo (timeout)');
     // A browser intentionally hides CORS failures from JavaScript.
     throw new Error('Origem de dados inacessível no navegador (rede ou CORS)');
+  } finally {
+    clearTimeout(timeout);
   }
   if (response.status !== 206 ||
       response.headers?.get('content-range') !== `bytes 0-0/${size}`) {
