@@ -13,6 +13,7 @@ import collections
 import json
 import logging
 import os
+import re
 import shutil
 import tempfile
 import time
@@ -1570,14 +1571,20 @@ def write_enderecos_parquet(
     logradouro prevalece, evitando duplicação e preservando conflitos para
     diagnóstico separado.
 
-    Normalização vetorizada: CTE computa a base normalizada uma vez por linha
-    (UPPER + strip_accents + TRIM + whitespace collapse); depois uma única
-    extração de prefixo + MAP lookup substitui as 10 chamadas regexp_replace
-    anteriores, passando de 11 para 4 operações regex/map por linha.
+    Normalização vetorizada em DuckDB (UPPER, strip_accents e espaços).
+    Os prefixos conhecidos vêm da mesma tabela de abreviações usada pelo MAP.
+    A verificação do prefixo adiciona trabalho ao writer; medir o custo
+    sobre um volume representativo antes de publicar novo snapshot.
     """
     output_path.parent.mkdir(parents=True, exist_ok=True)
     log.info("    writing enderecos.parquet...")
     abbrev_map = "MAP {" + ", ".join(f"'{k}': '{v} '" for k, v in _LOGRADOURO_ABBREVS.items()) + "}"
+    prefixos = set(_LOGRADOURO_ABBREVS) | set(_LOGRADOURO_ABBREVS.values())
+    tipo_prefix_pattern = (
+        r"^(?:"
+        + "|".join(re.escape(p) for p in sorted(prefixos, key=len, reverse=True))
+        + r")\.?\s+"
+    )
     has_lookup = _has_lookup_table(con, "lookup_municipios")
     municipio_name_sql = "mun.descricao" if has_lookup else "NULL::VARCHAR"
     municipio_join_sql = (
@@ -1598,7 +1605,7 @@ def write_enderecos_parquet(
                                   OR TRIM(est.tipo_logradouro) = ''
                                   OR regexp_matches(
                                       UPPER(strip_accents(TRIM(est.logradouro))),
-                                      '^(RUA|R\.?|AVENIDA|AV\.?|TRAVESSA|TV\.?|ALAMEDA|AL\.?|PRACA|PCA\.?|PC\.?|ESTRADA|EST\.?|RODOVIA|ROD\.?|VILA|VL\.?|LARGO|LG\.?)\s+'
+                                      '{tipo_prefix_pattern}'
                                   )
                                 THEN est.logradouro
                                 ELSE TRIM(est.tipo_logradouro) || ' ' || est.logradouro
