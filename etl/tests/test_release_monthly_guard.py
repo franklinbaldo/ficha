@@ -56,10 +56,9 @@ def _guard() -> str:
 
 def test_guard_is_exactly_successful_workflow_run() -> None:
     guard = " ".join(_guard().split())
-    assert re.fullmatch(
-        r"\\$\\{\\{ github\\.event_name == 'workflow_run' "
-        r"&& github\\.event\\.workflow_run\\.conclusion == 'success' \\}\\}",
-        guard,
+    assert guard == (
+        "${{ github.event_name == 'workflow_run' && "
+        "github.event.workflow_run.conclusion == 'success' }}"
     ), guard
     assert _allows_job(_guard(), "workflow_run", "success")
     assert not _allows_job(_guard(), "workflow_run", "failure")
