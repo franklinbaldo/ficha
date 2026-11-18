@@ -12,7 +12,9 @@ export const stripCnpj = value => value.toUpperCase().replace(/[.\/\-\s]/g, '');
 /** Matches the current Svelte home semantics, including name fallback. */
 export function planCompanyQuery(input) {
   const sanitized = input.trim().replace(/[%_\\]/g, '');
-  const cnpj = stripCnpj(sanitized);
+  // Legacy Astro classifies the original input before stripping LIKE wildcards.
+  // Otherwise a trailing %/_/backslash incorrectly becomes an exact CNPJ.
+  const cnpj = stripCnpj(input.trim());
   if (/^[A-Z0-9]{12}[0-9]{2}$/.test(cnpj)) {
     return { mode: 'cnpj', sql: EXACT, param: cnpj };
   }
