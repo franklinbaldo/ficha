@@ -7,8 +7,8 @@ versionado para reproduzir falhas de checkpoint anteriores a qualquer PUT.
 from __future__ import annotations
 
 import os
-import sys
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -53,9 +53,9 @@ def test_rerun_receipt_download_is_not_optional() -> None:
 @pytest.mark.parametrize(
     ("attempt", "prior", "allowed"),
     [
-        (1, None, True),      # primeira tentativa não precisa de checkpoint prévio
-        (2, None, False),     # rerun sem artifact: não permitir novo recibo/PUT
-        (2, b"same", True),   # rerun com bytes idênticos
+        (1, None, True),  # primeira tentativa não precisa de checkpoint prévio
+        (2, None, False),  # rerun sem artifact: não permitir novo recibo/PUT
+        (2, b"same", True),  # rerun com bytes idênticos
         (2, b"changed", False),  # rerun com recibo divergente
     ],
 )
