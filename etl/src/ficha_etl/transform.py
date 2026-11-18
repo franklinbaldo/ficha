@@ -82,7 +82,7 @@ def extract_all(
     *,
     progress: Progress | None = None,
 ) -> list[ExtractedFile]:
-    """Resolve cada ZIP via chain, extrai pra `extract_dir/{kind}/`.
+    """Resolve cada ZIP via chain, extrai pra `extract_dir/{kind}/{spec.name}/`.
 
     RFB publica exatamente 1 CSV por ZIP. A invariante é checada explicitamente
     aqui — se RFB mudar e empacotar arquivos extras (ex.: checksum), falhamos
