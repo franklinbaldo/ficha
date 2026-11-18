@@ -1,5 +1,5 @@
 import { fetchCurrentDataset, probeParquetRange } from './dataset.mjs';
-import { attachAnalyticalFiles, planCompanyQuery, queryCompanies } from './query-core.mjs';
+import { attachAnalyticalFiles, planCompanyQuery, queryCompanies, stripCnpj } from './query-core.mjs';
 import { createDuckDBEngine } from './duckdb-runtime.mjs';
 
 /** Render only text nodes; public CNPJ/empresa data must never become HTML. */
@@ -12,6 +12,13 @@ export function renderCompanies(documentRef, list, rows) {
     const details = documentRef.createElement('p');
     const location = [company.municipio_nome, company.uf].filter(Boolean).join(' / ');
     details.textContent = [String(company.cnpj ?? ''), location].filter(Boolean).join(' · ');
+    const canonical = stripCnpj(String(company.cnpj ?? ''));
+    if (/^[A-Z0-9]{12}[0-9]{2}$/.test(canonical)) {
+      const link = documentRef.createElement('a');
+      link.href = '/ficha/empresa/?cnpj=' + encodeURIComponent(canonical);
+      link.textContent = 'Abrir ficha';
+      details.append(link);
+    }
     item.append(heading, details);
     list.append(item);
   }
