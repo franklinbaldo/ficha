@@ -206,7 +206,12 @@ def _require_matching_content_range(response: httpx.Response, existing: int) -> 
     if match is None:
         raise RuntimeError(f"invalid Content-Range for resumed download: {value!r}")
     start, end, total = (int(part) for part in match.groups())
-    if not (0 <= start <= end < total) or existing <= 0 or start != existing or end != total - 1:
+    if not (
+        0 <= start <= end < total
+        and existing > 0
+        and start == existing
+        and end == total - 1
+    ):
         raise RuntimeError(f"Content-Range does not match resume offset {existing}: {value!r}")
 
 
