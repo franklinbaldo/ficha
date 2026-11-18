@@ -11,7 +11,7 @@ from ficha_etl.monthly_sharded import (
     materialization_inputs_from_descriptor,
     wait_for_descriptor_remote,
 )
-from ficha_etl.shard_remote import SHARD_INPUT_NAMES
+from ficha_etl.shard_remote import PUBLIC_COMPANIES_GEOMETRY, SHARD_INPUT_NAMES
 
 
 def _identity(seed: str, size: int = 10) -> dict:
@@ -228,6 +228,45 @@ def test_local_descriptor_preserves_valid_byte_sizes(tmp_path: Path, valid_size:
     path.write_text(json.dumps(descriptor), encoding="utf-8")
 
     assert _load_descriptor(path, "2026-06") == descriptor
+
+
+def _valid_shard_receipt() -> dict:
+    return {
+        "month": "2026-06",
+        "prefix": "00",
+        "name": PUBLIC_COMPANIES_GEOMETRY.shard_name("00"),
+        "size": 11,
+        "sha1": "1" * 40,
+        "materialization_id": "a" * 64,
+    }
+
+
+@pytest.mark.parametrize(
+    "bad_size",
+    [11.9, True, "11.0", "+11", " 11", "١١", 0, -11, "9" * 5000],
+)
+def test_shard_receipt_rejects_nonintegral_size(
+    tmp_path: Path, bad_size: object
+) -> None:
+    receipt = _valid_shard_receipt()
+    receipt["size"] = bad_size
+    path = tmp_path / "receipt-00.json"
+    path.write_text(json.dumps(receipt), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="invalid byte identity in receipt"):
+        _load_receipt(path, "2026-06", "00")
+
+
+@pytest.mark.parametrize("valid_size", [11, "11", "00011"])
+def test_shard_receipt_accepts_integral_size(
+    tmp_path: Path, valid_size: object
+) -> None:
+    receipt = _valid_shard_receipt()
+    receipt["size"] = valid_size
+    path = tmp_path / "receipt-00.json"
+    path.write_text(json.dumps(receipt), encoding="utf-8")
+
+    assert _load_receipt(path, "2026-06", "00") == receipt
 
 
 def test_monthly_workflow_persists_receipts_before_remote_writes() -> None:
