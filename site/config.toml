@@ -1,0 +1,9 @@
+site_name = "FICHA"
+site_title = "FICHA — fichário aberto"
+site_description = "Dados públicos de CNPJ por competência, preservados no Internet Archive."
+language = "pt-BR"
+base_url = "https://franklinbaldo.github.io/ficha/"
+content_dir = "content"
+output_dir = "dist/ficha"
+template_dir = "templates"
+no_taxonomy_pages = true
