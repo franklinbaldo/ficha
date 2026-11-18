@@ -54,6 +54,12 @@ jobs:
           ssg check --config config.toml
           ssg build --config config.toml
           node scripts/finalize.mjs
+      - uses: astral-sh/setup-uv@v3
+      - name: Print canonical Ruff formatting patch (temporary)
+        working-directory: etl
+        run: |
+          uv tool run --from ruff==0.15.12 ruff format tests/test_ssg_browser_ci_policy.py
+          git diff -- tests/test_ssg_browser_ci_policy.py
       - name: Install Chromium
         working-directory: web
         run: bunx playwright install chromium --with-deps
