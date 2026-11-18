@@ -102,6 +102,18 @@ try {
         }, manifest.parquetUrl);
       }
 
+      // Give initialization a chance to reach a terminal user-visible state.
+      // Capturing during "Preparando..." would misclassify the recovery link.
+      try {
+        await page.waitForFunction(() => {
+          const status = document.querySelector('.status')?.textContent ?? '';
+          return /Pronto para consultas|temporariamente indisponível|dados ainda não foram publicados|Manifest inválido|^Erro/i.test(status);
+        }, undefined, {timeout:20000});
+        report.initializationSettled = true;
+      } catch {
+        report.initializationSettled = false; // still record what the user saw
+      }
+
       // Check the existing search UI and its accessible recovery link.
       const input = page.locator('#busca-principal');
       try {
