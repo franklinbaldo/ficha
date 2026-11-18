@@ -139,6 +139,7 @@ reutilizar um testemunho de um lote em outro.
 | Chave duplicada entre partes, alias de caminhos/ZIP idêntico | Rejeitar |
 | Mesmo CNPJ em partes com ZIPs de bytes distintos | Rejeitar; hash de ZIP sozinho não demonstra unicidade global |
 | ZIP malformado, membro extra ou CSV com schema incorreto | Rejeitar |
+| CNPJ alfanumérico/numérico com DV incorreto e formato correto | Rejeitar na captura sintética, antes do recibo |
 | Incompatibilidade wire ou falha de completude | Zero chamadas remotas |
 
 ## Evidência disponível e próximos gates
@@ -149,6 +150,14 @@ ZIP, recibo e saída e obtém aceitação: ela demonstra o limite epistemológic
 já descrito acima, **não** prova origem RFB nem uma vulnerabilidade observada
 no pipeline real. Só uma âncora externa de confiança e ligação aos mesmos bytes
 consumidos pela ingestão poderá transformar consistência em custódia.
+
+O oráculo offline agora verifica também os **dois dígitos verificadores (DV)**
+na leitura da fonte sintética, por módulo 11 e valores ASCII menos 48,
+antes de emitir recibo. Controles com CNPJ alfanumérico e numérico de
+formato correto, mas DV adulterado, devem falhar na captura. Isso resolve
+a ressalva de revisão sobre a autossuficiência do **oráculo de testes**;
+**não demonstra** que o parser produtivo aplique a mesma verificação nem
+substitui o gate de DV já existente sobre o Parquet de saída.
 
 `etl/tests/test_cervo_rfb_completeness_p1.py` é uma **referência de teste**
 com dez ZIPs/CSV artificiais; usa `Counter` apenas porque a fixture é pequena,
