@@ -75,8 +75,10 @@ test('fecha statement/conexão inclusive no erro; input curto não consulta', as
   assert.equal(closed,1);
 });
 
-test('registra cnpjs.parquet pela URL real e rejeita SQL em nomes de lookup', async () => {
-  const dataset = currentDataset(await fixture());
+test('busca registra somente o Parquet CNPJ; lookups não geram seis dependências CORS extras', async () => {
+  const raw = await fixture();
+  const dataset = currentDataset(raw);
+  assert.equal(Object.keys(dataset.lookups).length, 6);
   const events = [];
   const db = {
     registerFileURL:async (...args) => events.push(['file',...args]),
@@ -85,9 +87,18 @@ test('registra cnpjs.parquet pela URL real e rejeita SQL em nomes de lookup', as
   };
   const module = {DuckDBDataProtocol:{HTTP:'HTTP'}};
   await attachAnalyticalFiles(db,dataset,module);
-  assert.deepEqual(events[0],['file','cnpjs.parquet',dataset.files.cnpjs.url,'HTTP',false]);
-  assert.equal(events.at(-1)[0],'close');
-  await assert.rejects(attachAnalyticalFiles(db,{...dataset,lookups:{'x; DROP TABLE cnpjs':{url:'https://example.org/x'}}},module),/unsafe lookup/);
+  assert.deepEqual(events,[
+    ['file','cnpjs.parquet',dataset.files.cnpjs.url,'HTTP',false],
+    ['view',"CREATE OR REPLACE VIEW cnpjs AS SELECT * FROM 'cnpjs.parquet'"],
+    ['close'],
+  ], 'consulta CNPJ/nome não deve acessar lookups no Internet Archive');
+
+  // The manifest reader still rejects unsafe names, even if the search
+  // no longer constructs SQL views for lookup files.
+  const corrupted = structuredClone(raw);
+  corrupted.snapshots.find(s => s.date === raw.current).lookups['x; DROP TABLE cnpjs'] =
+    {url:'https://example.org/x'};
+  assert.throws(() => currentDataset(corrupted), /nome inseguro/);
 });
 
 
