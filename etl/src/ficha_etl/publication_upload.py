@@ -98,14 +98,14 @@ def local_output_paths(output_dir: Path, descriptor: dict) -> dict[str, Path]:
         path = output_dir / name
         if not path.exists():
             raise FileNotFoundError(f"output missing before publication: {path}")
-        expected_size = int(entries[name].get("size", 0) or 0)
+        expected_size = _positive_size(entries[name].get("size"))
         expected_sha1 = _valid_sha1(entries[name].get("sha1"))
         actual_size = path.stat().st_size
         actual_sha1 = (
-            _sha1_file(path) if actual_size == expected_size and expected_size > 0 else None
+            _sha1_file(path) if expected_size is not None and actual_size == expected_size else None
         )
         if (
-            expected_size <= 0
+            expected_size is None
             or expected_sha1 is None
             or actual_size != expected_size
             or actual_sha1 != expected_sha1
@@ -116,6 +116,19 @@ def local_output_paths(output_dir: Path, descriptor: dict) -> dict[str, Path]:
             )
         paths[name] = path
     return paths
+
+
+def _positive_size(value: object) -> int | None:
+    """Bytes inteiros positivos, sem coerção de bool/float ou dígitos Unicode."""
+    if type(value) is int:
+        return value if value > 0 else None
+    if isinstance(value, str) and value.isascii() and value.isdecimal():
+        try:
+            parsed = int(value)
+        except ValueError:  # limite de dígitos do interpretador
+            return None
+        return parsed if parsed > 0 else None
+    return None
 
 
 def _valid_sha1(value: object) -> str | None:
@@ -143,14 +156,16 @@ def classify_output_upload(
 ) -> OutputUploadPlan:
     """Classifica uma fotografia remota sem fazer escrita."""
     entries = descriptor_file_entries(descriptor)
-    if metadata is None or not isinstance(metadata.get("files"), list):
+    if not isinstance(metadata, dict) or not isinstance(metadata.get("files"), list):
         return OutputUploadPlan((), (), tuple(entries), ())
 
-    by_name = {
-        entry.get("name"): entry
-        for entry in metadata["files"]
-        if isinstance(entry, dict) and isinstance(entry.get("name"), str)
-    }
+    by_name: dict[str, list[dict]] = {}
+    for entry in metadata["files"]:
+        if not isinstance(entry, dict):
+            return OutputUploadPlan((), (), tuple(entries), ())
+        name = entry.get("name")
+        if isinstance(name, str) and name in entries:
+            by_name.setdefault(name, []).append(entry)
 
     upload: list[str] = []
     reuse: list[str] = []
@@ -158,19 +173,21 @@ def classify_output_upload(
     mismatches: list[str] = []
 
     for name, expected in entries.items():
-        remote = by_name.get(name)
-        expected_size = int(expected.get("size", 0) or 0)
+        expected_size = _positive_size(expected.get("size"))
         expected_sha1 = _valid_sha1(expected.get("sha1"))
-        if expected_size <= 0 or expected_sha1 is None:
+        if expected_size is None or expected_sha1 is None:
             raise ValueError(f"{name}: invalid identity in production descriptor")
 
-        if remote is not None:
-            try:
-                remote_size = int(remote.get("size", 0) or 0)
-            except (TypeError, ValueError):
-                remote_size = 0
+        matches = by_name.get(name, [])
+        if len(matches) > 1:
+            pending.append(f"{name} (duplicate catalog entries: {len(matches)})")
+            continue
+
+        if matches:
+            remote = matches[0]
+            remote_size = _positive_size(remote.get("size"))
             remote_sha1 = _valid_sha1(remote.get("sha1"))
-            if remote_size <= 0 or remote_sha1 is None:
+            if remote_size is None or remote_sha1 is None:
                 pending.append(name)
                 continue
             if remote_size == expected_size and remote_sha1 == expected_sha1:
