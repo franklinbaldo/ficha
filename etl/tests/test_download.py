@@ -95,6 +95,24 @@ def test_resume_rejects_incompatible_content_range(tmp_path, bad_range, suffix):
     assert target.read_bytes() == original_prefix
 
 
+
+
+@pytest.mark.parametrize("status", [201, 204])
+def test_resume_rejects_other_success_status_codes(tmp_path, status):
+    file = _file()
+    target = tmp_path / file.name
+    prefix = PAYLOAD[:2000]
+    target.write_bytes(prefix)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.headers["range"] == "bytes=2000-"
+        return httpx.Response(status, content=b"" if status == 204 else PAYLOAD[2000:])
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    with pytest.raises(RuntimeError, match="unexpected HTTP"):
+        download.download_one(file, tmp_path, client=client, max_attempts=1)
+    assert target.read_bytes() == prefix
+
 def test_unrequested_partial_response_is_rejected(tmp_path):
     def handler(request: httpx.Request) -> httpx.Response:
         assert "range" not in request.headers
