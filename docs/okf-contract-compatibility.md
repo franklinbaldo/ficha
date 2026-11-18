@@ -42,9 +42,12 @@ campos que aceitam `null` é agora fixada independentemente do diff entre Zods:
 26 em Cnpj, 1 em Raiz e 9 em Socio. O inventário de 28 divergências,
 sozinho, não detectava a mudança **simultânea** dos dois contratos (por
 exemplo, `cnpj` passando a `.nullable()` em ambos, ou
-`cpf_mascarado` deixando de aceitar `null` em ambos). Dois testes
-adversariais demonstram essa lacuna no comparador antigo; o novo gate
-exige revisão explícita quando o conjunto público de nulabilidade muda.
+`cpf_mascarado` deixando de aceitar `null` em ambos). Três testes
+adversariais cobrem alargamento e estreitamento simultâneos e uma segunda
+falha: editar o inventário de dívida junto com o Zod público poderia alterar
+indiretamente uma baseline derivada dessa dívida. A lista pública 26/1/9 agora
+é **literal e independente** de `KNOWN_NULLABILITY_GAPS`; alterar qualquer
+uma das duas exige revisão explícita do contrato e do versionamento.
 Isto não valida valores reais, `safeParse` nem nulabilidade física do
 Parquet e não altera a escolha de versão feita por consumidores.
 
