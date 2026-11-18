@@ -1,5 +1,5 @@
 import { fetchCurrentDataset, probeParquetRange } from './dataset.mjs';
-import { attachAnalyticalFiles, planCompanyQuery, queryCompanies } from './query-core.mjs';
+import { attachAnalyticalFiles, planCompanyQuery, queryCompanies, stripCnpj } from './query-core.mjs';
 import { createDuckDBEngine } from './duckdb-runtime.mjs';
 
 /** Render only text nodes; public CNPJ/empresa data must never become HTML. */
