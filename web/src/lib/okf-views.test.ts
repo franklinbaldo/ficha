@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { SocioSchema as PublicV1SocioSchema } from '../schemas/v1/socio';
 import {
   getOkfConvenienceView,
   okfConvenienceViews,
@@ -44,6 +45,23 @@ describe('OKF convenience views', () => {
     expect(validateOkfConvenienceViewRows('socios_de_raizes_ativas', [socioRow])).toEqual([
       socioRow,
     ]);
+  });
+
+  it('documents the existing public-v1 nullable-row mismatch at the OKF view boundary', () => {
+    // A PF row may legitimately have no CNPJ for the partner.
+    // The generated OKF schema is deliberately not equivalent to public v1.
+    const publicV1Row = {
+      ...socioRow,
+      tipo: '2',
+      tipo_descricao: 'PF',
+      cpf_mascarado: '***.123.***-**',
+      cnpj_socio: null,
+    };
+
+    expect(PublicV1SocioSchema.safeParse(publicV1Row).success).toBe(true);
+    expect(() =>
+      validateOkfConvenienceViewRows('socios_de_raizes_ativas', [publicV1Row])
+    ).toThrow(/cnpj_socio/);
   });
 
   it('fails closed when a view returns a row outside its declared output shape', () => {
