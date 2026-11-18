@@ -120,7 +120,7 @@ def _reconcile(
     zip_hashes = set()
     for name in PART_NAMES:
         path = source_zips[name]
-        actual = _capture(month, name, path)
+        actual = _capture(month, name, path, run_id=run_id)
         if actual != by_name[name]:
             raise ValueError(f"source receipt mismatch: {name}")
         if actual.zip_sha256 in zip_hashes:
@@ -307,6 +307,15 @@ def test_zip_repack_same_csv_changes_zip_identity(tmp_path: Path) -> None:
     assert updated.zip_sha256 != receipts[0].zip_sha256
     with pytest.raises(ValueError, match="source receipt mismatch"):
         _reconcile(MONTH, zips, receipts, keys)
+
+
+def test_consistent_nondefault_run_id_is_accepted(tmp_path: Path) -> None:
+    zips, _, keys = _fixture(tmp_path)
+    other_run_id = "synthetic-rfb-ingest-b"
+    other_receipts = tuple(
+        _capture(MONTH, name, zips[name], run_id=other_run_id) for name in PART_NAMES
+    )
+    _reconcile(MONTH, zips, other_receipts, keys, run_id=other_run_id)
 
 
 def test_other_run_receipt_rejected_even_with_same_competence(tmp_path: Path) -> None:
