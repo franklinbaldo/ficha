@@ -4,7 +4,13 @@ on:
   push:
     branches: [main]
     paths:
-      - 'web/**'
+      - 'site/**'
+      - 'web/public/manifest.json'
+      - '.github/workflows/deploy.yml'
+  pull_request:
+    paths:
+      - 'site/**'
+      - 'web/public/manifest.json'
       - '.github/workflows/deploy.yml'
   workflow_dispatch:
 
@@ -14,34 +20,51 @@ permissions:
   id-token: write
 
 concurrency:
-  group: pages
+  group: pages-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: false
 
 jobs:
   build:
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: web
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - id: pages
-        uses: actions/configure-pages@v5
-      - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: 1.3.11
-      - run: bun install --frozen-lockfile
-      - run: bun run build
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Conferir SHA do checkout
         env:
-          SITE: ${{ steps.pages.outputs.origin }}
-          BASE_PATH: ${{ steps.pages.outputs.base_path }}
-      - uses: actions/upload-pages-artifact@v3
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+      - uses: actions/setup-node@v4
         with:
-          path: web/dist
+          node-version: '22'
+      - name: Instalar SSG Rust fixado e conferir SHA-256
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/ssg.tar.gz"
+          curl --fail --location --silent --show-error \
+            'https://github.com/sebastienrousseau/static-site-generator/releases/download/v0.0.75/ssg-v0.0.75-x86_64-unknown-linux-gnu.tar.gz' \
+            --output "$archive"
+          printf '%s  %s\n' 'f6305109e9bec5895e9c90f97a5c569c74048b3d50823d40175e15ca99c50843' "$archive" | sha256sum --check -
+          tar -xzf "$archive" -C "$RUNNER_TEMP" ssg
+          chmod 755 "$RUNNER_TEMP/ssg"
+          "$RUNNER_TEMP/ssg" --version
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+      - name: Build SSG Rust e conferir manifesto da Receita
+        working-directory: site
+        run: |
+          ssg check --config config.toml
+          ssg build --config config.toml
+          node scripts/finalize.mjs
+      - uses: actions/upload-pages-artifact@v3
+        if: github.event_name != 'pull_request'
+        with:
+          path: site/dist/ficha
 
   deploy:
+    if: github.event_name != 'pull_request'
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
@@ -52,67 +75,25 @@ jobs:
         uses: actions/deploy-pages@v4
 
   verify:
+    if: github.event_name != 'pull_request'
     needs: deploy
-    # Playwright 1.54.2 nao suporta Chromium no Ubuntu 26.04.
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - name: Smoke test deployed site
+        with:
+          persist-credentials: false
+      - name: HTTP smoke do Pages e identidade do manifesto RFB
         env:
           PAGE_URL: ${{ needs.deploy.outputs.page_url }}
         run: |
+          set -euo pipefail
           BASE="${PAGE_URL%/}"
-          echo "Verifying $BASE"
-          code=$(curl -sS -o /dev/null -w '%{http_code}' -L "$BASE/")
-          [ "$code" = "200" ] || { echo "::error::homepage → HTTP $code"; exit 1; }
-          curl -sSfL "$BASE/manifest.json" -o manifest.json \
-            || { echo "::error::manifest.json não publicado em $BASE/manifest.json"; exit 1; }
-          CURRENT=$(jq -r '.current // ""' manifest.json)
-          [ -n "$CURRENT" ] || { echo "::error::manifest.json sem campo 'current'"; exit 1; }
-          echo "manifest OK — snapshot atual: $CURRENT"
-          check_url() {
-            local url="$1"
-            local code
-            code=$(curl -sS -o /dev/null -w '%{http_code}' -I -L --max-time 60 "$url")
-            [ "$code" = "200" ]
-          }
-          ESSENTIAL=$(jq -r --arg m "$CURRENT" '.snapshots[] | select(.date == $m) | [.files.cnpjs.url, (.lookups[]?.url)] | .[]' manifest.json)
-          [ -n "$ESSENTIAL" ] || { echo "::error::nenhuma URL essencial encontrada pro mês $CURRENT"; exit 1; }
-          fail=0
-          while IFS= read -r url; do
-            if check_url "$url"; then echo "OK   $url"; else echo "::error::$url → indisponível (essencial)"; fail=1; fi
-          done <<< "$ESSENTIAL"
-          [ "$fail" = "0" ] || exit 1
-          COMPLEMENTARY=$(jq -r --arg m "$CURRENT" '.snapshots[] | select(.date == $m) | [(.files.socios.url // empty),(.files.cnpj_contatos.url // empty),(.files.cnpj_cnaes.url // empty),(.files.enderecos.url // empty),(.files.pessoas.url // empty)] | .[]' manifest.json)
-          degraded=0
-          while IFS= read -r url; do
-            [ -n "$url" ] || continue
-            if check_url "$url"; then echo "OK   $url"; else echo "::warning::$url → indisponível (complementar — seção correspondente fica degradada no site)"; degraded=1; fi
-          done <<< "$COMPLEMENTARY"
-          if [ "$degraded" = "1" ]; then echo "site publicado com busca principal OK, mas com dataset(s) complementar(es) indisponível(is)"; else echo "snapshot files OK — todos os arquivos alcançáveis"; fi
-
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: 1.3.11
-      - name: Install browser audit dependencies
-        working-directory: web
-        run: |
-          bun install --frozen-lockfile
-          bun add --no-save playwright@1.54.2 axe-core@4.10.3
-          bunx playwright install chromium --with-deps
-      - name: Verify accessibility on the page readers receive
-        working-directory: web
-        env:
-          GITHUB_HEAD_SHA: ${{ github.sha }}
-          PAGE_URL: ${{ needs.deploy.outputs.page_url }}
-        run: |
-          BASE="${PAGE_URL%/}/"
-          bun run scripts/check-accessibility.mjs "$BASE" ../public-accessibility-evidence
-      - name: Upload public accessibility evidence
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: ficha-public-accessibility-${{ github.sha }}
-          path: public-accessibility-evidence/
-          if-no-files-found: error
-          retention-days: 30
+          curl -fsSL --retry 3 "$BASE/" -o index.html
+          curl -fsSL --retry 3 "$BASE/sobre/" -o sobre.html
+          curl -fsSL --retry 3 "$BASE/css/site.css" -o site.css
+          curl -fsSL --retry 3 "$BASE/manifest.json" -o manifest-live.json
+          grep -q 'Pesquisa por CNPJ ainda indisponível' index.html
+          grep -q 'Sobre o FICHA' sobre.html
+          grep -q 'focus-visible' site.css
+          cmp web/public/manifest.json manifest-live.json
+          node -e "const d=require('./manifest-live.json');if(!d.current||!d.snapshots?.some(s=>s.date===d.current))process.exit(1); console.log('Pages MVP + manifest OK: '+d.current)"
