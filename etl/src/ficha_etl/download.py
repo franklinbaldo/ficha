@@ -145,6 +145,9 @@ def _download_streaming(
             mode = "wb"
         elif resumed and response.status_code != 206:
             response.raise_for_status()
+            raise RuntimeError(
+                f"{file.name}: unexpected HTTP {response.status_code} for Range resume"
+            )
         else:
             response.raise_for_status()
 
