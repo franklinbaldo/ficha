@@ -1565,6 +1565,11 @@ def write_enderecos_parquet(
     auxiliar e nunca é necessário só para interpretar uma linha de endereço.
     Ver docs/perf-plan-2026-05.md §7 e ADR 0023.
 
+    Quando o logradouro não começa com um tipo conhecido, acrescenta tipo_logradouro
+    separado (origem RFB) antes de normalizar. Um prefixo já explícito no
+    logradouro prevalece, evitando duplicação e preservando conflitos para
+    diagnóstico separado.
+
     Normalização vetorizada: CTE computa a base normalizada uma vez por linha
     (UPPER + strip_accents + TRIM + whitespace collapse); depois uma única
     extração de prefixo + MAP lookup substitui as 10 chamadas regexp_replace
@@ -1587,7 +1592,19 @@ def write_enderecos_parquet(
                     est.municipio AS municipio_codigo,
                     {municipio_name_sql} AS municipio_nome,
                     UPPER(strip_accents(TRIM(
-                        regexp_replace(est.logradouro, '\s+', ' ', 'g')
+                        regexp_replace(
+                            CASE
+                                WHEN est.tipo_logradouro IS NULL
+                                  OR TRIM(est.tipo_logradouro) = ''
+                                  OR regexp_matches(
+                                      UPPER(strip_accents(TRIM(est.logradouro))),
+                                      '^(RUA|R\.?|AVENIDA|AV\.?|TRAVESSA|TV\.?|ALAMEDA|AL\.?|PRACA|PCA\.?|PC\.?|ESTRADA|EST\.?|RODOVIA|ROD\.?|VILA|VL\.?|LARGO|LG\.?)\s+'
+                                  )
+                                THEN est.logradouro
+                                ELSE TRIM(est.tipo_logradouro) || ' ' || est.logradouro
+                            END,
+                            '\s+', ' ', 'g'
+                        )
                     ))) AS _logr,
                     est.numero,
                     est.cep,
