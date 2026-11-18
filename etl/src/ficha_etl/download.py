@@ -12,6 +12,7 @@ Não extrai os ZIPs — extração é responsabilidade do `transform.py`.
 from __future__ import annotations
 
 import logging
+import re
 import time
 from collections.abc import Iterable
 from dataclasses import dataclass
@@ -147,6 +148,11 @@ def _download_streaming(
         else:
             response.raise_for_status()
 
+        # HTTP 206 alone is not evidence that a resumed body starts at our
+        # cached offset. Validate the exact open-ended range *before* append.
+        if response.status_code == 206:
+            _require_matching_content_range(response, existing)
+
         with target.open(mode) as fh:
             downloaded = existing
             last_report = downloaded
@@ -180,6 +186,24 @@ def _download_streaming(
         speed,
     )
     return DownloadResult(file=file, path=target, size_bytes=size, resumed=resumed)
+
+
+
+def _require_matching_content_range(response: httpx.Response, existing: int) -> None:
+    """Reject a 206 whose advertised slice cannot complete our cached prefix.
+
+    This guards splice offsets; it is not a digest or an authenticity check
+    for the cached prefix or the upstream RFB/IA object.
+    """
+    value = response.headers.get("content-range", "")
+    match = re.fullmatch(r"bytes (\\d+)-(\\d+)/(\\d+)", value)
+    if match is None:
+        raise RuntimeError(f"invalid Content-Range for resumed download: {value!r}")
+    start, end, total = (int(part) for part in match.groups())
+    if existing <= 0 or start != existing or end != total - 1:
+        raise RuntimeError(
+            f"Content-Range does not match resume offset {existing}: {value!r}"
+        )
 
 
 def _expected_size(response: httpx.Response, prior_bytes: int) -> int | None:
