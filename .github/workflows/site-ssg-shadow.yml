@@ -1,0 +1,73 @@
+name: SSG shadow (no deploy)
+
+on:
+  pull_request:
+    paths:
+      - 'site-ssg/**'
+      - '.github/workflows/site-ssg-shadow.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ssg-shadow-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-shadow:
+    name: SSG Rust source and output contract
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    defaults:
+      run:
+        shell: bash
+        working-directory: site-ssg
+    steps:
+      - name: Checkout exact PR SHA
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Assert source SHA
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Run SSG source contracts
+        run: node --test tests/source.test.mjs
+
+      - name: Install verified SSG Rust 0.0.75
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/ssg-0.0.75.tar.gz"
+          curl --fail --location --silent --show-error \
+            'https://github.com/sebastienrousseau/static-site-generator/releases/download/v0.0.75/ssg-v0.0.75-x86_64-unknown-linux-gnu.tar.gz' \
+            --output "$archive"
+          printf '%s  %s\n' 'f6305109e9bec5895e9c90f97a5c569c74048b3d50823d40175e15ca99c50843' "$archive" | sha256sum --check -
+          tar -xzf "$archive" -C "$RUNNER_TEMP" ssg
+          chmod 755 "$RUNNER_TEMP/ssg"
+          "$RUNNER_TEMP/ssg" --version
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+
+      - name: Validate and build static site
+        run: |
+          ssg check --config config.toml
+          ssg build --config config.toml
+
+      - name: Verify actual output and CSS
+        run: |
+          node scripts/materialize-assets.mjs
+          node scripts/check-built.mjs
+
+      - name: Confirm no publishing happened
+        run: |
+          test -f dist/ficha/index.html
+          test -f dist/ficha/sobre/index.html
+          echo "Shadow only. No Pages deployment, ETL, IA, or manifest promotion."
