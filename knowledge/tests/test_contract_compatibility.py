@@ -186,11 +186,33 @@ def _generated_fields(table: str) -> dict[str, str]:
     return fields
 
 
+def _parse_published_v1_object(source: str, type_name: str) -> dict[str, str]:
+    """Pin the exported object itself, not just its field declarations.
+
+    A schema-level .partial() makes every field optional without adding
+    .optional() to any field expression. Likewise .passthrough() changes
+    acceptance of extra fields while the field-by-field guard still passes.
+    """
+    schema_name = f"{type_name.capitalize()}Schema"
+    declaration = re.search(
+        rf"^export const {re.escape(schema_name)}\s*=\s*z\.object\(\{{"
+        r"(?P<body>.*?)^[ \t]*\}\)(?P<tail>[^\r\n]*)$",
+        source,
+        flags=re.DOTALL | re.MULTILINE,
+    )
+    if declaration is None or declaration.group("tail").strip() != ";":
+        raise AssertionError(
+            f"{schema_name}: public v1 must export a direct z.object(...); "
+            "review schema-level modifiers/aliases before changing the contract"
+        )
+    return _zod_fields(declaration.group("body"), quoted=False)
+
+
 def _published_v1_fields(type_name: str) -> dict[str, str]:
     source = (
         ROOT / f"web/src/schemas/v1/{type_name}.ts"
     ).read_text(encoding="utf-8")
-    return _zod_fields(source, quoted=False)
+    return _parse_published_v1_object(source, type_name)
 
 
 def _kind(expr: str) -> str:
@@ -351,6 +373,26 @@ class OkfContractCompatibilityTest(unittest.TestCase):
             _nullable_fields(published),
             EXPECTED_PUBLIC_NULLABLE_FIELDS["Cnpj"],
         )
+
+    def test_negative_schema_level_widening_is_rejected(self) -> None:
+        source = (
+            ROOT / "web/src/schemas/v1/estabelecimento.ts"
+        ).read_text(encoding="utf-8")
+        closing = "});\n\nexport type Estabelecimento"
+        self.assertIn(closing, source)
+        self.assertEqual(
+            _parse_published_v1_object(source, "estabelecimento"),
+            _published_v1_fields("estabelecimento"),
+        )
+        for modifier in (".partial()", ".passthrough()"):
+            with self.subTest(modifier=modifier):
+                mutated = source.replace(
+                    closing,
+                    "})" + modifier + ";\n\nexport type Estabelecimento",
+                    1,
+                )
+                with self.assertRaisesRegex(AssertionError, "direct z.object"):
+                    _parse_published_v1_object(mutated, "estabelecimento")
 
     def test_required_field_presence_matches_public_v1(self) -> None:
         # Generated Zod metadata (title/description) is intentionally excluded.
