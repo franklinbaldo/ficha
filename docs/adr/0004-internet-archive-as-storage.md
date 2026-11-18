@@ -5,7 +5,7 @@
 
 ## Contexto
 
-FICHA precisa hospedar Parquets de ~3-5GB e ZIPs de fichas atômicas para o público acessar via HTTP, com:
+FICHA precisa hospedar Parquets de vários gigabytes e ZIPs de fichas atômicas para o público acessar via HTTP, com:
 
 - Custo zero ou simbólico
 - Disponibilidade longa (anos, idealmente décadas)
@@ -21,7 +21,7 @@ Usar **Internet Archive (archive.org)** como storage primário, com **um item po
 - ✅ **Custo zero** para dados públicos.
 - ✅ **Persistência institucional** — o IA é uma das infraestruturas culturais mais estáveis da web.
 - ⚠️ **`Range` HTTP funciona em teste pontual**, mas não comprova leitura por DuckDB-WASM: CORS precisa funcionar também. Ver adendo de 18/11/2026.
-- ✅ **Funcionalidade nativa de "unzip transparente"** — permite acesso direto a `archive.org/.../ZIP/{cnpj}.json` sem descompactar tudo.
+- ⚠️ **Acesso a membros de ZIP** — o IA oferece URLs de leitura de membros em determinadas condições, mas nomes e formatos (inclusive `.pb`) variam por snapshot; a disponibilidade HTTP deve ser testada, sem pressupor CORS.
 - ✅ **API S3-like** (`internetarchive` Python lib) facilita upload via GitHub Actions.
 - ⚠️ **Latência variável** — acceptable, mitigado por cache TanStack Query no client.
 - ⚠️ **CORS não garantido** — a suposição inicial de headers permissivos foi contrariada por teste real em 18/11/2026. Ver adendo e [#208](https://github.com/franklinbaldo/ficha/issues/208).
@@ -29,7 +29,7 @@ Usar **Internet Archive (archive.org)** como storage primário, com **um item po
 ## Estrutura
 
 - **1 item por snapshot mensal**: `ficha-2026-01`, `ficha-2026-02`, ...
-- Cada item contém: `ficha-YYYY-MM.parquet`, `ficha-YYYY-MM.zip` (fichas JSON), `metadata.json`.
+- Cada item pode conter os artefatos declarados no manifesto daquela competência: por exemplo, `cnpjs.parquet`, `raizes.parquet`, `pessoas.parquet` e shards `companies-NN.zip` com fichas Protobuf. Nomes, formatos e composição variam por snapshot; declaração não prova disponibilidade HTTP/CORS.
 - **Manifest** vive no repo (`web/public/manifest.json`), não no IA — atomicidade de deploy. Ver [ADR 0003](0003-schema-versioning.md).
 
 ## Consequências
@@ -41,7 +41,7 @@ Usar **Internet Archive (archive.org)** como storage primário, com **um item po
 
 ## Alternativas consideradas
 
-- **R2/B2/S3**: custo previsível mas pago, e perdemos persistência institucional.
+- **R2/B2/S3 como custódia primária**: custo de hospedagem pago e troca da preservação institucional escolhida nesta ADR. Uma eventual **origem separada de consulta** com CORS/Range (issue #208) não substitui essa custódia.
 - **GitHub Releases**: limite 2GB por arquivo, inviável.
 - **Hugging Face Datasets**: ótima alternativa, mas IA é mais estável a longo prazo.
 - **IPFS**: pinning sustentável é caro; latência ruim.
