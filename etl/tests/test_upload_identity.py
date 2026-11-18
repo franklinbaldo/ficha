@@ -317,3 +317,126 @@ def test_incomplete_metadata_never_triggers_a_write(tmp_path) -> None:
             ensure_uploaded(
                 NAME, path, upload=upload, fetch_metadata=lambda m=metadata: m, sleep=lambda _: None
             )
+
+
+# --- catálogo com duplicatas do nome alvo ------------------------------------
+# Mesmo quando as duas identidades coincidem, o catálogo não prova unicidade.
+
+
+@pytest.mark.parametrize("first_matches", [True, False])
+@pytest.mark.parametrize("same_identity", [True, False])
+def test_duplicate_target_fails_closed(tmp_path, first_matches, same_identity) -> None:
+    content = b"AAAAA"
+    local = local_identity(_file(tmp_path, content))
+    valid = _entry(content)
+    second = valid.copy() if same_identity else _entry(b"BBBBB")
+    entries = [valid, second] if first_matches else [second, valid]
+
+    decision = decide(NAME, local, _metadata(*entries))
+    assert decision.state is RemoteIdentityState.UNAVAILABLE
+    assert decision.action is UploadAction.RETRY_FAIL
+    assert "2 entradas" in decision.detail
+
+
+@pytest.mark.parametrize("same_identity", [True, False])
+def test_duplicate_target_never_calls_uploader(tmp_path, same_identity) -> None:
+    content = b"AAAAA"
+    path = _file(tmp_path, content)
+    valid = _entry(content)
+    duplicate = valid.copy() if same_identity else _entry(b"BBBBB")
+    uploaded: list[str] = []
+
+    with pytest.raises(IdentityNotConfirmed):
+        ensure_uploaded(
+            NAME,
+            path,
+            upload=lambda: uploaded.append("PUT"),
+            fetch_metadata=lambda: _metadata(valid, duplicate),
+            sleep=lambda _: None,
+        )
+    assert uploaded == []
+
+
+@pytest.mark.parametrize("first_matches", [True, False])
+def test_duplicate_target_cannot_confirm_after_put(tmp_path, first_matches) -> None:
+    content = b"AAAAA"
+    local = local_identity(_file(tmp_path, content))
+    entries = [_entry(content), _entry(b"BBBBB")]
+    if not first_matches:
+        entries.reverse()
+    fetches: list[int] = []
+
+    def fetch_metadata() -> dict:
+        fetches.append(1)
+        return _metadata(*entries)
+
+    assert not confirm_remote_identity(
+        NAME, local, fetch_metadata=fetch_metadata, attempts=2, sleep=lambda _: None
+    )
+    assert len(fetches) == 2
+
+
+def test_duplicates_of_irrelevant_names_do_not_change_target_decision(tmp_path) -> None:
+    content = b"AAAAA"
+    local = local_identity(_file(tmp_path, content))
+    unrelated = _entry(b"other", name="unrelated.parquet")
+    repeated = _metadata(unrelated, unrelated.copy())
+    missing = decide(NAME, local, repeated)
+    assert missing.state is RemoteIdentityState.MISSING
+    assert missing.action is UploadAction.UPLOAD
+
+    with_target = decide(NAME, local, _metadata(unrelated, _entry(content), unrelated))
+    assert with_target.state is RemoteIdentityState.IDENTICAL
+    assert with_target.action is UploadAction.SKIP
+
+
+# --- identidade remota precisa ser realmente comparável ----------------------
+# int(5.9) == 5 e int(True) == 1: coerção não prova tamanho. Um sha1
+# não-hexadecimal tampouco é evidência de bytes diferentes que autorize REPLACE.
+
+
+@pytest.mark.parametrize(
+    ("raw_size", "raw_sha1"),
+    [
+        (5.9, hashlib.sha1(b"AAAAA").hexdigest()),
+        (True, hashlib.sha1(b"AAAAA").hexdigest()),
+        (-1, hashlib.sha1(b"AAAAA").hexdigest()),
+        ("5.0", hashlib.sha1(b"AAAAA").hexdigest()),
+        ("9" * 5000, hashlib.sha1(b"AAAAA").hexdigest()),  # acima do limite int() do Python
+        ({"size": 5}, hashlib.sha1(b"AAAAA").hexdigest()),
+        ("5", "sha1-invalid"),
+        ("5", "g" * 40),
+        ("5", "0" * 39),
+        ("5", 123),
+        ("5", None),
+    ],
+)
+def test_noncomparable_metadata_neither_skips_nor_writes(tmp_path, raw_size, raw_sha1) -> None:
+    path = _file(tmp_path, b"AAAAA")
+    local = local_identity(path)
+    remote = {"name": NAME, "size": raw_size, "sha1": raw_sha1}
+    metadata = _metadata(remote)
+
+    decision = decide(NAME, local, metadata)
+    assert decision.state is RemoteIdentityState.UNAVAILABLE
+    assert decision.action is UploadAction.RETRY_FAIL
+
+    with pytest.raises(IdentityNotConfirmed):
+        ensure_uploaded(
+            NAME,
+            path,
+            upload=lambda: pytest.fail("metadata incomparável não autoriza PUT"),
+            fetch_metadata=lambda: metadata,
+            sleep=lambda _: None,
+        )
+
+
+@pytest.mark.parametrize("raw_size", [5, "5", "0005"])
+def test_valid_decimal_size_and_uppercase_sha1_still_reuse(tmp_path, raw_size) -> None:
+    content = b"AAAAA"
+    local = local_identity(_file(tmp_path, content))
+    entry = {"name": NAME, "size": raw_size, "sha1": local.sha1.upper()}
+
+    decision = decide(NAME, local, _metadata(entry))
+    assert decision.state is RemoteIdentityState.IDENTICAL
+    assert decision.action is UploadAction.SKIP
