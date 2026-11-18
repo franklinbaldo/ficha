@@ -115,6 +115,15 @@ def test_ssg_gate_policy() -> None:
     assert violations(_load(), AUDITOR.read_text(encoding="utf-8")) == []
 
 
+def test_ssg_templates_have_explicit_utf8_charset() -> None:
+    for template_name in ("index.html", "page.html"):
+        source = (ROOT / "site" / "templates" / template_name).read_text(
+            encoding="utf-8"
+        )
+        assert '<meta charset="utf-8">' in source
+        assert '{{charset}}' not in source
+
+
 def test_reject_mutations_that_restore_false_green() -> None:
     baseline = _load()
     auditor = AUDITOR.read_text(encoding="utf-8")
