@@ -19,9 +19,22 @@ layout: index
   <div class="actions"><a class="primary-link" href="/ficha/manifest.json">Ver manifesto de dados</a><a class="secondary-link" href="/ficha/sobre/">Entender o projeto</a></div>
   <p>Fonte arquivística do snapshot: <a href="__FICHA_CURRENT_SOURCE_URL__">arquivo completo de CNPJs (Parquet, __FICHA_CURRENT_SOURCE_SIZE__ GB)</a>. O link aponta para um arquivo grande e pode iniciar download; não é pesquisa no navegador.</p>
 </section>
-<section class="notice" aria-labelledby="notice-title">
-  <div class="notice-marker" aria-hidden="true">i</div>
-  <div><h2 id="notice-title">Pesquisa por CNPJ ainda indisponível</h2><p>Esta primeira versão apresenta o acervo e seus links públicos. A pesquisa por CNPJ numérico, alfanumérico ou razão social depende de uma etapa posterior de integração. Não exibimos resultados de pesquisa não confirmados.</p></div>
+<section class="search-section" aria-labelledby="busca-titulo">
+  <h2 id="busca-titulo">Pesquisa de CNPJ</h2>
+  <p class="notice"><strong>Prévia da busca.</strong> A nova busca por CNPJ numérico, alfanumérico ou razão social ainda não passou pelos testes de paridade completa com os Parquets remotos.</p>
+  <form id="busca-form" role="search">
+    <label for="busca-termo">CNPJ (numérico ou alfanumérico) ou razão social</label>
+    <div class="search-controls">
+      <input id="busca-termo" name="q" type="search" maxlength="200" autocomplete="off" required placeholder="CNPJ ou nome da empresa">
+      <button id="busca-enviar" type="submit">Pesquisar</button>
+    </div>
+  </form>
+  <p id="consulta-estado" role="status" aria-live="polite">Digite um CNPJ ou uma razão social para iniciar a consulta.</p>
+  <section aria-labelledby="consulta-titulo">
+    <h3 id="consulta-titulo">Resultados</h3>
+    <ul class="companies" id="consulta-lista"></ul>
+  </section>
+  <noscript><p>A busca precisa de JavaScript. O manifesto público continua disponível pelo link acima.</p></noscript>
 </section>
 <section class="reading" aria-labelledby="reading-title">
   <h2 id="reading-title">Por onde começar</h2>

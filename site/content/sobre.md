@@ -12,13 +12,13 @@ layout: page
 
 O **FICHA**, Fichário de Identificação de CNPJ Hospedado no Archive, organiza referências aos dados públicos do Cadastro Nacional da Pessoa Jurídica (CNPJ) da Receita Federal, preservados por competência.
 
+## Duas camadas de dados
+
+A camada atômica armazena registros por raiz de CNPJ em arquivos Protobuf/ZIP quando declarados pelo snapshot. A camada analítica utiliza arquivos Parquet e DuckDB-WASM para cruzamentos no navegador. A disponibilidade e a versão de cada artefato dependem do manifesto publicado; sua declaração não é prova de acesso remoto.
+
 ## O que já está disponível
 
-A [página inicial](/ficha/) apresenta a competência apontada pelo manifesto público. O [manifesto de dados](/ficha/manifest.json) contém referências aos arquivos e seus metadados. A origem arquivística e a disponibilidade de acesso podem variar com o tempo.
-
-## O que esta versão ainda não faz
-
-A interface de pesquisa por CNPJ numérico, alfanumérico ou razão social **não está habilitada**. O projeto estuda a consulta no navegador, inclusive os formatos Parquet e Protobuf, mas a existência desses arquivos não demonstra que um navegador consiga lê-los diretamente de seus endereços arquivísticos. Não alteramos nem produzimos os dados de origem nesta publicação.
+A [página inicial](/ficha/) apresenta a competência apontada pelo manifesto público e a interface de busca. O [manifesto de dados](/ficha/manifest.json) contém referências aos arquivos e seus metadados. A origem arquivística e a disponibilidade de acesso podem variar com o tempo.
 
 ## Código e documentação
 

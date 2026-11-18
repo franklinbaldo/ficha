@@ -52,6 +52,16 @@ await mkdir(new URL('css/',root), {recursive:true});
 try { await lstat(cssURL); throw new Error('CSS já existe; não sobrescrever'); }
 catch (err) { if (err?.code !== 'ENOENT') throw err; }
 await copyFile(new URL('../static/css/site.css', import.meta.url), cssURL);
+
+const jsFiles = ['boot.mjs', 'search-app.mjs', 'duckdb-runtime.mjs', 'query-core.mjs', 'dataset.mjs'];
+await mkdir(new URL('js/', root), { recursive: true });
+for (const file of jsFiles) {
+  const target = new URL('js/' + file, root);
+  try { await lstat(target); throw new Error(file + ': destino já existe; não sobrescrever'); }
+  catch (err) { if (err?.code !== 'ENOENT') throw err; }
+  await copyFile(new URL('../static/js/' + file, import.meta.url), target);
+}
+
 const indexURL = new URL('index.html',root);
 const aboutURL = new URL('sobre/index.html',root);
 let index = (await required(indexURL)).toString('utf8');
@@ -76,10 +86,10 @@ for (const [file,html] of [['index',index],['sobre',about]]) {
   for (const requiredText of ['lang="pt-BR"','href="/ficha/"','href="/ficha/sobre/"','href="/ficha/css/site.css"','id="main"']) {
     if (!html.includes(requiredText)) throw new Error(file + ': falta ' + requiredText);
   }
-  if (/astro-island|svelte|<form|type="module"/i.test(html)) throw new Error(file+': elemento de busca/legado indevido');
+  if (/astro-island|svelte/i.test(html)) throw new Error(file+': elemento legado indevido');
   if (/\{\{[!\w]|\{%/.test(html)) throw new Error(file + ': template não renderizado');
 }
-for (const token of ['Pesquisa por CNPJ ainda indisponível',label,'/ficha/manifest.json',safeUrl,sizeGB+' GB']) {
+for (const token of ['id="busca-form"','/ficha/js/boot.mjs',label,'/ficha/manifest.json',safeUrl,sizeGB+' GB']) {
   if (!index.includes(token)) throw new Error('Home sem ' + token);
 }
 if (!about.includes('Sobre o FICHA')) throw new Error('Sobre não renderizado');

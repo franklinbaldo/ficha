@@ -46,7 +46,7 @@ test('preserva manifesto desconhecido, mesmo semelhante ao PWA', async () => {
     assert.deepEqual(JSON.parse(await readFile(path, 'utf8')), unknown);
   });
 });
-test('recusa apagar caminho simbólico', async () => {
+test('recusa apagar caminho simbólico', { skip: process.platform === 'win32' }, async () => {
   await withFixture(null, async (path, dir) => {
     const target = join(dir, 'pwa.json');
     await writeFile(target, JSON.stringify(pwa));
