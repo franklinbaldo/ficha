@@ -34,18 +34,22 @@ def test_enderecos_writer_compoe_tipo_sem_duplicar_prefixo(tmp_path: Path) -> No
             "INSERT INTO estabelecimento VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             [
                 (
-                    f"{i:08d}", "E08G", "12", "SP", "7107",
-                    tipo, nome, str(i), "CENTRO", "01000000",
+                    f"{i:08d}",
+                    "E08G",
+                    "12",
+                    "SP",
+                    "7107",
+                    tipo,
+                    nome,
+                    str(i),
+                    "CENTRO",
+                    "01000000",
                 )
                 for i, (tipo, nome, _) in enumerate(casos, start=1)
             ],
         )
-        con.execute(
-            "CREATE TABLE lookup_municipios(codigo VARCHAR, descricao VARCHAR)"
-        )
-        con.execute(
-            "INSERT INTO lookup_municipios VALUES ('7107', 'MUNICIPIO RFB')"
-        )
+        con.execute("CREATE TABLE lookup_municipios(codigo VARCHAR, descricao VARCHAR)")
+        con.execute("INSERT INTO lookup_municipios VALUES ('7107', 'MUNICIPIO RFB')")
         output = tmp_path / "enderecos.parquet"
         write_enderecos_parquet(con, output)
 
