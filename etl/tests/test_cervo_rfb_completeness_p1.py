@@ -145,12 +145,18 @@ def _key(base12: str) -> str:
     return base12 + a + b
 
 
-def _write_zip(path: Path, keys: list[str], *, extra_member: bool = False) -> None:
+def _write_zip(
+    path: Path,
+    keys: list[str],
+    *,
+    extra_member: bool = False,
+    compression: int = zipfile.ZIP_DEFLATED,
+) -> None:
     stream = io.StringIO(newline="")
     writer = csv.writer(stream, delimiter=";", quotechar='"', quoting=csv.QUOTE_ALL)
     for key in keys:
         writer.writerow([key[:8], key[8:12], key[12:], *([""] * 27)])
-    with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+    with zipfile.ZipFile(path, "w", compression=compression) as archive:
         archive.writestr("K.synthetic.ESTABELE", stream.getvalue().encode("latin-1"))
         if extra_member:
             archive.writestr("unexpected.txt", "extra")
@@ -346,3 +352,34 @@ def test_jointly_replaced_origin_receipt_and_output_are_not_authenticated(
     assert fresh.zip_sha256 != receipts[9].zip_sha256
     assert fresh.key_multiset_sha256 != receipts[9].key_multiset_sha256
     _reconcile(MONTH, zips, (*receipts[:9], fresh), [*keys[:9], replacement])
+
+
+def test_equal_name_and_size_do_not_prove_zip_byte_identity(tmp_path: Path) -> None:
+    """An existing raw object with the expected filename/size may be a different ZIP."""
+    zips, _, expected = _fixture(tmp_path)
+    name = PART_NAMES[5]
+    path = zips[name]
+    key_a = _key("111122220001")
+    key_b = _key("333344440001")
+
+    # Stored ZIPs have equal-length members and stable container lengths.
+    _write_zip(path, [key_a], compression=zipfile.ZIP_STORED)
+    receipt_a = _capture(MONTH, name, path)
+    raw_a = path.read_bytes()
+    receipts_a = tuple(
+        receipt_a if part == name else _capture(MONTH, part, zips[part])
+        for part in PART_NAMES
+    )
+
+    _write_zip(path, [key_b], compression=zipfile.ZIP_STORED)
+    raw_b = path.read_bytes()
+    assert path.name == name
+    assert len(raw_a) == len(raw_b)
+    assert _digest(raw_a) != _digest(raw_b)
+    with pytest.raises(ValueError, match="source receipt mismatch"):
+        _reconcile(MONTH, zips, receipts_a, [*expected[:5], key_a, *expected[6:]])
+
+    # Recapturing source B with its own coherent receipt and output still passes.
+    # That is a trust-boundary counterexample, NOT a production RFB custody test.
+    receipts_b = tuple(_capture(MONTH, part, zips[part]) for part in PART_NAMES)
+    _reconcile(MONTH, zips, receipts_b, [*expected[:5], key_b, *expected[6:]])
