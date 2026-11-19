@@ -97,3 +97,28 @@ def test_wire_publicado_202607_evidencia_numero_nao_origem_rfb():
     assert archived.snapshot_yyyymm == 202607
     assert archived.porte_empresa == 1
     assert Porte.Name(archived.porte_empresa) == "NAO_INFORMADO"
+
+    # Linha-ouro de OUTRO artefato publicado no mesmo item, consultado via
+    # DuckDB HTTP Range pela Lontra R88, sem baixar o Parquet de ~3 GB:
+    # https://archive.org/download/ficha-2026-07/raizes.parquet
+    # https://github.com/franklinbaldo/lontra/blob/main/workspace/ficha_ia_parquet_pb_pair_r88.py
+    # ETag/Last-Modified do servidor não equivalem a SHA integral do Parquet.
+    derived_parquet_row = {
+        "cnpj_base": "00000006",
+        "porte_empresa": "01",
+        "snapshot_yyyymm": 202607,  # item ficha-2026-07, não coluna física do Parquet
+    }
+    assert f"{archived.cnpj_base:08d}" == derived_parquet_row["cnpj_base"]
+    assert archived.snapshot_yyyymm == derived_parquet_row["snapshot_yyyymm"]
+    # Segundo o layout RFB, 01 = microempresa, mas o enum do PB diz
+    # NAO_INFORMADO. É divergência ENTRE DERIVADOS PUBLICADOS, não
+    # prova da entrada RFB nem identidade do produtor histórico v1.0.
+    rfb_meanings = {
+        "00": "NAO_INFORMADO",
+        "01": "MICRO_EMPRESA",
+        "03": "PEQUENO_PORTE",
+        "05": "DEMAIS",
+    }
+    expected_semantics = rfb_meanings[derived_parquet_row["porte_empresa"]]
+    assert expected_semantics == "MICRO_EMPRESA"
+    assert Porte.Name(archived.porte_empresa) != expected_semantics
