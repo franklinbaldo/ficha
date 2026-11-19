@@ -12,7 +12,9 @@ from ficha_etl import cli, pack_upload_snapshot
 
 
 @pytest.mark.parametrize("mutation", ["rewrite", "replace"])
-def test_pack_cli_passes_anonymous_bytes_even_if_path_changes(monkeypatch, tmp_path, mutation):
+def test_pack_cli_passes_anonymous_bytes_even_if_path_changes(
+    monkeypatch, tmp_path, mutation
+):
     output = tmp_path / "companies.zip"
     original = b"PACKED ORIGINAL"
     events = []
@@ -38,13 +40,22 @@ def test_pack_cli_passes_anonymous_bytes_even_if_path_changes(monkeypatch, tmp_p
     monkeypatch.setattr(cli.upload_mod, "upload_companies_zip", upload)
     monkeypatch.setenv("IA_ACCESS_KEY", "synthetic")
     monkeypatch.setenv("IA_SECRET_KEY", "synthetic")
-    assert cli._cmd_pack(
-        "2026-08", output=output, local_parquets=None, memory_limit_gb=None, skip_upload=False
-    ) == 0
+    assert (
+        cli._cmd_pack(
+            "2026-08",
+            output=output,
+            local_parquets=None,
+            memory_limit_gb=None,
+            skip_upload=False,
+        )
+        == 0
+    )
     assert events == ["pack", "upload"]
 
 
-def test_pack_cli_skip_upload_does_not_require_snapshot_or_credentials(monkeypatch, tmp_path):
+def test_pack_cli_skip_upload_does_not_require_snapshot_or_credentials(
+    monkeypatch, tmp_path
+):
     output = tmp_path / "companies.zip"
 
     def pack(*args, **kwargs):
@@ -59,9 +70,16 @@ def test_pack_cli_skip_upload_does_not_require_snapshot_or_credentials(monkeypat
     monkeypatch.setattr(cli.upload_mod, "upload_companies_zip", unexpected)
     monkeypatch.delenv("IA_ACCESS_KEY", raising=False)
     monkeypatch.delenv("IA_SECRET_KEY", raising=False)
-    assert cli._cmd_pack(
-        "2026-08", output=output, local_parquets=None, memory_limit_gb=None, skip_upload=True
-    ) == 0
+    assert (
+        cli._cmd_pack(
+            "2026-08",
+            output=output,
+            local_parquets=None,
+            memory_limit_gb=None,
+            skip_upload=True,
+        )
+        == 0
+    )
 
 
 def test_pack_cli_freeze_failure_prevents_put(monkeypatch, tmp_path):
@@ -82,9 +100,16 @@ def test_pack_cli_freeze_failure_prevents_put(monkeypatch, tmp_path):
     monkeypatch.setattr(cli.upload_mod, "upload_companies_zip", unexpected)
     monkeypatch.setenv("IA_ACCESS_KEY", "synthetic")
     monkeypatch.setenv("IA_SECRET_KEY", "synthetic")
-    assert cli._cmd_pack(
-        "2026-08", output=output, local_parquets=None, memory_limit_gb=None, skip_upload=False
-    ) == 1
+    assert (
+        cli._cmd_pack(
+            "2026-08",
+            output=output,
+            local_parquets=None,
+            memory_limit_gb=None,
+            skip_upload=False,
+        )
+        == 1
+    )
 
 
 @pytest.mark.parametrize("size", [0, -1, True, 8])
@@ -128,7 +153,10 @@ def test_freeze_rejects_same_size_rewrite_during_copy(monkeypatch, tmp_path):
         "TemporaryFile",
         lambda **kwargs: MutateOnWrite(real(**kwargs)),
     )
-    with ExitStack() as stack, pytest.raises(ValueError, match="changed while freezing"):
+    with (
+        ExitStack() as stack,
+        pytest.raises(ValueError, match="changed while freezing"),
+    ):
         pack_upload_snapshot.freeze_pack_snapshot(stack, output, 8)
 
 
