@@ -86,3 +86,19 @@ test('História Protobuf publicada: aviso da ficha e teclado móvel não induzem
   assert.match(historia, /<label for="historia-cnpj">CNPJ numérico completo \(14 dígitos\)<\/label>/);
   assert.match(historia, /<input\b[^>]*id="historia-cnpj"[^>]*\binputmode="numeric"[^>]*>/);
 });
+
+test('avisos públicos não insinuam fallback alfanumérico após a História numérica #379', async () => {
+  const [home, empresa, historia] = await Promise.all([
+    read('../content/index.md'),
+    read('../content/empresa.md'),
+    read('../content/historia.md'),
+  ]);
+  assert.match(home, /CNPJs alfanuméricos e meses sem essa camada não são comparáveis nesta interface/);
+  assert.match(home, /não há fallback automático/);
+  assert.doesNotMatch(home, /CNPJs alfanuméricos continuam sujeitos à rota analítica/);
+  assert.match(empresa, /CNPJs alfanuméricos e competências sem essa camada não são comparáveis pela página História/);
+  assert.match(empresa, /Não há fallback para Parquet/);
+  assert.match(empresa, /a comparação alfanumérica ainda não está disponível/);
+  assert.match(historia, /CNPJs alfanuméricos e meses sem essa camada não são comparáveis por esta interface/);
+  assert.match(historia, /não há fallback para Parquet/);
+});
