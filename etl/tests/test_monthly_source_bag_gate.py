@@ -259,8 +259,53 @@ def test_real_duckdb_loader_produces_per_part_row_counts(tmp_path: Path) -> None
         )
         assert len(counts) == 10
         assert all(count == 1 for count in counts.values())
-        assert sum(counts.values()) == con.execute(
-            "SELECT COUNT(*) FROM estabelecimento"
-        ).fetchone()[0]
+        assert (
+            sum(counts.values())
+            == con.execute("SELECT COUNT(*) FROM estabelecimento").fetchone()[0]
+        )
+    finally:
+        con.close()
+
+
+def test_real_duckdb_blank_line_part_blocks_equal_nine_part_output(tmp_path: Path) -> None:
+    """One CSV has bytes but no logical record; the 9/9 multiset must not pass."""
+    from ficha_etl import registry
+    from ficha_etl.transform import _create_table_from_csvs
+
+    parts = _parts(tmp_path / "sources")
+    for i, (_, path) in enumerate(parts):
+        fields = [""] * 30
+        fields[0] = f"{i:08d}"
+        fields[1] = "0001"
+        fields[2] = "95"
+        path.write_text(";".join(fields) + "\n", encoding="utf-8")
+    parts[9][1].write_bytes(b"\n")
+
+    con = duckdb.connect()
+    try:
+        counts: dict[Path, int] = {}
+        _create_table_from_csvs(
+            con,
+            "estabelecimento",
+            [path for _, path in parts],
+            registry.main_table("estabelecimento").source,
+            per_file_counts=counts,
+        )
+        assert len(counts) == 10
+        assert counts[parts[9][1].resolve()] == 0
+        assert con.execute("SELECT COUNT(*) FROM estabelecimento").fetchone()[0] == 9
+
+        target = tmp_path / "equal_nine_parts.parquet"
+        con.execute(
+            "COPY (SELECT cnpj_basico || cnpj_ordem || cnpj_dv AS cnpj "
+            "FROM estabelecimento) TO ? (FORMAT PARQUET)",
+            [str(target)],
+        )
+        with pytest.raises(MonthlySourceBagError, match="zero logical rows"):
+            reconcile_loaded_source_keys(
+                con, "2026-08", parts, target, tmp_path / "evidence.json", counts
+            )
+        receipt = json.loads((tmp_path / "evidence.json").read_text())
+        assert receipt["status"] == "failed"
     finally:
         con.close()
