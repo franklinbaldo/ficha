@@ -25,7 +25,7 @@ layout: index
       <h2 id="resultados-titulo">Resultados da consulta</h2>
       <ul class="companies" id="consulta-lista"></ul>
     </div>
-    <p class="fineprint notice"><strong>Busca experimental.</strong> Em 19/11/2026, um teste no navegador do próprio site confirmou bloqueio CORS da origem arquivística do Parquet CNPJ. A consulta remota ainda não tem funcionamento comprovado. Falhas são exibidas sem resultados simulados. <a href="https://github.com/franklinbaldo/ficha/issues/208#issuecomment-6999541728">Ver evidência e estado da investigação</a> ou <a href="/ficha/acervo/">consultar o acervo</a>.</p>
+    <p class="fineprint notice"><strong>Busca experimental.</strong> Em 19/11/2026, um teste no navegador do próprio site confirmou bloqueio CORS da origem arquivística do Parquet CNPJ. A pesquisa ainda não passou pelos testes de paridade completa com os Parquets remotos, e não há consulta remota funcional comprovada. Falhas são exibidas sem resultados simulados. <a href="https://github.com/franklinbaldo/ficha/issues/208#issuecomment-6999541728">Ver evidência e estado da investigação</a> ou <a href="/ficha/acervo/">consultar o acervo</a>.</p>
   </div>
   <div class="hero-bottom">
     <div class="fact"><span>Competência de referência no manifesto</span><strong id="competencia">__FICHA_CURRENT_COMPETENCE__</strong></div>
