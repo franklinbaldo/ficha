@@ -19,6 +19,7 @@ from . import (
     manifest as manifest_mod,
     mirror,
     pack as pack_mod,
+    pack_upload_snapshot,
     smoke,
     sources,
     transform,
@@ -368,9 +369,19 @@ def _cmd_pack(
             )
             return 1
         try:
-            upload_mod.upload_companies_zip(
-                month, output, access_key=access_key, secret_key=secret_key
-            )
+            # Never let the uploader reopen a mutable pathname after validation.
+            # Anonymous scratch remains open for the entire synchronous IA call.
+            with ExitStack() as stack:
+                frozen = pack_upload_snapshot.freeze_pack_snapshot(
+                    stack, output, result["size_bytes"]
+                )
+                upload_mod.upload_companies_zip(
+                    month,
+                    output,
+                    access_key=access_key,
+                    secret_key=secret_key,
+                    frozen=frozen,
+                )
         except Exception as exc:
             _eprint(f"error: upload companies.zip falhou: {exc}")
             return 1
