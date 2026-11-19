@@ -191,7 +191,7 @@ def test_same_duckdb_csv_dialect_as_writer_with_ten_real_reads(tmp_path: Path) -
 def test_nonempty_part_with_zero_logical_rows_fails_with_receipt(tmp_path: Path) -> None:
     """A nonempty CSV can still contain zero logical records; never certify it."""
     parts = _parts(tmp_path / "sources")
-    parts[9][1].write_bytes(b"\\n")
+    parts[9][1].write_bytes(b"\n")
     expected = [f"{i:08d}000195" for i in range(9)]
     con = duckdb.connect()
     try:
@@ -200,8 +200,12 @@ def test_nonempty_part_with_zero_logical_rows_fails_with_receipt(tmp_path: Path)
         parsed_counts[parts[9][1].resolve()] = 0
         with pytest.raises(MonthlySourceBagError, match="zero logical rows"):
             reconcile_loaded_source_keys(
-                con, "2026-08", parts, tmp_path / "output.parquet",
-                tmp_path / "evidence" / "receipt.json", parsed_counts,
+                con,
+                "2026-08",
+                parts,
+                tmp_path / "output.parquet",
+                tmp_path / "evidence" / "receipt.json",
+                parsed_counts,
             )
         receipt = json.loads((tmp_path / "evidence" / "receipt.json").read_text())
         assert receipt["status"] == "failed"
@@ -219,8 +223,12 @@ def test_per_part_counts_must_match_same_loaded_table(tmp_path: Path) -> None:
         parsed_counts[parts[0][1].resolve()] = 2
         with pytest.raises(MonthlySourceBagError, match="row totals"):
             reconcile_loaded_source_keys(
-                con, "2026-08", parts, tmp_path / "output.parquet",
-                tmp_path / "evidence" / "receipt.json", parsed_counts,
+                con,
+                "2026-08",
+                parts,
+                tmp_path / "output.parquet",
+                tmp_path / "evidence" / "receipt.json",
+                parsed_counts,
             )
     finally:
         con.close()
@@ -237,13 +245,15 @@ def test_real_duckdb_loader_produces_per_part_row_counts(tmp_path: Path) -> None
         columns[0] = f"{i:08d}"
         columns[1] = "0001"
         columns[2] = "95"
-        path.write_text(";".join(columns) + "\\n", encoding="utf-8")
+        path.write_text(";".join(columns) + "\n", encoding="utf-8")
 
     con = duckdb.connect()
     try:
         counts: dict[Path, int] = {}
         _create_table_from_csvs(
-            con, "estabelecimento", [p for _, p in parts],
+            con,
+            "estabelecimento",
+            [p for _, p in parts],
             registry.main_table("estabelecimento").source,
             per_file_counts=counts,
         )
