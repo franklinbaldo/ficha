@@ -69,6 +69,8 @@ def reconcile_loaded_source_keys(
         "status": "failed",
         "parts": [],
     }
+    # Invalidate a prior successful receipt before any fallible DuckDB query.
+    _write_receipt(receipt_path, payload)
     names = [name for name, _ in parts]
     paths = [Path(path) for _, path in parts]
     if (
