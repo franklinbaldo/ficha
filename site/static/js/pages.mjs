@@ -177,10 +177,11 @@ export async function mountHistory(doc,{loadManifest=fetchManifest,lookup=fetchR
   form.addEventListener('submit',async event=>{
     event.preventDefault();
     const cnpj=canonicalCnpj(input.value);
+    output.replaceChildren();
     if(!cnpj){status(state,'Informe um CNPJ completo.',true);return;}
     if(from.value===to.value){status(state,'Selecione duas competências diferentes.',true);return;}
+    if(from.value>to.value){status(state,'A competência inicial deve ser anterior à competência final.',true);return;}
     button.disabled=true;
-    output.replaceChildren();
     setParams({cnpj,de:from.value,ate:to.value});
     status(state,'Consultando os dois snapshots de forma sequencial…');
     try {
@@ -200,7 +201,7 @@ export function renderArchiveSelection(doc, parent, manifest, date) {
   parent.replaceChildren();
   add(doc,parent,'h2',competenceLabel(selected.date)+' · '+selected.date,'section-title');
   const summary=add(doc,parent,'div','','stat-strip');
-  add(doc,summary,'div',String(totals.fileCount)+' conjuntos declarados');
+  add(doc,summary,'div',String(totals.fileCount)+' arquivos declarados');
   add(doc,summary,'div',formatBytes(totals.bytes)+' em arquivos com tamanho declarado');
   if(selected.date===manifest.current) add(doc,parent,'p','Esta é a competência de referência declarada no manifesto.','fineprint');
   add(doc,parent,'p','Os links abaixo são declarados pelo manifesto. A existência de uma URL não comprova acessibilidade nem valida o conteúdo remoto.','fineprint');
@@ -233,7 +234,7 @@ export async function mountArchive(doc,{loadManifest=fetchManifest}={}) {
       const total=catalogueTotals(snap);
       const row=add(doc,list,'li','','archive-snapshot');
       add(doc,row,'strong',snap.date);
-      add(doc,row,'span',String(total.fileCount)+' conjuntos');
+      add(doc,row,'span',String(total.fileCount)+' arquivos');
       add(doc,row,'span',formatBytes(total.bytes));
       if(snap.date===manifest.current) add(doc,row,'small','Referência');
     }
@@ -254,7 +255,7 @@ export function renderExploreAssets(doc,parent,manifest,date,filter='') {
   const term=filter.trim().toLowerCase();
   const entries=archivalFileEntries(snapshot).filter(e=>e.key.toLowerCase().includes(term));
   const max=Math.max(1,...entries.map(e=>e.size ?? 0));
-  const title=add(doc,parent,'p',entries.length+' conjuntos correspondentes · '+date,'fineprint');
+  const title=add(doc,parent,'p',entries.length+' arquivos correspondentes · '+date,'fineprint');
   title.className='fineprint';
   for(const file of entries) {
     const row=add(doc,parent,'div','','asset-row');
@@ -308,7 +309,7 @@ export async function mountExplore(doc,{loadManifest=fetchManifest}={}) {
     const paint=()=>{
       const snap=snaps.find(s=>s.date===select.value);
       const totals=catalogueTotals(snap);
-      counter.textContent=totals.fileCount+' conjuntos · '+formatBytes(totals.bytes)+' declarados';
+      counter.textContent=totals.fileCount+' arquivos · '+formatBytes(totals.bytes)+' declarados';
       renderExploreAssets(doc,output,manifest,select.value,filter.value);
       setParams({competencia:select.value});
     };
