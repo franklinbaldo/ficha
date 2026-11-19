@@ -250,30 +250,15 @@ rede/decoder e hash Git conferido. Após os merges da #362 e #365, o leitor defe
 `main`. A integração real veio via #367 e recebeu replay independente
 pós-deploy na R93 abaixo. Não prova completude do acervo.
 
-## Gate R92: o renderer não pode converter inconclusão em ausência
+## Gate R92: não transformar inconclusão em ausência
 
-Na [`main@03490dfa`](https://github.com/franklinbaldo/ficha/commit/03490dfa6c4513653b8519b5306394b19bc7c319),
-com `pages.mjs` blob `eb990058` e `atomic-record.mjs` blob
-`3b63cc91`, executei o
-[regressor R92](https://github.com/franklinbaldo/polvo/blob/main/scripts/ficha_atomic_ssg_contract_r92.mjs)
-sobre as **funções SSG reais**, DOM e `lookup` injetados, sem rede:
-`node /path/ficha_atomic_ssg_contract_r92.mjs "$PWD/site/static/js/pages.mjs" --strict`.
-Resultado **1 PASS / 4 RED**, todos reproduzíveis:
-- `renderCompanyRecord` interpreta `artifact-unavailable`/404 como
-  **“Nenhum registro encontrado”**, embora o ZIP/membro possa faltar.
-- `absent-in-snapshot` usa o mesmo texto; é ausência **condicional da
-  filial naquela competência**, não inexistência cadastral absoluta.
-- `mountCompany` anuncia **“Consulta concluída”** após receber
-  `artifact-unavailable`, promovendo resultado inconclusivo a sucesso.
-- Erro HTTP **503** é tratado como indisponível, mas o texto auxiliar
-  invoca **HTTP Range**, pré-requisito do Parquet, não do membro PB.
-  O controle positivo `found` exibiu a razão social.
-
-**Resultado histórico, não status atual:** falhas R92 foram
-reproduzidas antes das PRs #367/#370. O código publicado agora distingue
-`found`, `absent-in-snapshot`, `artifact-unavailable` e falha de rede.
-Não converter 404 em ausência cadastral. A História numérica foi integrada
-na #374 e testada no Pages (R96).
+[Regressor R92](https://github.com/franklinbaldo/polvo/blob/main/scripts/ficha_atomic_ssg_contract_r92.mjs):
+**1 PASS/4 RED** no SSG `main@03490dfa`, offline. Confundia HTTP 404
+e ausência de filial com ausência cadastral; anunciava sucesso após
+`artifact-unavailable` e orientava Range para erro 503 de PB.
+**Histórico, não defeito atual:** #367/#370 corrigiram a ficha;
+#374 integrou História numérica, R96 testou Pages; #377 segue aberto
+para a História alfanumérica.
 
 ## R93: replay independente após deploy público
 
@@ -336,6 +321,19 @@ do clique ao resultado (não p95).
 alfanumérico ainda faz 1 GET Parquet por viewport e falha por CORS;
 exigir recusa local com zero GET e mensagem clara.
 [R95](https://github.com/franklinbaldo/polvo/blob/main/memory/2026-11-19-r95-ficha-history-atomic-budget.md):
-746.335 B de PBs+lookups; lookups têm hashes distintos mas mapas iguais
-sem `snapshot_date`. Não deduplicar sem identidade por competência.
-Porte, wire v1.1, busca textual e custódia #281 continuam pendentes.
+746.335 B de PBs+lookups; dicionários iguais sem `snapshot_date`,
+mas hashes diferentes: não deduplicar sem contrato.
+
+**Waterfall público R97:** [reprodutor no Ifro](https://github.com/franklinbaldo/polvo/blob/main/scripts/ficha_history_waterfall_r97.mjs),
+blob Git do executável idêntico ao publicado. Chromium 1440×900
+**9.518 ms**, 375×812 **13.913 ms** do clique ao sucesso;
+**oito requisições em série** (4 lógicas 302→200):
+PB junho → lookup junho → PB julho → lookup julho, sem Parquet,
+WASM ou erro JS. Ensaio anterior: 10.066/10.398 ms.
+São quatro sessões, não p95 nem bytes wire totais.
+Uma otimização candidata após PB1 `found`: concorrer PB2
+com lookup1, preservando veto 404 antes do PB2, identidade,
+teto de bytes e proteção A→B→A. Exigir testes de falha antes
+de mudar o produto.
+
+Porte, wire v1.1, busca textual e custódia #281 seguem pendentes.
