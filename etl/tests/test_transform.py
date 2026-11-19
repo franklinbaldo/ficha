@@ -798,25 +798,21 @@ def all_zips_dir(tmp_path):
 
 @pytest.mark.parametrize("part", [0, 1, 5, 9])
 def test_extract_all_rejects_empty_estabelecimento_csv_when_strict(tmp_path, all_zips_dir, part):
-    """Reject a zero-byte CSV in an early, middle, or late RFB part.
+    """Target the selected empty ZIP without earlier empty fixtures masking it."""
+    for index in range(10):
+        zip_path = all_zips_dir / f"Estabelecimentos{index}.zip"
+        with zipfile.ZipFile(zip_path) as zf:
+            members = [member for member in zf.infolist() if not member.is_dir()]
+            assert len(members) == 1
+            member_name = members[0].filename
 
-    A ZIP with one zero-byte member is not an empty ZIP. Historical fixtures
-    intentionally leave Estabelecimentos1..9 empty, while part 0 has records.
-    """
-    zip_path = all_zips_dir / f"Estabelecimentos{part}.zip"
-    with zipfile.ZipFile(zip_path) as zf:
-        members = [member for member in zf.infolist() if not member.is_dir()]
-        assert len(members) == 1
-        member_name = members[0].filename
-
-    if part == 0:
-        # Exercise the first part too; unlike 1..9 it is nonempty by default.
-        with zipfile.ZipFile(zip_path, "w") as zf:
-            zf.writestr(member_name, b"")
-
-    with zipfile.ZipFile(zip_path) as zf:
-        assert len([member for member in zf.infolist() if not member.is_dir()]) == 1
-        assert zf.infolist()[0].file_size == 0
+        # The fixture leaves parts 1..9 empty. Fill the other parts with real
+        # fixture rows so the strict gate must reach the chosen failing part.
+        if index == part:
+            with zipfile.ZipFile(zip_path, "w") as zf:
+                zf.writestr(member_name, b"")
+        else:
+            _zip_with_csv(zip_path, member_name, [ESTABELECIMENTO_ROWS[0]])
 
     chain = fetcher.ChainedFetcher(fetchers=[_ZipDirFetcher(all_zips_dir)])
     with pytest.raises(
