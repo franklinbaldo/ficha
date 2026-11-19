@@ -22,7 +22,7 @@ const pwa = {
 };
 const nav = '<a href="/ficha/">Início</a><a href="/ficha/sobre/">Sobre</a><link href="/ficha/css/site.css">';
 const index = `<!doctype html><html lang="pt-BR"><body>${nav}<main id="main">
-  <form id="busca-form"></form>
+  <form id="busca-form"><button id="busca-enviar" aria-label="Pesquisar" type="submit">Pesquisar <span aria-hidden="true">↗</span></button></form>
   <span>__FICHA_CURRENT_COMPETENCE__</span><a href="/ficha/manifest.json">Dados</a>
   <a href="__FICHA_CURRENT_SOURCE_URL__">Fonte</a><span>__FICHA_CURRENT_SOURCE_SIZE__ GB</span>
 </main><script type="module" src="/ficha/js/boot.mjs"></script></body></html>`;
@@ -135,4 +135,18 @@ test('rejeita marcador ausente na página', async () => {
   const f = await fixture();
   await writeFile(f.file('site/dist/ficha/index.html'), index.replace('__FICHA_CURRENT_COMPETENCE__',''));
   rejected(f, /Marcador de competência ausente ou repetido/);
+});
+
+
+test('rejeita nome acessível do botão transformado em nome de ícone', async () => {
+  const f = await fixture();
+  await writeFile(f.file('site/dist/ficha/index.html'),
+    index.replace('aria-label="Pesquisar"', 'aria-label="north-east-arrow"'));
+  rejected(f, /Botão Pesquisar sem nome acessível em português/);
+});
+test('rejeita botão Pesquisar sem rótulo explícito no SSG', async () => {
+  const f = await fixture();
+  await writeFile(f.file('site/dist/ficha/index.html'),
+    index.replace(' aria-label="Pesquisar"', ''));
+  rejected(f, /Botão Pesquisar sem nome acessível em português/);
 });
