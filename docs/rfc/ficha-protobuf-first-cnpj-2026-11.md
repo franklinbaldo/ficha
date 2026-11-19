@@ -2,7 +2,7 @@
 type: RFC
 title: "Consulta exata de CNPJ por Protobuf atômico"
 description: "Rota Protobuf-first no site SSG, custos observados e critérios de promoção sem Parquet de 6 GB"
-status: "Proposta técnica; biblioteca SSG integrada, decoder e UX de consulta pendentes"
+status: "CNPJ numérico v1 no Pages; histórico, textual, porte e v1.1 pendentes"
 date: 2026-11-19
 ---
 
@@ -77,30 +77,15 @@ respondeu HTTP 200 e CORS a um `fetch` diretamente da origem GitHub Pages
 sem inventar índice novo. O código de município `7107` desse snapshot
 resolve para São Paulo; **não inferir que seja código IBGE de sete dígitos**.
 
-## Verificação adicional de orçamento no navegador (R89)
+## Orçamento de navegação experimental (R89)
 
-O [probe CDP independente](https://github.com/franklinbaldo/polvo/blob/main/scripts/ficha_atomic_cdp_budget.mjs)
-executou em **19/11/2026**, no Ifro, Chromium real com origem
-`https://franklinbaldo.github.io/ficha/empresa/`, duas sessões em
-**375×812 e 1440×900**, cache de rede desabilitado, decoder canônico
-injetado somente para o ensaio e nenhum arquivo de produto alterado.
-Em **cada** sessão foram feitos exatamente **três GET lógicos** do
-IA: `lookups.json` (272.145 B), PB de Nubank (2.860 B) e PB de
-Petrobras (101.606 B). Após redirects, CDP observou **seis saltos
-`requestWillBeSent`**, três respostas finais HTTP 200 e **383.382
-bytes em `Network.loadingFinished.encodedDataLength`**; a soma
-dos **corpos JavaScript** foi **376.611 bytes**. Em ambos os viewports
-os CNPJs completos produziram um único estabelecimento, a raiz
-decodificada coincidiu, DV alterado não fez match, e não houve
-requisição a Parquet na janela medida.
-
-**Alcance da métrica:** `encodedDataLength` é contabilidade de rede
-reportada pelo CDP para as respostas finalizadas; os hops de
-redirecionamento não têm necessariamente valor próprio atribuído
-pelo evento. **Não** equivale a medição integral de tráfego TLS,
-requests de bootstrap do site, custo econômico, teste de longa duração,
-p95 nem validação da UI atualmente publicada. Os 383.382 B são
-desta janela controlada e não limite máximo de qualquer empresa.
+No [teste CDP](https://github.com/franklinbaldo/polvo/blob/main/scripts/ficha_atomic_cdp_budget.mjs)
+executado no Ifro em 19/11/2026, Chromium 375×812/1440×900 com
+decoder **injetado para experimento**, três GETs IA lógicos por sessão
+(lookup 272.145 B + Nubank 2.860 B + Petrobras 101.606 B), recebeu
+**376.611 B nos corpos e 383.382 B pelo CDP**. Redirects, bootstrap,
+TLS, cold-cache global, p95 e custo não foram integralmente medidos.
+Os 383.382 B não são teto por empresa nem prova da UI publicada.
 
 As [PRs #362](https://github.com/franklinbaldo/ficha/pull/362)
 e [#365](https://github.com/franklinbaldo/ficha/pull/365) já foram integradas
@@ -110,11 +95,12 @@ antecipada de `Content-Length`; recusa DV inválido antes de GET, contador
 divergente, raiz/competência erradas e filiais duplicadas.
 A [#358](https://github.com/franklinbaldo/ficha/pull/358), que tratava
 o leitor Astro legado, foi encerrada **sem merge**. O teto de 32 MiB
-não é máximo empírico do acervo. **Ainda não há decoder canônico
-empacotado nem conexão desse leitor com a interface pública SSG**;
-a página atual consulta a trilha analítica. Limite/excesso não
-significam CNPJ ausente. Não usar `arrayBuffer()` sem limite.
-A meta de 100 MB foi observada apenas nas duas fichas medidas.
+não é máximo empírico do acervo. **Atualização R93:** decoder e
+busca numérica SSG publicados via [#367](https://github.com/franklinbaldo/ficha/pull/367),
+erro de entrada ajustado na [#370](https://github.com/franklinbaldo/ficha/pull/370),
+comunicação na [#371](https://github.com/franklinbaldo/ficha/pull/371).
+A home textual ainda usa trilha analítica. Não usar `arrayBuffer()`
+sem limite; teto de 32 MiB não prova disponibilidade global.
 
 ## Contrato proposto para a interface
 
@@ -261,8 +247,8 @@ CNPJ/DV inválido recusado antes de novo GET e contagens divergente
 ou ausente recusadas. O contraste é **RED no blob `a3765909`
 → GREEN no blob `08753b6c`**, ambos em Node com mocks de
 rede/decoder e hash Git conferido. Após os merges da #362 e #365, o leitor defensivo está na
-`main`; ainda exige integração do decoder real ao produto e testes
-Chromium/Pages do fluxo público completo. Não prova completude do acervo.
+`main`. A integração real veio via #367 e recebeu replay independente
+pós-deploy na R93 abaixo. Não prova completude do acervo.
 
 ## Gate R92: o renderer não pode converter inconclusão em ausência
 
@@ -283,17 +269,26 @@ Resultado **1 PASS / 4 RED**, todos reproduzíveis:
   invoca **HTTP Range**, pré-requisito do Parquet, não do membro PB.
   O controle positivo `found` exibiu a razão social.
 
-**Não é incidente observado de busca PB no Pages:** o site ainda não
-conectou o leitor atômico. A integração deve ramificar pelo
-`result.state`, nunca por `!result.data`. `found` apresenta ficha;
-`absent-in-snapshot` informa apenas filial/competência;
-`artifact-unavailable` informa resultado inconclusivo; 503, timeout,
-CORS e corrupção mantêm erro recuperável. Histórico de duas competências
-também precisa preservar estados por fotografia. Exigir regressor R92
-**GREEN**, decoder canônico, testes 404/503/contagem/duplicatas,
-A→B→A, CNPJ real e Chromium mobile/desktop antes da promoção.
-Não implementar fallback silencioso a Parquet. Vertical 🦊/🦇,
-QA 🦉/🦎, contrato 🐙.
+**Resultado histórico, não status atual:** falhas R92 foram
+reproduzidas antes das PRs #367/#370. O código publicado agora distingue
+`found`, `absent-in-snapshot`, `artifact-unavailable` e falha de rede.
+Não converter 404 em ausência cadastral. A trilha de História ainda
+exige prova separada, por competência.
+
+## R93: replay independente após deploy público
+
+Em 19/11/2026, no Ifro, o [reprodutor read-only](https://github.com/franklinbaldo/polvo/blob/main/scripts/ficha_atomic_pages_postdeploy_r93.mjs)
+foi executado **contra o GitHub Pages publicado**, após #367/#370/#371:
+Chromium sem flags de CORS, **375×812 e 1440×900**. Em cada viewport,
+`18236120000158` (Nubank) e `33000167000101` (Petrobras) exibiram
+a ficha real e município, com `Porte empresarial: Não determinado`.
+`33000167000102` (DV inválido) foi rejeitado **sem GET PB e sem deep
+link**. **6/6 PASS, rc=0, zero erros JS e zero requests `.parquet`
+ou `.wasm`** nas seis navegações. Cada sucesso teve 302→200 para
+o membro PB; também foi buscado lookup. A página carrega
+`duckdb-runtime.mjs` uma vez por navegação, sem evidência de
+inicialização DuckDB: otimizar depois. Este recorte não atesta p95,
+igualdade de todos os ZIPs, Histórico, v1.1 ou acessibilidade assistiva.
 
 ## Divisão de consultas
 
@@ -330,9 +325,7 @@ QA 🦉/🦎, contrato 🐙.
 
 ## Situação
 
-**Prova de transporte + decode + seleção exata em Chromium experimental:
-PASS. Leitor defensivo na main via #362/#365: SIM. Decoder real + formulário
-público SSG com estados corretos: NÃO FEITO (R92: 4 RED).** Os testes não
-comprovaram lookup por nome, histórico, alfanumérico v1.1, hashes
-integrais dos 100 ZIPs, disponibilidade permanente do IA ou orçamento
-p95 global. Esta RFC é proposta; não muda o comportamento publicado.
+**Consulta exata numérica v1 publicada via #367 e replay Pages na R93:
+6/6 PASS.** A RFC permanece DRAFT, sem furar a fila do Elefante.
+Persistem pendências: busca textual, História, v1.1, porte (#359),
+hashes de todos os ZIPs, disponibilidade IA e p95.
