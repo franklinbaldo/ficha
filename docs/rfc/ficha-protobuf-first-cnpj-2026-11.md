@@ -32,11 +32,15 @@ no Internet Archive do snapshot `2026-07`, acessando somente o membro
 | --- | ---: | ---: | ---: | ---: |
 | `00000000` (Banco do Brasil) | 1.370.270 B | 3,291 | 7.902 | 41 |
 | `33000167` (Petrobras) | 101.606 B | 2,608 | 661 | 9 |
-| `60746948` (Itaú) | 1.542.666 B | 3,396 | 9.999 | 106 |
+| `60746948` (Bradesco) | 1.542.666 B | 3,396 | 9.999 | 106 |
 | `18236120` (Nubank) | 2.860 B | 1,910 | 10 | 18 |
 
 Somatório de corpos PB: **3.017.402 B**. São quatro casos deliberadamente
-escolhidos, não uma amostra representativa nem p95.
+escolhidos, não uma amostra representativa nem p95. Uma releitura dos quatro
+PBs reais com `company.proto` em 19/11 confirmou `porte_empresa=5` nos quatro
+casos e o nome **BANCO BRADESCO S.A.** na raiz `60746948`, corrigindo a
+identificação anterior como Itaú. Essa amostra **não testa microempresas**;
+o conflito de semântica do porte é registrado na [#359](https://github.com/franklinbaldo/ficha/issues/359).
 
 O [primeiro ensaio Chromium na origem real do
 Pages](https://github.com/franklinbaldo/ficha/issues/208#issuecomment-7009984682)
@@ -147,14 +151,64 @@ sem limite no navegador. A comparação com a meta de 100 MB
    identificador fictício `00000000000000`.
 6. Estados distintos e acessíveis: `404` de membro, `503`/falha de
    rede, resposta inválida, wire incompatível, CNPJ completo sem
-   estabelecimento e sucesso. Na observação real, uma raiz artificial
-   retornou **503**, nunca convertê-la em `404`. Não mostrar resultado
-   velho em corrida A→B→A; respeitar a proteção de seleção da
-   [PR #349](https://github.com/franklinbaldo/ficha/pull/349) quando integrada.
+   estabelecimento e sucesso. Um **404 de membro ZIP não prova inexistência
+   de empresa**: é ausência do artefato naquela rota/competência.
+   Na observação real, uma raiz artificial retornou **503**; nunca
+   convertê-la em `404` ou ausência cadastral. Um PB íntegro sem
+   filial correspondente informa somente ausência daquela filial
+   na fotografia. Não mostrar resultado velho em corrida A→B→A;
+   preservar a proteção da [PR #349](https://github.com/franklinbaldo/ficha/pull/349)
+   já integrada.
 7. Preservar competência, fonte, URL arquivística do ZIP e versão no
    resultado. A identidade `size+SHA` declarada para o ZIP não é
    prova de SHA-256 do **membro individual** obtido via `view_archive`.
    Não anunciar integridade integral que não foi aferida.
+
+## Gate P1: semântica de bytes v1 e linguagem pública
+
+A [issue #359](https://github.com/franklinbaldo/ficha/issues/359) confrontou
+o layout oficial RFB (`00` não informado; `01` Micro Empresa;
+`03` EPP; `05` Demais) com `pack.py::_porte`:
+**RFB `01` é emitido como wire 1, cujo nome no enum é
+`NAO_INFORMADO`**. O código `00` vira wire 0,
+enquanto `03/05` viram 3/5. Um valor 2 ou campo ausente não
+comprova porte ME. É evidência do *código atual*, não prova
+sobre cada PB publicado; os quatro arquivos públicos amostrados
+tinham valor 5.
+
+O site deve ter um **adaptador semântico versionado** distinto do
+decoder, com `snapshotDate`, `wireVersion`, `sourceValue`,
+`semanticStatus` e `displayLabel`. **Antes de exibir porte**,
+reconciliar bytes publicados/linhagem da competência com a regra
+do produtor. Sem esse vínculo, usar **“Não determinado”**,
+sobretudo para wire 1. Não apresentar o nome ingênuo do enum
+nem converter wire 1 automaticamente em ME sem provar origem.
+Não alterar o packer ou reinterpretar histórico sem versão
+e autorização de publicação.
+
+Em Simples/MEI, `_bool(None) → False` perde a distinção
+entre ausência de informação e negativa: um `false` do PB v1
+**não** autoriza exibir “Não”. Município é **código RFB**
+resolvido com o lookup da mesma competência; `7107`
+resolve São Paulo no exemplo, não deve virar um suposto IBGE
+de sete dígitos por `padStart(7)`.
+
+| Evidência observada | Estado/texto admissível |
+| --- | --- |
+| CNPJ/DV inválido localmente | “Confira o CNPJ informado.” |
+| HTTP 404 de membro PB | “Arquivo da consulta não disponível nesta competência.” |
+| HTTP 503, CORS, timeout, excesso de 32 MiB ou decode inválido | “Consulta indisponível; cadastro não verificado.” |
+| PB válido e raiz conferida, mas sem estabelecimento exato | “Estabelecimento não encontrado nos dados desta competência.” |
+| Campo com semântica ambígua no v1 | Ficha visível, campo “Não determinado”, com competência/fonte |
+
+Teste o adaptador com códigos `00/01/03/05`, `02` desconhecido,
+wire 0/1/2/ausente, `false` sem proveniência,
+município RFB, competências distintas e uma fixture
+de bytes **v1 efetivamente publicados** antes de rotular ME.
+Não criar deep link de sucesso para erro; anunciar mensagens
+em `aria-live` sem ressuscitar resultado anterior A→B→A.
+Histórico de duas fotografias não identifica data exata
+da mudança. Este gate pertence à UI, não autoriza ETL.
 
 ## Divisão de consultas
 
@@ -172,7 +226,7 @@ sem limite no navegador. A comparação com a meta de 100 MB
 
 - Reutilizar e testar o decoder canônico, em vez de copiar resultados
   de fixtures e confundir prova de transporte com UI.
-- Testes offline de seleção de estabelecimento, lookups e falhas,
+- Testes offline de seleção de estabelecimento, lookups, semântica #359 e falhas,
   incluindo CNPJ divergente, repetido, truncado, errado, alfa/v1,
   mapeamento de URL de shard trocado, Simples/MEI desconhecido e
   sócio PF sem CNPJ.
