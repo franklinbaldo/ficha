@@ -2,7 +2,7 @@
 type: RFC
 title: "Consulta exata de CNPJ por Protobuf atômico"
 description: "Rota Protobuf-first no site SSG, custos observados e critérios de promoção sem Parquet de 6 GB"
-status: "CNPJ numérico v1 no Pages; histórico, textual, porte e v1.1 pendentes"
+status: "CNPJ e História numéricos v1 publicados; alfa, nome, porte e custódia pendentes"
 date: 2026-11-19
 ---
 
@@ -272,8 +272,8 @@ Resultado **1 PASS / 4 RED**, todos reproduzíveis:
 **Resultado histórico, não status atual:** falhas R92 foram
 reproduzidas antes das PRs #367/#370. O código publicado agora distingue
 `found`, `absent-in-snapshot`, `artifact-unavailable` e falha de rede.
-Não converter 404 em ausência cadastral. A trilha de História ainda
-exige prova separada, por competência.
+Não converter 404 em ausência cadastral. A História numérica foi integrada
+na #374 e testada no Pages (R96).
 
 ## R93: replay independente após deploy público
 
@@ -293,10 +293,10 @@ igualdade de todos os ZIPs, Histórico, v1.1 ou acessibilidade assistiva.
 ## Divisão de consultas
 
 - **CNPJ exato:** Protobuf-first e lookup, sem Parquet nem relay.
-- **História da mesma empresa:** dois Protobufs e lookups próprios,
-  wire v1 compatível; diferença não data a mudança. A [#374](https://github.com/franklinbaldo/ficha/pull/374)
-  é a PR canônica DRAFT (a #373 foi substituída): dois `found+data`,
-  HTTP 404 interrompe o segundo GET, ausência gera comparação incompleta.
+- **História da mesma empresa:** #374 integrada e publicada;
+  dois PBs v1 e lookups por competência, sem Parquet na rota numérica.
+  HTTP 404 é inconclusivo; ausência torna a comparação incompleta.
+  Diferença observada não data alteração cadastral.
 - **Razão social, pessoa, município, CNAE e agregados:** índices
   apropriados ou trilha analítica separada, com orçamento real de
   bytes, requests e latência antes da promoção.
@@ -327,10 +327,15 @@ igualdade de todos os ZIPs, Histórico, v1.1 ou acessibilidade assistiva.
 
 ## Situação
 
-**Ficha numérica v1 publicada (#367, R93: 6/6 PASS); História #374
-DRAFT, não publicada.** No [R95](https://github.com/franklinbaldo/polvo/blob/main/memory/2026-11-19-r95-ficha-history-atomic-budget.md),
-Chromium leu Petrobras 2026-06→07: **4 fetches, 746.335 B de corpos,
-8,7–9,5 s sequenciais**. Os dois lookups (544.290 B, 73%) têm hashes
-arquivísticos distintos, mas mapas idênticos exceto por `snapshot_date`.
-Não deduplicar sem identidade versionada por competência. Nenhum p95,
-E2E da #374, wire 1.1 ou custódia global comprovado. Prioridade 🐘 #368.
+**Ficha e História numéricas v1 publicadas (#367/#374/#378).**
+No [R96](https://github.com/franklinbaldo/polvo/blob/main/memory/2026-11-19-r96-ficha-history-pages-live.md),
+Chromium comparou Petrobras 2026-06→07 no Pages em desktop/celular:
+**2/2 PASS**, dois PBs, zero Parquet/WASM/erros JS, **9,1/13,2 s**
+do clique ao resultado (não p95).
+**Defeito real [#377](https://github.com/franklinbaldo/ficha/issues/377):**
+alfanumérico ainda faz 1 GET Parquet por viewport e falha por CORS;
+exigir recusa local com zero GET e mensagem clara.
+[R95](https://github.com/franklinbaldo/polvo/blob/main/memory/2026-11-19-r95-ficha-history-atomic-budget.md):
+746.335 B de PBs+lookups; lookups têm hashes distintos mas mapas iguais
+sem `snapshot_date`. Não deduplicar sem identidade por competência.
+Porte, wire v1.1, busca textual e custódia #281 continuam pendentes.
