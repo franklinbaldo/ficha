@@ -37,7 +37,7 @@ async function fixture(mutator = async () => {}) {
   }
   for (const jsFile of ['boot.mjs', 'search-app.mjs', 'duckdb-runtime.mjs', 'query-core.mjs',
     'dataset.mjs', 'catalog.mjs', 'record.mjs', 'pages.mjs']) {
-    await writeFile(file('site/static/js/' + jsFile), '// mock');
+    await writeFile(file('site/static/js/' + jsFile), '// mock: ' + jsFile);
   }
   const manifest = sample();
   await mutator({ manifest, file });
@@ -71,6 +71,18 @@ test('preserva exatamente os bytes da origem no destino e anuncia a competência
   assert.match(html, /julho de 2026 \(2026-07\)/);
   assert.match(html, /6,08 GB/);
   assert.doesNotMatch(html, /__FICHA_CURRENT_/);
+});
+
+test('preserva bytes de todos os oito módulos JS e do CSS SSG', async () => {
+  const f = await fixture();
+  assert.equal(run(f).status, 0);
+  for (const name of ['boot.mjs', 'search-app.mjs', 'duckdb-runtime.mjs', 'query-core.mjs',
+    'dataset.mjs', 'catalog.mjs', 'record.mjs', 'pages.mjs']) {
+    assert.deepEqual(await readFile(f.file('site/dist/ficha/js/' + name)),
+      await readFile(f.file('site/static/js/' + name)), name);
+  }
+  assert.deepEqual(await readFile(f.file('site/dist/ficha/css/site.css')),
+    await readFile(f.file('site/static/css/site.css')), 'site.css');
 });
 
 test('rejeita manifesto PWA inesperado sem sobrescrevê-lo', async () => {

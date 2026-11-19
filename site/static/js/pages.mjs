@@ -285,7 +285,7 @@ export function renderExploreAssets(doc,parent,manifest,date,filter='') {
     add(doc,line,'span',formatBytes(file.size));
     const track=add(doc,row,'div','','asset-track');
     const bar=add(doc,track,'span','','asset-bar');
-    const percentage=file.size===null ? 0 : Math.max(1,Math.round(100*file.size/max));
+    const percentage=file.size===null || file.size===0 ? 0 : Math.max(1,Math.round(100*file.size/max));
     bar.style.width=percentage+'%';
     track.setAttribute('role','img');
     track.setAttribute('aria-label',file.key+': '+formatBytes(file.size));
@@ -305,7 +305,7 @@ export function renderCountSeries(doc,parent,manifest,kind) {
     add(doc,header,'strong',row.count===null ? 'Não declarado' : fmt.format(row.count)+' linhas');
     const track=add(doc,item,'div','','series-track');
     const bar=add(doc,track,'span','','series-bar');
-    bar.style.width=(row.count===null ? 0 : Math.max(1,Math.round(100*row.count/max)))+'%';
+    bar.style.width=(row.count===null || row.count===0 ? 0 : Math.max(1,Math.round(100*row.count/max)))+'%';
     track.setAttribute('role','img');
     track.setAttribute('aria-label',row.date+': '+(row.count===null ? 'não declarado' : fmt.format(row.count)+' linhas'));
   }
