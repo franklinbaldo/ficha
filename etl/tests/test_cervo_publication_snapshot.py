@@ -191,3 +191,23 @@ def test_all_remote_files_reused_never_touch_tempfile(tmp_path, monkeypatch):
     result = _run(tmp_path, desc, metadata=lambda: _catalog(desc, missing=()), head=unexpected)
     assert len(result.reuse) == len(p.descriptor_file_entries(desc))
     assert result.upload == ()
+
+
+@pytest.mark.parametrize("response_count", [0, 1])
+def test_missing_upload_responses_fail_closed(tmp_path, monkeypatch, response_count):
+    desc, _ = _fixtures(tmp_path)
+    missing = ("cnpjs.parquet", "socios.parquet")
+    observed = []
+
+    def upload(_item, *, files, **_kwargs):
+        observed.append(tuple(sorted(files)))
+        return [
+            type("Response", (), {"status_code": 201, "url": "offline"})()
+            for _ in range(response_count)
+        ]
+
+    monkeypatch.setattr(p.ia, "upload", upload)
+    with pytest.raises(p.OutputPublishError, match=r"response count [01]/2"):
+        _run(tmp_path, desc, metadata=lambda: _catalog(desc, missing=missing), head=lambda _: 404)
+
+    assert observed == [missing]
