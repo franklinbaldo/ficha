@@ -238,10 +238,14 @@ def test_duplicate_catalog_becoming_unambiguous_allows_reuse() -> None:
     assert sleeps == [1]
 
 
-def test_malformed_catalog_entry_cannot_authorize_put() -> None:
+@pytest.mark.parametrize(
+    "bad_entry",
+    [None, {"size": "1"}, {"name": None}, {"name": 42}, {"name": ""}],
+)
+def test_malformed_catalog_entry_cannot_authorize_put(bad_entry: object) -> None:
     descriptor = _descriptor()
     metadata = _metadata(descriptor, omit={"cnpjs.parquet"})
-    metadata["files"].append(None)
+    metadata["files"].append(bad_entry)
 
     plan = publication.classify_output_upload(
         descriptor,
