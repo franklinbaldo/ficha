@@ -324,13 +324,7 @@ def stream_raw_zips_to_ia(
     identifier = item_id(month)
     all_specs = list(canonical_inventory())
 
-    # Skip ZIPs already present on IA. Idempotent re-runs (e.g. retry after
-    # transform failure, or backfill resuming a partial month) avoid
-    # ~30 min and ~7 GB of pointless re-streaming. RFB historical files
-    # are immutable per ADR 0015, so name-based existence is sufficient.
-    # IMPORTANT: this runs BEFORE upstream.discover_token() so a recovery
-    # run with all files already on IA succeeds even if RFB is down or
-    # has rotated its share token.
+    # Check existing raw objects before contacting RFB (ADR 0015).
     existing = _existing_raw_files_on_ia(identifier)
     specs = [s for s in all_specs if f"raw/{s.name}" not in existing]
     skipped = len(all_specs) - len(specs)
@@ -399,8 +393,12 @@ def stream_raw_zips_to_ia(
     log.info("all %d ZIPs streamed to ia:%s OK", total, identifier)
 
 
-def _check_responses(responses: list, label: str) -> None:
-    """Levanta RuntimeError se algum response indicar falha."""
+def _check_responses(responses: list, label: str, expected: int | None = None) -> None:
+    """A quantidade de respostas também integra o recibo de upload."""
+    if not responses or (expected is not None and len(responses) != expected):
+        raise RuntimeError(
+            f"IA upload incomplete [{label}]: expected {expected}, got {len(responses) if responses else 0}"
+        )
     for r in responses:
         if r.status_code not in (200, 201):
             raise RuntimeError(f"IA upload failed [{label}]: HTTP {r.status_code} — {r.url}")
@@ -412,6 +410,7 @@ def upload_outputs(
     *,
     access_key: str,
     secret_key: str,
+    frozen: dict | None = None,
 ) -> None:
     """Faz upload de todos os parquets + lookups.json para o item IA do mês.
 
@@ -438,9 +437,12 @@ def upload_outputs(
     for kind in _LOOKUP_KINDS:
         outputs[f"lookups/{kind}.parquet"] = output_dir / "lookups" / f"{kind}.parquet"
 
-    missing = [name for name, path in outputs.items() if not path.exists()]
-    if missing:
-        raise FileNotFoundError(f"outputs missing before upload: {missing}")
+    if frozen is None:
+        missing = [name for name, path in outputs.items() if not path.exists()]
+        if missing:
+            raise FileNotFoundError(f"outputs missing before upload: {missing}")
+    elif set(frozen) != set(outputs):
+        raise ValueError("frozen output set differs from expected upload files")
 
     identifier = item_id(month)
     metadata = {
@@ -456,7 +458,7 @@ def upload_outputs(
     log.info("uploading %d output files to ia:%s", len(outputs), identifier)
     responses = ia.upload(
         identifier,
-        files={name: str(path) for name, path in outputs.items()},
+        files=frozen if frozen is not None else {name: str(path) for name, path in outputs.items()},
         metadata=metadata,
         access_key=access_key,
         secret_key=secret_key,
@@ -464,7 +466,7 @@ def upload_outputs(
         retries_sleep=_RETRY_SLEEP,
         verbose=True,
     )
-    _check_responses(responses, "outputs")
+    _check_responses(responses, "outputs", len(outputs) if frozen is not None else None)
     log.info("uploaded outputs to ia:%s OK", identifier)
 
 
@@ -475,6 +477,7 @@ def upload_companies_zip(
     access_key: str,
     secret_key: str,
     identifier_override: str | None = None,
+    frozen=None,
 ) -> None:
     """Faz upload de companies.zip para o item IA do mês.
 
@@ -488,21 +491,21 @@ def upload_companies_zip(
     """
     if not is_valid_month(month):
         raise ValueError(f"month must be YYYY-MM, got {month!r}")
-    if not companies_zip_path.exists():
+    if frozen is None and not companies_zip_path.exists():
         raise FileNotFoundError(f"companies.zip not found: {companies_zip_path}")
 
     identifier = identifier_override or item_id(month)
     log.info("uploading companies.zip to ia:%s", identifier)
     responses = ia.upload(
         identifier,
-        files={"companies.zip": str(companies_zip_path)},
+        files={"companies.zip": frozen if frozen is not None else str(companies_zip_path)},
         access_key=access_key,
         secret_key=secret_key,
         retries=_RETRIES,
         retries_sleep=_RETRY_SLEEP,
         verbose=True,
     )
-    _check_responses(responses, "companies.zip")
+    _check_responses(responses, "companies.zip", 1 if frozen is not None else None)
     log.info("uploaded ia:%s/companies.zip OK", identifier)
 
 
