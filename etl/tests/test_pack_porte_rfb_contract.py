@@ -58,9 +58,7 @@ def test_wire_emitido_hoje_e_inadequado_para_rotulo_ingenuo():
     byte já foi recuperado do Internet Archive. Se a política de versão corrigir
     o packer, alterar este baseline junto com o teste normativo acima.
     """
-    wire = row_to_company(
-        {"cnpj_base": "12345678", "porte_empresa": "01"}
-    ).SerializeToString()
+    wire = row_to_company({"cnpj_base": "12345678", "porte_empresa": "01"}).SerializeToString()
     decoded = Company.FromString(wire)
     assert decoded.porte_empresa == 1
     assert Porte.Name(decoded.porte_empresa) == "NAO_INFORMADO"
