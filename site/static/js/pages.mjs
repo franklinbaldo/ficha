@@ -210,7 +210,7 @@ export function renderHistoryComparison(doc, parent, older, newer) {
       ' (HTTP 404). Isso não comprova ausência cadastral e impede comparar os dois registros.');
   } else if(absent.length) {
     add(doc,parent,'h3','Comparação incompleta: CNPJ não localizado');
-    add(doc,parent,'p','O CNPJ não foi localizado no agregado íntegro de '+absent.map(r=>r.date).join(' e ')+
+    add(doc,parent,'p','O CNPJ não foi localizado no registro decodificado de '+absent.map(r=>r.date).join(' e ')+
       '. Isso não demonstra início, encerramento ou data exata de alteração.');
   } else if (!older.data || !newer.data) {
     add(doc,parent,'p','Um ou ambos os snapshots não retornaram registro para este CNPJ. Não é possível concluir que a empresa nasceu, encerrou atividades ou mudou nesta data.');
