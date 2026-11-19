@@ -97,24 +97,33 @@ export async function mountCompany(doc, {loadManifest = fetchManifest, lookup = 
     submit.disabled = true;
     return;
   }
+  let busy = false;
   async function lookupSubmit(event) {
     event?.preventDefault();
+    if (busy) return;
     const cnpj = canonicalCnpj(input.value);
     if (!cnpj) { status(state,'Informe um CNPJ completo, numérico ou alfanumérico.',true); output.replaceChildren(); return; }
     const date = select.value;
+    const stillCurrent = () => canonicalCnpj(input.value) === cnpj && select.value === date;
+    const discarded = 'CNPJ ou competência alterados durante a consulta. Pesquise novamente.';
+    busy = true;
     submit.disabled = true;
     output.replaceChildren();
     status(state,'Consultando o registro na competência '+date+'…');
-    setParams({cnpj,competencia:date});
     try {
       const result = await lookup(manifest,date,cnpj);
+      // A delayed archival response must not be presented as the new selection.
+      if (!stillCurrent()) { status(state,discarded); return; }
+      setParams({cnpj,competencia:date});
       renderCompanyRecord(doc,output,result);
       status(state,'Consulta concluída para '+date+'.');
     } catch (error) {
+      if (!stillCurrent()) { status(state,discarded); return; }
+      setParams({cnpj,competencia:date});
       status(state,'Consulta indisponível: '+error.message,true);
       add(doc,output,'p','Os arquivos continuam referenciados no catálogo. A leitura remota depende de um transporte compatível com CORS e HTTP Range.');
       anchor(doc,output,'Consultar o catálogo de arquivos',BASE+'acervo/?competencia='+date);
-    } finally { submit.disabled = false; }
+    } finally { busy = false; submit.disabled = false; }
   }
   form.addEventListener('submit',lookupSubmit);
   const initial = params().get('cnpj');
@@ -174,25 +183,37 @@ export async function mountHistory(doc,{loadManifest=fetchManifest,lookup=fetchR
     return;
   }
   status(state,'Escolha duas competências existentes. A comparação só será executada após solicitar.');
+  let busy = false;
   form.addEventListener('submit',async event=>{
     event.preventDefault();
+    if (busy) return;
     const cnpj=canonicalCnpj(input.value);
     output.replaceChildren();
     if(!cnpj){status(state,'Informe um CNPJ completo.',true);return;}
-    if(from.value===to.value){status(state,'Selecione duas competências diferentes.',true);return;}
-    if(from.value>to.value){status(state,'A competência inicial deve ser anterior à competência final.',true);return;}
+    const start=from.value, end=to.value;
+    if(start===end){status(state,'Selecione duas competências diferentes.',true);return;}
+    if(start>end){status(state,'A competência inicial deve ser anterior à competência final.',true);return;}
+    const stillCurrent = () => canonicalCnpj(input.value) === cnpj &&
+      from.value === start && to.value === end;
+    const discarded = 'CNPJ ou competências alterados durante a comparação. Pesquise novamente.';
+    busy = true;
     button.disabled=true;
-    setParams({cnpj,de:from.value,ate:to.value});
     status(state,'Consultando os dois snapshots de forma sequencial…');
     try {
-      const older=await lookup(manifest,from.value,cnpj);
-      const newer=await lookup(manifest,to.value,cnpj);
+      const older=await lookup(manifest,start,cnpj);
+      // Avoid a second archival GET if the user changed the requested comparison.
+      if (!stillCurrent()) { status(state,discarded); return; }
+      const newer=await lookup(manifest,end,cnpj);
+      if (!stillCurrent()) { status(state,discarded); return; }
+      setParams({cnpj,de:start,ate:end});
       renderHistoryComparison(doc,output,older,newer);
       status(state,'Comparação concluída. Alterações são diferenças entre observações, não datas de eventos.');
     }catch(error){
+      if (!stillCurrent()) { status(state,discarded); return; }
+      setParams({cnpj,de:start,ate:end});
       status(state,'Comparação indisponível: '+error.message,true);
       anchor(doc,output,'Ver competências disponíveis',BASE+'acervo/');
-    }finally{button.disabled=false;}
+    }finally{busy=false;button.disabled=false;}
   });
 }
 

@@ -37,7 +37,9 @@ export function compareRecords(before, after) {
     field, label,
     before: displayValue(before?.[field]),
     after: displayValue(after?.[field]),
-    changed: displayValue(before?.[field]) !== displayValue(after?.[field]),
+    // Presentation collapses null, empty strings and some scalar types.
+    // Compare observed values, never their labels.
+    changed: before?.[field] !== after?.[field],
   }));
 }
 
