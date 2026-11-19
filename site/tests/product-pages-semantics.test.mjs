@@ -247,3 +247,106 @@ test('história descarta segunda resposta tardia após mudança do CNPJ', async 
     assert.equal(globalThis.location.search, '');
   });
 });
+
+
+test('ficha: editar após resultado apaga registro anterior sem novo I/O', async () => {
+  await withPageUrl(async () => {
+    const doc = fakeDocument(['empresa-cnpj','empresa-competencia','empresa-form',
+      'empresa-estado','empresa-resultado','empresa-enviar']);
+    let lookups = 0;
+    await mountCompany(doc, {
+      loadManifest: async () => manifestWithShards(),
+      lookup: async (_manifest,date,cnpj) => {
+        lookups++;
+        return {date,cnpj,data:{razao_social:'Empresa anterior'},source:'https://archive.org/old'};
+      },
+    });
+    doc.at('empresa-cnpj').value = '00000000E08G12';
+    await doc.at('empresa-form').listeners.get('submit')({preventDefault(){}});
+    assert.ok(doc.at('empresa-resultado').children.length > 0);
+    doc.at('empresa-cnpj').value = '00000000E08G13';
+    doc.at('empresa-cnpj').listeners.get('input')();
+    assert.equal(doc.at('empresa-resultado').children.length, 0);
+    assert.match(doc.at('empresa-estado').textContent,/Seleção alterada.*Pesquise novamente/);
+    assert.equal(lookups,1,'editar não consulta automaticamente');
+  });
+});
+
+test('ficha: edição A→B→A durante lookup descarta resposta antiga', async () => {
+  await withPageUrl(async () => {
+    const doc = fakeDocument(['empresa-cnpj','empresa-competencia','empresa-form',
+      'empresa-estado','empresa-resultado','empresa-enviar']);
+    let finish;
+    await mountCompany(doc, {
+      loadManifest: async () => manifestWithShards(),
+      lookup: async () => new Promise(resolve => { finish = resolve; }),
+    });
+    const input = doc.at('empresa-cnpj');
+    input.value = '00000000E08G12';
+    const pending = doc.at('empresa-form').listeners.get('submit')({preventDefault(){}});
+    input.value = '00000000E08G13';
+    input.listeners.get('input')();
+    input.value = '00000000E08G12';
+    input.listeners.get('input')();
+    finish({date:'2026-07',cnpj:'00000000E08G12',
+      data:{razao_social:'Resultado antigo'},source:'https://archive.org/old'});
+    await pending;
+    assert.equal(doc.at('empresa-resultado').children.length,0);
+    assert.match(doc.at('empresa-estado').textContent,/alterados durante a consulta/i);
+    assert.equal(globalThis.location.search,'','não publicar URL de requisição alterada');
+  });
+});
+
+test('história: editar competência após comparação limpa resultado sem I/O', async () => {
+  await withPageUrl(async () => {
+    const doc = fakeDocument(['historia-competencias','historia-inicio','historia-fim',
+      'historia-form','historia-cnpj','historia-enviar','historia-estado','historia-resultado']);
+    let calls=0;
+    await mountHistory(doc,{
+      loadManifest:async()=>manifestWithShards(),
+      lookup:async (_manifest,date,cnpj)=>{
+        calls++;
+        return {date,cnpj,data:null,source:'https://archive.org/'+date};
+      },
+    });
+    doc.at('historia-cnpj').value='00000000E08G12';
+    doc.at('historia-inicio').value='2026-06';
+    doc.at('historia-fim').value='2026-07';
+    await doc.at('historia-form').listeners.get('submit')({preventDefault(){}});
+    assert.ok(doc.at('historia-resultado').children.length>0);
+    doc.at('historia-fim').value='2026-06';
+    doc.at('historia-fim').listeners.get('change')();
+    assert.equal(doc.at('historia-resultado').children.length,0);
+    assert.match(doc.at('historia-estado').textContent,/Seleção alterada.*Pesquise novamente/);
+    assert.equal(calls,2);
+  });
+});
+
+test('história: edição A→B→A enquanto segunda fonte demora descarta comparação', async () => {
+  await withPageUrl(async () => {
+    const doc = fakeDocument(['historia-competencias','historia-inicio','historia-fim',
+      'historia-form','historia-cnpj','historia-enviar','historia-estado','historia-resultado']);
+    let finishNewer;
+    await mountHistory(doc,{
+      loadManifest:async()=>manifestWithShards(),
+      lookup:async (_manifest,date,cnpj)=>date==='2026-06'
+        ? {date,cnpj,data:null,source:'https://archive.org/old'}
+        : new Promise(resolve=>{finishNewer=resolve;}),
+    });
+    doc.at('historia-cnpj').value='00000000E08G12';
+    doc.at('historia-inicio').value='2026-06';
+    doc.at('historia-fim').value='2026-07';
+    const pending=doc.at('historia-form').listeners.get('submit')({preventDefault(){}});
+    await Promise.resolve();
+    assert.equal(typeof finishNewer,'function');
+    doc.at('historia-cnpj').value='00000000E08G13';
+    doc.at('historia-cnpj').listeners.get('input')();
+    doc.at('historia-cnpj').value='00000000E08G12';
+    doc.at('historia-cnpj').listeners.get('input')();
+    finishNewer({date:'2026-07',data:null,source:'https://archive.org/new'});
+    await pending;
+    assert.equal(doc.at('historia-resultado').children.length,0);
+    assert.match(doc.at('historia-estado').textContent,/alterados durante a comparação/i);
+    assert.equal(globalThis.location.search,'');
+  });
+});
