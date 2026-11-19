@@ -88,6 +88,63 @@ export function companyArchiveUrl(
 }
 
 /**
+ * Public interactive lookup budget, not an assertion about corpus-wide sizes.
+ * If a member exceeds it, report an unavailable result instead of silently
+ * downloading a whole ZIP (or treating a transport error as absent CNPJ).
+ */
+export const MAX_ATOMIC_COMPANY_BYTES = 32 * 1024 * 1024;
+
+/** Consume a transparent-unzip PB member with a hard bound even without Content-Length. */
+export async function readAtomicMember(
+  response: Response,
+  maxBytes: number = MAX_ATOMIC_COMPANY_BYTES
+): Promise<Uint8Array> {
+  if (!Number.isSafeInteger(maxBytes) || maxBytes < 1) {
+    throw new Error('Protobuf: limite de bytes inválido');
+  }
+  const tooLarge = () => new Error('Protobuf: membro excede o limite de leitura da interface');
+  const advertised = response.headers?.get('content-length');
+  if (advertised != null && /^\\d+$/.test(advertised) && Number(advertised) > maxBytes) {
+    throw tooLarge();
+  }
+  // Mocks without a ReadableStream retain the historical arrayBuffer path.
+  // Browsers always expose a response.body stream: that is the bounded path.
+  if (!response.body || typeof response.body.getReader !== 'function') {
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    if (bytes.byteLength > maxBytes) throw tooLarge();
+    return bytes;
+  }
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    for (;;) {
+      const part = await reader.read();
+      if (part.done) break;
+      if (!(part.value instanceof Uint8Array)) {
+        throw new Error('Protobuf: corpo binário inválido');
+      }
+      total += part.value.byteLength;
+      if (total > maxBytes) throw tooLarge();
+      chunks.push(part.value);
+    }
+    const bytes = new Uint8Array(total);
+    let offset = 0;
+    for (const chunk of chunks) {
+      bytes.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+    return bytes;
+  } catch (error) {
+    // Cancellation must not block UI feedback if an origin stalls.
+    void reader.cancel().catch(() => {});
+    throw error;
+  } finally {
+    reader.releaseLock();
+  }
+}
+
+/**
  * Fetch and decode a single Company by cnpj_base.
  *
  * Quando `files` vem do manifesto, ele é a fonte de verdade para a URL do
@@ -113,7 +170,7 @@ export async function fetchCompany(
   if (!res.ok) {
     throw new Error(`fetchCompany(${cnpjBase}): HTTP ${res.status} ${url}`);
   }
-  const bytes = new Uint8Array(await res.arrayBuffer());
+  const bytes = await readAtomicMember(res);
   const company = normalizeLongs(ficha.v1.Company.decode(bytes));
   // A v1-indexed ZIP must not masquerade as 1.1 just because the numeric root
   // still matches: alphanumeric establishment orders or partners are lossy in v1.
