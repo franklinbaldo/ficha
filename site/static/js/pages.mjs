@@ -43,13 +43,17 @@ function setParams(params) {
 }
 function params() { return new URLSearchParams(globalThis.location.search); }
 /** Revision guard: a selection changed A→B→A is still a new request. */
-function watchSelection(controls, state, output, pendingMessage) {
+function watchSelection(controls, state, output, pendingMessage, queryKeys) {
   let revision = 0;
   let pending = false;
   let terminal = false;
   let announced = false;
   const edited = () => {
     revision++;
+    // An edited selection must not leave a shareable URL for the prior result.
+    if (queryKeys.some(key => params().has(key))) {
+      setParams(Object.fromEntries(queryKeys.map(key => [key, null])));
+    }
     if (pending) {
       if (!announced) {
         announced = true;
@@ -129,7 +133,8 @@ export async function mountCompany(doc, {loadManifest = fetchManifest, lookup = 
   let busy = false;
   const selection = watchSelection(
     [[input, 'input'], [select, 'change']], state, output,
-    'CNPJ ou competência alterados durante a consulta. Aguarde a conclusão para pesquisar novamente.');
+    'CNPJ ou competência alterados durante a consulta. Aguarde a conclusão para pesquisar novamente.',
+    ['cnpj', 'competencia']);
   async function lookupSubmit(event) {
     event?.preventDefault();
     if (busy) return;
@@ -220,7 +225,8 @@ export async function mountHistory(doc,{loadManifest=fetchManifest,lookup=fetchR
   let busy = false;
   const selection = watchSelection(
     [[input, 'input'], [from, 'change'], [to, 'change']], state, output,
-    'CNPJ ou competências alterados durante a comparação. Aguarde a conclusão para pesquisar novamente.');
+    'CNPJ ou competências alterados durante a comparação. Aguarde a conclusão para pesquisar novamente.',
+    ['cnpj', 'de', 'ate']);
   form.addEventListener('submit',async event=>{
     event.preventDefault();
     if (busy) return;

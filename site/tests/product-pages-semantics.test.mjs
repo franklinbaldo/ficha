@@ -249,8 +249,9 @@ test('história descarta segunda resposta tardia após mudança do CNPJ', async 
 });
 
 
-test('ficha: editar após resultado apaga registro anterior sem novo I/O', async () => {
+test('ficha: editar após resultado limpa deep link anterior mas preserva parâmetros alheios', async () => {
   await withPageUrl(async () => {
+    globalThis.location.search = '?origem=exemplo';
     const doc = fakeDocument(['empresa-cnpj','empresa-competencia','empresa-form',
       'empresa-estado','empresa-resultado','empresa-enviar']);
     let lookups = 0;
@@ -264,11 +265,20 @@ test('ficha: editar após resultado apaga registro anterior sem novo I/O', async
     doc.at('empresa-cnpj').value = '00000000E08G12';
     await doc.at('empresa-form').listeners.get('submit')({preventDefault(){}});
     assert.ok(doc.at('empresa-resultado').children.length > 0);
+    assert.equal(new URLSearchParams(globalThis.location.search).get('cnpj'), '00000000E08G12');
     doc.at('empresa-cnpj').value = '00000000E08G13';
     doc.at('empresa-cnpj').listeners.get('input')();
     assert.equal(doc.at('empresa-resultado').children.length, 0);
     assert.match(doc.at('empresa-estado').textContent,/Seleção alterada.*Pesquise novamente/);
     assert.equal(lookups,1,'editar não consulta automaticamente');
+    assert.equal(globalThis.location.search, '?origem=exemplo', 'não manter CNPJ anterior na URL');
+    const reloadDoc = fakeDocument(['empresa-cnpj','empresa-competencia','empresa-form',
+      'empresa-estado','empresa-resultado','empresa-enviar']);
+    await mountCompany(reloadDoc, {
+      loadManifest: async () => manifestWithShards(),
+      lookup: async () => { lookups++; throw new Error('recarregar não deve consultar A'); },
+    });
+    assert.equal(lookups, 1, 'recarregar com URL limpa não reconsulta a seleção antiga');
   });
 });
 
@@ -297,8 +307,9 @@ test('ficha: edição A→B→A durante lookup descarta resposta antiga', async 
   });
 });
 
-test('história: editar competência após comparação limpa resultado sem I/O', async () => {
+test('história: editar competência limpa link antigo mas mantém parâmetros alheios', async () => {
   await withPageUrl(async () => {
+    globalThis.location.search = '?origem=exemplo';
     const doc = fakeDocument(['historia-competencias','historia-inicio','historia-fim',
       'historia-form','historia-cnpj','historia-enviar','historia-estado','historia-resultado']);
     let calls=0;
@@ -314,11 +325,17 @@ test('história: editar competência após comparação limpa resultado sem I/O'
     doc.at('historia-fim').value='2026-07';
     await doc.at('historia-form').listeners.get('submit')({preventDefault(){}});
     assert.ok(doc.at('historia-resultado').children.length>0);
+    assert.equal(new URLSearchParams(globalThis.location.search).get('de'), '2026-06');
     doc.at('historia-fim').value='2026-06';
     doc.at('historia-fim').listeners.get('change')();
     assert.equal(doc.at('historia-resultado').children.length,0);
     assert.match(doc.at('historia-estado').textContent,/Seleção alterada.*Pesquise novamente/);
     assert.equal(calls,2);
+    assert.equal(globalThis.location.search, '?origem=exemplo');
+    const reloadDoc = fakeDocument(['historia-competencias','historia-inicio','historia-fim',
+      'historia-form','historia-cnpj','historia-enviar','historia-estado','historia-resultado']);
+    await mountHistory(reloadDoc, {loadManifest:async()=>manifestWithShards()});
+    assert.equal(reloadDoc.at('historia-cnpj').value, '', 'URL limpa não restaura CNPJ antigo');
   });
 });
 
