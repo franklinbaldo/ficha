@@ -51,9 +51,12 @@ identificáveis como fraude só por SHA-256.
 
 ### Risco de duas aquisições sem vínculo (auditoria de código, 18/11/2026)
 
-No caminho existente de `monthly_sharded.command_produce`, a chamada a
-`upload.stream_raw_zips_to_ia` antecede `transform.transform_snapshot`.
-O primeiro caminho faz **GET RFB → PUT IA diretamente em streaming**, sem gravar
+Na base auditada em 18/11, `monthly_sharded.command_produce` chamava
+`upload.stream_raw_zips_to_ia` **antes** de `transform.transform_snapshot`.
+A PR #343 inverte essa ordem **somente no comando mensal**, permitindo recusar
+falhas da transformação estrita antes do primeiro PUT raw desta invocação.
+Isso não unifica as aquisições: o caminho de streaming faz
+**GET RFB → PUT IA diretamente**, sem gravar
 os bytes recebidos em um arquivo local comum com a transformação. Além disso,
 `stream_raw_zips_to_ia` pode **pular** um `raw/<nome>.zip` já anunciado no
 catálogo IA com tamanho positivo, sem comparar SHA-256 de seus bytes. A etapa
