@@ -105,6 +105,11 @@ export async function readAtomicMember(
   const tooLarge = () => new Error('Protobuf: membro excede o limite de leitura da interface');
   const advertised = response.headers?.get('content-length');
   if (advertised != null && /^\d+$/.test(advertised) && Number(advertised) > maxBytes) {
+    // Rejecting the header must also stop an already-started browser download.
+    // Never await cancellation: remote stream teardown must not delay UI feedback.
+    if (typeof response.body?.cancel === 'function') {
+      void response.body.cancel().catch(() => {});
+    }
     throw tooLarge();
   }
   // Mocks without a ReadableStream retain the historical arrayBuffer path.

@@ -195,6 +195,21 @@ describe('atomic member transfer budget', () => {
     expect(opened).toBe(false);
   });
 
+  it('cancels a declared oversized response before pulling its body', async () => {
+    let pulled = false;
+    let cancelled = false;
+    const body = new ReadableStream<Uint8Array>({
+      pull() { pulled = true; },
+      cancel() { cancelled = true; },
+    }, { highWaterMark: 0 });
+    const response = new Response(body, {
+      headers: { 'content-length': '65' },
+    });
+    await expect(readAtomicMember(response, 64)).rejects.toThrow(/excede o limite/);
+    expect(cancelled).toBe(true);
+    expect(pulled).toBe(false);
+  });
+
   it('rejects chunked oversize without Content-Length and cancels the stream', async () => {
     let cancelled = false;
     const stream = new ReadableStream<Uint8Array>({
