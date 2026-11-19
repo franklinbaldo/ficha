@@ -1,8 +1,13 @@
 /** Browser-neutral DuckDB-WASM query core. The caller supplies an instantiated db. */
-const FIELDS = `cnpj, razao_social, nome_fantasia, uf,
-  cnae_principal_codigo, cnae_principal_descricao, municipio_nome,
-  capital_social, opcao_simples, data_opcao_simples, data_exclusao_simples,
-  opcao_mei, data_opcao_mei`;
+// Keep the actual SELECT projection inspectable by cross-contract tests.
+// A display field missing here would silently render as "Não informado".
+export const COMPANY_SELECT_FIELDS = Object.freeze([
+  'cnpj', 'razao_social', 'nome_fantasia', 'uf',
+  'cnae_principal_codigo', 'cnae_principal_descricao', 'municipio_nome',
+  'capital_social', 'opcao_simples', 'data_opcao_simples', 'data_exclusao_simples',
+  'opcao_mei', 'data_opcao_mei',
+]);
+const FIELDS = COMPANY_SELECT_FIELDS.join(', ');
 const EXACT = `SELECT ${FIELDS} FROM cnpjs WHERE cnpj = ? LIMIT 1`;
 const BY_NAME = `SELECT ${FIELDS} FROM cnpjs WHERE razao_social ILIKE ? LIMIT 20`;
 

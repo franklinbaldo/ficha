@@ -361,8 +361,9 @@ jobs:
           path: etl/.publication/${{ needs.resolve.outputs.month }}
 
       - name: Restore previous receipt on job rerun
+        # The receipt is the pre-PUT checkpoint. Losing it on a rerun must
+        # never turn an existing identity commitment into an optional hint.
         if: github.run_attempt > 1
-        continue-on-error: true
         uses: actions/download-artifact@v4
         with:
           name: shard-receipt-${{ matrix.prefix }}-${{ needs.resolve.outputs.month }}
@@ -379,10 +380,16 @@ jobs:
             --receipt ".publication/$MONTH/receipt-$PREFIX.json"
 
       - name: Require receipt stability across attempts
+        env:
+          RUN_ATTEMPT: ${{ github.run_attempt }}
         run: |
           previous=".publication/$MONTH/previous-receipt/receipt-$PREFIX.json"
           current=".publication/$MONTH/receipt-$PREFIX.json"
-          if [ -f "$previous" ]; then
+          if [ "$RUN_ATTEMPT" -gt 1 ]; then
+            if [ ! -f "$previous" ]; then
+              echo "::error::previous shard receipt unavailable on workflow rerun"
+              exit 1
+            fi
             if ! cmp -s "$previous" "$current"; then
               echo "::error::shard receipt changed across workflow attempts"
               diff -u "$previous" "$current" || true
