@@ -293,8 +293,10 @@ igualdade de todos os ZIPs, Histórico, v1.1 ou acessibilidade assistiva.
 ## Divisão de consultas
 
 - **CNPJ exato:** Protobuf-first e lookup, sem Parquet nem relay.
-- **História da mesma empresa:** dois Protobufs, cada qual da própria
-  competência e wire compatível; diferença observada não data a mudança.
+- **História da mesma empresa:** dois Protobufs e lookups próprios,
+  wire v1 compatível; diferença não data a mudança. A [#374](https://github.com/franklinbaldo/ficha/pull/374)
+  é a PR canônica DRAFT (a #373 foi substituída): dois `found+data`,
+  HTTP 404 interrompe o segundo GET, ausência gera comparação incompleta.
 - **Razão social, pessoa, município, CNAE e agregados:** índices
   apropriados ou trilha analítica separada, com orçamento real de
   bytes, requests e latência antes da promoção.
@@ -325,7 +327,10 @@ igualdade de todos os ZIPs, Histórico, v1.1 ou acessibilidade assistiva.
 
 ## Situação
 
-**Consulta exata numérica v1 publicada via #367 e replay Pages na R93:
-6/6 PASS.** A RFC permanece DRAFT, sem furar a fila do Elefante.
-Persistem pendências: busca textual, História, v1.1, porte (#359),
-hashes de todos os ZIPs, disponibilidade IA e p95.
+**Ficha numérica v1 publicada (#367, R93: 6/6 PASS); História #374
+DRAFT, não publicada.** No [R95](https://github.com/franklinbaldo/polvo/blob/main/memory/2026-11-19-r95-ficha-history-atomic-budget.md),
+Chromium leu Petrobras 2026-06→07: **4 fetches, 746.335 B de corpos,
+8,7–9,5 s sequenciais**. Os dois lookups (544.290 B, 73%) têm hashes
+arquivísticos distintos, mas mapas idênticos exceto por `snapshot_date`.
+Não deduplicar sem identidade versionada por competência. Nenhum p95,
+E2E da #374, wire 1.1 ou custódia global comprovado. Prioridade 🐘 #368.
