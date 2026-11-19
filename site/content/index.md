@@ -17,7 +17,7 @@ layout: index
       <label id="busca-titulo" for="busca-termo">Pesquise por CNPJ ou razão social</label>
       <div class="search-controls">
         <input id="busca-termo" name="q" type="search" maxlength="200" autocomplete="off" required placeholder="CNPJ ou nome da empresa">
-        <button id="busca-enviar" type="submit">Pesquisar <span aria-hidden="true">↗</span></button>
+        <button id="busca-enviar" type="submit" aria-label="Pesquisar">Pesquisar <span aria-hidden="true">↗</span></button>
       </div>
     </form>
     <p id="consulta-estado" role="status" aria-live="polite" class="interface-status">Digite um CNPJ completo ou ao menos três letras de uma razão social.</p>

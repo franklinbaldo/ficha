@@ -2,7 +2,7 @@
 type: Page
 name: Ficha da empresa
 title: Ficha da empresa — FICHA
-description: Consulte a ficha cadastral de um CNPJ em uma competência publicada.
+description: Ficha cadastral em competência arquivada; consulta remota por CNPJ ainda experimental.
 language: pt-BR
 permalink: https://franklinbaldo.github.io/ficha/empresa/
 layout: product
@@ -19,7 +19,7 @@ layout: product
   <form id="empresa-form" class="query-form" role="search">
     <div class="form-field"><label for="empresa-cnpj">CNPJ completo, numérico ou alfanumérico</label><input type="search" id="empresa-cnpj" name="cnpj" maxlength="24" autocomplete="off" required placeholder="00.000.000/0001-00"></div>
     <div class="form-field"><label for="empresa-competencia">Competência dos dados</label><select id="empresa-competencia" name="competencia" required></select></div>
-    <button class="button-primary" id="empresa-enviar" type="submit">Abrir ficha</button>
+    <button class="button-primary" id="empresa-enviar" type="submit" aria-label="Abrir ficha">Abrir ficha</button>
   </form>
   <p class="interface-status" id="empresa-estado" role="status" aria-live="polite">Preparando o catálogo de competências…</p>
   <div id="empresa-resultado" class="result-panel" aria-label="Ficha da empresa"></div>

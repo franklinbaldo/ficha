@@ -42,13 +42,28 @@ test('aviso público distingue falha de transporte de ausência cadastral', asyn
 });
 
 
+test('botão Pesquisar tem nome acessível português explícito na fonte SSG', async () => {
+  const home = await read('../content/index.md');
+  assert.match(home, /<button\b[^>]*\bid="busca-enviar"[^>]*\baria-label="Pesquisar"[^>]*>Pesquisar\s*<span aria-hidden="true">↗<\/span><\/button>/);
+  assert.doesNotMatch(home, /aria-label="north-east-arrow"/);
+});
+
+
+test('botão Abrir ficha tem nome acessível explícito na fonte SSG', async () => {
+  const empresa = await read('../content/empresa.md');
+  assert.match(empresa, /<button\b[^>]*\bid="empresa-enviar"[^>]*\baria-label="Abrir ficha"[^>]*>Abrir ficha<\/button>/);
+  assert.doesNotMatch(empresa, /aria-label="abrir-ficha"/);
+});
+
 test('páginas de ficha e história não prometem pesquisa remota já funcional', async () => {
   const empresa = await read('../content/empresa.md');
   const historia = await read('../content/historia.md');
   assert.match(empresa, /consulta remota ainda é experimental/i);
+  assert.match(empresa, /^description: .*experimental\./m);
   assert.match(empresa, /erro de leitura não significa que a empresa esteja ausente/i);
   assert.match(empresa, /bloqueio CORS/);
   assert.match(historia, /leitura remota ainda experimental/i);
+  assert.match(historia, /^description: .*experimental\./m);
   assert.match(historia, /Isso não demonstra ausência de registros/);
   assert.match(historia, /diferenças entre arquivos não determinam a data exata/);
   for (const page of [empresa, historia]) {

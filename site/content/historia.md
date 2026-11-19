@@ -2,7 +2,7 @@
 type: Page
 name: História de empresas
 title: História — FICHA
-description: Compare observações cadastrais em competências realmente arquivadas.
+description: Observações históricas em competências arquivadas; comparação remota ainda experimental.
 language: pt-BR
 permalink: https://franklinbaldo.github.io/ficha/historia/
 layout: product
