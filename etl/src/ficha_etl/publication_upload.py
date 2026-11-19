@@ -299,13 +299,19 @@ def submit_outputs_fail_closed(
             expected_size = _positive_size(expected.get("size"))
             expected_sha1 = _valid_sha1(expected.get("sha1"))
             snapshot = stack.enter_context(tempfile.TemporaryFile(mode="w+b"))
-            digest = hashlib.sha1(usedforsecurity=False)
-            copied = 0
             with paths[name].open("rb") as source:
                 for chunk in iter(lambda: source.read(1024 * 1024), b""):
                     snapshot.write(chunk)
-                    digest.update(chunk)
-                    copied += len(chunk)
+
+            # Hash the staged bytes, not the source read buffers: the uploader
+            # consumes the TemporaryFile, so that is the payload to attest.
+            snapshot.flush()
+            snapshot.seek(0)
+            digest = hashlib.sha1(usedforsecurity=False)
+            copied = 0
+            for chunk in iter(lambda: snapshot.read(1024 * 1024), b""):
+                digest.update(chunk)
+                copied += len(chunk)
             if copied != expected_size or digest.hexdigest() != expected_sha1:
                 raise OutputPublishError(
                     f"{name}: local bytes changed during upload snapshot: "
