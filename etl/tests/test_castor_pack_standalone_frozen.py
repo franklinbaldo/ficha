@@ -186,5 +186,11 @@ def test_freeze_rejects_inode_swap_during_copy(monkeypatch, tmp_path):
         "TemporaryFile",
         lambda **kwargs: ReplaceOnWrite(real(**kwargs)),
     )
-    with ExitStack() as stack, pytest.raises(ValueError, match="path replaced"):
-        pack_upload_snapshot.freeze_pack_snapshot(stack, output, 8)
+    # Windows holds the source inode with sharing flags that can deny a
+    # replacement while it is open. That is also a fail-closed outcome.
+    if os.name == "nt":
+        with ExitStack() as stack, pytest.raises(PermissionError):
+            pack_upload_snapshot.freeze_pack_snapshot(stack, output, 8)
+    else:
+        with ExitStack() as stack, pytest.raises(ValueError, match="path replaced"):
+            pack_upload_snapshot.freeze_pack_snapshot(stack, output, 8)
