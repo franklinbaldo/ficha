@@ -27,4 +27,3 @@ if (!file.isFile() || file.isSymbolicLink() || file.size < 1000 || file.size > 5
   throw new Error('Bundle Protobuf inesperado');
 }
 console.log('Decoder canônico gerado: '+file.size+' bytes');
-}
