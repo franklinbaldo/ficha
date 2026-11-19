@@ -33,7 +33,8 @@ from ficha_etl.proto.ficha.v1.company_pb2 import Company, Porte
             "02",
             Porte.PORTE_UNSPECIFIED,
             marks=pytest.mark.xfail(
-                strict=True, reason="#359: 02 não pertence ao domínio público 00/01/03/05"
+                strict=True,
+                reason="#359: 02 não pertence ao domínio público 00/01/03/05",
             ),
         ),
         ("03", Porte.PEQUENO_PORTE),
@@ -57,7 +58,9 @@ def test_wire_emitido_hoje_e_inadequado_para_rotulo_ingenuo():
     byte já foi recuperado do Internet Archive. Se a política de versão corrigir
     o packer, alterar este baseline junto com o teste normativo acima.
     """
-    wire = row_to_company({"cnpj_base": "12345678", "porte_empresa": "01"}).SerializeToString()
+    wire = row_to_company(
+        {"cnpj_base": "12345678", "porte_empresa": "01"}
+    ).SerializeToString()
     decoded = Company.FromString(wire)
     assert decoded.porte_empresa == 1
     assert Porte.Name(decoded.porte_empresa) == "NAO_INFORMADO"
@@ -139,35 +142,35 @@ def test_meta_zip_publicado_202607_prefixo00_evidencia_versao_nao_semantica():
 
     archived_meta = base64.b64decode(
         (
-        "ewogICJhcnRpZmFjdCI6IG51bGwsCiAgImNvdW50IjogOTY0Nzk4LAogICJtYXRlcmlhbGl6YXRp"
-        "b24iOiB7CiAgICAiaWQiOiAiNGQ0MzViMzJjMzVmOTcwZmMyNWFjODFjMWM3ZmY2Nzc5MGNlYjAw"
-        "YzE4MTI3NTk3ODVmYWQwNTY1OGRmOWJlYiIsCiAgICAic3BlYyI6IHsKICAgICAgImlucHV0cyI6"
-        "IHsKICAgICAgICAiY25wanMucGFycXVldCI6IHsKICAgICAgICAgICJzaGExIjogIjhhY2YzOTky"
-        "ZDA4ZWM4OGYxMTM0MjdiNzk0Y2QwZTYxODdmMGQ4YmQiCiAgICAgICAgfSwKICAgICAgICAibG9v"
-        "a3Vwcy9jbmFlcy5wYXJxdWV0IjogewogICAgICAgICAgInNoYTEiOiAiNzk2MGE1ZmY0Y2I4Mjg0"
-        "OGEwMzM3YTk5ZjNjNWNlYzAxNDJkOGUzMCIKICAgICAgICB9LAogICAgICAgICJsb29rdXBzL21v"
-        "dGl2b3MucGFycXVldCI6IHsKICAgICAgICAgICJzaGExIjogImM1ZGYxYzkyNTgxZDI1NmVhNDE3"
-        "NjFmYTFkZTY4OTUxMzVkYzAwNTIiCiAgICAgICAgfSwKICAgICAgICAibG9va3Vwcy9tdW5pY2lw"
-        "aW9zLnBhcnF1ZXQiOiB7CiAgICAgICAgICAic2hhMSI6ICIxMjA5ODA2Y2ViNWQwMWYwMzBjMGM1"
-        "MzA2MGY0NmQ4ZTQzYWI5YWJhIgogICAgICAgIH0sCiAgICAgICAgImxvb2t1cHMvbmF0dXJlemFz"
-        "LnBhcnF1ZXQiOiB7CiAgICAgICAgICAic2hhMSI6ICI1MTJkM2IxZWYyOWY1ZjYzOThlOTQyMmQz"
-        "NDE5ZDU2YzE1NjRlYjZiIgogICAgICAgIH0sCiAgICAgICAgImxvb2t1cHMvcGFpc2VzLnBhcnF1"
-        "ZXQiOiB7CiAgICAgICAgICAic2hhMSI6ICJlMTExYmI2MGRjOGU1ODIyMWUyN2Q1YWJlMWExYWU4"
-        "MDJjNDFlM2Y2IgogICAgICAgIH0sCiAgICAgICAgImxvb2t1cHMvcXVhbGlmaWNhY29lcy5wYXJx"
-        "dWV0IjogewogICAgICAgICAgInNoYTEiOiAiZmU4MzkxZjBiYThkMTRiYjgyNjYwMTFmOWQ2MDFm"
-        "Y2Q2YmViZTM1YSIKICAgICAgICB9LAogICAgICAgICJyYWl6ZXMucGFycXVldCI6IHsKICAgICAg"
-        "ICAgICJzaGExIjogIjFhMGYyNjIxZjQwMjZhNWYxY2RmMDE2NmEyMjQyOTM3N2E4Zjk1YjIiCiAg"
-        "ICAgICAgfSwKICAgICAgICAic29jaW9zLnBhcnF1ZXQiOiB7CiAgICAgICAgICAic2hhMSI6ICI1"
-        "MjZhMjcxZDZkMmRkZDdmNjkyNGMxOGM3MWViOTg3NmY0MTNlMTkxIgogICAgICAgIH0KICAgICAg"
-        "fSwKICAgICAgIm1hdGVyaWFsaXphdGlvbl92ZXJzaW9uIjogMSwKICAgICAgInBhY2tlcl9mb3Jt"
-        "YXRfdmVyc2lvbiI6IDEsCiAgICAgICJyYW5nZSI6IHsKICAgICAgICAia2luZCI6ICJjbnBqX2Jh"
-        "c2VfcHJlZml4IiwKICAgICAgICAidmFsdWUiOiAiMDAiCiAgICAgIH0sCiAgICAgICJzY2hlbWEi"
-        "OiB7CiAgICAgICAgImRlc2NyaXB0b3Jfc2hhMjU2IjogImY4NWY3OGJkNTkxZWJlOWJkM2QzODRk"
-        "YmRhMjYxYzViNmFmZDNiMDZkZDdlZWFmNzAwNThmYzVmZWVlOTkzYmUiCiAgICAgIH0sCiAgICAg"
-        "ICJzbmFwc2hvdCI6ICIyMDI2LTA3IgogICAgfQogIH0sCiAgInNjaGVtYV9zaGEyNTYiOiAiZjg1"
-        "Zjc4YmQ1OTFlYmU5YmQzZDM4NGRiZGEyNjFjNWI2YWZkM2IwNmRkN2VlYWY3MDA1OGZjNWZlZWU5"
-        "OTNiZSIsCiAgInNjaGVtYV92ZXJzaW9uIjogIjEuMC4wIiwKICAic25hcHNob3RfbW9udGgiOiAi"
-        "MjAyNi0wNyIKfQ=="
+            "ewogICJhcnRpZmFjdCI6IG51bGwsCiAgImNvdW50IjogOTY0Nzk4LAogICJtYXRlcmlhbGl6YXRp"
+            "b24iOiB7CiAgICAiaWQiOiAiNGQ0MzViMzJjMzVmOTcwZmMyNWFjODFjMWM3ZmY2Nzc5MGNlYjAw"
+            "YzE4MTI3NTk3ODVmYWQwNTY1OGRmOWJlYiIsCiAgICAic3BlYyI6IHsKICAgICAgImlucHV0cyI6"
+            "IHsKICAgICAgICAiY25wanMucGFycXVldCI6IHsKICAgICAgICAgICJzaGExIjogIjhhY2YzOTky"
+            "ZDA4ZWM4OGYxMTM0MjdiNzk0Y2QwZTYxODdmMGQ4YmQiCiAgICAgICAgfSwKICAgICAgICAibG9v"
+            "a3Vwcy9jbmFlcy5wYXJxdWV0IjogewogICAgICAgICAgInNoYTEiOiAiNzk2MGE1ZmY0Y2I4Mjg0"
+            "OGEwMzM3YTk5ZjNjNWNlYzAxNDJkOGUzMCIKICAgICAgICB9LAogICAgICAgICJsb29rdXBzL21v"
+            "dGl2b3MucGFycXVldCI6IHsKICAgICAgICAgICJzaGExIjogImM1ZGYxYzkyNTgxZDI1NmVhNDE3"
+            "NjFmYTFkZTY4OTUxMzVkYzAwNTIiCiAgICAgICAgfSwKICAgICAgICAibG9va3Vwcy9tdW5pY2lw"
+            "aW9zLnBhcnF1ZXQiOiB7CiAgICAgICAgICAic2hhMSI6ICIxMjA5ODA2Y2ViNWQwMWYwMzBjMGM1"
+            "MzA2MGY0NmQ4ZTQzYWI5YWJhIgogICAgICAgIH0sCiAgICAgICAgImxvb2t1cHMvbmF0dXJlemFz"
+            "LnBhcnF1ZXQiOiB7CiAgICAgICAgICAic2hhMSI6ICI1MTJkM2IxZWYyOWY1ZjYzOThlOTQyMmQz"
+            "NDE5ZDU2YzE1NjRlYjZiIgogICAgICAgIH0sCiAgICAgICAgImxvb2t1cHMvcGFpc2VzLnBhcnF1"
+            "ZXQiOiB7CiAgICAgICAgICAic2hhMSI6ICJlMTExYmI2MGRjOGU1ODIyMWUyN2Q1YWJlMWExYWU4"
+            "MDJjNDFlM2Y2IgogICAgICAgIH0sCiAgICAgICAgImxvb2t1cHMvcXVhbGlmaWNhY29lcy5wYXJx"
+            "dWV0IjogewogICAgICAgICAgInNoYTEiOiAiZmU4MzkxZjBiYThkMTRiYjgyNjYwMTFmOWQ2MDFm"
+            "Y2Q2YmViZTM1YSIKICAgICAgICB9LAogICAgICAgICJyYWl6ZXMucGFycXVldCI6IHsKICAgICAg"
+            "ICAgICJzaGExIjogIjFhMGYyNjIxZjQwMjZhNWYxY2RmMDE2NmEyMjQyOTM3N2E4Zjk1YjIiCiAg"
+            "ICAgICAgfSwKICAgICAgICAic29jaW9zLnBhcnF1ZXQiOiB7CiAgICAgICAgICAic2hhMSI6ICI1"
+            "MjZhMjcxZDZkMmRkZDdmNjkyNGMxOGM3MWViOTg3NmY0MTNlMTkxIgogICAgICAgIH0KICAgICAg"
+            "fSwKICAgICAgIm1hdGVyaWFsaXphdGlvbl92ZXJzaW9uIjogMSwKICAgICAgInBhY2tlcl9mb3Jt"
+            "YXRfdmVyc2lvbiI6IDEsCiAgICAgICJyYW5nZSI6IHsKICAgICAgICAia2luZCI6ICJjbnBqX2Jh"
+            "c2VfcHJlZml4IiwKICAgICAgICAidmFsdWUiOiAiMDAiCiAgICAgIH0sCiAgICAgICJzY2hlbWEi"
+            "OiB7CiAgICAgICAgImRlc2NyaXB0b3Jfc2hhMjU2IjogImY4NWY3OGJkNTkxZWJlOWJkM2QzODRk"
+            "YmRhMjYxYzViNmFmZDNiMDZkZDdlZWFmNzAwNThmYzVmZWVlOTkzYmUiCiAgICAgIH0sCiAgICAg"
+            "ICJzbmFwc2hvdCI6ICIyMDI2LTA3IgogICAgfQogIH0sCiAgInNjaGVtYV9zaGEyNTYiOiAiZjg1"
+            "Zjc4YmQ1OTFlYmU5YmQzZDM4NGRiZGEyNjFjNWI2YWZkM2IwNmRkN2VlYWY3MDA1OGZjNWZlZWU5"
+            "OTNiZSIsCiAgInNjaGVtYV92ZXJzaW9uIjogIjEuMC4wIiwKICAic25hcHNob3RfbW9udGgiOiAi"
+            "MjAyNi0wNyIKfQ=="
         ),
         validate=True,
     )
