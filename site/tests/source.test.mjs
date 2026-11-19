@@ -65,7 +65,8 @@ test('páginas de ficha e história não prometem pesquisa remota já funcional'
   assert.match(empresa, /Parquet sujeito a CORS/);
   assert.match(historia, /comparação de CNPJ numérico.*Protobuf v1/i);
   assert.match(historia, /CNPJs alfanuméricos e meses sem essa camada/i);
-  assert.match(historia, /a comparação legada por Parquet continua bloqueada por CORS/i);
+  assert.match(historia, /a comparação legada por Parquet não é acionada nesta página/i);
+  assert.match(historia, /não há fallback para Parquet/i);
   assert.match(historia, /^description: .*experimental\./m);
   assert.match(historia, /Isso não demonstra ausência de registros/);
   assert.match(historia, /diferenças entre arquivos não determinam a data exata/i);
