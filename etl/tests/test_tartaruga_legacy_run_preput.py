@@ -51,7 +51,8 @@ def test_legacy_run_refuses_raw_put_when_transform_fails(
     monkeypatch.setattr(cli, "make_progress", _Progress)
     events: list[str] = []
 
-    def fail_transform(*_args: object, **_kwargs: object) -> None:
+    def fail_transform(*_args: object, **kwargs: object) -> None:
+        assert kwargs["reject_empty_estabelecimentos"] is True
         events.append("transform")
         raise RuntimeError(problem)
 
@@ -64,6 +65,46 @@ def test_legacy_run_refuses_raw_put_when_transform_fails(
     assert _run(tmp_path, skip_upload=False) == 1
     assert events == ["transform"]
     assert not (tmp_path / "manifest.json").exists()
+
+
+def test_legacy_run_refuses_raw_put_when_local_pack_fails(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A local companies.zip failure must precede *all* remote publication."""
+    monkeypatch.setenv("IA_ACCESS_KEY", "synthetic-access")
+    monkeypatch.setenv("IA_SECRET_KEY", "synthetic-secret")
+    monkeypatch.setattr(cli, "make_progress", _Progress)
+    events: list[str] = []
+
+    def transform(*_args: object, **kwargs: object) -> None:
+        assert kwargs["reject_empty_estabelecimentos"] is True
+        events.append("transform")
+
+    def fail_pack(*_args: object, **_kwargs: object) -> None:
+        events.append("pack")
+        raise RuntimeError("synthetic invalid companies Parquet")
+
+    monkeypatch.setattr(cli.transform, "transform_snapshot", transform)
+    monkeypatch.setattr(cli.pack_mod, "pack_from_parquets", fail_pack)
+    monkeypatch.setattr(cli.upload_mod, "stream_raw_zips_to_ia", _reject)
+    monkeypatch.setattr(cli.upload_mod, "upload_outputs", _reject)
+    monkeypatch.setattr(cli.upload_mod, "upload_companies_zip", _reject)
+    monkeypatch.setattr(cli.manifest_mod, "build_snapshot_entry", _reject)
+
+    assert _run(tmp_path, skip_upload=False) == 1
+    assert events == ["transform", "pack"]
+    assert not (tmp_path / "manifest.json").exists()
+
+
+def test_legacy_run_rejects_missing_ia_credentials_before_work(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.delenv("IA_ACCESS_KEY", raising=False)
+    monkeypatch.delenv("IA_SECRET_KEY", raising=False)
+    monkeypatch.setattr(cli, "make_progress", _Progress)
+    monkeypatch.setattr(cli.transform, "transform_snapshot", _reject)
+    monkeypatch.setattr(cli.pack_mod, "pack_from_parquets", _reject)
+    assert _run(tmp_path, skip_upload=False) == 1
 
 
 @pytest.mark.parametrize("skip_upload", [False, True])
@@ -81,7 +122,11 @@ def test_legacy_run_orders_transform_before_every_remote_effect(
 
         return run
 
-    monkeypatch.setattr(cli.transform, "transform_snapshot", record("transform"))
+    def transform(*_args: object, **kwargs: object) -> None:
+        assert kwargs["reject_empty_estabelecimentos"] is True
+        events.append("transform")
+
+    monkeypatch.setattr(cli.transform, "transform_snapshot", transform)
     monkeypatch.setattr(cli.upload_mod, "stream_raw_zips_to_ia", record("raw"))
     monkeypatch.setattr(cli.upload_mod, "upload_outputs", record("outputs"))
     monkeypatch.setattr(cli.upload_mod, "upload_companies_zip", record("companies"))
@@ -111,9 +156,9 @@ def test_legacy_run_orders_transform_before_every_remote_effect(
     else:
         assert events == [
             "transform",
+            "pack",
             "raw",
             "outputs",
-            "pack",
             "companies",
             "build",
             "verify",
