@@ -132,6 +132,15 @@ sem alterar o comportamento atual.
 Uma segunda diferença de aceitação também é exercitável sem consultar dados
 remotos: o v1 rejeita códigos fora dos enums `tipo`, `tipo_descricao` e
 `faixa_etaria` de `Socio`, mas o gerado usa `z.string()` e os admite.
+Testes adicionais exercitam **validadores de campo** para dois nulos
+representativos em `Cnpj.nome_fantasia` e
+`Raiz.ente_federativo_responsavel`, e os outros quatro domínios enum
+(`Cnpj.identificador_matriz_filial`, `Cnpj.porte_empresa`,
+`Cnpj.situacao_cadastral`, `Raiz.porte_empresa`). Assim os sete enums
+inventariados têm um controle runtime, mas apenas os casos de `Socio`
+atravessam aqui a validação de **linha inteira** da view; não confundir
+os dois níveis de prova.
+
 Uma terceira diferença ocorre com coluna futura: o `z.object` público v1
 aceita a linha e retira a chave desconhecida, enquanto o adaptador de views
 aplica `.strict()` e a rejeita. Os testes Vitest usam somente linhas
