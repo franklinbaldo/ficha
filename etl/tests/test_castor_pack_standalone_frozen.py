@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import tempfile
 from contextlib import ExitStack
+from types import SimpleNamespace
 
 import pytest
 
@@ -156,6 +157,7 @@ def test_freeze_rejects_same_size_rewrite_during_copy(monkeypatch, tmp_path):
         pack_upload_snapshot.freeze_pack_snapshot(stack, output, 8)
 
 
+@pytest.mark.skipif(os.name == "nt", reason="Windows locks opened files against os.replace")
 def test_freeze_rejects_inode_swap_during_copy(monkeypatch, tmp_path):
     output = tmp_path / "companies.zip"
     output.write_bytes(b"AAAAAAAA")
@@ -194,3 +196,50 @@ def test_freeze_rejects_inode_swap_during_copy(monkeypatch, tmp_path):
     else:
         with ExitStack() as stack, pytest.raises(ValueError, match="path replaced"):
             pack_upload_snapshot.freeze_pack_snapshot(stack, output, 8)
+
+
+def test_freeze_rejects_simulated_inode_swap_on_all_platforms(monkeypatch, tmp_path):
+    """Exercise the path-identity guard without relying on OS rename semantics.
+
+    Windows denies os.replace while the source file is open. The POSIX
+    test above separately exercises a real pathname swap.
+    """
+    output = tmp_path / "companies.zip"
+    output.write_bytes(b"AAAAAAAA")
+    original_stat = type(output).stat
+    real = tempfile.TemporaryFile
+    writing = False
+
+    class SimulateSwapOnWrite:
+        def __init__(self, handle):
+            self.handle = handle
+
+        def __enter__(self):
+            self.handle.__enter__()
+            return self
+
+        def __exit__(self, *args):
+            return self.handle.__exit__(*args)
+
+        def write(self, chunk):
+            nonlocal writing
+            writing = True
+            return self.handle.write(chunk)
+
+        def __getattr__(self, name):
+            return getattr(self.handle, name)
+
+    def stat_after_swap(path, *args, **kwargs):
+        current = original_stat(path, *args, **kwargs)
+        if path == output and writing:
+            return SimpleNamespace(st_dev=current.st_dev, st_ino=current.st_ino + 1)
+        return current
+
+    monkeypatch.setattr(type(output), "stat", stat_after_swap)
+    monkeypatch.setattr(
+        pack_upload_snapshot.tempfile,
+        "TemporaryFile",
+        lambda **kwargs: SimulateSwapOnWrite(real(**kwargs)),
+    )
+    with ExitStack() as stack, pytest.raises(ValueError, match="path replaced"):
+        pack_upload_snapshot.freeze_pack_snapshot(stack, output, 8)
