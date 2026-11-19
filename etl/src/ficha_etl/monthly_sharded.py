@@ -328,6 +328,7 @@ def command_produce(args: argparse.Namespace) -> None:
         skip_unimplemented=False,
         verify=not args.no_verify,
         verify_sample_size=args.verify_sample_size,
+        reject_empty_estabelecimentos=True,
     )
     descriptor = build_production_descriptor(month, output_dir)
     write_production_descriptor(descriptor_path, descriptor)
