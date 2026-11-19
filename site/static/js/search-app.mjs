@@ -17,7 +17,10 @@ export function renderCompanies(documentRef, list, rows) {
       const link = documentRef.createElement('a');
       link.href = '/ficha/empresa/?cnpj=' + encodeURIComponent(canonical);
       link.textContent = 'Abrir ficha';
-      details.append(link);
+      // Repeated result actions need an individual accessible name.
+      link.setAttribute('aria-label', 'Abrir ficha do CNPJ ' + canonical);
+      // A text separator keeps the CNPJ/location from touching the link label.
+      details.append(' · ', link);
     }
     item.append(heading, details);
     list.append(item);
