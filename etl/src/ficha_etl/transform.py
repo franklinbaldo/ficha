@@ -82,6 +82,7 @@ def extract_all(
     extract_dir: Path,
     *,
     progress: Progress | None = None,
+    reject_empty_estabelecimentos: bool = False,
 ) -> list[ExtractedFile]:
     """Resolve cada ZIP via chain, extrai pra `extract_dir/{kind}/{spec.name}/`.
 
@@ -91,6 +92,10 @@ def extract_all(
 
     `progress`: barra de progresso já iniciada (rich) pra reusar entre
     chamadas dentro do mesmo `run`; se omitido, cria (e fecha) a sua própria.
+
+    `reject_empty_estabelecimentos`: exige bytes não vazios em cada uma das dez
+    partes RFB na execução mensal; permanece opcional porque fixtures históricas
+    do ETL usam partes vazias para exercitar cenários sintéticos reduzidos.
     """
     if not is_valid_month(month):
         raise ValueError(f"month must be YYYY-MM, got {month!r}")
@@ -132,6 +137,12 @@ def extract_all(
                     f"{[p.name for p in files]}"
                 )
             csv_path = files[0]
+            if (
+                reject_empty_estabelecimentos
+                and spec.kind == "estabelecimentos"
+                and csv_path.stat().st_size == 0
+            ):
+                raise RuntimeError(f"zip {spec.name!r} has an empty estabelecimento CSV")
             size_mb = csv_path.stat().st_size / 1024 / 1024
             log.info(
                 "[%d/%d] extracted %s → %.1f MB CSV (%.1fs)",
@@ -2053,6 +2064,7 @@ def transform_snapshot(
     skip_unimplemented: bool = True,
     verify: bool = False,
     verify_sample_size: int = 100,
+    reject_empty_estabelecimentos: bool = False,
     progress: Progress | None = None,
 ) -> None:
     """Orquestrador: resolve → extract → load → write outputs.
@@ -2094,7 +2106,13 @@ def transform_snapshot(
         log.info("=== PHASE 1/4: extract 37 ZIPs for %s ===", month)
         t0 = time.monotonic()
         with recorder.stage("extract", workdir=extract_dir) as _mh_extract:
-            extracted = extract_all(month, chain, extract_dir, progress=progress)
+            extracted = extract_all(
+                month,
+                chain,
+                extract_dir,
+                progress=progress,
+                reject_empty_estabelecimentos=reject_empty_estabelecimentos,
+            )
             _mh_extract.bytes_read = sum(
                 ef.csv_path.stat().st_size for ef in extracted if ef.csv_path.exists()
             )
