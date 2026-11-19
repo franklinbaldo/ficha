@@ -60,8 +60,8 @@ jobs:
           ssg check --config config.toml
           ssg build --config config.toml
           node scripts/finalize.mjs
-          # All published data/catalogue/record modules must survive SSG byte-for-byte.
-          for module in dataset catalog record pages; do
+          # All eight published JavaScript modules must survive SSG byte-for-byte.
+          for module in boot search-app duckdb-runtime query-core dataset catalog record pages; do
             cmp "static/js/$module.mjs" "dist/ficha/js/$module.mjs"
           done
           # A newly declared page must also load its ES module in the built output.
@@ -115,6 +115,9 @@ jobs:
           curl -fsSL --retry 3 "$BASE/js/record.mjs" -o record.mjs
           curl -fsSL --retry 3 "$BASE/css/site.css" -o site.css
           curl -fsSL --retry 3 "$BASE/js/boot.mjs" -o boot.mjs
+          curl -fsSL --retry 3 "$BASE/js/search-app.mjs" -o search-app.mjs
+          curl -fsSL --retry 3 "$BASE/js/duckdb-runtime.mjs" -o duckdb-runtime.mjs
+          curl -fsSL --retry 3 "$BASE/js/query-core.mjs" -o query-core.mjs
           curl -fsSL --retry 3 "$BASE/js/dataset.mjs" -o dataset-live.mjs
           curl -fsSL --retry 3 "$BASE/manifest.json" -o manifest-live.json
           grep -q 'id="busca-form"' index.html
@@ -129,6 +132,10 @@ jobs:
           grep -q 'focus-visible' site.css
           grep -q 'mountSearch' boot.mjs
           # grep proves only presence; byte equality rules out a stale public module.
+          cmp site/static/js/boot.mjs boot.mjs
+          cmp site/static/js/search-app.mjs search-app.mjs
+          cmp site/static/js/duckdb-runtime.mjs duckdb-runtime.mjs
+          cmp site/static/js/query-core.mjs query-core.mjs
           cmp site/static/js/dataset.mjs dataset-live.mjs
           cmp site/static/js/catalog.mjs catalog.mjs
           cmp site/static/js/record.mjs record.mjs
