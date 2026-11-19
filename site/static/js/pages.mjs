@@ -202,8 +202,17 @@ export function renderHistoryComparison(doc, parent, older, newer) {
   title.className = 'section-title';
   const provenance = add(doc,parent,'p','Competências '+older.date+' e '+newer.date+'. As diferenças foram observadas entre snapshots; não representam datas exatas de alteração.');
   provenance.className='fineprint';
-  if (!older.data || !newer.data) {
-    add(doc,parent,'p','Um ou ambos os snapshots não retornaram registro para este CNPJ. Não é possível concluir que a empresa nasceu, encerrou atividades ou mudou nesta data.');
+  if (older.partial || newer.partial) {
+    add(doc,parent,'p','A comparação numérica utiliza Protobuf v1 arquivado. Campos desconhecidos permanecem não informados, e o porte histórico não pode ser determinado por este wire.','fineprint');
+  }
+  if (older.state === 'absent-in-snapshot' || newer.state === 'absent-in-snapshot') {
+    add(doc,parent,'h3','Comparação incompleta: CNPJ não localizado');
+    for (const entry of [older,newer]) {
+      if (entry.state === 'absent-in-snapshot') {
+        add(doc,parent,'p','CNPJ não localizado no registro Protobuf de ' + entry.date + '.');
+      }
+    }
+    add(doc,parent,'p','Uma diferença de presença entre snapshots não comprova nascimento, encerramento ou data de mudança cadastral.');
   } else {
     const table = add(doc,parent,'table','','comparison-table');
     const thead = add(doc,table,'thead'); const headers=add(doc,thead,'tr');
@@ -222,7 +231,36 @@ export function renderHistoryComparison(doc, parent, older, newer) {
   anchor(doc,sources,'Fonte '+newer.date,newer.source,true);
 }
 
-export async function mountHistory(doc,{loadManifest=fetchManifest,lookup=fetchRecordAt}={}) {
+/** Numeric full-CNPJ history reads the same bounded, canonical Protobuf v1
+ * as the company page. The alphanumeric legacy path is not claimed functional.
+ * No implicit fallback to Parquet when a declared PB shard is unavailable.
+ */
+export async function fetchHistoryRecordAt(manifest, date, cnpj, {
+  atomic = fetchCompanyByCnpj, legacy = fetchRecordAt,
+} = {}) {
+  return /^\d{14}$/.test(cnpj)
+    ? atomic(manifest, date, cnpj)
+    : legacy(manifest, date, cnpj);
+}
+
+function requireHistoryObservation(result) {
+  if (result?.state === 'artifact-unavailable') {
+    throw new Error('Consulta inconclusiva em ' + result.date +
+      ': arquivo Protobuf não respondeu (HTTP 404); ausência não comprovada');
+  }
+  if (!result || !['found', 'absent-in-snapshot'].includes(result.state)) {
+    throw new Error('Estado de consulta ausente ou desconhecido; comparação inconclusiva');
+  }
+  if (result.state === 'found' && (!result.data || typeof result.data !== 'object')) {
+    throw new Error('Registro encontrado sem dados; comparação inconclusiva');
+  }
+  if (result.state === 'absent-in-snapshot' && result.data != null) {
+    throw new Error('Resposta de ausência contraditória; comparação inconclusiva');
+  }
+  return result;
+}
+
+export async function mountHistory(doc,{loadManifest=fetchManifest,lookup=fetchHistoryRecordAt}={}) {
   const list=byId(doc,'historia-competencias'), from=byId(doc,'historia-inicio');
   const to=byId(doc,'historia-fim'), form=byId(doc,'historia-form');
   const input=byId(doc,'historia-cnpj'), button=byId(doc,'historia-enviar');
@@ -238,17 +276,35 @@ export async function mountHistory(doc,{loadManifest=fetchManifest,lookup=fetchR
     add(doc,li,'span',snap.date,'mono');
     add(doc,li,'strong',competenceLabel(snap.date));
     if(snap.date===manifest.current) add(doc,li,'small','Referência do manifesto');
+    if (snap.files?.companies?.shard_by !== 'cnpj_base_prefix_2' ||
+        (snap.files.companies.schema_version != null &&
+         snap.files.companies.schema_version !== '1.0.0') ||
+        !Array.isArray(snap.files.companies.shards)) {
+      add(doc,li,'small','Sem índice para comparação numérica');
+    }
   }
-  populateDateSelect(doc,from,manifest,params().get('de') || snaps.at(-1)?.date);
-  populateDateSelect(doc,to,manifest,params().get('ate') || manifest.current);
-  const initial=params().get('cnpj');
-  if(initial) input.value=initial;
-  if(snaps.length<2){
-    status(state,'O manifesto contém somente uma competência. A comparação exige pelo menos duas observações reais.');
+  const protobufMonths = snaps.filter(s => s.files?.companies?.shard_by ===
+    'cnpj_base_prefix_2' &&
+    (s.files.companies.schema_version == null ||
+      s.files.companies.schema_version === '1.0.0') &&
+    Array.isArray(s.files.companies.shards));
+  // Keep the full archival timeline; prevent selecting legacy or future-wire months.
+  if (protobufMonths.length < 2) {
+    from.replaceChildren(); to.replaceChildren();
+    status(state,'Há menos de duas competências com camada Protobuf numérica v1. Comparação indisponível.');
     button.disabled=true;
     return;
   }
-  status(state,'Escolha duas competências existentes. A comparação só será executada após solicitar.');
+  const comparableManifest={...manifest,snapshots:protobufMonths,
+    current:protobufMonths.some(s=>s.date===manifest.current)
+      ? manifest.current : protobufMonths[0].date};
+  populateDateSelect(doc,from,comparableManifest,params().get('de') ||
+    protobufMonths[1]?.date);
+  populateDateSelect(doc,to,comparableManifest,params().get('ate') ||
+    comparableManifest.current);
+  const initial=params().get('cnpj');
+  if(initial) input.value=initial;
+  status(state,'Escolha duas competências com índice Protobuf numérico v1.');
   let busy = false;
   const selection = watchSelection(
     [[input, 'input'], [from, 'change'], [to, 'change']], state, output,
@@ -271,19 +327,29 @@ export async function mountHistory(doc,{loadManifest=fetchManifest,lookup=fetchR
     button.disabled=true;
     status(state,'Consultando os dois snapshots de forma sequencial…');
     try {
-      const older=await lookup(manifest,start,cnpj);
+      const older=requireHistoryObservation(await lookup(manifest,start,cnpj));
       // Avoid a second archival GET if the user changed the requested comparison.
       if (!stillCurrent()) { status(state,discarded); return; }
-      const newer=await lookup(manifest,end,cnpj);
+      const newer=requireHistoryObservation(await lookup(manifest,end,cnpj));
       if (!stillCurrent()) { status(state,discarded); return; }
       setParams({cnpj,de:start,ate:end});
       renderHistoryComparison(doc,output,older,newer);
-      status(state,'Comparação concluída. Alterações são diferenças entre observações, não datas de eventos.');
+      if (older.state === 'absent-in-snapshot' || newer.state === 'absent-in-snapshot') {
+        status(state,'Comparação incompleta: CNPJ não localizado em uma das competências.');
+      } else {
+        status(state,'Comparação concluída. Alterações são diferenças entre observações, não datas de eventos.');
+      }
     }catch(error){
       if (!stillCurrent()) { status(state,discarded); return; }
-      setParams({cnpj,de:start,ate:end});
-      status(state,'Comparação indisponível: '+error.message,true);
-      anchor(doc,output,'Ver competências disponíveis',BASE+'acervo/');
+      if (error instanceof CnpjInputError) {
+        setParams({cnpj:null,de:null,ate:null});
+        status(state,error.message,true);
+        add(doc,output,'p','Corrija o CNPJ antes de comparar.');
+      } else {
+        setParams({cnpj,de:start,ate:end});
+        status(state,'Comparação indisponível: '+error.message,true);
+        anchor(doc,output,'Ver competências disponíveis',BASE+'acervo/');
+      }
     }finally{busy=false;selection.finish();button.disabled=false;}
   });
 }
