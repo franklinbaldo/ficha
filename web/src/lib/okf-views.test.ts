@@ -1,4 +1,7 @@
 import { describe, expect, it } from 'vitest';
+import { EstabelecimentoSchema as PublicV1CnpjSchema } from '../schemas/v1/estabelecimento';
+import { RaizSchema as PublicV1RaizSchema } from '../schemas/v1/raiz';
+import { okfParquetRowSchemas } from './okf-row-schemas';
 import { SocioSchema as PublicV1SocioSchema } from '../schemas/v1/socio';
 import {
   getOkfConvenienceView,
@@ -78,6 +81,48 @@ describe('OKF convenience views', () => {
       expect(validateOkfConvenienceViewRows('socios_de_raizes_ativas', [row])).toEqual([
         row,
       ]);
+    }
+  });
+
+  it('documents Cnpj and Raiz public-v1 nullable fields rejected by generated OKF rows', () => {
+    // Check field validators, not complete Parquet rows or live snapshots.
+    expect(PublicV1CnpjSchema.shape.nome_fantasia.safeParse(null).success).toBe(true);
+    expect(okfParquetRowSchemas.Cnpj.shape.nome_fantasia.safeParse(null).success).toBe(false);
+    expect(PublicV1RaizSchema.shape.ente_federativo_responsavel.safeParse(null).success).toBe(
+      true
+    );
+    expect(
+      okfParquetRowSchemas.Raiz.shape.ente_federativo_responsavel.safeParse(null).success
+    ).toBe(false);
+  });
+
+  it('documents generated OKF enum widening in Cnpj and Raiz field validators', () => {
+    // Together with the Socio row test above, these cover all seven known enums.
+    const invalidValues = [
+      [
+        PublicV1CnpjSchema.shape.identificador_matriz_filial,
+        okfParquetRowSchemas.Cnpj.shape.identificador_matriz_filial,
+        '9',
+      ],
+      [
+        PublicV1CnpjSchema.shape.porte_empresa,
+        okfParquetRowSchemas.Cnpj.shape.porte_empresa,
+        '99',
+      ],
+      [
+        PublicV1CnpjSchema.shape.situacao_cadastral,
+        okfParquetRowSchemas.Cnpj.shape.situacao_cadastral,
+        '99',
+      ],
+      [
+        PublicV1RaizSchema.shape.porte_empresa,
+        okfParquetRowSchemas.Raiz.shape.porte_empresa,
+        '99',
+      ],
+    ] as const;
+    for (const [publicField, generatedField, value] of invalidValues) {
+      expect(publicField.safeParse(value).success).toBe(false);
+      expect(generatedField.safeParse(value).success).toBe(true);
     }
   });
 
