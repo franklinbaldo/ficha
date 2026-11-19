@@ -65,7 +65,7 @@ export async function fetchCompanyByCnpj(manifest, date, cnpj, {
   const municipio = result.data.municipio_codigo;
   const cnae = result.data.cnae_principal_codigo;
   const municipality = municipio == null ? null : lookups.municipios[String(municipio)];
-  const activity = cnae == null ? null : lookups.cnaes[String(cnae)];
+  const activity = cnae == null ? null : lookups.cnaes[String(cnae).padStart(7, '0')];
   if ((municipio != null && typeof municipality !== 'string') ||
       (cnae != null && typeof activity !== 'string')) {
     throw new Error('Código RFB ausente do lookup da competência');
