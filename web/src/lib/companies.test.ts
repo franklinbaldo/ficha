@@ -224,6 +224,35 @@ describe('atomic member transfer budget', () => {
     expect(cancelled).toBe(true);
   });
 
+  it('does not await a stalled underlying cancellation when a streamed member exceeds the budget', async () => {
+    let cancelCount = 0;
+    // A remote stream may never settle its teardown. Error feedback must
+    // remain prompt while the cancellation is still attempted.
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) { controller.enqueue(new Uint8Array(65)); },
+      cancel() {
+        cancelCount++;
+        return new Promise<void>(() => {});
+      },
+    }, { highWaterMark: 0 });
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const outcome = await Promise.race([
+        readAtomicMember(new Response(stream), 64).then(
+          () => 'resolved',
+          (error: unknown) => /excede o limite/.test(String(error)) ? 'rejected' : 'wrong-error',
+        ),
+        new Promise<string>((resolve) => {
+          timeout = setTimeout(() => resolve('stalled'), 250);
+        }),
+      ]);
+      expect(outcome).toBe('rejected');
+      expect(cancelCount).toBe(1);
+    } finally {
+      if (timeout) clearTimeout(timeout);
+    }
+  });
+
   it('rejects oversized legacy test doubles without a stream', async () => {
     const res = {
       headers: new Headers(),
