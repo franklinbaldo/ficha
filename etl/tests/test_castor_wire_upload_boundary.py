@@ -261,6 +261,9 @@ def test_monthly_legacy_wire_transforms_before_raw_upload_and_descriptor(
         calls.append("write")
 
     monkeypatch.setattr(monthly_sharded.transform, "transform_snapshot", transform_first)
+    monkeypatch.setattr(
+        monthly_sharded, "run_monthly_gate", lambda *_args: calls.append("gate")
+    )
     monkeypatch.setattr(monthly_sharded, "_require_secret", fake_secret)
     monkeypatch.setattr(monthly_sharded.upload, "stream_raw_zips_to_ia", upload_after_transform)
     monkeypatch.setattr(monthly_sharded, "build_production_descriptor", build_after_upload)
@@ -269,6 +272,7 @@ def test_monthly_legacy_wire_transforms_before_raw_upload_and_descriptor(
     monthly_sharded.command_produce(args)
     assert calls == [
         "transform",
+        "gate",
         "secret:IA_ACCESS_KEY",
         "secret:IA_SECRET_KEY",
         "raw",
