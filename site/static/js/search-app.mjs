@@ -46,15 +46,26 @@ export function mountSearch({
   let active = false;
   let inputVersion = 0;
   let terminalFeedback = false;
-  // Completed results, validation errors and transport failures belong to the old term.
-  // Clear feedback on the first edit, without announcing on every
-  // keystroke. Pending responses are discarded by the version guard below.
+  let pendingEditAnnounced = false;
+  const setStatus = (message, kind = 'info') => {
+    status.textContent = message;
+    status.dataset.kind = kind;
+  };
+  // Completed feedback belongs to the previous term. During an in-flight
+  // request, notify on the first edit only: repeated live-region updates
+  // would announce the same message at each keystroke.
   input.addEventListener('input', () => {
     inputVersion++;
-    if (terminalFeedback) {
+    if (active) {
+      if (!pendingEditAnnounced) {
+        pendingEditAnnounced = true;
+        list.replaceChildren();
+        setStatus('Termo alterado durante a consulta. Aguarde a conclusão para pesquisar novamente.');
+      }
+    } else if (terminalFeedback) {
       terminalFeedback = false;
       list.replaceChildren();
-      status.textContent = 'Termo alterado. Pesquise novamente para atualizar os resultados.';
+      setStatus('Termo alterado. Pesquise novamente para atualizar os resultados.');
     }
   });
   const openSession = () => {
@@ -92,7 +103,7 @@ export function mountSearch({
     if (!planCompanyQuery(term)) {
       terminalFeedback = true;
       list.replaceChildren();
-      status.textContent = 'Informe um CNPJ completo ou ao menos três caracteres da razão social.';
+      setStatus('Informe um CNPJ completo ou ao menos três caracteres da razão social.', 'error');
       return;
     }
     const requestVersion = inputVersion;
@@ -100,39 +111,44 @@ export function mountSearch({
     const discardedMessage = 'Termo alterado durante a consulta. Pesquise novamente.';
     active = true;
     terminalFeedback = false;
+    pendingEditAnnounced = false;
     submit.disabled = true;
     list.replaceChildren(); // never leave stale results visible during failures
-    status.textContent = 'Preparando consulta à competência publicada…';
+    setStatus('Preparando consulta à competência publicada…');
     try {
       const session = await openSession();
       if (!stillCurrent()) {
         terminalFeedback = true;
-        status.textContent = discardedMessage;
+        setStatus(discardedMessage);
         return;
       }
       if (!session) {
         terminalFeedback = true;
-        status.textContent = 'Os dados ainda não foram publicados (manifesto ausente).';
+        setStatus('Os dados ainda não foram publicados (manifesto ausente).', 'error');
         return;
       }
-      status.textContent = 'Consultando a base analítica…';
+      setStatus('Consultando a base analítica…');
       const rows = await query(session.db, term);
       if (!stillCurrent()) {
         terminalFeedback = true;
-        status.textContent = discardedMessage;
+        setStatus(discardedMessage);
         return;
       }
       renderCompanies(documentRef, list, rows);
       terminalFeedback = true;
-      status.textContent = 'Competência ' + session.dataset.date + ': ' +
+      setStatus('Competência ' + session.dataset.date + ': ' +
         (rows.length === 0 ? 'nenhum resultado encontrado.' :
-          rows.length + (rows.length === 1 ? ' resultado encontrado.' : ' resultados encontrados.'));
+          rows.length + (rows.length === 1 ? ' resultado encontrado.' : ' resultados encontrados.')));
     } catch (error) {
       terminalFeedback = true;
-      status.textContent = stillCurrent() ?
-        'Consulta indisponível: ' + (error?.message || 'erro desconhecido') : discardedMessage;
+      if (stillCurrent()) {
+        setStatus('Consulta indisponível: ' + (error?.message || 'erro desconhecido'), 'error');
+      } else {
+        setStatus(discardedMessage);
+      }
     } finally {
       active = false;
+      pendingEditAnnounced = false;
       submit.disabled = false;
     }
   }
