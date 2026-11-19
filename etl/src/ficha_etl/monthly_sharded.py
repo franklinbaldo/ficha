@@ -34,6 +34,7 @@ from .manifest import (
     update_manifest,
     write_production_descriptor,
 )
+from .monthly_estabelecimento_gate import run_monthly_gate
 from .publication_upload import submit_outputs_fail_closed
 from .remote_reuse import fetch_item_metadata
 from .shard_publish import ShardPublishError
@@ -324,8 +325,16 @@ def command_produce(args: argparse.Namespace) -> None:
         reject_empty_estabelecimentos=True,
     )
 
-    # Transform may reject an invalid source, including a zero-byte CSV.
-    # Do not upload raw bytes or publish a descriptor on that failure.
+    # Fail closed on duplicate keys and invalid CNPJ check digits before
+    # *any* raw ZIP PUT. Evidence survives gate failures as a job artifact.
+    run_monthly_gate(
+        month,
+        output_dir / "cnpjs.parquet",
+        output_dir.parent / "evidence" / "monthly-estabelecimento-key-gate.json",
+        output_dir.parent / "monthly-estabelecimento-key-gate",
+    )
+
+    # Transform and key validation must both succeed before raw publication.
     if not args.skip_raw_upload:
         upload.stream_raw_zips_to_ia(
             month,
