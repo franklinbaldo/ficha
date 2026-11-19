@@ -39,7 +39,7 @@ function fakeDocument(ids = []) {
 function manifestWithShards() {
   const snapshot = date => ({
     date, row_counts: { cnpjs: 2 }, files: {
-      companies: { shards: [
+      companies: { shard_by: 'cnpj_base_prefix_2', shards: [
         { shard: '00', size: 10, url: 'https://archive.org/00' },
         { shard: '01', size: 20, url: 'https://archive.org/01' },
       ] },
