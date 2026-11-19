@@ -148,6 +148,22 @@ test('diff é observação, não prova de evento cadastral', () => {
   assert.deepEqual(compareRecords(null,null),[]);
 });
 
+test('comparação distingue valor bruto de apresentação, inclusive drift de tipo e nulidade', () => {
+  // Public v1 fixes scalar types and nullable fields. Two different raw
+  // observations may render identically; they must not become false negatives.
+  const rows = compareRecords(
+    {opcao_mei:false, capital_social:0, nome_fantasia:null, uf:'RO'},
+    {opcao_mei:'Não', capital_social:'0', nome_fantasia:'', uf:'RO'});
+  for (const field of ['opcao_mei','capital_social','nome_fantasia']) {
+    const row = rows.find(item => item.field === field);
+    assert.equal(row.before, row.after, field + ': presentation collision expected');
+    assert.equal(row.changed, true, field + ': raw contract drift must be visible');
+  }
+  assert.equal(rows.find(item => item.field === 'uf').changed, false);
+  assert.equal(compareRecords({opcao_mei:false},{opcao_mei:false})
+    .find(item => item.field === 'opcao_mei').changed, false);
+});
+
 test('SSG tem páginas novas com formulários e navegação, sem Astro/Svelte', async () => {
   for(const [path,marker] of [
     ['../content/empresa.md','id="empresa-form"'],
