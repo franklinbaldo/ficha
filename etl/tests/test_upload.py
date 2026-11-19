@@ -494,7 +494,11 @@ def test_stream_raw_denies_metadata_errors_before_get_or_put(monkeypatch, status
     monkeypatch.setattr(upload_mod.upstream, "discover_token", forbid_network)
     monkeypatch.setattr(upload_mod, "_stream_one_zip_with_retry", forbid_network)
 
-    reason = "access denied" if status in (401, 403) else ("rate limited" if status == 429 else "unavailable")
+    reason = (
+        "access denied"
+        if status in (401, 403)
+        else ("rate limited" if status == 429 else "unavailable")
+    )
     with pytest.raises(RuntimeError, match=f"{reason} HTTP {status}"):
         upload_mod.stream_raw_zips_to_ia("2026-04", access_key="A", secret_key="S")
 
@@ -523,7 +527,9 @@ def test_existing_raw_files_on_ia_returns_empty_on_404(monkeypatch):
     assert upload_mod._existing_raw_files_on_ia("ficha-2099-01") == set()
 
 
-@pytest.mark.parametrize("error_type", [upload_mod.httpx.ConnectError, upload_mod.httpx.ReadTimeout])
+@pytest.mark.parametrize(
+    "error_type", [upload_mod.httpx.ConnectError, upload_mod.httpx.ReadTimeout]
+)
 def test_stream_raw_rejects_metadata_transport_failure(monkeypatch, error_type):
     """Transport failure gives no evidence that an IA item is absent."""
 
