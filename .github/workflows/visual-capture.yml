@@ -56,9 +56,11 @@ jobs:
           ssg check --config config.toml
           ssg build --config config.toml
           node scripts/finalize.mjs
-      - name: Install Chromium
+      # Both audits use the default Playwright headless shell (no browser channel).
+      # The browser assertions themselves fail if the runner lacks required libraries.
+      - name: Install Chromium headless shell
         working-directory: web
-        run: bunx playwright install chromium --with-deps
+        run: bunx playwright install chromium --only-shell
       - name: Serve built Pages artifact locally
         run: |
           set -euo pipefail
