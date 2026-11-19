@@ -21,6 +21,7 @@ import os
 import sys
 import time
 from pathlib import Path
+from typing import BinaryIO
 
 import internetarchive as ia
 
@@ -244,10 +245,13 @@ def _shard_uploader(month: str):
     secret_key = _require_secret("IA_SECRET_KEY")
     identifier = f"ficha-{month}"
 
-    def upload_one(name: str, path: Path) -> None:
+    def upload_one(name: str, source: Path | BinaryIO) -> None:
+        # Prepared shards supply an already verified, anonymous open handle.
+        # The legacy one-step publisher still passes a pathname.
+        file_source = str(source) if isinstance(source, Path) else source
         responses = ia.upload(
             identifier,
-            files={name: str(path)},
+            files={name: file_source},
             access_key=access_key,
             secret_key=secret_key,
             retries=5,
