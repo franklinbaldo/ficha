@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {mountCompany, renderCompanyRecord} from '../static/js/pages.mjs';
+import {fetchCompanyByCnpj} from '../static/js/atomic-browser.mjs';
 
 class Element {
   constructor(tag='div') {
@@ -74,6 +75,41 @@ test('404 não anuncia consulta concluída; 503 não produz ausência; consulta 
     assert.match(doc.at('empresa-estado').textContent,/concluída/i);
     assert.match(treeText(doc.at('empresa-resultado')),/OK/);
     assert.equal(requests,3);
+  }finally{
+    if(oldLocation===undefined)delete globalThis.location;else globalThis.location=oldLocation;
+    if(oldHistory===undefined)delete globalThis.history;else globalThis.history=oldHistory;
+  }
+});
+
+test('CNPJ rejeitado não vira indisponibilidade nem deep link consultável',async()=>{
+  const oldLocation=globalThis.location, oldHistory=globalThis.history;
+  globalThis.location=new URL('https://franklinbaldo.github.io/ficha/empresa/');
+  globalThis.history={replaceState(_s,_t,url){globalThis.location=new URL(String(url));}};
+  try{
+    const ids=['empresa-cnpj','empresa-competencia','empresa-form',
+      'empresa-estado','empresa-resultado','empresa-enviar'];
+    const doc=documentFor(ids);
+    let network=0,decoder=0;
+    await mountCompany(doc,{loadManifest:async()=>manifest,lookup:(m,d,cnpj)=>
+      fetchCompanyByCnpj(m,d,cnpj,{
+        fetchImpl:async()=>{network++;throw Error('GET indevido');},
+        loadDecoder:async()=>{decoder++;throw Error('decoder indevido');},
+      }),
+    });
+    const submit=()=>doc.at('empresa-form').listeners.get('submit')({preventDefault(){}});
+    for(const [value,message] of [
+      ['33000167000102',/dígitos verificadores/],
+      ['AB123456000158',/alfanumérico/],
+    ]){
+      doc.at('empresa-cnpj').value=value;
+      await submit();
+      assert.match(doc.at('empresa-estado').textContent,message);
+      assert.doesNotMatch(doc.at('empresa-estado').textContent,/Consulta indisponível/i);
+      assert.equal(doc.at('empresa-estado').dataset.kind,'error');
+      assert.equal(new URL(globalThis.location.href).searchParams.has('cnpj'),false);
+      assert.equal(network,0);
+      assert.equal(decoder,0);
+    }
   }finally{
     if(oldLocation===undefined)delete globalThis.location;else globalThis.location=oldLocation;
     if(oldHistory===undefined)delete globalThis.history;else globalThis.history=oldHistory;
