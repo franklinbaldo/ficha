@@ -73,6 +73,41 @@ respondeu HTTP 200 e CORS a um `fetch` diretamente da origem GitHub Pages
 sem inventar índice novo. O código de município `7107` desse snapshot
 resolve para São Paulo; **não inferir que seja código IBGE de sete dígitos**.
 
+## Verificação adicional de orçamento no navegador (R89)
+
+O [probe CDP independente](https://github.com/franklinbaldo/polvo/blob/main/scripts/ficha_atomic_cdp_budget.mjs)
+executou em **19/11/2026**, no Ifro, Chromium real com origem
+`https://franklinbaldo.github.io/ficha/empresa/`, duas sessões em
+**375×812 e 1440×900**, cache de rede desabilitado, decoder canônico
+injetado somente para o ensaio e nenhum arquivo de produto alterado.
+Em **cada** sessão foram feitos exatamente **três GET lógicos** do
+IA: `lookups.json` (272.145 B), PB de Nubank (2.860 B) e PB de
+Petrobras (101.606 B). Após redirects, CDP observou **seis saltos
+`requestWillBeSent`**, três respostas finais HTTP 200 e **383.382
+bytes em `Network.loadingFinished.encodedDataLength`**; a soma
+dos **corpos JavaScript** foi **376.611 bytes**. Em ambos os viewports
+os CNPJs completos produziram um único estabelecimento, a raiz
+decodificada coincidiu, DV alterado não fez match, e não houve
+requisição a Parquet na janela medida.
+
+**Alcance da métrica:** `encodedDataLength` é contabilidade de rede
+reportada pelo CDP para as respostas finalizadas; os hops de
+redirecionamento não têm necessariamente valor próprio atribuído
+pelo evento. **Não** equivale a medição integral de tráfego TLS,
+requests de bootstrap do site, custo econômico, teste de longa duração,
+p95 nem validação da UI atualmente publicada. Os 383.382 B são
+desta janela controlada e não limite máximo de qualquer empresa.
+
+O leitor atualmente proposto pela [PR #358](https://github.com/franklinbaldo/ficha/pull/358)
+introduz teto preventivo de **32 MiB por membro** antes do decode,
+com leitura incremental que recusa `Content-Length` ou stream
+grande demais. A proposta ainda não está integrada ao site SSG
+e **32 MiB não foi aferido como máximo do acervo**. O fluxo SSG
+deve reusar essa semântica, adicionar timeout/cancelamento e jamais
+tratar excesso como CNPJ inexistente. Não usar `arrayBuffer()`
+sem limite no navegador. A comparação com a meta de 100 MB
+é evidência **somente destes dois CNPJs**, não garantia global.
+
 ## Contrato proposto para a interface
 
 1. Validar e normalizar o **CNPJ completo de 14 caracteres** antes da
