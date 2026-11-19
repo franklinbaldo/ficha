@@ -824,9 +824,7 @@ def test_extract_all_rejects_empty_zip(tmp_path, all_zips_dir):
 
 
 @pytest.mark.parametrize("part", [0, 1, 9])
-def test_extract_all_rejects_empty_estabelecimento_csv_when_strict(
-    tmp_path, all_zips_dir, part
-):
+def test_extract_all_rejects_empty_estabelecimento_csv_when_strict(tmp_path, all_zips_dir, part):
     """Reject a zero-byte CSV in an early, middle, or late RFB part.
 
     A ZIP with one zero-byte member is not an empty ZIP. Historical fixtures
@@ -850,7 +848,7 @@ def test_extract_all_rejects_empty_estabelecimento_csv_when_strict(
     chain = fetcher.ChainedFetcher(fetchers=[_ZipDirFetcher(all_zips_dir)])
     with pytest.raises(
         RuntimeError,
-        match=rf"Estabelecimentos{part}\\.zip.*empty estabelecimento CSV",
+        match=rf"Estabelecimentos{part}\.zip.*empty estabelecimento CSV",
     ):
         transform.extract_all(
             "2026-04",
