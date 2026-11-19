@@ -272,30 +272,8 @@ def submit_prepared_shard(
         _require_same_bytes(direct.name, direct, prepared)
         return _result_from_verified(prefix, expected_id, direct)
 
-    # Preflight final imediatamente antes do PUT: outro job pode ter criado o
-    # nome enquanto este shard era materializado/persistido como artifact.
-    pre_upload_metadata = _metadata_still_matches(pinned_inputs, fetch_metadata)
-    pre_upload = _classify(session, prefix, expected, pre_upload_metadata, fetch_meta)
-    if pre_upload.state is ShardReuseState.REUSABLE:
-        _require_same_bytes(pre_upload.name, pre_upload, prepared)
-        return _result_from_verified(prefix, expected_id, pre_upload)
-    if pre_upload.state is not ShardReuseState.ABSENT:
-        raise ShardPublishError(
-            f"{pre_upload.name}: estado mudou antes do PUT: {pre_upload.state}: {pre_upload.detail}"
-        )
-
-    direct_before_put = _reconcile_catalog_absent(
-        prefix,
-        expected,
-        pre_upload_metadata,
-        fetch_meta=fetch_meta,
-        fetch_direct=fetch_direct,
-        geometry=session.geometry,
-    )
-    if direct_before_put is not None:
-        _require_same_bytes(direct_before_put.name, direct_before_put, prepared)
-        return _result_from_verified(prefix, expected_id, direct_before_put)
-
+    # Freeze local bytes before the FINAL remote preflight. A long copy after
+    # that preflight would widen the race for another job to claim this name.
     # Copy into an anonymous, seekable file before letting the remote client read.
     # Reopening the original pathname after a hash check is a TOCTOU race: a
     # replacement inode or a same-size rewrite could change the bytes sent.
@@ -316,6 +294,30 @@ def submit_prepared_shard(
                 f"size={size}/{prepared.size} sha1={sha1.hexdigest()}/{prepared.sha1}"
             )
         snapshot.seek(0)
+        # Preflight final imediatamente antes do PUT: outro job pode ter criado o
+        # nome enquanto este shard era materializado/persistido como artifact.
+        pre_upload_metadata = _metadata_still_matches(pinned_inputs, fetch_metadata)
+        pre_upload = _classify(session, prefix, expected, pre_upload_metadata, fetch_meta)
+        if pre_upload.state is ShardReuseState.REUSABLE:
+            _require_same_bytes(pre_upload.name, pre_upload, prepared)
+            return _result_from_verified(prefix, expected_id, pre_upload)
+        if pre_upload.state is not ShardReuseState.ABSENT:
+            raise ShardPublishError(
+                f"{pre_upload.name}: estado mudou antes do PUT: {pre_upload.state}: {pre_upload.detail}"
+            )
+
+        direct_before_put = _reconcile_catalog_absent(
+            prefix,
+            expected,
+            pre_upload_metadata,
+            fetch_meta=fetch_meta,
+            fetch_direct=fetch_direct,
+            geometry=session.geometry,
+        )
+        if direct_before_put is not None:
+            _require_same_bytes(direct_before_put.name, direct_before_put, prepared)
+            return _result_from_verified(prefix, expected_id, direct_before_put)
+
         upload(prepared.name, snapshot)
     return ShardTransferResult(
         prefix=prefix,
