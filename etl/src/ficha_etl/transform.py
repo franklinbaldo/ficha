@@ -254,6 +254,8 @@ def _create_table_from_csvs(
     table: str,
     csv_paths: Iterable[Path],
     spec: registry.CsvSpec,
+    *,
+    per_file_counts: dict[Path, int] | None = None,
 ) -> None:
     """Cria/recria ``table`` como união lossless de leituras por arquivo.
 
@@ -268,6 +270,11 @@ def _create_table_from_csvs(
     campo `correio_eletronico`) como U+008F em vez de rejeitar ou apagar a
     linha, e mantém arquivos UTF-8 verdadeiros sem mojibake.
     """
+    # Reuse each already-materialized DuckDB table to record logical row counts.
+    # These counts are tied to the exact parser used by the writer, not to
+    # physical newlines (CSV fields can contain quoted newlines).
+    if per_file_counts is not None:
+        per_file_counts.clear()
     paths = [p for p in csv_paths if p.exists() and p.stat().st_size > 0]
     if not paths:
         col_defs = ", ".join(f"{c} VARCHAR" for c in spec.columns)
@@ -275,10 +282,18 @@ def _create_table_from_csvs(
         return
 
     _create_table_from_single_csv(con, table, paths[0], spec)
+    if per_file_counts is not None:
+        per_file_counts[paths[0].resolve()] = int(
+            con.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+        )
     staging = f"__ficha_{table}_csv_part"
     try:
         for csv_path in paths[1:]:
             _create_table_from_single_csv(con, staging, csv_path, spec)
+            if per_file_counts is not None:
+                per_file_counts[csv_path.resolve()] = int(
+                    con.execute(f"SELECT COUNT(*) FROM {staging}").fetchone()[0]
+                )
             con.execute(f"INSERT INTO {table} SELECT * FROM {staging}")
     finally:
         con.execute(f"DROP TABLE IF EXISTS {staging}")
@@ -2337,7 +2352,7 @@ def transform_snapshot(
 
         # --- Step 3b: Roundtrip-equivalence verify (ADR 0009) ---
         # Must happen BEFORE deleting estabelecimento CSVs (step 4).
-        if verify:
+        if verify or reject_empty_estabelecimentos:
             cnpjs_parquet = output_dir / "cnpjs.parquet"
             if cnpjs_parquet.exists():
                 log.info(
@@ -2358,18 +2373,52 @@ def transform_snapshot(
                     # Re-load estabelecimento from all CSVs so assert_roundtrip can
                     # compare against the original source rows. After write_cnpjs_parquet_chunked
                     # each chunk's table was dropped; we reload the full set here.
+                    parsed_part_counts: dict[Path, int] = {}
                     if estabelecimento_csv_paths:
-                        _create_table_from_csvs(
-                            con,
-                            "estabelecimento",
-                            estabelecimento_csv_paths,
-                            registry.main_table("estabelecimento").source,
-                        )
+                        # Preserve the legacy reader signature for non-monthly
+                        # paths, including instrumentation that wraps this call.
+                        if reject_empty_estabelecimentos:
+                            _create_table_from_csvs(
+                                con,
+                                "estabelecimento",
+                                estabelecimento_csv_paths,
+                                registry.main_table("estabelecimento").source,
+                                per_file_counts=parsed_part_counts,
+                            )
+                        else:
+                            _create_table_from_csvs(
+                                con,
+                                "estabelecimento",
+                                estabelecimento_csv_paths,
+                                registry.main_table("estabelecimento").source,
+                            )
                     _mh_verify.bytes_read = sum(
                         p.stat().st_size for p in estabelecimento_csv_paths if p.exists()
                     )
                     _mh_verify.files_read = len(estabelecimento_csv_paths)
-                    assert_roundtrip(con, cnpjs_parquet, sample_size=verify_sample_size)
+                    if verify:
+                        assert_roundtrip(con, cnpjs_parquet, sample_size=verify_sample_size)
+                    if reject_empty_estabelecimentos:
+                        # Monthly-only exact multiset witness from the ten CSVs
+                        # reloaded through the SAME DuckDB reader as the writer.
+                        # This must run before source deletion and first raw PUT.
+                        from .monthly_source_bag_gate import reconcile_loaded_source_keys
+
+                        source_parts = [
+                            (ef.zip_name, ef.csv_path)
+                            for ef in extracted
+                            if ef.kind == "estabelecimentos"
+                        ]
+                        reconcile_loaded_source_keys(
+                            con,
+                            month,
+                            source_parts,
+                            cnpjs_parquet,
+                            output_dir.parent
+                            / "evidence"
+                            / "monthly-estabelecimento-source-bag.json",
+                            parsed_part_counts,
+                        )
                     _mh_verify.rows_read = min(
                         verify_sample_size,
                         con.execute("SELECT COUNT(*) FROM estabelecimento").fetchone()[0],

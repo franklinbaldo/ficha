@@ -350,6 +350,7 @@ def _cmd_pack(
             output,
             parquets_base=parquets_base,
             memory_limit_gb=memory_limit_gb,
+            attest_output=not skip_upload,
         )
     except Exception as exc:
         _eprint(f"error: pack failed: {exc}")
@@ -373,7 +374,10 @@ def _cmd_pack(
             # Anonymous scratch remains open for the entire synchronous IA call.
             with ExitStack() as stack:
                 frozen = pack_upload_snapshot.freeze_pack_snapshot(
-                    stack, output, result["size_bytes"]
+                    stack,
+                    output,
+                    result["size_bytes"],
+                    expected_sha256=result["zip_sha256"],
                 )
                 upload_mod.upload_companies_zip(
                     month,
