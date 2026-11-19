@@ -45,14 +45,14 @@ export function mountSearch({
   let sessionPromise;
   let active = false;
   let inputVersion = 0;
-  let lastRenderedTerm = null;
-  // A completed result (including "no results") belongs to the old term.
-  // Clear it on the first edit, but avoid live-region announcements on every
+  let terminalFeedback = false;
+  // Completed results, validation errors and transport failures belong to the old term.
+  // Clear feedback on the first edit, without announcing on every
   // keystroke. Pending responses are discarded by the version guard below.
   input.addEventListener('input', () => {
     inputVersion++;
-    if (lastRenderedTerm !== null) {
-      lastRenderedTerm = null;
+    if (terminalFeedback) {
+      terminalFeedback = false;
       list.replaceChildren();
       status.textContent = 'Termo alterado. Pesquise novamente para atualizar os resultados.';
     }
@@ -90,7 +90,7 @@ export function mountSearch({
     if (active) return;
     const term = input.value.trim();
     if (!planCompanyQuery(term)) {
-      lastRenderedTerm = null;
+      terminalFeedback = true;
       list.replaceChildren();
       status.textContent = 'Informe um CNPJ completo ou ao menos três caracteres da razão social.';
       return;
@@ -99,32 +99,36 @@ export function mountSearch({
     const stillCurrent = () => requestVersion === inputVersion && input.value.trim() === term;
     const discardedMessage = 'Termo alterado durante a consulta. Pesquise novamente.';
     active = true;
-    lastRenderedTerm = null;
+    terminalFeedback = false;
     submit.disabled = true;
     list.replaceChildren(); // never leave stale results visible during failures
     status.textContent = 'Preparando consulta à competência publicada…';
     try {
       const session = await openSession();
       if (!stillCurrent()) {
+        terminalFeedback = true;
         status.textContent = discardedMessage;
         return;
       }
       if (!session) {
+        terminalFeedback = true;
         status.textContent = 'Os dados ainda não foram publicados (manifesto ausente).';
         return;
       }
       status.textContent = 'Consultando a base analítica…';
       const rows = await query(session.db, term);
       if (!stillCurrent()) {
+        terminalFeedback = true;
         status.textContent = discardedMessage;
         return;
       }
       renderCompanies(documentRef, list, rows);
-      lastRenderedTerm = term;
+      terminalFeedback = true;
       status.textContent = 'Competência ' + session.dataset.date + ': ' +
         (rows.length === 0 ? 'nenhum resultado encontrado.' :
           rows.length + (rows.length === 1 ? ' resultado encontrado.' : ' resultados encontrados.'));
     } catch (error) {
+      terminalFeedback = true;
       status.textContent = stillCurrent() ?
         'Consulta indisponível: ' + (error?.message || 'erro desconhecido') : discardedMessage;
     } finally {
