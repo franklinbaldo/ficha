@@ -12,7 +12,7 @@ test('prefixo, rotas e versão explícitos', async () => {
 test('home com formulário, módulo real e limites da busca legada', async () => {
   const home = await read('../content/index.md');
   for (const fragment of ['id="busca-form"', 'id="busca-termo"', 'id="consulta-lista"',
-    'A busca por nome e a comparação histórica não foram resolvidas']) assert.ok(home.includes(fragment), fragment);
+    'A busca por nome e a comparação histórica completa ainda não foram resolvidas']) assert.ok(home.includes(fragment), fragment);
   const template = await read('../templates/index.html');
   assert.match(template, /type="module" src="\/ficha\/js\/boot\.mjs"/);
   assert.match(template, /\{\{!content\}\}/);
@@ -36,7 +36,7 @@ test('aviso público distingue falha de transporte de ausência cadastral', asyn
   assert.match(home, /falhou por CORS/);
   assert.match(home, /essa rota independente foi exercitada em navegador com registros reais/);
   assert.match(home, /Isso não significa ausência cadastral/);
-  assert.match(home, /A busca por nome e a comparação histórica não foram resolvidas/);
+  assert.match(home, /A busca por nome e a comparação histórica completa ainda não foram resolvidas/);
   assert.match(home, /\/ficha\/acervo\//);
   assert.match(sobre, /Chromium 152/);
   assert.match(sobre, /não.*a integridade do arquivo inteiro/);
@@ -63,10 +63,12 @@ test('páginas de ficha e história não prometem pesquisa remota já funcional'
   assert.match(empresa, /^description: .*experimental\./m);
   assert.match(empresa, /erro de leitura não significa que a empresa esteja ausente/i);
   assert.match(empresa, /Parquet sujeito a CORS/);
-  assert.match(historia, /leitura remota ainda experimental/i);
+  assert.match(historia, /comparação de CNPJ numérico.*Protobuf v1/i);
+  assert.match(historia, /CNPJs alfanuméricos e meses sem essa camada/i);
+  assert.match(historia, /a comparação legada por Parquet continua bloqueada por CORS/i);
   assert.match(historia, /^description: .*experimental\./m);
   assert.match(historia, /Isso não demonstra ausência de registros/);
-  assert.match(historia, /diferenças entre arquivos não determinam a data exata/);
+  assert.match(historia, /diferenças entre arquivos não determinam a data exata/i);
   for (const page of [empresa, historia]) {
     assert.match(page, /href="\/ficha\/acervo\/"/);
     assert.match(page, /https:\/\/github\.com\/franklinbaldo\/ficha\/issues\/208/);
