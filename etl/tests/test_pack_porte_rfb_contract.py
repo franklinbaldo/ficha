@@ -195,3 +195,28 @@ def test_meta_zip_publicado_202607_prefixo00_evidencia_versao_nao_semantica():
         "raizes.parquet": "1a0f2621f4026a5f1cdf0166a22429377a8f95b2",
         "socios.parquet": "526a271d6d2ddd7f6924c18c71eb9876f413e191",
     }
+
+    # O ID semantico deve ser recalculado pela rotina produtiva, nao
+    # simplesmente copiado do documento publicado (Lontra R91).
+    from ficha_etl.materialization import canonical_json
+
+    original_id = metadata["materialization"]["id"]
+    assert original_id == "4d435b32c35f970fc25ac81c1c7ff67790ceb00c1812759785fad05658df9beb"
+    assert hashlib.sha256(canonical_json(spec)).hexdigest() == original_id
+    assert len(spec["inputs"]) == 9
+
+    # Perturbar um input ou a competencia invalida a identidade semantica.
+    changed_input = json.loads(json.dumps(spec))
+    changed_input["inputs"]["raizes.parquet"]["sha1"] = "0" * 40
+    assert hashlib.sha256(canonical_json(changed_input)).hexdigest() != original_id
+    changed_month = {**spec, "snapshot": "2026-06"}
+    assert hashlib.sha256(canonical_json(changed_month)).hexdigest() != original_id
+
+    # Mas versao de wire e contagem ficam FORA da spec. Mesmo com ID
+    # intacto, um consumidor deve conferir schema_version separadamente.
+    altered_meta = {**metadata, "schema_version": "1.1.0", "count": metadata["count"] + 1}
+    assert altered_meta["schema_version"] != metadata["schema_version"]
+    assert altered_meta["count"] != metadata["count"]
+    assert hashlib.sha256(canonical_json(altered_meta["materialization"]["spec"])).hexdigest() == (
+        original_id
+    )
