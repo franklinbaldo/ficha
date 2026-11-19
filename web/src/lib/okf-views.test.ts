@@ -28,6 +28,87 @@ const socioRow = {
   faixa_etaria: '0',
 };
 
+
+/**
+ * Two complete, synthetic public-v1 rows. Keep the column sets explicit rather
+ * than deriving them from the generated OKF shape under test.
+ */
+const cnpjWholeRow = {
+  cnpj: '11111111000100',
+  cnpj_base: '11111111',
+  cnpj_ordem: '0001',
+  cnpj_dv: '00',
+  identificador_matriz_filial: '1',
+  razao_social: 'EMPRESA EXEMPLO',
+  razao_social_normalizada: 'EMPRESA EXEMPLO',
+  natureza_juridica_codigo: '2062',
+  natureza_juridica_descricao: 'Sociedade empresaria',
+  qualificacao_responsavel_codigo: '49',
+  qualificacao_responsavel_descricao: 'Socio',
+  capital_social: 1000,
+  porte_empresa: '01',
+  ente_federativo_responsavel: '',
+  nome_fantasia: 'EXEMPLO',
+  situacao_cadastral: '02',
+  situacao_cadastral_descricao: 'Ativa',
+  data_situacao_cadastral: '2020-01-01',
+  motivo_situacao_cadastral_codigo: '00',
+  motivo_situacao_cadastral_descricao: '',
+  data_inicio_atividade: '2020-01-01',
+  cnae_principal_codigo: '6201501',
+  cnae_principal_descricao: 'Exemplo',
+  cnae_secundario_codigos: [],
+  cnae_secundario_descricoes: [],
+  tipo_logradouro: 'RUA',
+  logradouro: 'EXEMPLO',
+  numero: '1',
+  complemento: '',
+  bairro: 'CENTRO',
+  cep: '00000000',
+  uf: 'RO',
+  municipio_codigo: '0000',
+  municipio_nome: 'EXEMPLO',
+  pais_codigo: '105',
+  pais_nome: 'Brasil',
+  nome_cidade_exterior: '',
+  ddd_1: '',
+  telefone_1: '',
+  ddd_2: '',
+  telefone_2: '',
+  ddd_fax: '',
+  fax: '',
+  correio_eletronico: '',
+  situacao_especial: '',
+  data_situacao_especial: '',
+  opcao_simples: false,
+  data_opcao_simples: '',
+  data_exclusao_simples: '',
+  opcao_mei: false,
+  data_opcao_mei: '',
+  data_exclusao_mei: '',
+};
+
+const raizWholeRow = {
+  cnpj_base: '11111111',
+  razao_social: 'EMPRESA EXEMPLO',
+  razao_social_normalizada: 'EMPRESA EXEMPLO',
+  natureza_juridica_codigo: '2062',
+  natureza_juridica_descricao: 'Sociedade empresaria',
+  capital_social: 1000,
+  porte_empresa: '01',
+  ente_federativo_responsavel: '',
+  qtd_estabelecimentos: 1,
+  qtd_estabelecimentos_ativos: 1,
+  ufs_atuacao: ['RO'],
+  cnaes_principais_distintos: ['6201501'],
+  data_inicio_atividade_matriz: '2020-01-01',
+  uf_matriz: 'RO',
+  municipio_matriz_codigo: '0000',
+  municipio_matriz_nome: 'EXEMPLO',
+  cnae_principal_matriz_codigo: '6201501',
+  cnae_principal_matriz_descricao: 'Exemplo',
+};
+
 describe('OKF convenience views', () => {
   it('exposes generated views by name', () => {
     expect(okfConvenienceViews.map((view) => view.name)).toEqual([
@@ -124,6 +205,41 @@ describe('OKF convenience views', () => {
       expect(publicField.safeParse(value).success).toBe(false);
       expect(generatedField.safeParse(value).success).toBe(true);
     }
+  });
+
+
+  it('uses independently enumerated complete synthetic Cnpj/Raiz rows as controls', () => {
+    expect(PublicV1CnpjSchema.safeParse(cnpjWholeRow).success).toBe(true);
+    expect(okfParquetRowSchemas.Cnpj.safeParse(cnpjWholeRow).success).toBe(true);
+    expect(PublicV1RaizSchema.safeParse(raizWholeRow).success).toBe(true);
+    expect(okfParquetRowSchemas.Raiz.safeParse(raizWholeRow).success).toBe(true);
+  });
+
+  it('demonstrates the Cnpj/Raiz null mismatch on complete rows', () => {
+    const cnpjWithNull = { ...cnpjWholeRow, nome_fantasia: null };
+    expect(PublicV1CnpjSchema.safeParse(cnpjWithNull).success).toBe(true);
+    expect(okfParquetRowSchemas.Cnpj.safeParse(cnpjWithNull).success).toBe(false);
+
+    const raizWithNull = { ...raizWholeRow, ente_federativo_responsavel: null };
+    expect(PublicV1RaizSchema.safeParse(raizWithNull).success).toBe(true);
+    expect(okfParquetRowSchemas.Raiz.safeParse(raizWithNull).success).toBe(false);
+  });
+
+  it('demonstrates four widened Cnpj/Raiz enum domains on complete rows', () => {
+    const cnpjInvalidEnums = [
+      { identificador_matriz_filial: '9' },
+      { porte_empresa: '99' },
+      { situacao_cadastral: '99' },
+    ];
+    for (const changed of cnpjInvalidEnums) {
+      const row = { ...cnpjWholeRow, ...changed };
+      expect(PublicV1CnpjSchema.safeParse(row).success).toBe(false);
+      expect(okfParquetRowSchemas.Cnpj.safeParse(row).success).toBe(true);
+    }
+
+    const raizWithInvalidPorte = { ...raizWholeRow, porte_empresa: '99' };
+    expect(PublicV1RaizSchema.safeParse(raizWithInvalidPorte).success).toBe(false);
+    expect(okfParquetRowSchemas.Raiz.safeParse(raizWithInvalidPorte).success).toBe(true);
   });
 
   it('distinguishes public-v1 unknown-field stripping from strict OKF view rows', () => {
