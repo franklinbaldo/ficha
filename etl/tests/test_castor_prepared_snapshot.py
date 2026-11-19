@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import tempfile
+from contextlib import contextmanager
 from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
@@ -101,8 +102,8 @@ def _submit(prepared: PreparedShard, uploader):
 
 
 @pytest.mark.parametrize("mutation", ["rewrite", "replace"])
-@pytest.mark.parametrize("trigger", [1, 2, 3, 4])
-def test_mutation_after_each_remote_observation_refuses_put(
+@pytest.mark.parametrize("trigger", [1, 2])
+def test_mutation_before_snapshot_refuses_put(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, trigger: int, mutation: str
 ) -> None:
     prepared, _good, bad = _prepared(tmp_path)
@@ -125,9 +126,103 @@ def test_mutation_after_each_remote_observation_refuses_put(
     _setup_remote(monkeypatch, events, mutate)
     with pytest.raises(ShardPublishError, match="durante snapshot anterior ao PUT"):
         _submit(prepared, lambda _name, source: uploads.append(source.read()))
-    assert remote_count == 4
+    assert remote_count == 2
     assert uploads == []
+    assert events.count("direct") == 1
+
+
+@pytest.mark.parametrize("mutation", ["rewrite", "replace"])
+@pytest.mark.parametrize("trigger", [3, 4])
+def test_mutation_during_final_preflight_uses_frozen_bytes(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, trigger: int, mutation: str
+) -> None:
+    prepared, good, bad = _prepared(tmp_path)
+    events: list[str] = []
+    remote_count = 0
+    uploads: list[bytes] = []
+
+    def mutate(event: str) -> None:
+        nonlocal remote_count
+        if event not in ("before_metadata", "direct"):
+            return
+        remote_count += 1
+        if remote_count == trigger:
+            if mutation == "rewrite":
+                prepared.path.write_bytes(bad)
+            else:
+                _replace_source(prepared.path, bad)
+
+    _setup_remote(monkeypatch, events, mutate)
+    result = _submit(prepared, lambda _name, source: uploads.append(source.read()))
+    assert remote_count == 4
     assert events.count("direct") == 2
+    assert result.action is ShardTransferAction.SUBMITTED
+    assert uploads == [good]
+    assert result.sha1 == _sha1(uploads[0])
+    assert prepared.path.read_bytes() == bad
+
+
+@pytest.mark.parametrize("remote_sha1", ["same", "different"])
+def test_remote_appears_during_snapshot_requires_fresh_preflight(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, remote_sha1: str
+) -> None:
+    prepared, good, _bad = _prepared(tmp_path)
+    remote_present = False
+    observations: list[tuple[str, bool]] = []
+    uploads: list[bytes] = []
+    original_tempfile = tempfile.TemporaryFile
+
+    class SnapshotProbe:
+        def __init__(self, wrapped):
+            self.wrapped = wrapped
+
+        def write(self, data: bytes) -> int:
+            nonlocal remote_present
+            written = self.wrapped.write(data)
+            remote_present = True  # Competing job publishes while the local copy runs.
+            return written
+
+        def __getattr__(self, name: str):
+            return getattr(self.wrapped, name)
+
+    @contextmanager
+    def make_snapshot(*args, **kwargs):
+        with original_tempfile(*args, **kwargs) as wrapped:
+            yield SnapshotProbe(wrapped)
+
+    def catalog(_pinned, fetch):
+        observations.append(("metadata", remote_present))
+        return fetch()
+
+    def classify(_session, _prefix, _expected, _metadata, _fetch_meta):
+        observations.append(("classify", remote_present))
+        return SimpleNamespace(
+            name=prepared.name,
+            state=ShardReuseState.REUSABLE if remote_present else ShardReuseState.ABSENT,
+            detail="",
+            size=prepared.size,
+            sha1=prepared.sha1 if remote_sha1 == "same" else _sha1(b"different"),
+        )
+
+    monkeypatch.setattr(shard_transfer.tempfile, "TemporaryFile", make_snapshot)
+    monkeypatch.setattr(shard_transfer, "_metadata_still_matches", catalog)
+    monkeypatch.setattr(shard_transfer, "_classify", classify)
+    monkeypatch.setattr(shard_transfer, "_reconcile_catalog_absent", lambda *_a, **_k: None)
+
+    if remote_sha1 == "same":
+        result = _submit(prepared, lambda _name, source: uploads.append(source.read()))
+        assert result.action is ShardTransferAction.VERIFIED
+        assert (result.size, result.sha1) == (len(good), _sha1(good))
+    else:
+        with pytest.raises(ShardPublishError, match="bytes divergem do recibo"):
+            _submit(prepared, lambda _name, source: uploads.append(source.read()))
+    assert uploads == []  # Never overwrite an object observed after the snapshot.
+    assert observations == [
+        ("metadata", False),
+        ("classify", False),
+        ("metadata", True),
+        ("classify", True),
+    ]
 
 
 @pytest.mark.parametrize("mutation", ["rewrite", "replace"])
