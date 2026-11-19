@@ -248,6 +248,17 @@ sendo conclusão **condicional aos bytes publicados**, não certidão
 de inexistência cadastral na Receita. Os casos RED precisam virar
 testes de regressão na branch da 🦊 #362, sem PR concorrente.
 
+**Atualização SHA-exata na mesma rodada:** a 🦊 incorporou as duas
+proteções na [PR #362, HEAD `a41f0701`](https://github.com/franklinbaldo/ficha/commit/a41f07018fb0d5895e77068ceec0b1fc18647eec).
+Reexecutei **o mesmo script R91, sem modificações**, contra o
+blob novo `08753b6c` no Ifro: `--strict` **PASS (rc=0)**,
+CNPJ/DV inválido recusado antes de novo GET e contagens divergente
+ou ausente recusadas. O contraste é **RED no blob `a3765909`
+→ GREEN no blob `08753b6c`**, ambos em Node com mocks de
+rede/decoder e hash Git conferido. Ainda exige integração com
+o decoder real, testes Chromium/Pages e aprovação da fila; não
+prova completude de todos os registros publicados.
+
 ## Divisão de consultas
 
 - **CNPJ exato:** Protobuf-first e lookup, sem Parquet nem relay.
