@@ -255,7 +255,7 @@ def _existing_raw_files_on_ia(identifier: str) -> set[str]:
 
     Name and size are NOT proof that the ZIP equals the RFB source. Reject
     malformed or duplicate entries before starting any upstream GET / IA PUT.
-    Metadata HTTP outages retain the existing stream-all recovery behavior.
+    Only a confirmed 404 permits treating the IA item as absent.
     """
     url = _IA_METADATA_URL.format(identifier=identifier)
     try:
@@ -267,14 +267,14 @@ def _existing_raw_files_on_ia(identifier: str) -> set[str]:
             )
         if resp.status_code == 429:
             raise RuntimeError(f"IA raw metadata: rate limited HTTP 429 for {identifier}")
-        if resp.status_code != 200:
-            log.info(
-                "ia:%s metadata returned HTTP %d -- assuming new item", identifier, resp.status_code
-            )
+        if resp.status_code == 404:
             return set()
+        if resp.status_code != 200:
+            raise RuntimeError(
+                f"IA raw metadata: unavailable HTTP {resp.status_code} for {identifier}"
+            )
     except httpx.HTTPError as exc:
-        log.warning("ia:%s metadata fetch failed (%s) -- will stream all", identifier, exc)
-        return set()
+        raise RuntimeError(f"IA raw metadata: fetch failed for {identifier}") from exc
 
     try:
         data = resp.json()
