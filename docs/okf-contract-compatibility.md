@@ -137,9 +137,19 @@ representativos em `Cnpj.nome_fantasia` e
 `Raiz.ente_federativo_responsavel`, e os outros quatro domínios enum
 (`Cnpj.identificador_matriz_filial`, `Cnpj.porte_empresa`,
 `Cnpj.situacao_cadastral`, `Raiz.porte_empresa`). Assim os sete enums
-inventariados têm um controle runtime, mas apenas os casos de `Socio`
-atravessam aqui a validação de **linha inteira** da view; não confundir
-os dois níveis de prova.
+inventariados têm um controle runtime. Os testes anteriores de
+`Cnpj` e `Raiz` isolam o validador **de campo**; não confundir esse nível
+de prova com a aceitação de linha inteira.
+
+Três testes adicionais usam **linhas sintéticas completas** de `Cnpj`
+(52 colunas) e `Raiz` (18 colunas), enumeradas explicitamente sem derivar
+as fixtures do gerador sob teste. Primeiro verificam que os dois validadores
+aceitam a linha de controle. Em seguida comprovam, por `safeParse` da
+**linha inteira**, a rejeição OKF de `null` permitido pelo v1 em
+`Cnpj.nome_fantasia` e `Raiz.ente_federativo_responsavel`, e a aceitação
+OKF de valores inválidos em quatro enums v1 de Cnpj/Raiz. Isso estende a
+contraprova runtime aos três tipos, mas ainda não prova os 28 desacordos
+de nulabilidade, os valores de Parquet real ou a política do novo site SSG.
 
 Uma terceira diferença ocorre com coluna futura: o `z.object` público v1
 aceita a linha e retira a chave desconhecida, enquanto o adaptador de views
