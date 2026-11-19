@@ -823,20 +823,35 @@ def test_extract_all_rejects_empty_zip(tmp_path, all_zips_dir):
         transform.extract_all("2026-04", chain, tmp_path / "extracted")
 
 
-def test_extract_all_rejects_empty_estabelecimento_csv_when_strict(tmp_path, all_zips_dir):
-    """A ZIP with one zero-byte member is not the same as an empty ZIP.
+@pytest.mark.parametrize("part", [0, 1, 9])
+def test_extract_all_rejects_empty_estabelecimento_csv_when_strict(
+    tmp_path, all_zips_dir, part
+):
+    """Reject a zero-byte CSV in an early, middle, or late RFB part.
 
-    The historical fixture deliberately leaves Estabelecimentos1..9 empty.
-    Monthly strict mode must reject that source rather than silently skip it.
+    A ZIP with one zero-byte member is not an empty ZIP. Historical fixtures
+    intentionally leave Estabelecimentos1..9 empty, while part 0 has records.
     """
-    zip_path = all_zips_dir / "Estabelecimentos1.zip"
+    zip_path = all_zips_dir / f"Estabelecimentos{part}.zip"
     with zipfile.ZipFile(zip_path) as zf:
         members = [member for member in zf.infolist() if not member.is_dir()]
         assert len(members) == 1
-        assert members[0].file_size == 0
+        member_name = members[0].filename
+
+    if part == 0:
+        # Exercise the first part too; unlike 1..9 it is nonempty by default.
+        with zipfile.ZipFile(zip_path, "w") as zf:
+            zf.writestr(member_name, b"")
+
+    with zipfile.ZipFile(zip_path) as zf:
+        assert len([member for member in zf.infolist() if not member.is_dir()]) == 1
+        assert zf.infolist()[0].file_size == 0
 
     chain = fetcher.ChainedFetcher(fetchers=[_ZipDirFetcher(all_zips_dir)])
-    with pytest.raises(RuntimeError, match="Estabelecimentos1.zip.*empty estabelecimento CSV"):
+    with pytest.raises(
+        RuntimeError,
+        match=rf"Estabelecimentos{part}\\.zip.*empty estabelecimento CSV",
+    ):
         transform.extract_all(
             "2026-04",
             chain,
