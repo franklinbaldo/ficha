@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mountArchive, mountExplore, mountHistory,
+import { mountArchive, mountCompany, mountExplore, mountHistory,
   renderArchiveSelection, renderExploreAssets } from '../static/js/pages.mjs';
 
 class FakeElement {
@@ -135,5 +135,115 @@ test('história preserva ordem anterior → posterior numa comparação válida'
     assert.deepEqual(lookups.map(([date]) => date), ['2026-06', '2026-07']);
     assert.equal(doc.at('historia-estado').dataset.kind, 'info');
     assert.match(doc.at('historia-estado').textContent, /Comparação concluída/);
+  });
+});
+
+test('ficha descarta resposta tardia após mudança de CNPJ sem publicar URL antiga', async () => {
+  await withPageUrl(async () => {
+    const doc = fakeDocument(['empresa-cnpj', 'empresa-competencia', 'empresa-form',
+      'empresa-estado', 'empresa-resultado', 'empresa-enviar']);
+    let finish, lookups = 0;
+    await mountCompany(doc, {
+      loadManifest: async () => manifestWithShards(),
+      lookup: async () => {
+        lookups++;
+        return new Promise(resolve => { finish = resolve; });
+      },
+    });
+    doc.at('empresa-cnpj').value = '00000000E08G12';
+    const submit = () => doc.at('empresa-form').listeners.get('submit')({ preventDefault() {} });
+    const pending = submit();
+    assert.equal(doc.at('empresa-enviar').disabled, true);
+    await submit(); // a synthetic repeated submit must not start another remote query
+    assert.equal(lookups, 1);
+    doc.at('empresa-cnpj').value = '00000000E08G13';
+    finish({ date: '2026-07', cnpj: '00000000E08G12',
+      source: 'https://archive.org/old', data: { razao_social: 'Resultado antigo' } });
+    await pending;
+    assert.match(doc.at('empresa-estado').textContent, /alterados durante a consulta/i);
+    assert.equal(doc.at('empresa-resultado').children.length, 0);
+    assert.equal(globalThis.location.search, '', 'deep link must not record the stale request');
+    assert.equal(doc.at('empresa-enviar').disabled, false);
+  });
+});
+
+test('ficha não transforma erro tardio de outra seleção em falha da seleção atual', async () => {
+  await withPageUrl(async () => {
+    const doc = fakeDocument(['empresa-cnpj', 'empresa-competencia', 'empresa-form',
+      'empresa-estado', 'empresa-resultado', 'empresa-enviar']);
+    let fail;
+    await mountCompany(doc, {
+      loadManifest: async () => manifestWithShards(),
+      lookup: async () => new Promise((_, reject) => { fail = reject; }),
+    });
+    doc.at('empresa-cnpj').value = '00000000E08G12';
+    const pending = doc.at('empresa-form').listeners.get('submit')({ preventDefault() {} });
+    doc.at('empresa-competencia').value = '2026-06';
+    fail(new Error('falha da consulta antiga'));
+    await pending;
+    assert.match(doc.at('empresa-estado').textContent, /alterados durante a consulta/i);
+    assert.doesNotMatch(doc.at('empresa-estado').textContent, /falha da consulta antiga/);
+    assert.equal(doc.at('empresa-resultado').children.length, 0);
+    assert.equal(globalThis.location.search, '');
+  });
+});
+
+test('história interrompe segundo lookup quando a seleção muda após o primeiro', async () => {
+  await withPageUrl(async () => {
+    const doc = fakeDocument(['historia-competencias', 'historia-inicio', 'historia-fim',
+      'historia-form', 'historia-cnpj', 'historia-enviar',
+      'historia-estado', 'historia-resultado']);
+    let finishOlder;
+    const lookups = [];
+    await mountHistory(doc, {
+      loadManifest: async () => manifestWithShards(),
+      lookup: async (_manifest, date, cnpj) => {
+        lookups.push([date, cnpj]);
+        if (date === '2026-06') return new Promise(resolve => { finishOlder = resolve; });
+        throw new Error('second lookup must not run after a selection change');
+      },
+    });
+    doc.at('historia-cnpj').value = '00000000E08G12';
+    doc.at('historia-inicio').value = '2026-06';
+    doc.at('historia-fim').value = '2026-07';
+    const submit = () => doc.at('historia-form').listeners.get('submit')({ preventDefault() {} });
+    const pending = submit();
+    await submit(); // reject reentrant comparisons during the first lookup
+    assert.equal(lookups.length, 1);
+    doc.at('historia-fim').value = '2026-06';
+    finishOlder({ date: '2026-06', source: 'https://archive.org/old', data: null });
+    await pending;
+    assert.deepEqual(lookups.map(item => item[0]), ['2026-06']);
+    assert.equal(doc.at('historia-resultado').children.length, 0);
+    assert.match(doc.at('historia-estado').textContent, /alterados durante a comparação/i);
+    assert.equal(globalThis.location.search, '');
+    assert.equal(doc.at('historia-enviar').disabled, false);
+  });
+});
+
+test('história descarta segunda resposta tardia após mudança do CNPJ', async () => {
+  await withPageUrl(async () => {
+    const doc = fakeDocument(['historia-competencias', 'historia-inicio', 'historia-fim',
+      'historia-form', 'historia-cnpj', 'historia-enviar',
+      'historia-estado', 'historia-resultado']);
+    let finishNewer;
+    await mountHistory(doc, {
+      loadManifest: async () => manifestWithShards(),
+      lookup: async (_manifest, date, cnpj) => date === '2026-06'
+        ? { date, cnpj, source: 'https://archive.org/old', data: null }
+        : new Promise(resolve => { finishNewer = resolve; }),
+    });
+    doc.at('historia-cnpj').value = '00000000E08G12';
+    doc.at('historia-inicio').value = '2026-06';
+    doc.at('historia-fim').value = '2026-07';
+    const pending = doc.at('historia-form').listeners.get('submit')({ preventDefault() {} });
+    await Promise.resolve(); // first lookup resolved; second has started
+    assert.equal(typeof finishNewer, 'function');
+    doc.at('historia-cnpj').value = '00000000E08G13';
+    finishNewer({ date: '2026-07', source: 'https://archive.org/new', data: null });
+    await pending;
+    assert.equal(doc.at('historia-resultado').children.length, 0);
+    assert.match(doc.at('historia-estado').textContent, /alterados durante a comparação/i);
+    assert.equal(globalThis.location.search, '');
   });
 });
