@@ -15,8 +15,10 @@ Isso é o equivalente para Parquets/lookups do preflight já usado nos shards.
 from __future__ import annotations
 
 import hashlib
+import tempfile
 import time
 from collections.abc import Callable
+from contextlib import ExitStack
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -286,20 +288,62 @@ def submit_outputs_fail_closed(
     if not plan.upload:
         return plan
 
-    responses = ia.upload(
-        item_id(month),
-        files={name: str(paths[name]) for name in plan.upload},
-        access_key=access_key,
-        secret_key=secret_key,
-        retries=5,
-        retries_sleep=30,
-        verbose=True,
-    )
-    bad: list[str] = []
-    for response in responses:
-        status = getattr(response, "status_code", None)
-        if status not in (200, 201):
-            bad.append(f"HTTP {status}: {getattr(response, 'url', '<unknown>')}")
-    if bad:
-        raise OutputPublishError("IA rejected derived outputs: " + "; ".join(bad))
-    return plan
+    # O preflight inicial reduz cópias aos arquivos realmente ausentes.
+    # O segundo preflight, APÓS congelar bytes, fecha a janela de cópia
+    # frente a outro escritor remoto. Não é operação atômica no IA.
+    entries = descriptor_file_entries(descriptor)
+    with ExitStack() as stack:
+        frozen = {}
+        for name in plan.upload:
+            expected = entries[name]
+            expected_size = _positive_size(expected.get("size"))
+            expected_sha1 = _valid_sha1(expected.get("sha1"))
+            snapshot = stack.enter_context(tempfile.TemporaryFile(mode="w+b"))
+            digest = hashlib.sha1(usedforsecurity=False)
+            copied = 0
+            with paths[name].open("rb") as source:
+                for chunk in iter(lambda: source.read(1024 * 1024), b""):
+                    snapshot.write(chunk)
+                    digest.update(chunk)
+                    copied += len(chunk)
+            if copied != expected_size or digest.hexdigest() != expected_sha1:
+                raise OutputPublishError(
+                    f"{name}: local bytes changed during upload snapshot: "
+                    f"size={copied}/{expected_size} sha1={digest.hexdigest()}/{expected_sha1}"
+                )
+            snapshot.seek(0)
+            frozen[name] = snapshot
+
+        plan = wait_for_safe_output_plan(
+            descriptor,
+            fetch_metadata=fetch_metadata,
+            head_status=head_status,
+            attempts=attempts,
+            interval_s=interval_s,
+        )
+        extra = set(plan.upload) - set(frozen)
+        if extra:
+            raise OutputPublishError(
+                f"remote plan changed after snapshot; retry required: {sorted(extra)}"
+            )
+        if not plan.upload:
+            return plan
+
+        # O uploader lê os handles congelados, não os caminhos mutáveis.
+        responses = ia.upload(
+            item_id(month),
+            files={name: frozen[name] for name in plan.upload},
+            access_key=access_key,
+            secret_key=secret_key,
+            retries=5,
+            retries_sleep=30,
+            verbose=True,
+        )
+        bad: list[str] = []
+        for response in responses:
+            status = getattr(response, "status_code", None)
+            if status not in (200, 201):
+                bad.append(f"HTTP {status}: {getattr(response, 'url', '<unknown>')}")
+        if bad:
+            raise OutputPublishError("IA rejected derived outputs: " + "; ".join(bad))
+        return plan
