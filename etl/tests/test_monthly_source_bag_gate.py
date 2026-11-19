@@ -54,13 +54,22 @@ def _run(
 ) -> dict:
     con = duckdb.connect()
     try:
-        _tables(con, source, output, tmp_path / "output.parquet")
+        # All ten sources contribute one independent baseline key. Mutations
+        # exercise the multiset without constructing impossible 1-of-10 cases.
+        baseline = [f"{i:08d}000195" for i in range(10)] if source or output else []
+        source_parts = _parts(tmp_path / "sources") if parts is None else parts
+        counts = {path.resolve(): 1 if baseline else 0 for _, path in source_parts}
+        if baseline:
+            first = source_parts[0][1].resolve()
+            counts[first] += len(source)
+        _tables(con, baseline + source, baseline + output, tmp_path / "output.parquet")
         return reconcile_loaded_source_keys(
             con,
             "2026-08",
-            _parts(tmp_path / "sources") if parts is None else parts,
+            source_parts,
             tmp_path / "output.parquet",
             tmp_path / "evidence" / "receipt.json",
+            counts,
         )
     finally:
         con.close()
@@ -70,7 +79,7 @@ def test_equal_bag_accepts_permutations_and_alphanumeric_keys(tmp_path: Path) ->
     values = ["00000000E08G12", "12345678000195", "12345678000276"]
     receipt = _run(tmp_path, values, values[::-1])
     assert receipt["status"] == "ok"
-    assert receipt["parsed_source_rows"] == receipt["produced_rows"] == 3
+    assert receipt["parsed_source_rows"] == receipt["produced_rows"] == 13
     assert len(receipt["parts"]) == 10
     assert receipt["identity_level"] == "parsed-duckdb-source-not-zip-custody"
 
@@ -86,7 +95,7 @@ def test_equal_bag_accepts_permutations_and_alphanumeric_keys(tmp_path: Path) ->
             "multiset",
         ),
         (["12345678000195", "12345678000276"], ["12345678000195", "12345678000195"], "multiset"),
-        ([], [], "cardinality"),
+        ([], [], "zero logical rows"),
     ],
 )
 def test_fail_closed_for_loss_swap_and_multiplicity(
@@ -155,11 +164,13 @@ def test_same_duckdb_csv_dialect_as_writer_with_ten_real_reads(tmp_path: Path) -
 
     con = duckdb.connect()
     try:
+        counts: dict[Path, int] = {}
         _create_table_from_csvs(
             con,
             "estabelecimento",
             [path for _, path in parts],
             registry.main_table("estabelecimento").source,
+            per_file_counts=counts,
         )
         assert con.execute("SELECT COUNT(*) FROM estabelecimento").fetchone()[0] == 10
         target = tmp_path / "result.parquet"
@@ -169,9 +180,77 @@ def test_same_duckdb_csv_dialect_as_writer_with_ten_real_reads(tmp_path: Path) -
             [str(target)],
         )
         receipt = reconcile_loaded_source_keys(
-            con, "2026-08", parts, target, tmp_path / "evidence.json"
+            con, "2026-08", parts, target, tmp_path / "evidence.json", counts
         )
         assert receipt["status"] == "ok"
         assert receipt["parsed_source_rows"] == 10
+    finally:
+        con.close()
+
+
+def test_nonempty_part_with_zero_logical_rows_fails_with_receipt(tmp_path: Path) -> None:
+    """A nonempty CSV can still contain zero logical records; never certify it."""
+    parts = _parts(tmp_path / "sources")
+    parts[9][1].write_bytes(b"\\n")
+    expected = [f"{i:08d}000195" for i in range(9)]
+    con = duckdb.connect()
+    try:
+        _tables(con, expected, expected, tmp_path / "output.parquet")
+        parsed_counts = {path.resolve(): 1 for _, path in parts}
+        parsed_counts[parts[9][1].resolve()] = 0
+        with pytest.raises(MonthlySourceBagError, match="zero logical rows"):
+            reconcile_loaded_source_keys(
+                con, "2026-08", parts, tmp_path / "output.parquet",
+                tmp_path / "evidence" / "receipt.json", parsed_counts,
+            )
+        receipt = json.loads((tmp_path / "evidence" / "receipt.json").read_text())
+        assert receipt["status"] == "failed"
+    finally:
+        con.close()
+
+
+def test_per_part_counts_must_match_same_loaded_table(tmp_path: Path) -> None:
+    parts = _parts(tmp_path / "sources")
+    expected = [f"{i:08d}000195" for i in range(10)]
+    con = duckdb.connect()
+    try:
+        _tables(con, expected, expected, tmp_path / "output.parquet")
+        parsed_counts = {path.resolve(): 1 for _, path in parts}
+        parsed_counts[parts[0][1].resolve()] = 2
+        with pytest.raises(MonthlySourceBagError, match="row totals"):
+            reconcile_loaded_source_keys(
+                con, "2026-08", parts, tmp_path / "output.parquet",
+                tmp_path / "evidence" / "receipt.json", parsed_counts,
+            )
+    finally:
+        con.close()
+
+
+def test_real_duckdb_loader_produces_per_part_row_counts(tmp_path: Path) -> None:
+    """Do not infer row counts from ZIP size, newline count or global totals."""
+    from ficha_etl import registry
+    from ficha_etl.transform import _create_table_from_csvs
+
+    parts = _parts(tmp_path / "sources")
+    for i, (_, path) in enumerate(parts):
+        columns = [""] * 30
+        columns[0] = f"{i:08d}"
+        columns[1] = "0001"
+        columns[2] = "95"
+        path.write_text(";".join(columns) + "\\n", encoding="utf-8")
+
+    con = duckdb.connect()
+    try:
+        counts: dict[Path, int] = {}
+        _create_table_from_csvs(
+            con, "estabelecimento", [p for _, p in parts],
+            registry.main_table("estabelecimento").source,
+            per_file_counts=counts,
+        )
+        assert len(counts) == 10
+        assert all(count == 1 for count in counts.values())
+        assert sum(counts.values()) == con.execute(
+            "SELECT COUNT(*) FROM estabelecimento"
+        ).fetchone()[0]
     finally:
         con.close()
