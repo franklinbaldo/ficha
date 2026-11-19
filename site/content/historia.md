@@ -11,7 +11,8 @@ layout: product
 <section class="page-lead">
   <p class="eyebrow">02 / TEMPO</p>
   <h1>O tempo deixa registros.</h1>
-  <p class="lede">Compare como uma mesma empresa aparece em duas competências arquivadas. A diferença entre observações não determina a data em que algo mudou.</p>
+  <p class="lede">As competências preservadas mostram observações cadastrais de momentos distintos. A comparação por CNPJ exige leitura remota ainda experimental; diferenças entre arquivos não determinam a data exata de uma alteração.</p>
+  <p class="fineprint notice"><strong>Comparação sujeita a indisponibilidade.</strong> A origem arquivística bloqueou a leitura do Parquet de CNPJ por CORS em teste de 19/11/2026. Isso não demonstra ausência de registros. Os <a href="/ficha/acervo/">arquivos e competências declarados</a> continuam documentados, mesmo quando a consulta no navegador falha. <a href="https://github.com/franklinbaldo/ficha/issues/208">Consulte o diagnóstico</a>.</p>
 </section>
 <section class="workspace">
   <h2>Competências no acervo</h2>
