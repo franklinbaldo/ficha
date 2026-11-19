@@ -1,12 +1,20 @@
 from __future__ import annotations
 
+import argparse
+import json
 from pathlib import Path
 
+import pytest
+
 from ficha_etl.monthly_sharded import (
+    _load_descriptor,
+    _load_receipt,
     _remote_descriptor_state,
+    command_finalize,
     materialization_inputs_from_descriptor,
+    wait_for_descriptor_remote,
 )
-from ficha_etl.shard_remote import SHARD_INPUT_NAMES
+from ficha_etl.shard_remote import PUBLIC_COMPANIES_GEOMETRY, SHARD_INPUT_NAMES
 
 
 def _identity(seed: str, size: int = 10) -> dict:
@@ -101,6 +109,196 @@ def test_remote_descriptor_state_never_adopts_remote_mismatch() -> None:
     assert pending == []
     assert len(mismatches) == 1
     assert "cnpjs.parquet" in mismatches[0]
+
+
+@pytest.mark.parametrize("opposite_first", [True, False])
+@pytest.mark.parametrize("same_identity", [True, False])
+def test_remote_descriptor_rejects_duplicate_target_regardless_of_order(
+    opposite_first: bool, same_identity: bool
+) -> None:
+    descriptor = _descriptor()
+    metadata = _metadata_from_descriptor(descriptor)
+    target = next(entry for entry in metadata["files"] if entry["name"] == "cnpjs.parquet")
+    duplicate = target.copy()
+    if not same_identity:
+        duplicate["sha1"] = "0" * 40
+    if opposite_first:
+        metadata["files"].insert(0, duplicate)
+    else:
+        metadata["files"].append(duplicate)
+
+    pending, mismatches = _remote_descriptor_state(descriptor, metadata)
+    assert pending == ["cnpjs.parquet (duplicado)"]
+    assert mismatches == []
+
+
+@pytest.mark.parametrize(
+    "bad_size",
+    [11.9, True, "11.0", "+11", " 11", "١١", 0, -11, "9" * 5000],
+)
+def test_remote_descriptor_rejects_uncomparable_size(bad_size: object) -> None:
+    descriptor = _descriptor()
+    metadata = _metadata_from_descriptor(descriptor)
+    target = next(entry for entry in metadata["files"] if entry["name"] == "cnpjs.parquet")
+    target["size"] = bad_size
+
+    pending, mismatches = _remote_descriptor_state(descriptor, metadata)
+    assert pending == ["cnpjs.parquet"]
+    assert mismatches == []
+
+
+def test_remote_descriptor_does_not_block_on_unrelated_duplicate() -> None:
+    descriptor = _descriptor()
+    metadata = _metadata_from_descriptor(descriptor)
+    metadata["files"].extend([{"name": "unrelated.txt", "size": "1"}] * 2)
+    assert _remote_descriptor_state(descriptor, metadata) == ([], [])
+
+
+def test_remote_descriptor_accepts_integer_and_zero_padded_size() -> None:
+    descriptor = _descriptor()
+    metadata = _metadata_from_descriptor(descriptor)
+    target = next(entry for entry in metadata["files"] if entry["name"] == "cnpjs.parquet")
+    target["size"] = 11
+    assert _remote_descriptor_state(descriptor, metadata) == ([], [])
+    target["size"] = "00011"
+    assert _remote_descriptor_state(descriptor, metadata) == ([], [])
+
+
+def test_wait_for_descriptor_remote_refuses_ambiguous_catalog(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The actual wait gate must not pass a last-wins catalog to finalize."""
+    descriptor = _descriptor()
+    metadata = _metadata_from_descriptor(descriptor)
+    duplicate = next(
+        entry for entry in metadata["files"] if entry["name"] == "cnpjs.parquet"
+    ).copy()
+    duplicate["sha1"] = "0" * 40
+    metadata["files"].insert(0, duplicate)
+    calls: list[str] = []
+
+    def fake_fetch(month: str) -> dict:
+        calls.append(month)
+        return metadata
+
+    monkeypatch.setattr("ficha_etl.monthly_sharded.fetch_item_metadata", fake_fetch)
+    monkeypatch.setattr("ficha_etl.monthly_sharded.time.sleep", lambda _: None)
+    with pytest.raises(RuntimeError, match=r"cnpjs\.parquet \(duplicado\)"):
+        wait_for_descriptor_remote("2026-06", descriptor, attempts=2, interval_s=0)
+    assert calls == ["2026-06", "2026-06"]
+
+
+def test_wait_for_descriptor_remote_retries_then_accepts_unambiguous_catalog(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A transient ambiguous view can recover, without adopting either duplicate."""
+    descriptor = _descriptor()
+    valid = _metadata_from_descriptor(descriptor)
+    ambiguous = {"files": [*valid["files"], valid["files"][0].copy()]}
+    catalogs = iter((ambiguous, valid))
+    calls: list[str] = []
+
+    def fake_fetch(month: str) -> dict:
+        calls.append(month)
+        return next(catalogs)
+
+    monkeypatch.setattr("ficha_etl.monthly_sharded.fetch_item_metadata", fake_fetch)
+    monkeypatch.setattr("ficha_etl.monthly_sharded.time.sleep", lambda _: None)
+    assert wait_for_descriptor_remote("2026-06", descriptor, attempts=2, interval_s=0) is valid
+    assert calls == ["2026-06", "2026-06"]
+
+
+@pytest.mark.parametrize(
+    "bad_size",
+    [11.9, True, "11.0", "+11", " 11", "١١", 0, -11, "9" * 5000],
+)
+def test_local_descriptor_rejects_nonintegral_size(tmp_path: Path, bad_size: object) -> None:
+    """Invalid local size must fail before any remote identity comparison."""
+    descriptor = _descriptor()
+    descriptor["files"]["cnpjs"]["size"] = bad_size
+    path = tmp_path / "descriptor.json"
+    path.write_text(json.dumps(descriptor), encoding="utf-8")
+
+    with pytest.raises(ValueError, match=r"files\.cnpjs: invalid size"):
+        _load_descriptor(path, "2026-06")
+
+
+@pytest.mark.parametrize("valid_size", [11, "11", "00011"])
+def test_local_descriptor_preserves_valid_byte_sizes(tmp_path: Path, valid_size: object) -> None:
+    descriptor = _descriptor()
+    descriptor["files"]["cnpjs"]["size"] = valid_size
+    path = tmp_path / "descriptor.json"
+    path.write_text(json.dumps(descriptor), encoding="utf-8")
+
+    assert _load_descriptor(path, "2026-06") == descriptor
+
+
+def _valid_shard_receipt() -> dict:
+    return {
+        "month": "2026-06",
+        "prefix": "00",
+        "name": PUBLIC_COMPANIES_GEOMETRY.shard_name("00"),
+        "size": 11,
+        "sha1": "1" * 40,
+        "materialization_id": "a" * 64,
+    }
+
+
+@pytest.mark.parametrize(
+    "bad_size",
+    [11.9, True, "11.0", "+11", " 11", "١١", 0, -11, "9" * 5000],
+)
+def test_shard_receipt_rejects_nonintegral_size(tmp_path: Path, bad_size: object) -> None:
+    receipt = _valid_shard_receipt()
+    receipt["size"] = bad_size
+    path = tmp_path / "receipt-00.json"
+    path.write_text(json.dumps(receipt), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="invalid byte identity in receipt"):
+        _load_receipt(path, "2026-06", "00")
+
+
+@pytest.mark.parametrize("valid_size", [11, "11", "00011"])
+def test_shard_receipt_accepts_integral_size(tmp_path: Path, valid_size: object) -> None:
+    receipt = _valid_shard_receipt()
+    receipt["size"] = valid_size
+    path = tmp_path / "receipt-00.json"
+    path.write_text(json.dumps(receipt), encoding="utf-8")
+
+    assert _load_receipt(path, "2026-06", "00") == receipt
+
+
+def test_finalize_rejects_malformed_receipt_before_remote_probe(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The finalizer must reject local receipt identity before contacting IA."""
+    descriptor_path = tmp_path / "descriptor.json"
+    descriptor_path.write_text(json.dumps(_descriptor()), encoding="utf-8")
+    receipts_dir = tmp_path / "receipts"
+    receipts_dir.mkdir()
+    receipt = _valid_shard_receipt()
+    receipt["size"] = 11.9
+    (receipts_dir / "receipt-00.json").write_text(json.dumps(receipt), encoding="utf-8")
+    calls: list[str] = []
+
+    def must_not_fetch(*args: object, **kwargs: object) -> None:
+        calls.append("remote")
+        raise AssertionError("invalid local receipt must not touch remote metadata")
+
+    monkeypatch.setattr("ficha_etl.monthly_sharded.wait_for_descriptor_remote", must_not_fetch)
+    args = argparse.Namespace(
+        month="2026-06",
+        descriptor=str(descriptor_path),
+        receipts_dir=str(receipts_dir),
+        snapshot_entry=str(tmp_path / "snapshot.json"),
+        verification=str(tmp_path / "verification.json"),
+        manifest=str(tmp_path / "manifest.json"),
+        attempts=2,
+        interval_seconds=0,
+    )
+    with pytest.raises(ValueError, match="invalid byte identity in receipt"):
+        command_finalize(args)
+    assert calls == []
 
 
 def test_monthly_workflow_persists_receipts_before_remote_writes() -> None:

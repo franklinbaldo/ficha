@@ -162,28 +162,66 @@ def _zod_fields(source: str, *, quoted: bool) -> dict[str, str]:
         else r"^\s*(\w+):\s*(z\..+),$"
     )
     for line in source.splitlines():
-        parsed = re.match(pattern, line)
-        if parsed is not None:
-            name, value = parsed.groups()
-            if name in fields:
-                raise AssertionError(f"Duplicate Zod field: {name}")
-            fields[name] = value.removesuffix(",")
+        if not line.strip() or line.lstrip().startswith("//"):
+            continue
+        parsed = re.fullmatch(pattern, line)
+        if parsed is None:
+            raise AssertionError(
+                f"Unrecognized Zod object member; review static guard: {line}"
+            )
+        name, value = parsed.groups()
+        if name in fields:
+            raise AssertionError(f"Duplicate Zod field: {name}")
+        fields[name] = value.removesuffix(",")
+    return fields
+
+
+def _without_block_comments(source: str) -> str:
+    """Strip commented-out Zod declarations; reject unbalanced comments."""
+    if source.count("/*") != source.count("*/"):
+        raise AssertionError("Unbalanced TypeScript block comment")
+    return re.sub(
+        r"/\*.*?\*/",
+        # A comment *inside* z.object remains an invalid member (fail closed).
+        lambda match: "\n__TS_BLOCK_COMMENT__\n" + "\n" * match.group(0).count("\n"),
+        source,
+        flags=re.DOTALL,
+    )
+
+
+def _parse_generated_fields(source: str, table: str) -> dict[str, str]:
+    source = _without_block_comments(source)
+    declarations = list(
+        re.finditer(
+            rf"^export const {table}Schema = z\.object\(\{{(.*?)\}}\);[ \t]*$",
+            source,
+            flags=re.DOTALL | re.MULTILINE,
+        )
+    )
+    if len(declarations) != 1:
+        raise AssertionError(
+            f"Expected exactly one live generated Zod schema: {table}; "
+            f"found {len(declarations)}"
+        )
+    fields = _zod_fields(declarations[0].group(1), quoted=True)
+    # Metadata is outside the public SQL row, but remains part of the
+    # generated OKF contract. Do not silently discard a wrong discriminator.
+    expected = {
+        "type": f'z.literal("{table}")',
+        "title": "z.string().optional()",
+        "description": "z.string().optional()",
+    }
+    actual = {name: fields.pop(name, None) for name in expected}
+    if actual != expected:
+        raise AssertionError(
+            f"{table}: generated OKF metadata changed: {actual!r}"
+        )
     return fields
 
 
 def _generated_fields(table: str) -> dict[str, str]:
     source = (ROOT / "web/src/generated/ficha-okf.zod.ts").read_text(encoding="utf-8")
-    match = re.search(
-        rf"export const {table}Schema = z\.object\(\{{(.*?)\}}\);",
-        source,
-        flags=re.DOTALL,
-    )
-    if match is None:
-        raise AssertionError(f"Missing generated Zod schema: {table}")
-    fields = _zod_fields(match.group(1), quoted=True)
-    for metadata in ("type", "title", "description"):
-        fields.pop(metadata, None)
-    return fields
+    return _parse_generated_fields(source, table)
 
 
 def _parse_published_v1_object(source: str, type_name: str) -> dict[str, str]:
@@ -194,18 +232,21 @@ def _parse_published_v1_object(source: str, type_name: str) -> dict[str, str]:
     acceptance of extra fields while the field-by-field guard still passes.
     """
     schema_name = f"{type_name.capitalize()}Schema"
-    declaration = re.search(
-        rf"^export const {re.escape(schema_name)}\s*=\s*z\.object\(\{{"
-        r"(?P<body>.*?)^[ \t]*\}\)(?P<tail>[^\r\n]*)$",
-        source,
-        flags=re.DOTALL | re.MULTILINE,
+    source = _without_block_comments(source)
+    declarations = list(
+        re.finditer(
+            rf"^export const {re.escape(schema_name)}\s*=\s*z\.object\(\{{"
+            r"(?P<body>.*?)^[ \t]*\}\)(?P<tail>[^\r\n]*)$",
+            source,
+            flags=re.DOTALL | re.MULTILINE,
+        )
     )
-    if declaration is None or declaration.group("tail").strip() != ";":
+    if len(declarations) != 1 or declarations[0].group("tail").strip() != ";":
         raise AssertionError(
             f"{schema_name}: public v1 must export a direct z.object(...); "
             "review schema-level modifiers/aliases before changing the contract"
         )
-    return _zod_fields(declaration.group("body"), quoted=False)
+    return _zod_fields(declarations[0].group("body"), quoted=False)
 
 
 def _published_v1_fields(type_name: str) -> dict[str, str]:

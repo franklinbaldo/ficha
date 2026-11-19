@@ -84,6 +84,15 @@ modificadores no objeto inteiro: `.partial()` tornaria todas as colunas
 opcionais sem alterar suas declarações, enquanto `.passthrough()` passaria
 a aceitar colunas adicionais. Duas contraprovas sintéticas asseguram que
 ambos os atalhos são rejeitados e exigem revisão explícita do contrato.
+O leitor estático agora recusa qualquer linha não reconhecida dentro de
+`z.object({...})`, exceto linhas vazias e comentários `//`. Antes ele
+ignorava silenciosamente uma linha `/*` ou `*/` e podia **contar como ativa**
+uma coluna situada dentro de um comentário de bloco; também ignorava spreads
+`...outrosCampos` que acrescentam colunas não declaradas. Três mutantes
+adversariais em `test_zod_static_parser_fail_closed.py` cobrem o campo
+comentado no contrato público e no gerado e um spread público. Syntax
+TypeScript nova/complexa exige revisão explícita em vez de um verde implícito.
+
 Esta proteção é estática, não execução de Zod/`safeParse`. Falha quando coluna ou tipo muda, quando surge
 uma nova incompatibilidade de nulabilidade, ou quando a lista de desvios
 deixa de descrever o estado do código, ou quando um dos sete domínios
@@ -106,6 +115,46 @@ assumir automaticamente cobertura dos demais artefatos Parquet do manifesto.
 O adaptador `web/src/lib/okf-row-schemas.ts` também não seleciona o
 contrato pela versão do snapshot. Ambas são dependências de decisão do
 Elefante/Polvo e não foram alteradas.
+
+### Consumidor de views do Astro legado: fronteira observável
+
+O módulo legado `web/src/lib/okf-views.ts` chama
+`getOkfParquetRowSchema(view.output)` e depois `safeParse(row)`.
+Esse adaptador usa **Zod gerado OKF** (`web/src/lib/okf-row-schemas.ts`),
+não o schema público v1. Para `Socio`, o v1 permite
+`cnpj_socio: null`, enquanto o gerado exige `z.string()`. Uma linha
+sintética de sócio PF com esse campo nulo é aceita por
+`web/src/schemas/v1/socio.ts`, mas recusada por
+`validateOkfConvenienceViewRows('socios_de_raizes_ativas', ...)`.
+O teste Vitest do consumidor registra explicitamente as duas expectativas,
+sem alterar o comportamento atual.
+
+Essa diferença é **dívida já conhecida**, não um incidente novo na
+home pública SSG (`site/`), que é separada do módulo Astro `web/`.
+O teste não consulta Parquet remoto nem prova que determinada linha
+foi publicada. Antes de usar esse validador numa busca SSG ou substituir
+o contrato gerado, decidir com 🐙 Polvo/🐘 Elefante qual contrato lógico
+e versão governam valores `null`, enums e campos ausentes (ADR 0027,
+PR #253 ainda em proposta). Não equiparar a paridade estática SQL/Zod
+à aceitação de linhas pelo validador.
+
+## Baseline independente de colunas públicas v1 (18/11/2026)
+
+O teste adicional `knowledge/tests/test_public_v1_column_baseline.py` congela
+**nome e tipo escalar de cada uma das 86 colunas v1** (Cnpj 52, Raiz 18,
+Socio 16) em `knowledge/tests/public-v1-column-kinds.json`. Essa baseline
+literal **não é regenerada** dos SQL ou Zods durante o teste; uma edição
+sincronizada dos três artefatos ainda poderia satisfazer o teste de paridade
+anterior, mas agora falha se alterar o contrato público v1. As duas
+contraprovas em memória simulam (a) renomear `cnpj` e (b) trocar
+`capital_social` de número para string nos três contratos simultaneamente.
+As duas conservam paridade e são rejeitadas pela baseline.
+
+A baseline fixa nomes/tipos básicos; nulabilidade (26/1/9), obrigatoriedade,
+domínios enum e modificadores Zod de objeto continuam cobertos pelos testes
+separados. A atualização intencional de uma coluna pública exige análise de
+versionamento, não regeneração automática desta fixture. Não há validação de
+`safeParse`, de linhas reais ou do Parquet físico nesta fatia.
 
 ## Gate enxuto
 

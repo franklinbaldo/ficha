@@ -24,6 +24,7 @@ def _estabelecimento(con: duckdb.DuckDBPyConnection) -> None:
             'RO'::VARCHAR AS uf,
             '0003'::VARCHAR AS municipio,
             'AV TESTE'::VARCHAR AS logradouro,
+            NULL::VARCHAR AS tipo_logradouro,
             '10'::VARCHAR AS numero,
             '76800000'::VARCHAR AS cep,
             'CENTRO'::VARCHAR AS bairro
