@@ -264,49 +264,36 @@ rede/decoder e hash Git conferido. Após os merges da #362 e #365, o leitor defe
 `main`; ainda exige integração do decoder real ao produto e testes
 Chromium/Pages do fluxo público completo. Não prova completude do acervo.
 
-## Gate R92: renderer SSG não deve destruir o estado de evidência
+## Gate R92: o renderer não pode converter inconclusão em ausência
 
-**Contraprova executável de 19/11/2026**, na
-[`main@03490dfa`](https://github.com/franklinbaldo/ficha/commit/03490dfa6c4513653b8519b5306394b19bc7c319),
-módulos `pages.mjs` (blob Git `eb990058`) e `atomic-record.mjs`
-(`3b63cc91`). O
-[probe independente R92](https://github.com/franklinbaldo/polvo/blob/main/scripts/ficha_atomic_ssg_contract_r92.mjs)
-chama o **renderer e o controlador SSG reais** com um DOM mínimo e
-`lookup` injetado, sem rede/IA. Para reproduzir no checkout do Ficha:
+Na [`main@03490dfa`](https://github.com/franklinbaldo/ficha/commit/03490dfa6c4513653b8519b5306394b19bc7c319),
+com `pages.mjs` blob `eb990058` e `atomic-record.mjs` blob
+`3b63cc91`, executei o
+[regressor R92](https://github.com/franklinbaldo/polvo/blob/main/scripts/ficha_atomic_ssg_contract_r92.mjs)
+sobre as **funções SSG reais**, DOM e `lookup` injetados, sem rede:
 `node /path/ficha_atomic_ssg_contract_r92.mjs "$PWD/site/static/js/pages.mjs" --strict`.
-Resultado atual: **1 PASS / 4 RED esperados**:
+Resultado **1 PASS / 4 RED**, todos reproduzíveis:
+- `renderCompanyRecord` interpreta `artifact-unavailable`/404 como
+  **“Nenhum registro encontrado”**, embora o ZIP/membro possa faltar.
+- `absent-in-snapshot` usa o mesmo texto; é ausência **condicional da
+  filial naquela competência**, não inexistência cadastral absoluta.
+- `mountCompany` anuncia **“Consulta concluída”** após receber
+  `artifact-unavailable`, promovendo resultado inconclusivo a sucesso.
+- Erro HTTP **503** é tratado como indisponível, mas o texto auxiliar
+  invoca **HTTP Range**, pré-requisito do Parquet, não do membro PB.
+  O controle positivo `found` exibiu a razão social.
 
-1. `renderCompanyRecord` recebe `state:artifact-unavailable, data:null,
-   httpStatus:404` e apresenta **“Nenhum registro encontrado”**. É
-   interpretação indevida: 404 de membro/ZIP é **consulta inconclusiva**.
-2. `renderCompanyRecord` recebe `state:absent-in-snapshot` e apresenta
-   a mesma mensagem genérica. A evidência é apenas **ausência daquela
-   filial nos bytes válidos da competência**, não inexistência da empresa.
-3. `mountCompany` recebe resultado tipado `artifact-unavailable` e
-   anuncia **“Consulta concluída”**, promovendo um 404 inconclusivo a
-   sucesso de UX.
-4. A exceção por **HTTP 503** é corretamente reportada como indisponível,
-   mas o texto adicional exige **HTTP Range**, específico do caminho
-   Parquet, irrelevante para GET de membro PB.
-   O positivo com ficha `found` renderizou a razão social corretamente.
-
-Essas falhas foram reproduzidas **com injeção do resultado PB**, não são
-alegação de que a busca PB já esteja ativada no Pages. Integração deve
-ser **por `result.state`, nunca por `!result.data`**. Estados:
-`found` renderiza ficha e só ele recebe anúncio de consulta concluída
-com registro; `absent-in-snapshot` recebe texto limitado a filial e
-competência; `artifact-unavailable` avisa consulta inconclusiva,
-com ação para tentar novamente; exceções 503/CORS/timeout/integridade
-não apagam a distinção nem mostram resultados anteriores. A história
-de dois snapshots precisa de tratamento próprio para não colapsar
-`artifact-unavailable` e `absent-in-snapshot`.
-
-**Aceite antes da conexão com o formulário:** replay R92 estrito GREEN,
-regressão com 404, 503, agregado incoerente, duplicata, A→B tardio e
-A→B→A, decoder canônico real, origem/lookup da mesma competência,
-Chromium Pages móvel/desktop. Não redirecionar silenciosamente para o
-Parquet se a camada PB falhar. Donos da vertical: 🦊 Raposa e
-🦇 Morcego, QA 🦉 Coruja/🦎 Lagarto, contrato 🐙 Polvo.
+**Não é incidente observado de busca PB no Pages:** o site ainda não
+conectou o leitor atômico. A integração deve ramificar pelo
+`result.state`, nunca por `!result.data`. `found` apresenta ficha;
+`absent-in-snapshot` informa apenas filial/competência;
+`artifact-unavailable` informa resultado inconclusivo; 503, timeout,
+CORS e corrupção mantêm erro recuperável. Histórico de duas competências
+também precisa preservar estados por fotografia. Exigir regressor R92
+**GREEN**, decoder canônico, testes 404/503/contagem/duplicatas,
+A→B→A, CNPJ real e Chromium mobile/desktop antes da promoção.
+Não implementar fallback silencioso a Parquet. Vertical 🦊/🦇,
+QA 🦉/🦎, contrato 🐙.
 
 ## Divisão de consultas
 
