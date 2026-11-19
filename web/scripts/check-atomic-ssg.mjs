@@ -11,8 +11,8 @@ const browser = await chromium.launch({headless:true});
 const results = [];
 const MAX_MS = 65_000;
 const cases = [
-  {cnpj:'18236120000158', name:'Nubank', city:/SÃO PAULO|São Paulo/i},
-  {cnpj:'33000167000101', name:'Petrobras', city:/RIO DE JANEIRO|Rio de Janeiro/i},
+  {cnpj:'18236120000158', name:'Nubank', city:/S[AÃ]O PAULO/i},
+  {cnpj:'33000167000101', name:'Petrobras', city:/RIO DE JANEIRO/i},
 ];
 try {
   for (const {cnpj,name,city} of cases) {
@@ -29,7 +29,7 @@ try {
       await page.waitForFunction(
         () => /Consulta concluída|Consulta indisponível|Consulta inconclusiva/.test(
           document.getElementById('empresa-estado')?.textContent||''),
-        {timeout:MAX_MS},
+        null, {timeout:MAX_MS},
       );
       const message = await page.locator('#empresa-estado').textContent();
       assert.match(message,/Consulta concluída/,name+': '+message);
