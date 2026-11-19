@@ -323,7 +323,7 @@ def test_quoted_newline_counts_one_logical_record_per_source_part(tmp_path: Path
         fields[1] = "0001"
         fields[2] = "95"
         fields[14] = '"AVENIDA\nCENTRAL"' if i == 4 else "RUA"
-        path.write_text(";".join(fields) + "\n", encoding="utf-8")
+        path.write_bytes((";".join(fields) + "\n").encode("utf-8"))
     # The fifth CSV has two physical lines but one DuckDB logical row.
     assert parts[4][1].read_bytes().count(b"\n") == 2
 
