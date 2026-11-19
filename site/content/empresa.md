@@ -11,7 +11,7 @@ layout: product
 <section class="page-lead">
   <p class="eyebrow">01 / FICHA CADASTRAL</p>
   <h1>Uma empresa, uma ficha.</h1>
-  <p class="lede">Uma ficha reúne informações públicas de uma competência arquivada quando a origem pode ser lida no navegador. A consulta numérica por CNPJ completo usa o membro Protobuf da competência, sem baixar o Parquet inteiro. A consulta remota ainda é experimental: erro de leitura não significa ausência no acervo.</p>
+  <p class="lede">Uma ficha reúne informações públicas de uma competência arquivada quando a origem pode ser lida no navegador. A consulta numérica por CNPJ completo usa o membro Protobuf da competência, sem baixar o Parquet inteiro. A consulta remota ainda é experimental: erro de leitura não significa que a empresa esteja ausente do acervo.</p>
   <p class="fineprint notice"><strong>Consulta sujeita a indisponibilidade.</strong> O Parquet anterior apresentou bloqueio CORS no Internet Archive. Esta ficha passa a utilizar os membros Protobuf numéricos, mas sua operação no site público ainda depende de testes de ponta a ponta. Se a consulta falhar, <a href="/ficha/acervo/">consulte os arquivos declarados no acervo</a>. <a href="https://github.com/franklinbaldo/ficha/issues/208">Entenda a investigação</a>.</p>
 </section>
 <section class="workspace" aria-labelledby="consulta-empresa">
