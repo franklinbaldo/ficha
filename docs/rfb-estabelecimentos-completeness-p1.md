@@ -53,8 +53,17 @@ identificáveis como fraude só por SHA-256.
 
 Na base auditada em 18/11, `monthly_sharded.command_produce` chamava
 `upload.stream_raw_zips_to_ia` **antes** de `transform.transform_snapshot`.
-A PR #343 inverte essa ordem **somente no comando mensal**, permitindo recusar
+A PR #343 integrou essa inversão **somente no comando mensal**, recusando
 falhas da transformação estrita antes do primeiro PUT raw desta invocação.
+A etapa posterior do workflow ainda podia descobrir CNPJ inválido ou duplicado
+depois desse primeiro PUT. O próximo gate executa
+`monthly_estabelecimento_gate.run_monthly_gate` diretamente em
+`command_produce`, após a transformação e antes das credenciais e do
+streamer raw. Isso cobre **DV, formato e unicidade do Parquet produzido**
+antes do primeiro PUT deste comando. A evidência usa o mesmo caminho antes
+reservado ao workflow, que preserva o recibo com `if: always()`.
+**Não demonstra** igualdade das dez fontes com a saída, nem identidade
+entre os ZIPs transformados e os ZIPs transmitidos posteriormente.
 Isso não unifica as aquisições: o caminho de streaming faz
 **GET RFB → PUT IA diretamente**, sem gravar
 os bytes recebidos em um arquivo local comum com a transformação. Além disso,
