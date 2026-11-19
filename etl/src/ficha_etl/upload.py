@@ -265,6 +265,8 @@ def _existing_raw_files_on_ia(identifier: str) -> set[str]:
             raise RuntimeError(
                 f"IA raw metadata: access denied HTTP {resp.status_code} for {identifier}"
             )
+        if resp.status_code == 429:
+            raise RuntimeError(f"IA raw metadata: rate limited HTTP 429 for {identifier}")
         if resp.status_code != 200:
             log.info(
                 "ia:%s metadata returned HTTP %d -- assuming new item", identifier, resp.status_code
