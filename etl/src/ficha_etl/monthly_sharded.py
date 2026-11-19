@@ -306,20 +306,13 @@ def _load_receipt(path: Path, month: str, prefix: str) -> dict:
 
 def command_produce(args: argparse.Namespace) -> None:
     month = _require_month(args.month)
-    # The default path uploads raw ZIPs *before* the shard submit phase.
     # Reject an incompatible wire contract before the first remote write.
+    # The strict local transform must also finish before any raw ZIP PUT.
     if not args.skip_raw_upload:
         _require_safe_legacy_shard_upload()
     output_dir = Path(args.output_dir)
     cache_dir = Path(args.cache_dir)
     descriptor_path = Path(args.descriptor)
-
-    if not args.skip_raw_upload:
-        upload.stream_raw_zips_to_ia(
-            month,
-            access_key=_require_secret("IA_ACCESS_KEY"),
-            secret_key=_require_secret("IA_SECRET_KEY"),
-        )
 
     transform.transform_snapshot(
         month,
@@ -330,6 +323,16 @@ def command_produce(args: argparse.Namespace) -> None:
         verify_sample_size=args.verify_sample_size,
         reject_empty_estabelecimentos=True,
     )
+
+    # Transform may reject an invalid source, including a zero-byte CSV.
+    # Do not upload raw bytes or publish a descriptor on that failure.
+    if not args.skip_raw_upload:
+        upload.stream_raw_zips_to_ia(
+            month,
+            access_key=_require_secret("IA_ACCESS_KEY"),
+            secret_key=_require_secret("IA_SECRET_KEY"),
+        )
+
     descriptor = build_production_descriptor(month, output_dir)
     write_production_descriptor(descriptor_path, descriptor)
     print(f"production descriptor written before output upload: {descriptor_path}")
