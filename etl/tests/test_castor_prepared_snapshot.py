@@ -35,7 +35,9 @@ class _Session:
     wire_version = "1.0.0"
     shard_by = "cnpj_base_prefix_2"
 
-    def materialization_spec(self, prefix: str, *, input_sha1s: dict[str, str]) -> _Spec:
+    def materialization_spec(
+        self, prefix: str, *, input_sha1s: dict[str, str]
+    ) -> _Spec:
         assert prefix == "07"
         return _Spec()
 
@@ -178,7 +180,7 @@ def test_invalid_initial_receipt_stops_before_remote_or_put(
 
 
 def test_ia_uploader_passes_binary_handle_without_reopening_path(
-    monkeypatch: pytest.MonkeyPatch
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(monthly_sharded, "_require_secret", lambda _name: "fake-only")
     observations: list[tuple[str, bytes]] = []
