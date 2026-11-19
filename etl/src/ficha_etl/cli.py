@@ -387,7 +387,7 @@ def _cmd_run(
     verify: bool,
     verify_sample_size: int,
 ) -> int:
-    """Roda transform local antes de qualquer streaming raw para o IA.
+    """Valida transform e pack locais antes do primeiro PUT raw para o IA.
 
     O transform e o streamer ainda podem adquirir ZIPs diferentes; a
     identidade das dez fontes com o Parquet permanece pendente (#281).
@@ -430,43 +430,17 @@ def _cmd_run(
                 skip_unimplemented=False,
                 verify=verify,
                 verify_sample_size=verify_sample_size,
+                reject_empty_estabelecimentos=True,
                 progress=progress,
             )
         except Exception as exc:
             _eprint(f"error: transform failed: {exc}")
             return 1
-        _advance("[run 2/5] stream ZIPs")
+        _advance("[run 2/5] pack companies.zip")
 
-        if not skip_upload:
-            log.info("[run 2/5] stream ZIPs RFB → IA (zero disco)")
-            try:
-                upload_mod.stream_raw_zips_to_ia(
-                    month, access_key=access_key, secret_key=secret_key
-                )
-            except Exception as exc:
-                _eprint(f"error: stream ZIPs falhou: {exc}")
-                return 1
-        else:
-            log.info("[run 2/5] stream ignorado (--skip-upload)")
-        _advance("[run 3/5] upload outputs")
-
-        # ── 3. Upload parquets ───────────────────────────────────────────────
-        if not skip_upload:
-            log.info("[run 3/5] upload outputs (parquets + lookups.json) → IA")
-            try:
-                upload_mod.upload_outputs(
-                    month, output_dir, access_key=access_key, secret_key=secret_key
-                )
-            except Exception as exc:
-                _eprint(f"error: upload outputs falhou: {exc}")
-                return 1
-        else:
-            log.info("[run 3/5] upload ignorado (--skip-upload)")
-        _advance("[run 4/5] pack companies.zip")
-
-        # ── 4. Pack companies.zip ─────────────────────────────────────────────
+        # ── 2. Pack companies.zip ─────────────────────────────────────────────
         companies_zip = output_dir / "companies.zip"
-        log.info("[run 4/5] pack companies.zip ← parquets locais → %s", companies_zip)
+        log.info("[run 2/5] pack companies.zip ← parquets locais → %s", companies_zip)
         try:
             result = pack_mod.pack_from_parquets(
                 month, companies_zip, parquets_base=str(output_dir)
@@ -475,11 +449,38 @@ def _cmd_run(
             _eprint(f"error: pack companies.zip falhou: {exc}")
             return 1
         log.info(
-            "[run 4/5] pack OK — %d companies, %.1f MB",
+            "[run 2/5] pack OK — %d companies, %.1f MB",
             result["count"],
             result["size_bytes"] / 1e6,
         )
 
+        _advance("[run 3/5] stream ZIPs")
+
+        if not skip_upload:
+            log.info("[run 3/5] stream ZIPs RFB → IA (zero disco)")
+            try:
+                upload_mod.stream_raw_zips_to_ia(
+                    month, access_key=access_key, secret_key=secret_key
+                )
+            except Exception as exc:
+                _eprint(f"error: stream ZIPs falhou: {exc}")
+                return 1
+        else:
+            log.info("[run 3/5] stream ignorado (--skip-upload)")
+        _advance("[run 4/5] upload outputs")
+
+        # ── 4. Upload parquets ───────────────────────────────────────────────
+        if not skip_upload:
+            log.info("[run 4/5] upload outputs (parquets + lookups.json) → IA")
+            try:
+                upload_mod.upload_outputs(
+                    month, output_dir, access_key=access_key, secret_key=secret_key
+                )
+            except Exception as exc:
+                _eprint(f"error: upload outputs falhou: {exc}")
+                return 1
+        else:
+            log.info("[run 4/5] upload ignorado (--skip-upload)")
         if not skip_upload:
             log.info("[run 4/5] upload companies.zip → IA")
             try:
