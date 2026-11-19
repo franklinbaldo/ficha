@@ -86,14 +86,14 @@ test('validação CNPJ do PB é local e não deixa deep link de consulta inváli
     assert.equal(globalThis.location.search,'');
   });
 });
-test('dispatcher usa somente PB para CNPJ numérico e preserva legado para alfanumérico',async()=>{
+test('dispatcher recusa alfa antes do Protobuf e nunca usa fallback Parquet',async()=>{
   const route=pages.fetchHistoryRecordAt;
-  assert.equal(typeof route,'function');
-  let atom=0,old=0;
+  let atom=0,legacy=0;
   const deps={atomic:async()=>{atom++;return observe('2026-06');},
-    legacy:async()=>{old++;return {data:null};}};
+    legacy:async()=>{legacy++;throw Error('Parquet não pode iniciar');}};
   const result=await route(manifest,'2026-06',numeric,deps);
-  assert.equal(result.state,'found');assert.equal(atom,1);assert.equal(old,0);
-  await route(manifest,'2026-06','AB123456000158',deps);
-  assert.equal(atom,1);assert.equal(old,1);
+  assert.equal(result.state,'found');assert.equal(atom,1);
+  await assert.rejects(route(manifest,'2026-06','AB123456000158',deps),
+    error=>error instanceof CnpjInputError && /alfanumérica ainda não disponível/i.test(error.message));
+  assert.equal(atom,1);assert.equal(legacy,0);
 });
