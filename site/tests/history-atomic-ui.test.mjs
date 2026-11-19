@@ -162,3 +162,20 @@ test('resposta sem estado é inconclusiva e não autoriza segunda consulta',asyn
     assert.doesNotMatch(doc.at('historia-estado').textContent,/Comparação concluída/i);
   });
 });
+
+test('CNPJ alfanumérico na História é erro local, zero GET e deep link rejeitado limpo',async()=>{
+  await withLocation(async()=>{
+    let calls=0,network=0;
+    globalThis.fetch=async()=>{network++;throw Error('GET indevido');};
+    const doc=await setup(async()=>{calls++;throw Error('lookup indevido');});
+    doc.at('historia-cnpj').value='12ABC34501DE35';
+    globalThis.location.search='?cnpj=12ABC34501DE35&de=2026-06&ate=2026-07';
+    await submit(doc);
+    assert.equal(calls,0,'não consultar nem mesmo o stub de dados');
+    assert.equal(network,0,'não requisitar Parquet, PB ou lookup');
+    assert.match(doc.at('historia-estado').textContent,/Comparação alfanumérica ainda não disponível/);
+    assert.equal(doc.at('historia-estado').dataset.kind,'error');
+    assert.equal(globalThis.location.search,'');
+    assert.doesNotMatch(doc.at('historia-estado').textContent,/rede|CORS|concluída/i);
+  });
+});
