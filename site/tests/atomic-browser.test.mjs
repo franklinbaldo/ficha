@@ -50,6 +50,23 @@ test('registro PB exato recebe município e CNAE do lookup RFB do mês',async()=
   assert.equal(result.data.opcao_simples,null);
 });
 
+test('CNAE RFB com zero inicial mantém sete dígitos no lookup',async()=>{
+  const lookup={...lookups,cnaes:{'0600001':'EXTRAÇÃO DE PETRÓLEO'}};
+  const body=new TextEncoder().encode(JSON.stringify(lookup));
+  const data=structuredClone(manifest);
+  data.snapshots[0].files.lookups.size=body.byteLength;
+  const modified=structuredClone(company);
+  modified.estabelecimentos[0].cnae_principal_codigo=600001;
+  const result=await fetchCompanyByCnpj(data,date,cnpj,{
+    loadDecoder:async()=>({decodeCompany:()=>modified}),
+    fetchImpl:async url=>new Response(url.endsWith('.json')?body:Uint8Array.of(1)),
+    loadLookups:(m,d,opts)=>fetchSnapshotLookups(m,d,{...opts,cacheMap:new Map()}),
+  });
+  assert.equal(result.state,'found');
+  assert.equal(result.data.cnae_principal_codigo,600001);
+  assert.equal(result.data.cnae_principal_descricao,'EXTRAÇÃO DE PETRÓLEO');
+});
+
 test('404 do membro é inconclusivo e não acessa o lookup',async()=>{
   let calls=0;
   const result=await fetchCompanyByCnpj(manifest,date,cnpj,{
