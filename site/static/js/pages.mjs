@@ -42,6 +42,35 @@ function setParams(params) {
   globalThis.history.replaceState(null, '', url);
 }
 function params() { return new URLSearchParams(globalThis.location.search); }
+/** Revision guard: a selection changed A→B→A is still a new request. */
+function watchSelection(controls, state, output, pendingMessage) {
+  let revision = 0;
+  let pending = false;
+  let terminal = false;
+  let announced = false;
+  const edited = () => {
+    revision++;
+    if (pending) {
+      if (!announced) {
+        announced = true;
+        output.replaceChildren();
+        status(state, pendingMessage);
+      }
+    } else if (terminal) {
+      terminal = false;
+      output.replaceChildren();
+      status(state, 'Seleção alterada. Pesquise novamente.');
+    }
+  };
+  for (const [node, event] of controls) node.addEventListener(event, edited);
+  return {
+    begin() { pending = true; terminal = false; announced = false; return revision; },
+    current(version) { return revision === version; },
+    finish() { pending = false; terminal = true; announced = false; },
+    markTerminal() { terminal = true; },
+  };
+}
+
 function showProvenance(doc, parent, date, url) {
   const strip = add(doc,parent,'div','','provenance-strip');
   add(doc,strip,'span','Competência ' + date);
@@ -98,13 +127,18 @@ export async function mountCompany(doc, {loadManifest = fetchManifest, lookup = 
     return;
   }
   let busy = false;
+  const selection = watchSelection(
+    [[input, 'input'], [select, 'change']], state, output,
+    'CNPJ ou competência alterados durante a consulta. Aguarde a conclusão para pesquisar novamente.');
   async function lookupSubmit(event) {
     event?.preventDefault();
     if (busy) return;
     const cnpj = canonicalCnpj(input.value);
-    if (!cnpj) { status(state,'Informe um CNPJ completo, numérico ou alfanumérico.',true); output.replaceChildren(); return; }
+    if (!cnpj) { status(state,'Informe um CNPJ completo, numérico ou alfanumérico.',true); output.replaceChildren(); selection.markTerminal(); return; }
     const date = select.value;
-    const stillCurrent = () => canonicalCnpj(input.value) === cnpj && select.value === date;
+    const version = selection.begin();
+    const stillCurrent = () => selection.current(version) &&
+      canonicalCnpj(input.value) === cnpj && select.value === date;
     const discarded = 'CNPJ ou competência alterados durante a consulta. Pesquise novamente.';
     busy = true;
     submit.disabled = true;
@@ -123,7 +157,7 @@ export async function mountCompany(doc, {loadManifest = fetchManifest, lookup = 
       status(state,'Consulta indisponível: '+error.message,true);
       add(doc,output,'p','Os arquivos continuam referenciados no catálogo. A leitura remota depende de um transporte compatível com CORS e HTTP Range.');
       anchor(doc,output,'Consultar o catálogo de arquivos',BASE+'acervo/?competencia='+date);
-    } finally { busy = false; submit.disabled = false; }
+    } finally { busy = false; selection.finish(); submit.disabled = false; }
   }
   form.addEventListener('submit',lookupSubmit);
   const initial = params().get('cnpj');
@@ -184,17 +218,21 @@ export async function mountHistory(doc,{loadManifest=fetchManifest,lookup=fetchR
   }
   status(state,'Escolha duas competências existentes. A comparação só será executada após solicitar.');
   let busy = false;
+  const selection = watchSelection(
+    [[input, 'input'], [from, 'change'], [to, 'change']], state, output,
+    'CNPJ ou competências alterados durante a comparação. Aguarde a conclusão para pesquisar novamente.');
   form.addEventListener('submit',async event=>{
     event.preventDefault();
     if (busy) return;
     const cnpj=canonicalCnpj(input.value);
     output.replaceChildren();
-    if(!cnpj){status(state,'Informe um CNPJ completo.',true);return;}
+    if(!cnpj){status(state,'Informe um CNPJ completo.',true);selection.markTerminal();return;}
     const start=from.value, end=to.value;
-    if(start===end){status(state,'Selecione duas competências diferentes.',true);return;}
-    if(start>end){status(state,'A competência inicial deve ser anterior à competência final.',true);return;}
-    const stillCurrent = () => canonicalCnpj(input.value) === cnpj &&
-      from.value === start && to.value === end;
+    if(start===end){status(state,'Selecione duas competências diferentes.',true);selection.markTerminal();return;}
+    if(start>end){status(state,'A competência inicial deve ser anterior à competência final.',true);selection.markTerminal();return;}
+    const version = selection.begin();
+    const stillCurrent = () => selection.current(version) &&
+      canonicalCnpj(input.value) === cnpj && from.value === start && to.value === end;
     const discarded = 'CNPJ ou competências alterados durante a comparação. Pesquise novamente.';
     busy = true;
     button.disabled=true;
@@ -213,7 +251,7 @@ export async function mountHistory(doc,{loadManifest=fetchManifest,lookup=fetchR
       setParams({cnpj,de:start,ate:end});
       status(state,'Comparação indisponível: '+error.message,true);
       anchor(doc,output,'Ver competências disponíveis',BASE+'acervo/');
-    }finally{busy=false;button.disabled=false;}
+    }finally{busy=false;selection.finish();button.disabled=false;}
   });
 }
 
