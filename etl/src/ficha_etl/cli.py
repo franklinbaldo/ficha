@@ -387,19 +387,10 @@ def _cmd_run(
     verify: bool,
     verify_sample_size: int,
 ) -> int:
-    """Orquestra: stream ZIPs → IA → transform → upload parquets → pack → manifest.
+    """Roda transform local antes de qualquer streaming raw para o IA.
 
-    Com upload ativado (default):
-      1. Stream 37 ZIPs da RFB → IA (zero disco, paralelo)
-      2. Transform: baixa do IA (rápido) → DuckDB → parquets
-      3. Upload parquets + lookups.json → IA
-      4. Pack: parquets locais → companies.zip → upload IA
-      5. Atualiza manifest.json
-
-    Com --skip-upload (dry-run):
-      1. Transform: baixa da RFB → DuckDB → parquets
-      2. Pack: parquets locais → companies.zip (sem upload)
-      3. Atualiza manifest.json (sem upload)
+    O transform e o streamer ainda podem adquirir ZIPs diferentes; a
+    identidade das dez fontes com o Parquet permanece pendente (#281).
     """
     import os
 
@@ -428,23 +419,9 @@ def _cmd_run(
                 )
                 return 1
 
-            # ── 1. Stream ZIPs → IA (zero disco) ────────────────────────
-            log.info("[run 1/5] stream ZIPs RFB → IA (zero disco)")
-            try:
-                upload_mod.stream_raw_zips_to_ia(
-                    month, access_key=access_key, secret_key=secret_key
-                )
-            except Exception as exc:
-                _eprint(f"error: stream ZIPs falhou: {exc}")
-                return 1
-        else:
-            log.info("[run 1/5] stream ignorado (--skip-upload) — transform usará RFB direto")
-        _advance("[run 2/5] transform")
-
-        # ── 2. Transform ─────────────────────────────────────────────────────
-        # Com upload: fetcher chain encontra ZIPs no IA (rápido).
-        # Sem upload: fetcher chain vai direto na RFB.
-        log.info("[run 2/5] transform %s → %s", month, output_dir)
+        # Fail before the first raw IA PUT when local extraction/transform fails.
+        # This does not bind the later raw RFB GET to the consumed ZIP bytes.
+        log.info("[run 1/5] transform %s → %s", month, output_dir)
         try:
             transform.transform_snapshot(
                 month,
@@ -458,6 +435,19 @@ def _cmd_run(
         except Exception as exc:
             _eprint(f"error: transform failed: {exc}")
             return 1
+        _advance("[run 2/5] stream ZIPs")
+
+        if not skip_upload:
+            log.info("[run 2/5] stream ZIPs RFB → IA (zero disco)")
+            try:
+                upload_mod.stream_raw_zips_to_ia(
+                    month, access_key=access_key, secret_key=secret_key
+                )
+            except Exception as exc:
+                _eprint(f"error: stream ZIPs falhou: {exc}")
+                return 1
+        else:
+            log.info("[run 2/5] stream ignorado (--skip-upload)")
         _advance("[run 3/5] upload outputs")
 
         # ── 3. Upload parquets ───────────────────────────────────────────────
