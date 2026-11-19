@@ -4,7 +4,8 @@ import { mountSearch, renderCompanies } from '../static/js/search-app.mjs';
 import { createDuckDBEngine } from '../static/js/duckdb-runtime.mjs';
 
 class Element {
-  constructor(tag = '') { this.tag = tag; this.children = []; this.textContent = ''; }
+  constructor(tag = '') { this.tag = tag; this.children = []; this.textContent = ''; this.attributes = {}; this.dataset = {}; }
+  setAttribute(name, value) { this.attributes[name] = value; }
   append(...nodes) { this.children.push(...nodes); }
   replaceChildren(...nodes) { this.children = nodes; }
   addEventListener(type, cb) { this[type] = cb; }
@@ -27,6 +28,30 @@ test('resultados são texto puro, não HTML interpretado', () => {
   assert.equal(li.children[1].textContent, '00000000E08G12 · RO');
   assert.equal(li.children.length, 2);
 });
+test('cada ficha tem link distinguível e separado dos dados da empresa', () => {
+  const { nodes,doc } = mockDOM();
+  renderCompanies(doc, nodes['consulta-lista'], [
+    {cnpj:'00.000.000/e08g-12',razao_social:'Empresa repetida',uf:'RO'},
+    {cnpj:'11.222.333/0001-81',razao_social:'Empresa repetida',uf:'RO'},
+    {cnpj:'INVALIDO',razao_social:'Sem link'},
+  ]);
+  const items = nodes['consulta-lista'].children;
+  const expected = ['00000000E08G12','11222333000181'];
+  for (const [index, cnpj] of expected.entries()) {
+    const details = items[index].children[1];
+    assert.equal(details.children[0], ' · ', 'separador antes da ação');
+    const link = details.children[1];
+    assert.equal(link.tag, 'a');
+    assert.equal(link.textContent, 'Abrir ficha');
+    assert.equal(link.href, '/ficha/empresa/?cnpj=' + cnpj);
+    assert.equal(link.attributes['aria-label'], 'Abrir ficha do CNPJ ' + cnpj);
+  }
+  assert.equal(items[2].children[1].children.length, 0,
+    'não criar atalho para CNPJ inválido');
+  assert.notEqual(items[0].children[1].children[1].attributes['aria-label'],
+    items[1].children[1].children[1].attributes['aria-label']);
+});
+
 test('formulário só abre sessão com entrada válida; reutiliza DB e anuncia resultado', async () => {
   const { nodes,doc } = mockDOM();
   let fetches=0, probed=0, created=0, attached=0, queried=0;
@@ -42,11 +67,13 @@ test('formulário só abre sessão com entrada válida; reutiliza DB e anuncia r
   nodes['busca-termo'].value = 'ab';
   await submit();
   assert.match(nodes['consulta-estado'].textContent,/ao menos três/);
+  assert.equal(nodes['consulta-estado'].dataset.kind, 'error');
   assert.equal(fetches,0);
   nodes['busca-termo'].value = '00.000.000/E08G-12';
   await submit();
   assert.equal(nodes['consulta-lista'].children.length,1);
   assert.match(nodes['consulta-estado'].textContent,/2026-04: 1 resultado/);
+  assert.equal(nodes['consulta-estado'].dataset.kind, 'info');
   nodes['busca-termo'].value = 'Empresa';
   await submit();
   assert.deepEqual([fetches,probed,created,attached,queried],[1,1,1,1,2]);
@@ -62,7 +89,12 @@ test('HTTP/engine indisponível é visível, busca seguinte pode repetir', async
   const submit = () => nodes['busca-form'].submit({preventDefault() {}});
   await submit();
   assert.match(nodes['consulta-estado'].textContent,/HTTP 500/);
+  assert.equal(nodes['consulta-estado'].dataset.kind, 'error');
   assert.equal(nodes['consulta-lista'].children.length,0);
+  nodes['busca-termo'].value='00000000E08G13';
+  nodes['busca-termo'].input();
+  assert.match(nodes['consulta-estado'].textContent,/Termo alterado/);
+  assert.equal(nodes['consulta-estado'].dataset.kind, 'info');
   await submit();
   assert.equal(attempts,2);
 });
@@ -92,6 +124,32 @@ test('manifesto 404 não fica em cache: nova tentativa observa HTTP 500 e depois
   assert.equal(attempts, 3);
   assert.match(nodes['consulta-estado'].textContent, /2026-07: 1 resultado/);
   assert.equal(nodes['busca-enviar'].disabled, false);
+});
+
+test('edição durante pedido pendente informa imediatamente sem apresentar resposta obsoleta', async () => {
+  const {nodes,doc} = mockDOM();
+  let resolveDataset, queries=0;
+  const pendingDataset = new Promise(resolve => { resolveDataset=resolve; });
+  mountSearch({documentRef:doc,
+    fetchDataset: () => pendingDataset,
+    probeRange: async () => {},
+    createEngine: async () => ({db:{},duckdb:{}}),
+    attach: async () => {},
+    query: async () => {queries++;return [{cnpj:'00000000E08G12'}];},
+  });
+  nodes['busca-termo'].value='00000000E08G12';
+  const pending = nodes['busca-form'].submit({preventDefault() {}});
+  assert.equal(nodes['busca-enviar'].disabled,true);
+  nodes['busca-termo'].value='00000000E08G13';
+  nodes['busca-termo'].input();
+  assert.match(nodes['consulta-estado'].textContent,/Termo alterado.*Aguarde/);
+  assert.equal(nodes['consulta-estado'].dataset.kind,'info');
+  assert.equal(nodes['consulta-lista'].children.length,0);
+  resolveDataset({date:'2026-07',files:{cnpjs:{url:'https://example.org/cnpjs.parquet',size:1}}});
+  await pending;
+  assert.equal(queries,0,'não executar SQL com parâmetro obsoleto');
+  assert.match(nodes['consulta-estado'].textContent,/Termo alterado/);
+  assert.equal(nodes['busca-enviar'].disabled,false);
 });
 
 test('DuckDB runtime usa bundle selecionado e encerra falha de instanciação', async () => {
