@@ -73,7 +73,7 @@ test('preserva exatamente os bytes da origem no destino e anuncia a competência
   assert.doesNotMatch(html, /__FICHA_CURRENT_/);
 });
 
-test('preserva bytes de todos os oito módulos JS do SSG', async () => {
+test('preserva bytes de todos os oito módulos JS e do CSS SSG', async () => {
   const f = await fixture();
   assert.equal(run(f).status, 0);
   for (const name of ['boot.mjs', 'search-app.mjs', 'duckdb-runtime.mjs', 'query-core.mjs',
@@ -81,6 +81,8 @@ test('preserva bytes de todos os oito módulos JS do SSG', async () => {
     assert.deepEqual(await readFile(f.file('site/dist/ficha/js/' + name)),
       await readFile(f.file('site/static/js/' + name)), name);
   }
+  assert.deepEqual(await readFile(f.file('site/dist/ficha/css/site.css')),
+    await readFile(f.file('site/static/css/site.css')), 'site.css');
 });
 
 test('rejeita manifesto PWA inesperado sem sobrescrevê-lo', async () => {
