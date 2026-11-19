@@ -22,7 +22,7 @@ export async function fetchSnapshotLookups(manifest, date, {
   if (!/^[0-9a-f]{64}$/.test(sha256 ?? '')) {
     throw new Error('SHA-256 do lookup ausente ou inválido no manifesto');
   }
-  const cacheKey = url + '#' + sha256;
+  const cacheKey = url + '#' + sha256 + ':' + snapshot.files.lookups.size;
   let promise = cacheMap.get(cacheKey);
   if (!promise) {
     promise = (async () => {
