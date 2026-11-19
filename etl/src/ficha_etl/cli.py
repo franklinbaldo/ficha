@@ -387,19 +387,10 @@ def _cmd_run(
     verify: bool,
     verify_sample_size: int,
 ) -> int:
-    """Orquestra: stream ZIPs → IA → transform → upload parquets → pack → manifest.
+    """Valida transform e pack locais antes do primeiro PUT raw para o IA.
 
-    Com upload ativado (default):
-      1. Stream 37 ZIPs da RFB → IA (zero disco, paralelo)
-      2. Transform: baixa do IA (rápido) → DuckDB → parquets
-      3. Upload parquets + lookups.json → IA
-      4. Pack: parquets locais → companies.zip → upload IA
-      5. Atualiza manifest.json
-
-    Com --skip-upload (dry-run):
-      1. Transform: baixa da RFB → DuckDB → parquets
-      2. Pack: parquets locais → companies.zip (sem upload)
-      3. Atualiza manifest.json (sem upload)
+    O transform e o streamer ainda podem adquirir ZIPs diferentes; a
+    identidade das dez fontes com o Parquet permanece pendente (#281).
     """
     import os
 
@@ -428,23 +419,9 @@ def _cmd_run(
                 )
                 return 1
 
-            # ── 1. Stream ZIPs → IA (zero disco) ────────────────────────
-            log.info("[run 1/5] stream ZIPs RFB → IA (zero disco)")
-            try:
-                upload_mod.stream_raw_zips_to_ia(
-                    month, access_key=access_key, secret_key=secret_key
-                )
-            except Exception as exc:
-                _eprint(f"error: stream ZIPs falhou: {exc}")
-                return 1
-        else:
-            log.info("[run 1/5] stream ignorado (--skip-upload) — transform usará RFB direto")
-        _advance("[run 2/5] transform")
-
-        # ── 2. Transform ─────────────────────────────────────────────────────
-        # Com upload: fetcher chain encontra ZIPs no IA (rápido).
-        # Sem upload: fetcher chain vai direto na RFB.
-        log.info("[run 2/5] transform %s → %s", month, output_dir)
+        # Fail before the first raw IA PUT when local extraction/transform fails.
+        # This does not bind the later raw RFB GET to the consumed ZIP bytes.
+        log.info("[run 1/5] transform %s → %s", month, output_dir)
         try:
             transform.transform_snapshot(
                 month,
@@ -453,30 +430,17 @@ def _cmd_run(
                 skip_unimplemented=False,
                 verify=verify,
                 verify_sample_size=verify_sample_size,
+                reject_empty_estabelecimentos=True,
                 progress=progress,
             )
         except Exception as exc:
             _eprint(f"error: transform failed: {exc}")
             return 1
-        _advance("[run 3/5] upload outputs")
+        _advance("[run 2/5] pack companies.zip")
 
-        # ── 3. Upload parquets ───────────────────────────────────────────────
-        if not skip_upload:
-            log.info("[run 3/5] upload outputs (parquets + lookups.json) → IA")
-            try:
-                upload_mod.upload_outputs(
-                    month, output_dir, access_key=access_key, secret_key=secret_key
-                )
-            except Exception as exc:
-                _eprint(f"error: upload outputs falhou: {exc}")
-                return 1
-        else:
-            log.info("[run 3/5] upload ignorado (--skip-upload)")
-        _advance("[run 4/5] pack companies.zip")
-
-        # ── 4. Pack companies.zip ─────────────────────────────────────────────
+        # ── 2. Pack companies.zip ─────────────────────────────────────────────
         companies_zip = output_dir / "companies.zip"
-        log.info("[run 4/5] pack companies.zip ← parquets locais → %s", companies_zip)
+        log.info("[run 2/5] pack companies.zip ← parquets locais → %s", companies_zip)
         try:
             result = pack_mod.pack_from_parquets(
                 month, companies_zip, parquets_base=str(output_dir)
@@ -485,11 +449,46 @@ def _cmd_run(
             _eprint(f"error: pack companies.zip falhou: {exc}")
             return 1
         log.info(
-            "[run 4/5] pack OK — %d companies, %.1f MB",
+            "[run 2/5] pack OK — %d companies, %.1f MB",
             result["count"],
             result["size_bytes"] / 1e6,
         )
 
+        # Validate the local manifest identity before any raw/output PUT.
+        # Missing Parquet, row count or hash errors must fail before publication.
+        try:
+            entry = manifest_mod.build_snapshot_entry(month, output_dir)
+        except Exception as exc:
+            _eprint(f"error: manifest build falhou: {exc}")
+            return 1
+
+        _advance("[run 3/5] stream ZIPs")
+
+        if not skip_upload:
+            log.info("[run 3/5] stream ZIPs RFB → IA (zero disco)")
+            try:
+                upload_mod.stream_raw_zips_to_ia(
+                    month, access_key=access_key, secret_key=secret_key
+                )
+            except Exception as exc:
+                _eprint(f"error: stream ZIPs falhou: {exc}")
+                return 1
+        else:
+            log.info("[run 3/5] stream ignorado (--skip-upload)")
+        _advance("[run 4/5] upload outputs")
+
+        # ── 4. Upload parquets ───────────────────────────────────────────────
+        if not skip_upload:
+            log.info("[run 4/5] upload outputs (parquets + lookups.json) → IA")
+            try:
+                upload_mod.upload_outputs(
+                    month, output_dir, access_key=access_key, secret_key=secret_key
+                )
+            except Exception as exc:
+                _eprint(f"error: upload outputs falhou: {exc}")
+                return 1
+        else:
+            log.info("[run 4/5] upload ignorado (--skip-upload)")
         if not skip_upload:
             log.info("[run 4/5] upload companies.zip → IA")
             try:
@@ -503,11 +502,6 @@ def _cmd_run(
 
         # ── 5. Manifest ───────────────────────────────────────────────────────
         log.info("[run 5/5] atualizar manifest → %s", manifest_path)
-        try:
-            entry = manifest_mod.build_snapshot_entry(month, output_dir)
-        except Exception as exc:
-            _eprint(f"error: manifest build falhou: {exc}")
-            return 1
 
         if not skip_upload:
             # Local existence (build_snapshot_entry) e upload HTTP OK
