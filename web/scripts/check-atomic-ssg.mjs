@@ -46,6 +46,59 @@ try {
       results.push({name,cnpj,state:'found',requests:visited.length,status:'PASS'});
     } finally {await page.close();}
   }
+  // History uses the same Protobuf transport for both selected months.
+  const history = await browser.newPage({serviceWorkers:'block'});
+  try {
+    const visited=[];
+    history.on('request',request=>{
+      if(request.url().includes('archive.org/download/')) visited.push(request.url());
+    });
+    await history.goto(base+'historia/',{waitUntil:'domcontentloaded'});
+    await history.locator('#historia-inicio option[value="2026-06"]')
+      .waitFor({state:'attached'});
+    assert.equal(await history.locator('#historia-inicio option[value="2026-04"]').count(),0,
+      '2026-04 não oferece índice numérico v1 para comparação');
+    await history.locator('#historia-inicio').selectOption('2026-06');
+    await history.locator('#historia-fim').selectOption('2026-07');
+    await history.locator('#historia-cnpj').fill('33000167000101');
+    await history.locator('#historia-enviar').click();
+    await history.locator('#historia-estado')
+      .filter({hasText:/Comparação concluída|Comparação indisponível|Comparação inconclusiva|Comparação incompleta/})
+      .waitFor({timeout:MAX_MS});
+    const message=await history.locator('#historia-estado').textContent();
+    assert.match(message,/Comparação concluída/,message);
+    const table=await history.locator('#historia-resultado').textContent();
+    assert.match(table,/Razão social/);
+    assert.match(table,/Porte.*não permite determinar/i);
+    const pb=visited.filter(url=>url.includes('.zip/')&&url.endsWith('.pb'));
+    assert.equal(pb.length,2,'comparação exige dois membros Protobuf distintos');
+    assert.ok(!visited.some(url=>url.endsWith('.parquet')),
+      'histórico numérico não pode abrir Parquet via DuckDB');
+    results.push({name:'História 2026-06→07 · Petrobras',state:'compared',
+      pbGets:pb.length,status:'PASS'});
+  }finally{await history.close();}
+
+  // A 404 in either month invalidates the comparison, not the company's history.
+  const history404=await browser.newPage({serviceWorkers:'block'});
+  try{
+    await history404.route('**/companies-33.zip/**',
+      route=>route.fulfill({status:404,body:''}));
+    await history404.goto(base+'historia/',{waitUntil:'domcontentloaded'});
+    await history404.locator('#historia-inicio option[value="2026-06"]')
+      .waitFor({state:'attached'});
+    await history404.locator('#historia-inicio').selectOption('2026-06');
+    await history404.locator('#historia-fim').selectOption('2026-07');
+    await history404.locator('#historia-cnpj').fill('33000167000101');
+    await history404.locator('#historia-enviar').click();
+    await history404.locator('#historia-estado')
+      .filter({hasText:/Comparação inconclusiva/}).waitFor({timeout:MAX_MS});
+    assert.match(await history404.locator('#historia-resultado').textContent(),
+      /arquivo indisponível/i);
+    assert.doesNotMatch(await history404.locator('#historia-estado').textContent(),
+      /concluída/i);
+    results.push({name:'História 404 não é ausência',status:'PASS'});
+  }finally{await history404.close();}
+
   // Negative DV must fail before *any* archival request.
   const page = await browser.newPage({serviceWorkers:'block'});
   try {
