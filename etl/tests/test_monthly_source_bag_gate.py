@@ -309,3 +309,92 @@ def test_real_duckdb_blank_line_part_blocks_equal_nine_part_output(tmp_path: Pat
         assert receipt["status"] == "failed"
     finally:
         con.close()
+
+
+def test_quoted_newline_counts_one_logical_record_per_source_part(tmp_path: Path) -> None:
+    """The writer and witness must agree on a quoted physical newline."""
+    from ficha_etl import registry
+    from ficha_etl.transform import _create_table_from_csvs
+
+    parts = _parts(tmp_path / "sources")
+    for i, (_, path) in enumerate(parts):
+        fields = [""] * 30
+        fields[0] = f"{i:08d}"
+        fields[1] = "0001"
+        fields[2] = "95"
+        fields[14] = '"AVENIDA\nCENTRAL"' if i == 4 else "RUA"
+        path.write_text(";".join(fields) + "\n", encoding="utf-8")
+    # The fifth CSV has two physical lines but one DuckDB logical row.
+    assert parts[4][1].read_bytes().count(b"\n") == 2
+
+    con = duckdb.connect()
+    try:
+        counts: dict[Path, int] = {}
+        _create_table_from_csvs(
+            con,
+            "estabelecimento",
+            [path for _, path in parts],
+            registry.main_table("estabelecimento").source,
+            per_file_counts=counts,
+        )
+        assert len(counts) == 10
+        assert set(counts.values()) == {1}
+        row = con.execute("SELECT * FROM estabelecimento WHERE cnpj_basico = '00000004'").fetchone()
+        assert row is not None
+        assert row[14] == "AVENIDA\nCENTRAL"
+
+        target = tmp_path / "result.parquet"
+        con.execute(
+            "COPY (SELECT cnpj_basico || cnpj_ordem || cnpj_dv AS cnpj "
+            "FROM estabelecimento) TO ? (FORMAT PARQUET)",
+            [str(target)],
+        )
+        receipt = reconcile_loaded_source_keys(
+            con, "2026-08", parts, target, tmp_path / "receipt.json", counts
+        )
+        assert receipt["status"] == "ok"
+        assert receipt["parsed_source_rows"] == 10
+        assert all(part["parsed_csv_rows"] == 1 for part in receipt["parts"])
+    finally:
+        con.close()
+
+
+def test_crlf_only_part_is_not_a_logical_record(tmp_path: Path) -> None:
+    """A physically nonempty CRLF-only tenth CSV cannot certify ten parts."""
+    from ficha_etl import registry
+    from ficha_etl.transform import _create_table_from_csvs
+
+    parts = _parts(tmp_path / "sources")
+    for i, (_, path) in enumerate(parts):
+        fields = [""] * 30
+        fields[0] = f"{i:08d}"
+        fields[1] = "0001"
+        fields[2] = "95"
+        path.write_text(";".join(fields) + "\n", encoding="utf-8")
+    parts[9][1].write_bytes(b"\r\n")
+
+    con = duckdb.connect()
+    try:
+        counts: dict[Path, int] = {}
+        _create_table_from_csvs(
+            con,
+            "estabelecimento",
+            [path for _, path in parts],
+            registry.main_table("estabelecimento").source,
+            per_file_counts=counts,
+        )
+        assert counts[parts[9][1].resolve()] == 0
+        assert con.execute("SELECT COUNT(*) FROM estabelecimento").fetchone()[0] == 9
+        target = tmp_path / "nine.parquet"
+        con.execute(
+            "COPY (SELECT cnpj_basico || cnpj_ordem || cnpj_dv AS cnpj "
+            "FROM estabelecimento) TO ? (FORMAT PARQUET)",
+            [str(target)],
+        )
+        with pytest.raises(MonthlySourceBagError, match="zero logical rows"):
+            reconcile_loaded_source_keys(
+                con, "2026-08", parts, target, tmp_path / "receipt.json", counts
+            )
+        assert json.loads((tmp_path / "receipt.json").read_text())["status"] == "failed"
+    finally:
+        con.close()
