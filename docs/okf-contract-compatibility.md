@@ -158,9 +158,16 @@ equivalentes.
 
 Uma terceira diferença ocorre com coluna futura: o `z.object` público v1
 aceita a linha e retira a chave desconhecida, enquanto o adaptador de views
-aplica `.strict()` e a rejeita. Os testes Vitest usam somente linhas
-sintéticas e documentam estas fronteiras, **sem corrigir nem aprovar**
-qualquer mudança de validador, contrato ou versão.
+aplica `.strict()` e a rejeita. Um controle posterior percorre **Cnpj, Raiz e
+Socio com linhas completas independentes**: (a) linha válida aceita nos dois
+validadores, (b) campo nullable **ausente** rejeitado nos dois, embora o mesmo
+campo com `null` seja aceito pelo v1, e (c) coluna `future_column` aceita e
+descartada pelo v1, mas rejeitada pelo gerado OKF. Assim, `null` não é
+confundido com ausência nem a política de evolução de colunas é inferida
+a partir de um único tipo. Todos são casos sintéticos do consumidor legado
+Astro; não provam Parquet físico nem o SSG público. Os testes documentam
+estas fronteiras, **sem corrigir nem aprovar** mudança de validador,
+contrato ou versão.
 
 Essa diferença é **dívida já conhecida**, não um incidente novo na
 home pública SSG (`site/`), que é separada do módulo Astro `web/`.
