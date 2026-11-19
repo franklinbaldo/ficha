@@ -42,6 +42,9 @@ export async function readBoundedMember(response, limit = MAX_COMPANY_BYTES) {
   if (!Number.isSafeInteger(limit) || limit <= 0) throw new Error('Orçamento de leitura inválido');
   const header = response.headers?.get?.('content-length');
   if (header != null && /^\d+$/.test(header) && Number(header) > limit) {
+    // Early rejection must also stop a pending response body (no chunk is read).
+    // Do not await transport teardown before returning the size error.
+    try { void response.body?.cancel?.().catch(() => {}); } catch { /* Already unusable. */ }
     throw new Error('Membro Protobuf excede orçamento de leitura');
   }
   if (!response.body?.getReader) throw new Error('Resposta sem stream binário');
@@ -93,7 +96,9 @@ export async function fetchAtomicRecord(manifest, date, input, {
   const response = await fetchImpl(target.memberUrl, {mode:'cors', signal});
   const shared = {cnpj:target.cnpj, date:target.date, source:target.memberUrl,
     archiveUrl:target.archiveUrl, wire:target.wire, partial:true};
-  if (response.status === 404) return {...shared, data:null, missingRoot:true};
+  // A 404 can mean a missing ZIP, shard or member; it cannot prove CNPJ absence.
+  if (response.status === 404) return {...shared, data:null,
+    state:'artifact-unavailable', httpStatus:404};
   if (!response.ok) throw new Error(`Consulta Protobuf indisponível: HTTP ${response.status}`);
   const bytes = await readBoundedMember(response);
   let company;
@@ -121,9 +126,9 @@ export async function fetchAtomicRecord(manifest, date, input, {
     target.root + String(est.cnpj_ordem ?? 0).padStart(4, '0') +
     String(est.cnpj_dv ?? 0).padStart(2, '0') === target.cnpj);
   if (exact.length > 1) throw new Error('CNPJ duplicado dentro da raiz Protobuf');
-  if (exact.length === 0) return {...shared, data:null, missingRoot:false};
+  if (exact.length === 0) return {...shared, data:null, state:'absent-in-snapshot'};
   const est = exact[0];
-  return {...shared, missingRoot:false, data:{
+  return {...shared, state:'found', data:{
     cnpj:target.cnpj,
     razao_social:company.razao_social || null,
     nome_fantasia:est.nome_fantasia || null,
