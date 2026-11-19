@@ -109,6 +109,21 @@ test('leitor de ficha usa snapshot pedido, sonda transporte, consulta e libera W
   assert.equal(result.data.razao_social,'Teste de contrato');
 });
 
+test('ficha recusa competência duplicada antes de qualquer I/O remoto', async () => {
+  const raw = await manifest();
+  const conflicting = structuredClone(raw.snapshots.find(s => s.date === raw.current));
+  // A second entry for the same competence must not silently win by array order.
+  conflicting.files.cnpjs.url = 'https://example.org/conflicting.parquet';
+  const malformed = { ...raw, snapshots: [...raw.snapshots, conflicting] };
+  let probes = 0, engines = 0;
+  await assert.rejects(fetchRecordAt(malformed, raw.current, '00000000E08G12', {
+    probeRange: async () => { probes++; },
+    createEngine: async () => { engines++; throw Error('WASM must not start'); },
+  }), /exatamente um snapshot/);
+  assert.equal(probes, 0, 'ambiguous archival source must not be contacted');
+  assert.equal(engines, 0, 'ambiguous archival source must not start WASM');
+});
+
 test('erro na consulta encerra instância e não fabrica resultados', async () => {
   const raw=await manifest();let closed=0,called=0;
   await assert.rejects(fetchRecordAt(raw,raw.current,'00000000E08G12',{
