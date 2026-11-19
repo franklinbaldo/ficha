@@ -8,6 +8,11 @@ const MONTH = /^\d{4}-(0[1-9]|1[0-2])$/;
 const NUMERIC = /^\d{14}$/;
 const VALID_CNPJ = /^[A-Z0-9]{12}\d{2}$/;
 
+/** A rejected CNPJ is a local input error, never a remote outage. */
+export class CnpjInputError extends Error {
+  constructor(message) { super(message); this.name = 'CnpjInputError'; }
+}
+
 /** Check digits for numeric CNPJ (RFB módulo 11); reject repetitive placeholders. */
 function validNumericCnpj(cnpj) {
   if (/^(\d)\1{13}$/.test(cnpj)) return false;
@@ -23,9 +28,9 @@ function validNumericCnpj(cnpj) {
 
 export function planAtomicRecord(manifest, date, value) {
   const cnpj = String(value ?? '').trim().replace(/[.\/\-\s]/g, '').toUpperCase();
-  if (!VALID_CNPJ.test(cnpj)) throw new Error('Informe um CNPJ completo de 14 caracteres');
-  if (!NUMERIC.test(cnpj)) throw new Error('CNPJ alfanumérico exige índice Protobuf 1.1 explícito');
-  if (!validNumericCnpj(cnpj)) throw new Error('CNPJ inválido: confira os dígitos verificadores');
+  if (!VALID_CNPJ.test(cnpj)) throw new CnpjInputError('Informe um CNPJ completo de 14 caracteres');
+  if (!NUMERIC.test(cnpj)) throw new CnpjInputError('CNPJ alfanumérico exige índice Protobuf 1.1 explícito');
+  if (!validNumericCnpj(cnpj)) throw new CnpjInputError('CNPJ inválido: confira os dígitos verificadores');
   if (!MONTH.test(date) || !Array.isArray(manifest?.snapshots)) {
     throw new Error('Competência inválida ou manifesto ausente');
   }
@@ -152,6 +157,9 @@ export async function fetchAtomicRecord(manifest, date, input, {
   for (const est of establishments) {
     const id = String(est.cnpj_ordem).padStart(4, '0') +
       String(est.cnpj_dv).padStart(2, '0');
+    if (!validNumericCnpj(target.root + id)) {
+      throw new Error('Dígitos verificadores de filial inválidos no Protobuf');
+    }
     if (seen.has(id)) throw new Error('Estabelecimento duplicado no agregado Protobuf');
     seen.add(id);
   }

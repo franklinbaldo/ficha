@@ -155,7 +155,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: estabelecimento-key-gate-${{ needs.resolve.outputs.month }}
-          path: etl/.cache/${{ needs.resolve.outputs.month }}/evidence/monthly-estabelecimento-key-gate.json
+          path: |
+            etl/.cache/${{ needs.resolve.outputs.month }}/evidence/monthly-estabelecimento-key-gate.json
+            etl/.cache/${{ needs.resolve.outputs.month }}/evidence/monthly-estabelecimento-source-bag.json
           if-no-files-found: warn
           retention-days: 90
 

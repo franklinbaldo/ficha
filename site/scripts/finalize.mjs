@@ -54,7 +54,8 @@ catch (err) { if (err?.code !== 'ENOENT') throw err; }
 await copyFile(new URL('../static/css/site.css', import.meta.url), cssURL);
 
 const jsFiles = ['boot.mjs', 'search-app.mjs', 'duckdb-runtime.mjs', 'query-core.mjs',
-  'dataset.mjs', 'catalog.mjs', 'record.mjs', 'pages.mjs'];
+  'dataset.mjs', 'catalog.mjs', 'record.mjs', 'pages.mjs',
+  'atomic-record.mjs', 'atomic-browser.mjs'];
 await mkdir(new URL('js/', root), { recursive: true });
 for (const file of jsFiles) {
   const target = new URL('js/' + file, root);
