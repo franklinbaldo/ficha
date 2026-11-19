@@ -23,7 +23,7 @@ try {
         if(request.url().includes('archive.org/download/')) visited.push(request.url());
       });
       await page.goto(base+'empresa/',{waitUntil:'domcontentloaded'});
-      await page.locator('#empresa-competencia option[value="2026-07"]').waitFor();
+      await page.locator('#empresa-competencia option[value="2026-07"]').waitFor({state:'attached'});
       await page.locator('#empresa-cnpj').fill(cnpj);
       await page.locator('#empresa-enviar').click();
       await page.waitForFunction(
@@ -52,10 +52,10 @@ try {
     let archiveGets = 0;
     page.on('request',r=>{if(r.url().includes('archive.org/'))archiveGets++;});
     await page.goto(base+'empresa/',{waitUntil:'domcontentloaded'});
-    await page.locator('#empresa-competencia option[value="2026-07"]').waitFor();
+    await page.locator('#empresa-competencia option[value="2026-07"]').waitFor({state:'attached'});
     await page.locator('#empresa-cnpj').fill('33000167000102');
     await page.locator('#empresa-enviar').click();
-    await page.locator('#empresa-estado').filter({hasText:/dígitos verificadores/}).waitFor();
+    await page.locator('#empresa-estado').filter({hasText:/dígitos verificadores/}).waitFor({state:'attached'});
     assert.equal(archiveGets,0,'DV inválido causou GET no IA');
     results.push({name:'DV inválido',archiveGets,status:'PASS'});
   }finally{await page.close();}
@@ -64,10 +64,10 @@ try {
   try {
     await missing.route('**/companies-33.zip/**',route=>route.fulfill({status:404,body:''}));
     await missing.goto(base+'empresa/',{waitUntil:'domcontentloaded'});
-    await missing.locator('#empresa-competencia option[value="2026-07"]').waitFor();
+    await missing.locator('#empresa-competencia option[value="2026-07"]').waitFor({state:'attached'});
     await missing.locator('#empresa-cnpj').fill('33000167000101');
     await missing.locator('#empresa-enviar').click();
-    await missing.locator('#empresa-estado').filter({hasText:/Consulta inconclusiva/}).waitFor();
+    await missing.locator('#empresa-estado').filter({hasText:/Consulta inconclusiva/}).waitFor({state:'attached'});
     const body=await missing.locator('#empresa-resultado').textContent();
     assert.match(body,/Arquivo indisponível/);
     assert.doesNotMatch(body,/Nenhum registro encontrado/);
