@@ -42,8 +42,14 @@ test('rejeita troca de URL entre slots, versão indevida e duplicata de competê
 });
 test('guarda 32 MiB configurada, Content-Length e corpo fragmentado',async()=>{
   assert.equal(MAX_COMPANY_BYTES,32*1024*1024);
-  await assert.rejects(readBoundedMember(new Response(Uint8Array.of(1),{
-    headers:{'content-length':'100'}}),3),/orçamento/);
+  let cancelCount=0, pullCount=0;
+  const oversize=new Response(new ReadableStream({
+    pull(){pullCount++;},
+    cancel(){cancelCount++;},
+  },{highWaterMark:0}),{headers:{'content-length':'100'}});
+  await assert.rejects(readBoundedMember(oversize,3),/orçamento/);
+  assert.equal(cancelCount,1,'rejeição antes da leitura deve cancelar o transporte');
+  assert.equal(pullCount,0,'rejeição do cabeçalho não deve ler chunks');
   const res = new Response(new ReadableStream({start(controller){
     controller.enqueue(Uint8Array.of(1,2));controller.enqueue(Uint8Array.of(3,4));controller.close();
   }}));
@@ -59,6 +65,7 @@ test('decoder canônico injetado recebe bytes, sem baixar ZIP ou Parquet',async(
   assert.deepEqual(urls,[[archive+'/33/000/167.pb','cors']]);
   assert.deepEqual(observed,[23,42]);
   assert.equal(result.data.cnpj,CNPJ);
+  assert.equal(result.state,'found');
   assert.equal(result.partial,true);
   assert.equal(result.data.razao_social,'EMPRESA TESTE');
   assert.equal(result.data.porte_empresa,null,'enum legado não é rótulo RFB confiável');
@@ -67,13 +74,22 @@ test('decoder canônico injetado recebe bytes, sem baixar ZIP ou Parquet',async(
   assert.equal(result.data.data_opcao_mei,'2026-07-11');
   assert.equal(result.data.municipio_codigo,7107,'não fabricar IBGE 7 dígitos');
 });
-test('404 de membro, estabelecimento ausente e HTTP 503 diferem',async()=>{
-  const missing=await lookup(manifest,DATE,CNPJ,{fetchImpl:mock(404)});
-  assert.equal(missing.data,null); assert.equal(missing.missingRoot,true);
+test('404 de membro ou ZIP é indisponibilidade, ausência só após PB íntegro, 503 é erro',async()=>{
+  let decoderCalled=false;
+  const unavailable=await lookup(manifest,DATE,CNPJ,{
+    fetchImpl:mock(404),decodeCompany:()=>{decoderCalled=true;return company;},
+  });
+  assert.equal(unavailable.data,null);
+  assert.equal(unavailable.state,'artifact-unavailable');
+  assert.equal(unavailable.httpStatus,404);
+  assert.equal(decoderCalled,false);
+  assert.equal(Object.hasOwn(unavailable,'missingRoot'),false,
+    'HTTP 404 não é prova de raiz ausente');
   const absent=await lookup(manifest,DATE,CNPJ,{decodeCompany:()=>({
     ...company,estabelecimentos:[{cnpj_ordem:2,cnpj_dv:1}],
   })});
-  assert.equal(absent.data,null);assert.equal(absent.missingRoot,false);
+  assert.equal(absent.data,null);
+  assert.equal(absent.state,'absent-in-snapshot');
   await assert.rejects(lookup(manifest,DATE,CNPJ,{fetchImpl:mock(503)}),/HTTP 503/);
 });
 test('erro de raiz, competência, duplicata e wire 1.1 não vira registro',async()=>{
