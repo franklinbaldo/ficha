@@ -80,7 +80,12 @@ resolve para São Paulo; **não inferir que seja código IBGE de sete dígitos**
    raízes numéricas; **não** enviar alfanumérico para shard v1.
 2. Selecionar competência existente e artifact `files.companies` v1
    com mapeamento `cnpj_base_prefix_2`. Resolver o shard declarado
-   da raiz e construir somente `XX/XXX/XXX.pb`; não transferir ZIP.
+   da raiz e conferir vínculo **shard ↔ URL ↔ competência** antes do fetch:
+   no v1 publicado, o URL deve ser exatamente
+   `https://archive.org/download/ficha-{date}/companies-{shard}.zip`.
+   O schema genérico atual valida unicidade, mas isso sozinho não
+   impede URLs de shards permutadas. Construir somente
+   `XX/XXX/XXX.pb`; não transferir ZIP.
    Snapshots legados `companies_zip` exigem seleção explícita da sua rota;
    ausência do artefato não pode virar fallback silencioso ao Parquet.
 3. Decodificar usando o schema gerado `proto/ficha/v1/company.proto`
@@ -99,7 +104,12 @@ resolve para São Paulo; **não inferir que seja código IBGE de sete dígitos**
    UF, município, CNAE, Simples/MEI). Resolver nomes com lookups
    **da mesma competência**. Respeitar campos ausentes e zero como
    dado ausente quando definido pelo schema; não fabricar descrições,
-   datas nem indicadores.
+   datas nem indicadores. Há perda de informação no produtor v1:
+   `_bool(None) → False` para Simples/MEI, de modo que um `false`
+   no Protobuf **não prova que a fonte informou Não**. Não declarar
+   negatividade definitiva sem contrato que preserve nulidade.
+   Também não converter CNPJ ausente de sócio PF/estrangeiro no
+   identificador fictício `00000000000000`.
 6. Estados distintos e acessíveis: `404` de membro, `503`/falha de
    rede, resposta inválida, wire incompatível, CNPJ completo sem
    estabelecimento e sucesso. Na observação real, uma raiz artificial
@@ -128,7 +138,9 @@ resolve para São Paulo; **não inferir que seja código IBGE de sete dígitos**
 - Reutilizar e testar o decoder canônico, em vez de copiar resultados
   de fixtures e confundir prova de transporte com UI.
 - Testes offline de seleção de estabelecimento, lookups e falhas,
-  incluindo CNPJ divergente, repetido, truncado, errado e alfa/v1.
+  incluindo CNPJ divergente, repetido, truncado, errado, alfa/v1,
+  mapeamento de URL de shard trocado, Simples/MEI desconhecido e
+  sócio PF sem CNPJ.
 - E2E no Chromium **sem flags** e origem Pages em 375×812 e 1440×900
   para casos numéricos e negativos (404 ≠ 503), além de URL compartilhável,
   A→B tardia e A→B→A com seleção alterada.
