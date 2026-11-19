@@ -340,6 +340,10 @@ def submit_outputs_fail_closed(
             verbose=True,
         )
         bad: list[str] = []
+        # O cliente IA retorna uma resposta por nome enviado. Um retorno
+        # vazio/parcial nao pode ser tratado como comprovacao de todos os PUTs.
+        if len(responses) != len(plan.upload):
+            bad.append(f"response count {len(responses)}/{len(plan.upload)}")
         for response in responses:
             status = getattr(response, "status_code", None)
             if status not in (200, 201):
