@@ -67,7 +67,7 @@ jobs:
           ssg build --config config.toml
           node scripts/finalize.mjs
           node scripts/bundle-protobuf.mjs
-          node -e "import('./dist/ficha/js/company-decoder.mjs').then(m=>{if(typeof m.decodeCompany!=='function')process.exit(1)})"
+          node scripts/check-protobuf-bundle.mjs
           # Published unbundled JavaScript modules must survive SSG byte-for-byte.
           for module in boot search-app duckdb-runtime query-core dataset catalog record pages atomic-record atomic-browser; do
             cmp "static/js/$module.mjs" "dist/ficha/js/$module.mjs"
