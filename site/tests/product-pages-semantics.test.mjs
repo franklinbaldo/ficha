@@ -1,0 +1,139 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { mountArchive, mountExplore, mountHistory,
+  renderArchiveSelection, renderExploreAssets } from '../static/js/pages.mjs';
+
+class FakeElement {
+  constructor(tag = 'div') {
+    this.tag = tag;
+    this.children = [];
+    this.textContent = '';
+    this.value = '';
+    this.disabled = false;
+    this.dataset = {};
+    this.style = {};
+    this.listeners = new Map();
+    this.attributes = {};
+  }
+  append(child) {
+    this.children.push(child);
+    if (this.tag === 'select' && this.children.length === 1) this.value = child.value;
+  }
+  replaceChildren() { this.children = []; this.textContent = ''; this.value = this.tag === 'select' ? '' : this.value; }
+  get options() { return this.children; }
+  addEventListener(name, listener) { this.listeners.set(name, listener); }
+  setAttribute(name, value) { this.attributes[name] = value; }
+}
+
+function fakeDocument(ids = []) {
+  const elements = new Map(ids.map(id => [id, new FakeElement(
+    id.includes('competencia') || id.endsWith('inicio') || id.endsWith('fim') || id.endsWith('serie') ? 'select' : 'div'
+  )]));
+  return {
+    createElement: tag => new FakeElement(tag),
+    getElementById: id => elements.get(id) ?? null,
+    at: id => elements.get(id),
+  };
+}
+
+function manifestWithShards() {
+  const snapshot = date => ({
+    date, row_counts: { cnpjs: 2 }, files: {
+      companies: { shards: [
+        { shard: '00', size: 10, url: 'https://archive.org/00' },
+        { shard: '01', size: 20, url: 'https://archive.org/01' },
+      ] },
+      cnpjs: { size: 30, url: 'https://archive.org/cnpjs' },
+    },
+  });
+  return { current: '2026-07', snapshots: [snapshot('2026-06'), snapshot('2026-07')] };
+}
+
+async function withPageUrl(fn) {
+  const oldLocation = globalThis.location;
+  const oldHistory = globalThis.history;
+  globalThis.location = new URL('https://franklinbaldo.github.io/ficha/historia/');
+  globalThis.history = { replaceState(_state, _title, next) { globalThis.location = new URL(String(next)); } };
+  try { return await fn(); }
+  finally {
+    if (oldLocation === undefined) delete globalThis.location;
+    else globalThis.location = oldLocation;
+    if (oldHistory === undefined) delete globalThis.history;
+    else globalThis.history = oldHistory;
+  }
+}
+
+test('acervo e exploração contam arquivos expandidos, não conjuntos com shards', async () => {
+  const data = manifestWithShards();
+  const doc = fakeDocument();
+  const acervo = new FakeElement();
+  const explorar = new FakeElement();
+  renderArchiveSelection(doc, acervo, data, '2026-07');
+  renderExploreAssets(doc, explorar, data, '2026-07');
+  assert.equal(acervo.children[1].children[0].textContent, '3 arquivos declarados');
+  assert.equal(explorar.children[0].textContent, '3 arquivos correspondentes · 2026-07');
+
+  await withPageUrl(async () => {
+    const archiveDoc = fakeDocument([
+      'acervo-competencia', 'acervo-resultado', 'acervo-estado', 'acervo-competencias',
+    ]);
+    await mountArchive(archiveDoc, { loadManifest: async () => data });
+    assert.equal(archiveDoc.at('acervo-competencias').children[0].children[1].textContent, '3 arquivos');
+
+    const exploreDoc = fakeDocument([
+      'explorar-competencia', 'explorar-filtro', 'explorar-estado', 'explorar-grafico',
+      'explorar-contador', 'explorar-serie', 'explorar-serie-grafico',
+    ]);
+    await mountExplore(exploreDoc, { loadManifest: async () => data });
+    assert.equal(exploreDoc.at('explorar-contador').textContent, '3 arquivos · 60 B declarados');
+  });
+});
+
+test('história rejeita competência inicial posterior antes de consultar ou alterar URL', async () => {
+  await withPageUrl(async () => {
+    const ids = ['historia-competencias', 'historia-inicio', 'historia-fim',
+      'historia-form', 'historia-cnpj', 'historia-enviar',
+      'historia-estado', 'historia-resultado'];
+    const doc = fakeDocument(ids);
+    let lookups = 0;
+    await mountHistory(doc, {
+      loadManifest: async () => manifestWithShards(),
+      lookup: async () => { lookups++; throw new Error('lookup não deve ocorrer'); },
+    });
+    doc.at('historia-cnpj').value = '00000000E08G12';
+    doc.at('historia-inicio').value = '2026-07';
+    doc.at('historia-fim').value = '2026-06';
+    const originalUrl = globalThis.location.href;
+    await doc.at('historia-form').listeners.get('submit')({ preventDefault() {} });
+    assert.equal(lookups, 0, 'comparação invertida não deve fazer I/O');
+    assert.equal(globalThis.location.href, originalUrl, 'não gravar deep link inválido');
+    assert.equal(doc.at('historia-estado').dataset.kind, 'error');
+    assert.match(doc.at('historia-estado').textContent, /competência inicial.*anterior.*final/i);
+    assert.equal(doc.at('historia-enviar').disabled, false);
+    assert.equal(doc.at('historia-resultado').children.length, 0);
+  });
+});
+
+test('história preserva ordem anterior → posterior numa comparação válida', async () => {
+  await withPageUrl(async () => {
+    const ids = ['historia-competencias', 'historia-inicio', 'historia-fim',
+      'historia-form', 'historia-cnpj', 'historia-enviar',
+      'historia-estado', 'historia-resultado'];
+    const doc = fakeDocument(ids);
+    const lookups = [];
+    await mountHistory(doc, {
+      loadManifest: async () => manifestWithShards(),
+      lookup: async (_manifest, date, cnpj) => {
+        lookups.push([date, cnpj]);
+        return { date, cnpj, data: null, source: 'https://archive.org/' + date };
+      },
+    });
+    doc.at('historia-cnpj').value = '00000000E08G12';
+    doc.at('historia-inicio').value = '2026-06';
+    doc.at('historia-fim').value = '2026-07';
+    await doc.at('historia-form').listeners.get('submit')({ preventDefault() {} });
+    assert.deepEqual(lookups.map(([date]) => date), ['2026-06', '2026-07']);
+    assert.equal(doc.at('historia-estado').dataset.kind, 'info');
+    assert.match(doc.at('historia-estado').textContent, /Comparação concluída/);
+  });
+});
