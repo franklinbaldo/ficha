@@ -466,7 +466,7 @@ def test_stream_raw_rejects_http_200_invalid_json_before_get_or_put(monkeypatch)
         upload_mod.stream_raw_zips_to_ia("2026-04", access_key="A", secret_key="S")
 
 
-@pytest.mark.parametrize("status", [401, 403, 429])
+@pytest.mark.parametrize("status", [401, 403, 429, 500, 502, 503, 504])
 def test_stream_raw_denies_metadata_errors_before_get_or_put(monkeypatch, status):
     """Denied or throttled metadata must not authorize RFB GET or IA PUT."""
 
@@ -494,7 +494,11 @@ def test_stream_raw_denies_metadata_errors_before_get_or_put(monkeypatch, status
     monkeypatch.setattr(upload_mod.upstream, "discover_token", forbid_network)
     monkeypatch.setattr(upload_mod, "_stream_one_zip_with_retry", forbid_network)
 
-    reason = "rate limited" if status == 429 else "access denied"
+    reason = (
+        "access denied"
+        if status in (401, 403)
+        else ("rate limited" if status == 429 else "unavailable")
+    )
     with pytest.raises(RuntimeError, match=f"{reason} HTTP {status}"):
         upload_mod.stream_raw_zips_to_ia("2026-04", access_key="A", secret_key="S")
 
@@ -523,8 +527,11 @@ def test_existing_raw_files_on_ia_returns_empty_on_404(monkeypatch):
     assert upload_mod._existing_raw_files_on_ia("ficha-2099-01") == set()
 
 
-def test_existing_raw_files_on_ia_returns_empty_on_network_error(monkeypatch):
-    """A flaky IA metadata API shouldn't block streaming -- fall back to "stream all"."""
+@pytest.mark.parametrize(
+    "error_type", [upload_mod.httpx.ConnectError, upload_mod.httpx.ReadTimeout]
+)
+def test_stream_raw_rejects_metadata_transport_failure(monkeypatch, error_type):
+    """Transport failure gives no evidence that an IA item is absent."""
 
     class _FakeClient:
         def __init__(self, *a, **kw):
@@ -537,10 +544,16 @@ def test_existing_raw_files_on_ia_returns_empty_on_network_error(monkeypatch):
             return False
 
         def get(self, url):
-            raise upload_mod.httpx.ConnectError("boom")
+            raise error_type("boom")
+
+    def forbid(*args, **kwargs):
+        pytest.fail("RFB GET or IA PUT after IA metadata transport failure")
 
     monkeypatch.setattr(upload_mod.httpx, "Client", _FakeClient)
-    assert upload_mod._existing_raw_files_on_ia("ficha-2026-04") == set()
+    monkeypatch.setattr(upload_mod.upstream, "discover_token", forbid)
+    monkeypatch.setattr(upload_mod, "_stream_one_zip_with_retry", forbid)
+    with pytest.raises(RuntimeError, match="IA raw metadata: fetch failed"):
+        upload_mod.stream_raw_zips_to_ia("2026-04", access_key="A", secret_key="S")
 
 
 def test_stream_raw_zips_to_ia_skips_existing(monkeypatch):
