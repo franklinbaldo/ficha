@@ -64,6 +64,33 @@ describe('OKF convenience views', () => {
     ).toThrow(/cnpj_socio/);
   });
 
+  it('documents generated OKF enum widening for three Socio public-v1 domains', () => {
+    // The generated shape uses unrestricted z.string() for these public enums.
+    // Keep this as evidence of incompatibility, not as an accepted wire contract.
+    const invalidPublicCodes = [
+      { tipo: '9' },
+      { tipo_descricao: 'desconhecido' },
+      { faixa_etaria: '10' },
+    ];
+    for (const changed of invalidPublicCodes) {
+      const row = { ...socioRow, ...changed };
+      expect(PublicV1SocioSchema.safeParse(row).success).toBe(false);
+      expect(validateOkfConvenienceViewRows('socios_de_raizes_ativas', [row])).toEqual([
+        row,
+      ]);
+    }
+  });
+
+  it('distinguishes public-v1 unknown-field stripping from strict OKF view rows', () => {
+    const rowWithExtra = { ...socioRow, future_column: 'new' };
+    const parsed = PublicV1SocioSchema.safeParse(rowWithExtra);
+    expect(parsed.success).toBe(true);
+    if (parsed.success) expect(parsed.data).not.toHaveProperty('future_column');
+    expect(() =>
+      validateOkfConvenienceViewRows('socios_de_raizes_ativas', [rowWithExtra])
+    ).toThrow(/returned invalid Socio row/);
+  });
+
   it('fails closed when a view returns a row outside its declared output shape', () => {
     expect(() => validateOkfConvenienceViewRows('socios_de_raizes_ativas', [{}])).toThrow(
       /returned invalid Socio row/
