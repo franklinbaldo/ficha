@@ -119,7 +119,7 @@ test('404 de membro ou ZIP é indisponibilidade, ausência só após PB íntegro
   assert.equal(Object.hasOwn(unavailable,'missingRoot'),false,
     'HTTP 404 não é prova de raiz ausente');
   const absent=await lookup(manifest,DATE,CNPJ,{decodeCompany:()=>({
-    ...company,estabelecimentos:[{cnpj_ordem:2,cnpj_dv:1}],
+    ...company,estabelecimentos:[{cnpj_ordem:2,cnpj_dv:92}],
   })});
   assert.equal(absent.data,null);
   assert.equal(absent.state,'absent-in-snapshot');
@@ -138,6 +138,7 @@ test('contagem de filiais incompatível ou não declarada nunca prova ausência'
   }
   const absent=structuredClone(company);
   absent.estabelecimentos[0].cnpj_ordem=2;
+  absent.estabelecimentos[0].cnpj_dv=92;
   assert.equal((await lookup(manifest,DATE,CNPJ,{decodeCompany:()=>absent})).state,
     'absent-in-snapshot');
 });
@@ -156,6 +157,23 @@ test('duplicata de outra filial invalida agregado antes de declarar ausência',a
   sound.estabelecimentos=[bad.estabelecimentos[0]];
   sound.qtd_estabelecimentos=1;
   assert.equal((await lookup(manifest,DATE,CNPJ,{decodeCompany:()=>sound})).state,
+    'absent-in-snapshot');
+});
+test('DV de toda filial é necessário para certificar presença ou ausência',async()=>{
+  const corrupt=structuredClone(company);
+  corrupt.estabelecimentos[0].cnpj_dv=99;
+  await assert.rejects(lookup(manifest,DATE,CNPJ,{decodeCompany:()=>corrupt}),
+    /Dígitos verificadores de filial inválidos/);
+  // Mesmo um CNPJ encontrado não torna uma raiz parcialmente corrompida íntegra.
+  corrupt.qtd_estabelecimentos=2;
+  corrupt.estabelecimentos=[structuredClone(company.estabelecimentos[0]),
+    {cnpj_ordem:2,cnpj_dv:99}];
+  await assert.rejects(lookup(manifest,DATE,CNPJ,{decodeCompany:()=>corrupt}),
+    /Dígitos verificadores de filial inválidos/);
+  const validOther=structuredClone(company);
+  validOther.estabelecimentos[0].cnpj_ordem=2;
+  validOther.estabelecimentos[0].cnpj_dv=92;
+  assert.equal((await lookup(manifest,DATE,CNPJ,{decodeCompany:()=>validOther})).state,
     'absent-in-snapshot');
 });
 test('erro de raiz, competência, duplicata e wire 1.1 não vira registro',async()=>{

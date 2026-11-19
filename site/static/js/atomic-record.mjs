@@ -152,6 +152,9 @@ export async function fetchAtomicRecord(manifest, date, input, {
   for (const est of establishments) {
     const id = String(est.cnpj_ordem).padStart(4, '0') +
       String(est.cnpj_dv).padStart(2, '0');
+    if (!validNumericCnpj(target.root + id)) {
+      throw new Error('Dígitos verificadores de filial inválidos no Protobuf');
+    }
     if (seen.has(id)) throw new Error('Estabelecimento duplicado no agregado Protobuf');
     seen.add(id);
   }
