@@ -56,16 +56,16 @@ test('botão Abrir ficha tem nome acessível explícito na fonte SSG', async () 
   assert.doesNotMatch(empresa, /aria-label="abrir-ficha"/);
 });
 
-test('páginas de ficha e história não prometem pesquisa remota já funcional', async () => {
+test('páginas de ficha e história delimitam experimento Protobuf e CORS legado', async () => {
   const empresa = await read('../content/empresa.md');
   const historia = await read('../content/historia.md');
   assert.match(empresa, /consulta remota ainda é experimental/i);
   assert.match(empresa, /^description: .*experimental\./m);
   assert.match(empresa, /erro de leitura não significa que a empresa esteja ausente/i);
   assert.match(empresa, /Parquet sujeito a CORS/);
-  assert.match(historia, /leitura remota ainda experimental/i);
-  assert.match(historia, /^description: .*experimental\./m);
-  assert.match(historia, /Isso não demonstra ausência de registros/);
+  assert.match(historia, /comparação Protobuf numérica é experimental/i);
+  assert.match(historia, /^description: .*experimental.*\.$/m);
+  assert.match(historia, /falhas de leitura não demonstram ausência de registros/i);
   assert.match(historia, /diferenças entre arquivos não determinam a data exata/);
   for (const page of [empresa, historia]) {
     assert.match(page, /href="\/ficha\/acervo\/"/);
