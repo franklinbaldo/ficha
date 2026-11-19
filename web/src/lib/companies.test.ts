@@ -182,7 +182,7 @@ describe('atomic member transfer budget', () => {
   it('accepts an exact-size streamed protobuf and preserves its bytes', async () => {
     const original = encodeFixture(12345678, 'FICHA COM LIMITE');
     const received = await readAtomicMember(bytesResponse(original), original.byteLength);
-    expect(received).toEqual(original);
+    expect(Array.from(received)).toEqual(Array.from(original));
   });
 
   it('rejects a declared oversized member before opening its body', async () => {
