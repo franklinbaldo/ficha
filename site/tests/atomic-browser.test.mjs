@@ -109,9 +109,20 @@ test('404 de lookup, competência trocada e tamanho divergente são erro, não a
   await assert.rejects(fetchSnapshotLookups(manifest,date,{
     fetchImpl:async()=>new Response(null,{status:404}),cacheMap:new Map(),
   }),/Lookup indisponível/);
+  // Wrong bytes of the same length must fail on digest before date parsing.
   await assert.rejects(fetchSnapshotLookups(manifest,date,{
     fetchImpl:async()=>new Response(payload),cacheMap:new Map(),
-  }),/tamanho divergente|incompatível/);
+  }),/SHA-256 do lookup difere/);
+  // Once the digest is bound to these bytes, the wrong month must fail too.
+  const wrongMonthManifest=structuredClone(manifest);
+  wrongMonthManifest.snapshots[0].files.lookups.sha256=sha256(payload);
+  await assert.rejects(fetchSnapshotLookups(wrongMonthManifest,date,{
+    fetchImpl:async()=>new Response(payload),cacheMap:new Map(),
+  }),/incompatível/);
+  // Size is an independent gate, not merely a side effect of SHA mismatch.
+  await assert.rejects(fetchSnapshotLookups(manifest,date,{
+    fetchImpl:async()=>new Response(payload.slice(0,-1)),cacheMap:new Map(),
+  }),/tamanho divergente/);
   const equalSize=new TextEncoder().encode(JSON.stringify(
     {...lookups,snapshot_date:'2026-08'}));
   const edited=structuredClone(manifest);

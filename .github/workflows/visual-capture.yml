@@ -7,6 +7,8 @@ on:
       - 'web/public/manifest.json'
       - 'web/scripts/check-accessibility.mjs'
       - 'web/scripts/check-greenfield.mjs'
+      - 'web/scripts/check-atomic-ssg.mjs'
+      - 'web/src/generated/company.pb.js'
       - 'web/package.json'
       - 'web/bun.lock'
       - '.github/workflows/visual-capture.yml'

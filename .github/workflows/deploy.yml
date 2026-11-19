@@ -6,11 +6,17 @@ on:
     paths:
       - 'site/**'
       - 'web/public/manifest.json'
+      - 'web/src/generated/company.pb.js'
+      - 'web/package.json'
+      - 'web/bun.lock'
       - '.github/workflows/deploy.yml'
   pull_request:
     paths:
       - 'site/**'
       - 'web/public/manifest.json'
+      - 'web/src/generated/company.pb.js'
+      - 'web/package.json'
+      - 'web/bun.lock'
       - '.github/workflows/deploy.yml'
   workflow_dispatch:
 
