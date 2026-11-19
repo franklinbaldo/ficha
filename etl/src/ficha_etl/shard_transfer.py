@@ -13,9 +13,12 @@ que o nome ainda não existe. A verificação é estritamente read-only e usa
 from __future__ import annotations
 
 import enum
-from collections.abc import Mapping
+import hashlib
+import tempfile
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from typing import BinaryIO
 
 from .shard_publish import (
     DirectArtifactFetch,
@@ -234,7 +237,7 @@ def submit_prepared_shard(
     pinned_inputs: Mapping[str, str],
     fetch_metadata: MetadataFetch,
     fetch_meta: RemoteMetaFetch,
-    upload: ShardUpload,
+    upload: Callable[[str, BinaryIO], None],
     fetch_direct: DirectArtifactFetch | None = None,
 ) -> ShardTransferResult:
     """Submete exatamente os bytes já registrados no recibo de produção.
@@ -293,7 +296,27 @@ def submit_prepared_shard(
         _require_same_bytes(direct_before_put.name, direct_before_put, prepared)
         return _result_from_verified(prefix, expected_id, direct_before_put)
 
-    upload(prepared.name, prepared.path)
+    # Copy into an anonymous, seekable file before letting the remote client read.
+    # Reopening the original pathname after a hash check is a TOCTOU race: a
+    # replacement inode or a same-size rewrite could change the bytes sent.
+    # Streaming the original opened inode would still permit in-place rewrites.
+    # This snapshot is bounded in RAM (on-disk for large shards) and must stay
+    # open throughout the uploader's request and response iteration.
+    with tempfile.TemporaryFile(mode="w+b") as snapshot:
+        sha1 = hashlib.sha1(usedforsecurity=False)
+        size = 0
+        with prepared.path.open("rb") as source:
+            for chunk in iter(lambda: source.read(1024 * 1024), b""):
+                snapshot.write(chunk)
+                size += len(chunk)
+                sha1.update(chunk)
+        if size != prepared.size or sha1.hexdigest() != prepared.sha1:
+            raise ShardPublishError(
+                f"{prepared.name}: bytes locais mudaram durante snapshot anterior ao PUT: "
+                f"size={size}/{prepared.size} sha1={sha1.hexdigest()}/{prepared.sha1}"
+            )
+        snapshot.seek(0)
+        upload(prepared.name, snapshot)
     return ShardTransferResult(
         prefix=prefix,
         name=prepared.name,
