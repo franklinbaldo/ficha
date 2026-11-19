@@ -145,6 +145,16 @@ export async function fetchAtomicRecord(manifest, date, input, {
       company.socios?.some(socio => socio?.cnpj_socio_text)) {
     throw new Error('Wire textual 1.1 indevido no índice numérico v1');
   }
+  // A count matching list length is not sufficient if two rows have the
+  // same establishment ID. Reject an inconsistent root before claiming absence
+  // of another CNPJ inside it.
+  const seen = new Set();
+  for (const est of establishments) {
+    const id = String(est.cnpj_ordem).padStart(4, '0') +
+      String(est.cnpj_dv).padStart(2, '0');
+    if (seen.has(id)) throw new Error('Estabelecimento duplicado no agregado Protobuf');
+    seen.add(id);
+  }
   const exact = establishments.filter(est => est &&
     target.root + String(est.cnpj_ordem ?? 0).padStart(4, '0') +
     String(est.cnpj_dv ?? 0).padStart(2, '0') === target.cnpj);
