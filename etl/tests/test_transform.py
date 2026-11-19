@@ -757,8 +757,8 @@ class _ZipDirFetcher:
 def _build_full_fixture_zips(zips_dir: Path) -> None:
     """Cria os 37 ZIPs canônicos com fixtures realistas.
 
-    Internal filename é único por ZIP (spec.name sem .zip + sufixo) pra que
-    extrações múltiplas pra mesma pasta não se sobrescrevam.
+    O nome interno deriva do nome canônico para identificar as fixtures.
+    A extração não depende de nomes internos distintos entre ZIPs.
     """
     zips_dir.mkdir(parents=True, exist_ok=True)
 
@@ -784,7 +784,7 @@ def _build_full_fixture_zips(zips_dir: Path) -> None:
         if spec.kind in seen_kinds:
             rows = []
         seen_kinds.add(spec.kind)
-        # Internal filename único por ZIP — evita colisão na extração.
+        # Filename identificável por fixture; colisões cross-ZIP têm teste próprio.
         inside = f"{spec.name.removesuffix('.zip')}.CSV"
         _zip_with_csv(zp, inside, rows)
 
@@ -821,6 +821,56 @@ def test_extract_all_rejects_empty_zip(tmp_path, all_zips_dir):
     chain = fetcher.ChainedFetcher(fetchers=[_ZipDirFetcher(all_zips_dir)])
     with pytest.raises(RuntimeError, match="contained no files"):
         transform.extract_all("2026-04", chain, tmp_path / "extracted")
+
+
+def test_extract_all_preserves_homonymous_members_from_two_parts(tmp_path, all_zips_dir):
+    """Different ZIPs can legitimately contain the same internal CSV name."""
+    expected = {
+        "Estabelecimentos0.zip": b"part-0-only\n",
+        "Estabelecimentos1.zip": b"part-1-only\n",
+    }
+    for zip_name, payload in expected.items():
+        with zipfile.ZipFile(all_zips_dir / zip_name, "w") as zf:
+            zf.writestr("shared.csv", payload)
+
+    chain = fetcher.ChainedFetcher(fetchers=[_ZipDirFetcher(all_zips_dir)])
+    extracted = transform.extract_all("2026-04", chain, tmp_path / "extracted")
+    paths = {}
+    for entry in extracted:
+        if entry.zip_name in expected:
+            paths[entry.zip_name] = entry.csv_path
+
+    assert set(paths) == set(expected)
+    first = paths["Estabelecimentos0.zip"].resolve()
+    second = paths["Estabelecimentos1.zip"].resolve()
+    assert first != second
+    for zip_name, payload in expected.items():
+        assert paths[zip_name].read_bytes() == payload
+
+
+def test_extract_all_homonymous_members_remain_distinct_in_duckdb(tmp_path, all_zips_dir):
+    """Two ZIP members with one internal name must remain two source rows."""
+    for zip_name, row in (
+        ("Estabelecimentos0.zip", ESTABELECIMENTO_ROWS[0]),
+        ("Estabelecimentos1.zip", ESTABELECIMENTO_ROWS[1]),
+    ):
+        _zip_with_csv(all_zips_dir / zip_name, "shared.csv", [row])
+
+    chain = fetcher.ChainedFetcher(fetchers=[_ZipDirFetcher(all_zips_dir)])
+    extracted = transform.extract_all("2026-04", chain, tmp_path / "extracted")
+
+    con = duckdb.connect()
+    try:
+        transform.load_main_tables_into_duckdb(con, extracted)
+        rows = con.execute(
+            "SELECT cnpj_basico, cnpj_ordem FROM estabelecimento ORDER BY cnpj_basico, cnpj_ordem"
+        ).fetchall()
+        assert rows == [
+            (ESTABELECIMENTO_ROWS[0][0], ESTABELECIMENTO_ROWS[0][1]),
+            (ESTABELECIMENTO_ROWS[1][0], ESTABELECIMENTO_ROWS[1][1]),
+        ]
+    finally:
+        con.close()
 
 
 # -----------------------------------------------------------------------------
