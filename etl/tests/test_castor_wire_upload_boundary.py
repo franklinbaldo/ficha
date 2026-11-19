@@ -260,16 +260,10 @@ def test_monthly_legacy_wire_transforms_before_raw_upload_and_descriptor(
     def write_last(*_args: object, **_kwargs: object) -> None:
         calls.append("write")
 
-    monkeypatch.setattr(
-        monthly_sharded.transform, "transform_snapshot", transform_first
-    )
+    monkeypatch.setattr(monthly_sharded.transform, "transform_snapshot", transform_first)
     monkeypatch.setattr(monthly_sharded, "_require_secret", fake_secret)
-    monkeypatch.setattr(
-        monthly_sharded.upload, "stream_raw_zips_to_ia", upload_after_transform
-    )
-    monkeypatch.setattr(
-        monthly_sharded, "build_production_descriptor", build_after_upload
-    )
+    monkeypatch.setattr(monthly_sharded.upload, "stream_raw_zips_to_ia", upload_after_transform)
+    monkeypatch.setattr(monthly_sharded, "build_production_descriptor", build_after_upload)
     monkeypatch.setattr(monthly_sharded, "write_production_descriptor", write_last)
 
     monthly_sharded.command_produce(args)
