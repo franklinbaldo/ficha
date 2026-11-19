@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { ficha } from '../generated/company.pb.js';
-import { cnpjpath, companiesZipUrl, companyArchiveUrl, fetchCompany } from './companies';
+import { cnpjpath, companiesZipUrl, companyArchiveUrl, fetchCompany,
+  MAX_ATOMIC_COMPANY_BYTES, readAtomicMember } from './companies';
 
 describe('cnpjpath', () => {
   it('zero-pads to 8 digits and slices to XX/XXX/XXX.pb', () => {
@@ -173,5 +174,66 @@ describe('fetchCompany', () => {
     // object — otherwise comparisons and JSON shaping break for callers.
     expect(typeof socio!.cnpj_socio).toBe('number');
     expect(socio!.cnpj_socio).toBe(cnpjSocio);
+  });
+});
+
+
+describe('atomic member transfer budget', () => {
+  it('accepts an exact-size streamed protobuf and preserves its bytes', async () => {
+    const original = encodeFixture(12345678, 'FICHA COM LIMITE');
+    const received = await readAtomicMember(bytesResponse(original), original.byteLength);
+    expect(received).toEqual(original);
+  });
+
+  it('rejects a declared oversized member before opening its body', async () => {
+    let opened = false;
+    const res = {
+      headers: new Headers({ 'content-length': '65' }),
+      body: { getReader: () => { opened = true; throw new Error('must not read'); } },
+    } as unknown as Response;
+    await expect(readAtomicMember(res, 64)).rejects.toThrow(/excede o limite/);
+    expect(opened).toBe(false);
+  });
+
+  it('rejects chunked oversize without Content-Length and cancels the stream', async () => {
+    let cancelled = false;
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array(40));
+        controller.enqueue(new Uint8Array(40));
+      },
+      cancel() { cancelled = true; },
+    });
+    await expect(readAtomicMember(new Response(stream), 64))
+      .rejects.toThrow(/excede o limite/);
+    expect(cancelled).toBe(true);
+  });
+
+  it('rejects oversized legacy test doubles without a stream', async () => {
+    const res = {
+      headers: new Headers(),
+      body: null,
+      arrayBuffer: async () => new ArrayBuffer(65),
+    } as unknown as Response;
+    await expect(readAtomicMember(res, 64)).rejects.toThrow(/excede o limite/);
+  });
+
+  it('rejects invalid budgets instead of disabling the guard', async () => {
+    for (const invalid of [0, -1, 1.5, NaN, Infinity]) {
+      await expect(readAtomicMember(bytesResponse(new Uint8Array(1)), invalid))
+        .rejects.toThrow(/limite de bytes inválido/);
+    }
+  });
+
+  it('never decodes a huge advertised PB even if the server offers a short body', async () => {
+    const member = encodeFixture(12345678, 'INSPECT');
+    const encoded = new ArrayBuffer(member.byteLength);
+    new Uint8Array(encoded).set(member);
+    const response = new Response(encoded, {
+      headers: { 'content-length': String(MAX_ATOMIC_COMPANY_BYTES + 1) },
+    });
+    const fetchImpl = (async () => response) as unknown as FetchLike;
+    await expect(fetchCompany(12345678, { identifier: 'ficha-2026-07', fetchImpl }))
+      .rejects.toThrow(/excede o limite/);
   });
 });
