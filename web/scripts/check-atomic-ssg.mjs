@@ -133,6 +133,54 @@ try {
       'resposta antiga não pode restaurar o deep link após edição');
     results.push({name:'Resposta obsoleta A→B→A',status:'PASS'});
   } finally {release?.(); await stale.close();}
+  // History: the same real v1 record can be compared across two declared PB
+  // snapshots without invoking Parquet, DuckDB-WASM or any monolithic ZIP.
+  const history = await browser.newPage({serviceWorkers:'block'});
+  try {
+    const visited=[];
+    history.on('request',r=>{
+      if(r.url().includes('archive.org/download/'))visited.push(r.url());
+    });
+    await history.goto(base+'historia/',{waitUntil:'domcontentloaded'});
+    await history.locator('#historia-inicio option[value="2026-06"]').waitFor({state:'attached'});
+    assert.equal(await history.locator('#historia-inicio').inputValue(),'2026-06',
+      'default comparison starts at a PB-enabled month');
+    await history.locator('#historia-cnpj').fill('33000167000101');
+    await history.locator('#historia-fim').selectOption('2026-07');
+    await history.locator('#historia-enviar').click();
+    await history.locator('#historia-estado')
+      .filter({hasText:/Comparação concluída|Comparação indisponível/})
+      .waitFor({timeout:MAX_MS});
+    const status=await history.locator('#historia-estado').textContent();
+    assert.match(status,/Comparação concluída/,status);
+    const text=await history.locator('#historia-resultado').textContent();
+    assert.match(text,/PETROLEO BRASILEIRO/i);
+    assert.match(text,/2026-06.*2026-07/s);
+    assert.match(text,/porte histórico não pode ser determinado/);
+    assert.ok(visited.filter(url=>url.endsWith('.pb')).length >= 2,
+      'membros Protobuf das duas competências ausentes');
+    assert.ok(!visited.some(url=>/\.parquet|\.wasm/.test(url)),
+      'a comparação numérica não deve invocar Parquet ou WASM');
+    results.push({name:'História PB real 2026-06/07',requests:visited.length,status:'PASS'});
+  } finally {await history.close();}
+  const missingHistory = await browser.newPage({serviceWorkers:'block'});
+  try {
+    let members=0;
+    await missingHistory.route('**/companies-33.zip/**',route=>{
+      members++;return route.fulfill({status:404,body:''});
+    });
+    await missingHistory.goto(base+'historia/',{waitUntil:'domcontentloaded'});
+    await missingHistory.locator('#historia-inicio option[value="2026-06"]')
+      .waitFor({state:'attached'});
+    await missingHistory.locator('#historia-cnpj').fill('33000167000101');
+    await missingHistory.locator('#historia-enviar').click();
+    await missingHistory.locator('#historia-estado')
+      .filter({hasText:/inconclusiva/i}).waitFor({timeout:MAX_MS});
+    assert.equal(members,1,'404 inconclusivo não deve gerar GET do segundo snapshot');
+    assert.doesNotMatch(await missingHistory.locator('#historia-estado').textContent(),
+      /Comparação concluída/);
+    results.push({name:'História PB 404 inconclusivo',members,status:'PASS'});
+  } finally {await missingHistory.close();}
 }finally {
   await browser.close();
   await writeFile(out+'/atomic-ssg-browser-report.json',
