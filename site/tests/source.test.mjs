@@ -74,3 +74,14 @@ test('páginas de ficha e história não prometem pesquisa remota já funcional'
     assert.match(page, /https:\/\/github\.com\/franklinbaldo\/ficha\/issues\/208/);
   }
 });
+
+
+test('História Protobuf publicada: aviso da ficha e teclado móvel não induzem a rota Parquet', async () => {
+  const empresa = await read('../content/empresa.md');
+  const historia = await read('../content/historia.md');
+  assert.match(empresa, /comparação de CNPJ numérico nas competências Protobuf v1 usa registros menores/);
+  assert.match(empresa, /A busca por nome ainda usa Parquet sujeito a CORS/);
+  assert.doesNotMatch(empresa, /a comparação histórica ainda dependem do Parquet/i);
+  assert.match(historia, /<label for="historia-cnpj">CNPJ numérico completo \(14 dígitos\)<\/label>/);
+  assert.match(historia, /<input\b[^>]*id="historia-cnpj"[^>]*\binputmode="numeric"[^>]*>/);
+});

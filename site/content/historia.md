@@ -19,7 +19,7 @@ layout: product
   <ol id="historia-competencias" class="timeline-list" aria-label="Snapshots publicados"></ol>
   <h2>Comparar duas observações</h2>
   <form id="historia-form" class="query-form">
-    <div class="form-field"><label for="historia-cnpj">CNPJ completo</label><input id="historia-cnpj" name="cnpj" type="search" required maxlength="24" placeholder="Digite o CNPJ"></div>
+    <div class="form-field"><label for="historia-cnpj">CNPJ numérico completo (14 dígitos)</label><input id="historia-cnpj" name="cnpj" type="search" inputmode="numeric" required maxlength="24" placeholder="00.000.000/0001-00"></div>
     <div class="form-field"><label for="historia-inicio">Competência inicial</label><select id="historia-inicio" required></select></div>
     <div class="form-field"><label for="historia-fim">Competência final</label><select id="historia-fim" required></select></div>
     <button id="historia-enviar" class="button-primary" type="submit">Comparar</button>
