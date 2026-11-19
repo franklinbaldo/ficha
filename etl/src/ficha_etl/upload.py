@@ -231,35 +231,71 @@ def _stream_one_zip_with_retry(
 _IA_METADATA_URL = "https://archive.org/metadata/{identifier}"
 
 
-def _existing_raw_files_on_ia(identifier: str) -> set[str]:
-    """Returns the set of `raw/*` file names already on ia:{identifier}.
+def _catalog_raw_size(value: object, name: str) -> int:
+    """Parse IA catalog byte sizes without bool/float/Unicode coercion.
 
-    Empty set when the item doesn't exist yet, or when the metadata API
-    fails (502/timeout) -- in that case we fall back to streaming
-    everything, which is correct (PUTs are idempotent overwrites at IA).
+    This is a catalog observation, NOT an authentication of the RFB bytes.
+    """
+    if type(value) is int:
+        size = value
+    elif isinstance(value, str) and value.isascii() and value.isdecimal():
+        try:
+            size = int(value)
+        except ValueError as exc:
+            raise RuntimeError(f"IA raw metadata: invalid size for {name}") from exc
+    else:
+        raise RuntimeError(f"IA raw metadata: invalid size for {name}")
+    if size < 0:
+        raise RuntimeError(f"IA raw metadata: negative size for {name}")
+    return size
+
+
+def _existing_raw_files_on_ia(identifier: str) -> set[str]:
+    """Return raw names with unambiguous positive sizes in the IA catalog.
+
+    Name and size are NOT proof that the ZIP equals the RFB source. Reject
+    malformed or duplicate entries before starting any upstream GET / IA PUT.
+    Only a confirmed 404 permits treating the IA item as absent.
     """
     url = _IA_METADATA_URL.format(identifier=identifier)
     try:
         with httpx.Client(timeout=30.0) as client:
             resp = client.get(url)
-        if resp.status_code != 200:
-            log.info(
-                "ia:%s metadata returned HTTP %d -- assuming new item", identifier, resp.status_code
+        if resp.status_code in (401, 403):
+            raise RuntimeError(
+                f"IA raw metadata: access denied HTTP {resp.status_code} for {identifier}"
             )
+        if resp.status_code == 429:
+            raise RuntimeError(f"IA raw metadata: rate limited HTTP 429 for {identifier}")
+        if resp.status_code == 404:
             return set()
-        data = resp.json()
-    except (httpx.HTTPError, ValueError) as exc:
-        log.warning("ia:%s metadata fetch failed (%s) -- will stream all", identifier, exc)
-        return set()
+        if resp.status_code != 200:
+            raise RuntimeError(
+                f"IA raw metadata: unavailable HTTP {resp.status_code} for {identifier}"
+            )
+    except httpx.HTTPError as exc:
+        raise RuntimeError(f"IA raw metadata: fetch failed for {identifier}") from exc
 
-    files = data.get("files") or []
-    raw = {
-        f["name"]
-        for f in files
-        if isinstance(f, dict)
-        and f.get("name", "").startswith("raw/")
-        and int(f.get("size", 0) or 0) > 0
-    }
+    try:
+        data = resp.json()
+    except ValueError as exc:
+        raise RuntimeError(f"IA raw metadata: invalid JSON for {identifier}") from exc
+
+    if not isinstance(data, dict) or not isinstance(data.get("files"), list):
+        raise RuntimeError(f"IA raw metadata: invalid file catalog for {identifier}")
+    raw: set[str] = set()
+    seen: set[str] = set()
+    for entry in data["files"]:
+        if not isinstance(entry, dict) or not isinstance(entry.get("name"), str):
+            raise RuntimeError(f"IA raw metadata: malformed file entry for {identifier}")
+        name = entry["name"]
+        if not name.startswith("raw/"):
+            continue
+        if name in seen:
+            raise RuntimeError(f"IA raw metadata: duplicate file entry {name}")
+        seen.add(name)
+        if _catalog_raw_size(entry.get("size"), name) > 0:
+            raw.add(name)
     return raw
 
 

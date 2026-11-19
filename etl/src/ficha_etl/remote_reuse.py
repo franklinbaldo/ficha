@@ -271,8 +271,26 @@ def httpx_json_fetch(url: str) -> object:
         return response.json()
 
 
-def _files_by_name(metadata: dict) -> dict[str, dict]:
-    return {entry["name"]: entry for entry in metadata.get("files", []) if "name" in entry}
+def _files_by_name(metadata: object) -> dict[str, dict] | None:
+    """Indexa outputs esperados; qualquer ambiguidade invalida o catálogo."""
+    if not isinstance(metadata, dict):
+        return None
+    files = metadata.get("files")
+    if not isinstance(files, list):
+        return None
+
+    entries: dict[str, dict] = {}
+    for entry in files:
+        if not isinstance(entry, dict):
+            return None
+        name = entry.get("name")
+        if not isinstance(name, str) or not name:
+            return None
+        if name in REQUIRED_COLUMNS:
+            if name in entries:
+                return None
+            entries[name] = entry
+    return entries
 
 
 def _classify_lookups_json(
@@ -318,10 +336,16 @@ def _classify_one(
         return ReuseVerdict(name, ReuseState.ABSENT, "ausente no item remoto")
 
     raw_size = entry.get("size")
-    try:
-        size = int(raw_size)
-    except (TypeError, ValueError):
-        # Entrada presente mas sem tamanho utilizável: ambíguo, não ausente.
+    if type(raw_size) is int:
+        size = raw_size
+    elif isinstance(raw_size, str) and raw_size and raw_size.isascii() and raw_size.isdecimal():
+        try:
+            size = int(raw_size)
+        except ValueError:  # sequência decimal longa demais para int()
+            size = None
+    else:
+        size = None
+    if size is None:
         return ReuseVerdict(name, ReuseState.INVALID, f"size ilegível no metadata: {raw_size!r}")
 
     if size <= 0:
@@ -386,6 +410,11 @@ def classify_outputs(
 
     base_url = item_root(month)
     entries = _files_by_name(metadata)
+    if entries is None:
+        return {
+            name: ReuseVerdict(name, ReuseState.INVALID, "catálogo IA malformado ou ambíguo")
+            for name in REQUIRED_COLUMNS
+        }
     return {
         name: _classify_one(
             name, entries.get(name), base_url=base_url, probe=probe, json_fetch=json_fetch
