@@ -39,7 +39,8 @@ export async function fetchSnapshotLookups(manifest, date, {
       let value;
       try { value = JSON.parse(new TextDecoder('utf-8', {fatal:true}).decode(bytes)); }
       catch { throw new Error('Lookup JSON inválido'); }
-      if (value?.snapshot_date !== date || !value.municipios ||
+      if (value?.schema_version !== '1.0.0' ||
+          value?.snapshot_date !== date || !value.municipios ||
           !value.cnaes || typeof value.municipios !== 'object' ||
           typeof value.cnaes !== 'object' || Array.isArray(value.municipios) ||
           Array.isArray(value.cnaes)) {
