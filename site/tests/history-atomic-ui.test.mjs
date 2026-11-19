@@ -114,7 +114,7 @@ test('dois registros encontrados permitem comparação explícita e fontes disti
     assert.match(doc.at('historia-estado').textContent,/Comparação concluída/);
     assert.match(shown,/EMPRESA 2026-06/);
     assert.match(shown,/EMPRESA 2026-07/);
-    assert.match(shown,/não permite determinar o porte/);
+    assert.match(shown,/porte histórico não pode ser determinado/);
     assert.ok(new URLSearchParams(globalThis.location.search).has('cnpj'));
   });
 });
