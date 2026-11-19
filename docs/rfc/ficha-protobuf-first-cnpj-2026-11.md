@@ -210,6 +210,44 @@ em `aria-live` sem ressuscitar resultado anterior A→B→A.
 Histórico de duas fotografias não identifica data exata
 da mudança. Este gate pertence à UI, não autoriza ETL.
 
+## Gate R91: DV e completude condicionada antes de declarar ausência
+
+A [contraprova offline R91](https://github.com/franklinbaldo/polvo/blob/main/scripts/ficha_atomic_absence_gate_r91.mjs)
+executou sobre o **blob exato** `a3765909` do leitor proposto na
+[PR #362](https://github.com/franklinbaldo/ficha/pull/362), HEAD
+`5707ac7c`. Um CNPJ com DV alterado (`33000167000102`)
+passou em `planAtomicRecord`, provocou GET e retornou
+`absent-in-snapshot`; a entrada correta `33000167000101`
+foi encontrada. Um PB sintético com
+`qtd_estabelecimentos=3` mas apenas um filho diferente,
+e outro sem o agregado de contagem, **também** retornaram
+`absent-in-snapshot`. O script dá **RED (`--strict` rc=1)**
+para os três estados de ausência indevida; é caracterização
+offline com decoder/fetch injetados, não incidência demonstrada no IA.
+
+Controle empírico adicional, somente leitura, no IA `2026-07`:
+**5 membros PB efetivos** das raízes `00000000`, `33000167`,
+`60746948`, `18236120` e `00000006` apresentaram,
+cada um, `qtd_estabelecimentos == estabelecimentos.length`
+(7.902, 661, 9.999, 10 e 1, total **18.573**).
+Todos os 18.573 identificadores completos recombinados
+tiveram DV matematicamente válido e eram distintos **dentro
+de suas respectivas raízes**. É observação dirigida de cinco
+arquivos, **não** atestado de completude de todas as raízes,
+nem prova de que agregado e lista venham de fontes independentes.
+
+Antes de anunciar ausência de filial na competência, o leitor deve:
+validar DV numericamente **antes de qualquer I/O**;
+distinguir entrada inválida de filial ausente; verificar raiz,
+competência e versão do PB; exigir um agregado de estabelecimentos
+presente e coerente com a lista, além de unicidade da identidade
+completa. Se contagem estiver ausente, divergente ou inconsistente,
+retornar **consulta inconclusiva / ficha incompleta**, nunca ausência.
+Mesmo quando a contagem bate, `absent-in-snapshot` continua
+sendo conclusão **condicional aos bytes publicados**, não certidão
+de inexistência cadastral na Receita. Os casos RED precisam virar
+testes de regressão na branch da 🦊 #362, sem PR concorrente.
+
 ## Divisão de consultas
 
 - **CNPJ exato:** Protobuf-first e lookup, sem Parquet nem relay.
