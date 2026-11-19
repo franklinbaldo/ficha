@@ -225,6 +225,41 @@ describe('OKF convenience views', () => {
     expect(okfParquetRowSchemas.Raiz.safeParse(raizWithNull).success).toBe(false);
   });
 
+  it('witnesses all 28 public-v1 nullable gaps on complete synthetic rows', () => {
+    // Intentionally independent, literal witnesses: do not derive this list
+    // from either Zod shape or the generator that this test checks.
+    const cnpjGaps = [
+      'ente_federativo_responsavel', 'nome_fantasia', 'tipo_logradouro',
+      'logradouro', 'numero', 'complemento', 'bairro', 'cep',
+      'pais_codigo', 'pais_nome', 'nome_cidade_exterior', 'ddd_1',
+      'telefone_1', 'ddd_2', 'telefone_2', 'ddd_fax', 'fax',
+      'correio_eletronico', 'situacao_especial', 'opcao_simples',
+      'data_opcao_simples', 'opcao_mei',
+    ] as const;
+    const raizGaps = ['ente_federativo_responsavel'] as const;
+    const socioGaps = [
+      'cnpj_socio', 'pais_codigo', 'pais_nome',
+      'representante_legal_qualificacao_descricao', 'faixa_etaria',
+    ] as const;
+
+    expect([cnpjGaps.length, raizGaps.length, socioGaps.length]).toEqual([22, 1, 5]);
+    for (const field of cnpjGaps) {
+      const row = { ...cnpjWholeRow, [field]: null };
+      expect(PublicV1CnpjSchema.safeParse(row).success, `public Cnpj.${field}`).toBe(true);
+      expect(okfParquetRowSchemas.Cnpj.safeParse(row).success, `OKF Cnpj.${field}`).toBe(false);
+    }
+    for (const field of raizGaps) {
+      const row = { ...raizWholeRow, [field]: null };
+      expect(PublicV1RaizSchema.safeParse(row).success, `public Raiz.${field}`).toBe(true);
+      expect(okfParquetRowSchemas.Raiz.safeParse(row).success, `OKF Raiz.${field}`).toBe(false);
+    }
+    for (const field of socioGaps) {
+      const row = { ...socioRow, [field]: null };
+      expect(PublicV1SocioSchema.safeParse(row).success, `public Socio.${field}`).toBe(true);
+      expect(okfParquetRowSchemas.Socio.safeParse(row).success, `OKF Socio.${field}`).toBe(false);
+    }
+  });
+
   it('demonstrates four widened Cnpj/Raiz enum domains on complete rows', () => {
     const cnpjInvalidEnums = [
       { identificador_matriz_filial: '9' },
