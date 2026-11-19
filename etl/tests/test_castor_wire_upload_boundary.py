@@ -201,23 +201,80 @@ def test_monthly_dry_run_still_reaches_transform_under_v11(
     assert passed_flags == [True]
 
 
-def test_monthly_legacy_wire_still_reaches_raw_upload(
+@pytest.mark.parametrize("part", [0, 1, 5, 9])
+def test_monthly_invalid_source_aborts_before_raw_put_or_descriptor(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, part: int
+) -> None:
+    # Real zero-byte ZIP-member detection is exercised in test_transform.py.
+    # Here the monthly entry point must keep every remote effect after it.
+    args = _monthly_args(tmp_path)
+    monkeypatch.setattr(monthly_sharded, "COMPANIES_WIRE_VERSION", "1.0.0")
+    monkeypatch.setattr(monthly_sharded, "COMPANIES_SHARD_BY", "cnpj_base_prefix_2")
+
+    calls: list[str] = []
+
+    def reject_source(*_args: object, **kwargs: object) -> None:
+        calls.append("transform")
+        assert kwargs["reject_empty_estabelecimentos"] is True
+        raise RuntimeError(f"Estabelecimentos{part}.zip: empty member")
+
+    def forbid(*_args: object, **_kwargs: object) -> None:
+        pytest.fail("raw upload, secrets, or descriptor reached after source failure")
+
+    monkeypatch.setattr(monthly_sharded.transform, "transform_snapshot", reject_source)
+    monkeypatch.setattr(monthly_sharded, "_require_secret", forbid)
+    monkeypatch.setattr(monthly_sharded.upload, "stream_raw_zips_to_ia", forbid)
+    monkeypatch.setattr(monthly_sharded, "build_production_descriptor", forbid)
+    monkeypatch.setattr(monthly_sharded, "write_production_descriptor", forbid)
+
+    with pytest.raises(RuntimeError, match=f"Estabelecimentos{part}.zip"):
+        monthly_sharded.command_produce(args)
+    assert calls == ["transform"]
+    assert not args.descriptor.exists()
+
+
+def test_monthly_legacy_wire_transforms_before_raw_upload_and_descriptor(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     args = _monthly_args(tmp_path)
     monkeypatch.setattr(monthly_sharded, "COMPANIES_WIRE_VERSION", "1.0.0")
     monkeypatch.setattr(monthly_sharded, "COMPANIES_SHARD_BY", "cnpj_base_prefix_2")
-    monkeypatch.setattr(monthly_sharded, "_require_secret", lambda _name: "test-only")
 
-    class ReachedRawUpload(Exception):
-        pass
+    calls: list[str] = []
 
-    def stop_at_upload(*_args: object, **_kwargs: object) -> None:
-        raise ReachedRawUpload
+    def transform_first(*_args: object, **kwargs: object) -> None:
+        assert kwargs["reject_empty_estabelecimentos"] is True
+        calls.append("transform")
 
-    monkeypatch.setattr(monthly_sharded.upload, "stream_raw_zips_to_ia", stop_at_upload)
-    with pytest.raises(ReachedRawUpload):
-        monthly_sharded.command_produce(args)
+    def fake_secret(name: str) -> str:
+        calls.append(f"secret:{name}")
+        return "test-only"
+
+    def upload_after_transform(*_args: object, **_kwargs: object) -> None:
+        calls.append("raw")
+
+    def build_after_upload(*_args: object, **_kwargs: object) -> dict:
+        calls.append("descriptor")
+        return {}
+
+    def write_last(*_args: object, **_kwargs: object) -> None:
+        calls.append("write")
+
+    monkeypatch.setattr(monthly_sharded.transform, "transform_snapshot", transform_first)
+    monkeypatch.setattr(monthly_sharded, "_require_secret", fake_secret)
+    monkeypatch.setattr(monthly_sharded.upload, "stream_raw_zips_to_ia", upload_after_transform)
+    monkeypatch.setattr(monthly_sharded, "build_production_descriptor", build_after_upload)
+    monkeypatch.setattr(monthly_sharded, "write_production_descriptor", write_last)
+
+    monthly_sharded.command_produce(args)
+    assert calls == [
+        "transform",
+        "secret:IA_ACCESS_KEY",
+        "secret:IA_SECRET_KEY",
+        "raw",
+        "descriptor",
+        "write",
+    ]
 
 
 def test_monthly_legacy_wire_still_reaches_output_descriptor(
