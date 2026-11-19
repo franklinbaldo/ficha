@@ -164,7 +164,10 @@ def classify_output_upload(
         if not isinstance(entry, dict):
             return OutputUploadPlan((), (), tuple(entries), ())
         name = entry.get("name")
-        if isinstance(name, str) and name in entries:
+        if not isinstance(name, str) or not name:
+            # Uma linha sem identidade não é um catálogo confiável.
+            return OutputUploadPlan((), (), tuple(entries), ())
+        if name in entries:
             by_name.setdefault(name, []).append(entry)
 
     upload: list[str] = []
