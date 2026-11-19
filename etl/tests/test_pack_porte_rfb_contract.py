@@ -122,3 +122,75 @@ def test_wire_publicado_202607_evidencia_numero_nao_origem_rfb():
     expected_semantics = rfb_meanings[derived_parquet_row["porte_empresa"]]
     assert expected_semantics == "MICRO_EMPRESA"
     assert Porte.Name(archived.porte_empresa) != expected_semantics
+
+
+def test_meta_zip_publicado_202607_prefixo00_evidencia_versao_nao_semantica():
+    """Pin exato do _meta.json do MESMO ZIP do PB real; nao prova produtor.
+
+    Fonte: https://archive.org/download/ficha-2026-07/companies-00.zip/_meta.json
+    Auditoria independente: https://github.com/franklinbaldo/ficha/issues/359
+    O metadata e autoatestado pelo packer, nao assinatura do ZIP, do
+    membro PB ou dos ZIPs da Receita. O manifesto nao atesta versao PB.
+    Nao extrapolar 2026-07/00 para os 300 shards nem decodificar porte=1.
+    """
+    import base64
+    import hashlib
+    import json
+
+    archived_meta = base64.b64decode(
+        (
+        "ewogICJhcnRpZmFjdCI6IG51bGwsCiAgImNvdW50IjogOTY0Nzk4LAogICJtYXRlcmlhbGl6YXRp"
+        "b24iOiB7CiAgICAiaWQiOiAiNGQ0MzViMzJjMzVmOTcwZmMyNWFjODFjMWM3ZmY2Nzc5MGNlYjAw"
+        "YzE4MTI3NTk3ODVmYWQwNTY1OGRmOWJlYiIsCiAgICAic3BlYyI6IHsKICAgICAgImlucHV0cyI6"
+        "IHsKICAgICAgICAiY25wanMucGFycXVldCI6IHsKICAgICAgICAgICJzaGExIjogIjhhY2YzOTky"
+        "ZDA4ZWM4OGYxMTM0MjdiNzk0Y2QwZTYxODdmMGQ4YmQiCiAgICAgICAgfSwKICAgICAgICAibG9v"
+        "a3Vwcy9jbmFlcy5wYXJxdWV0IjogewogICAgICAgICAgInNoYTEiOiAiNzk2MGE1ZmY0Y2I4Mjg0"
+        "OGEwMzM3YTk5ZjNjNWNlYzAxNDJkOGUzMCIKICAgICAgICB9LAogICAgICAgICJsb29rdXBzL21v"
+        "dGl2b3MucGFycXVldCI6IHsKICAgICAgICAgICJzaGExIjogImM1ZGYxYzkyNTgxZDI1NmVhNDE3"
+        "NjFmYTFkZTY4OTUxMzVkYzAwNTIiCiAgICAgICAgfSwKICAgICAgICAibG9va3Vwcy9tdW5pY2lw"
+        "aW9zLnBhcnF1ZXQiOiB7CiAgICAgICAgICAic2hhMSI6ICIxMjA5ODA2Y2ViNWQwMWYwMzBjMGM1"
+        "MzA2MGY0NmQ4ZTQzYWI5YWJhIgogICAgICAgIH0sCiAgICAgICAgImxvb2t1cHMvbmF0dXJlemFz"
+        "LnBhcnF1ZXQiOiB7CiAgICAgICAgICAic2hhMSI6ICI1MTJkM2IxZWYyOWY1ZjYzOThlOTQyMmQz"
+        "NDE5ZDU2YzE1NjRlYjZiIgogICAgICAgIH0sCiAgICAgICAgImxvb2t1cHMvcGFpc2VzLnBhcnF1"
+        "ZXQiOiB7CiAgICAgICAgICAic2hhMSI6ICJlMTExYmI2MGRjOGU1ODIyMWUyN2Q1YWJlMWExYWU4"
+        "MDJjNDFlM2Y2IgogICAgICAgIH0sCiAgICAgICAgImxvb2t1cHMvcXVhbGlmaWNhY29lcy5wYXJx"
+        "dWV0IjogewogICAgICAgICAgInNoYTEiOiAiZmU4MzkxZjBiYThkMTRiYjgyNjYwMTFmOWQ2MDFm"
+        "Y2Q2YmViZTM1YSIKICAgICAgICB9LAogICAgICAgICJyYWl6ZXMucGFycXVldCI6IHsKICAgICAg"
+        "ICAgICJzaGExIjogIjFhMGYyNjIxZjQwMjZhNWYxY2RmMDE2NmEyMjQyOTM3N2E4Zjk1YjIiCiAg"
+        "ICAgICAgfSwKICAgICAgICAic29jaW9zLnBhcnF1ZXQiOiB7CiAgICAgICAgICAic2hhMSI6ICI1"
+        "MjZhMjcxZDZkMmRkZDdmNjkyNGMxOGM3MWViOTg3NmY0MTNlMTkxIgogICAgICAgIH0KICAgICAg"
+        "fSwKICAgICAgIm1hdGVyaWFsaXphdGlvbl92ZXJzaW9uIjogMSwKICAgICAgInBhY2tlcl9mb3Jt"
+        "YXRfdmVyc2lvbiI6IDEsCiAgICAgICJyYW5nZSI6IHsKICAgICAgICAia2luZCI6ICJjbnBqX2Jh"
+        "c2VfcHJlZml4IiwKICAgICAgICAidmFsdWUiOiAiMDAiCiAgICAgIH0sCiAgICAgICJzY2hlbWEi"
+        "OiB7CiAgICAgICAgImRlc2NyaXB0b3Jfc2hhMjU2IjogImY4NWY3OGJkNTkxZWJlOWJkM2QzODRk"
+        "YmRhMjYxYzViNmFmZDNiMDZkZDdlZWFmNzAwNThmYzVmZWVlOTkzYmUiCiAgICAgIH0sCiAgICAg"
+        "ICJzbmFwc2hvdCI6ICIyMDI2LTA3IgogICAgfQogIH0sCiAgInNjaGVtYV9zaGEyNTYiOiAiZjg1"
+        "Zjc4YmQ1OTFlYmU5YmQzZDM4NGRiZGEyNjFjNWI2YWZkM2IwNmRkN2VlYWY3MDA1OGZjNWZlZWU5"
+        "OTNiZSIsCiAgInNjaGVtYV92ZXJzaW9uIjogIjEuMC4wIiwKICAic25hcHNob3RfbW9udGgiOiAi"
+        "MjAyNi0wNyIKfQ=="
+        ),
+        validate=True,
+    )
+    assert len(archived_meta) == 1606
+    assert hashlib.sha256(archived_meta).hexdigest() == (
+        "41fb2be20d89df053e5d5b4634f225019091582a62bb8cbe6e5875d811914e90"
+    )
+    metadata = json.loads(archived_meta)
+    spec = metadata["materialization"]["spec"]
+    assert metadata["schema_version"] == "1.0.0"
+    assert metadata["snapshot_month"] == spec["snapshot"] == "2026-07"
+    assert spec["range"] == {"kind": "cnpj_base_prefix", "value": "00"}
+    assert metadata["schema_sha256"] == spec["schema"]["descriptor_sha256"]
+    assert metadata["schema_sha256"] == (
+        "f85f78bd591ebe9bd3d384dbda261c5b6afd3b06dd7eeaf70058fc5feee993be"
+    )
+    # SHA-1 dos derivados DECLARADOS no metadado; alinhados ao
+    # manifesto na auditoria Lontra R90, nao verificados aqui por replay.
+    assert {
+        name: spec["inputs"][name]["sha1"]
+        for name in ("cnpjs.parquet", "raizes.parquet", "socios.parquet")
+    } == {
+        "cnpjs.parquet": "8acf3992d08ec88f113427b794cd0e6187f0d8bd",
+        "raizes.parquet": "1a0f2621f4026a5f1cdf0166a22429377a8f95b2",
+        "socios.parquet": "526a271d6d2ddd7f6924c18c71eb9876f413e191",
+    }
