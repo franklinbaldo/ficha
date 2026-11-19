@@ -12,9 +12,7 @@ from ficha_etl import cli, pack_upload_snapshot
 
 
 @pytest.mark.parametrize("mutation", ["rewrite", "replace"])
-def test_pack_cli_passes_anonymous_bytes_even_if_path_changes(
-    monkeypatch, tmp_path, mutation
-):
+def test_pack_cli_passes_anonymous_bytes_even_if_path_changes(monkeypatch, tmp_path, mutation):
     output = tmp_path / "companies.zip"
     original = b"PACKED ORIGINAL"
     events = []
@@ -53,9 +51,7 @@ def test_pack_cli_passes_anonymous_bytes_even_if_path_changes(
     assert events == ["pack", "upload"]
 
 
-def test_pack_cli_skip_upload_does_not_require_snapshot_or_credentials(
-    monkeypatch, tmp_path
-):
+def test_pack_cli_skip_upload_does_not_require_snapshot_or_credentials(monkeypatch, tmp_path):
     output = tmp_path / "companies.zip"
 
     def pack(*args, **kwargs):
