@@ -90,9 +90,8 @@ def reconcile_loaded_source_keys(
     # Refuse missing/aliased counters rather than silently skipping a part.
     expected_paths = {p.resolve() for p in paths}
     counts = {Path(path).resolve(): value for path, value in parsed_part_counts.items()}
-    if (
-        set(counts) != expected_paths
-        or any(type(value) is not int or value <= 0 for value in counts.values())
+    if set(counts) != expected_paths or any(
+        type(value) is not int or value <= 0 for value in counts.values()
     ):
         payload["reason"] = "missing or zero logical rows in an RFB source part"
         _write_receipt(receipt_path, payload)
