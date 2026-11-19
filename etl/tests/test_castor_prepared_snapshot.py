@@ -7,12 +7,15 @@ The real transfer/uploader functions run; only remote observations are doubled.
 from __future__ import annotations
 
 import hashlib
+import tempfile
 from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
 
+import internetarchive as ia
 import pytest
+from internetarchive.item import Item
 
 from ficha_etl import monthly_sharded, shard_transfer
 from ficha_etl.shard_publish import ShardPublishError
@@ -194,3 +197,28 @@ def test_ia_uploader_passes_binary_handle_without_reopening_path(
     stream = BytesIO(b"frozen")
     monthly_sharded._shard_uploader("2026-08")("companies-07.zip", stream)
     assert observations == [("ficha-2026-08", b"frozen")]
+
+
+def test_real_ia_client_prepares_anonymous_handle_without_network() -> None:
+    """Exercise IA 5.8's own stream selection and HTTP preparation in debug mode."""
+    session = ia.ArchiveSession()
+    item = Item(
+        session,
+        "ficha-synthetic-probe",
+        item_metadata={"metadata": {"identifier": "ficha-synthetic-probe"}, "files": []},
+    )
+    with tempfile.TemporaryFile(mode="w+b") as stream:
+        stream.write(b"offline")
+        stream.seek(0)
+        # debug=True builds the PUT request but never invokes the network send.
+        responses = item.upload(
+            files={"companies-07.zip": stream},
+            access_key="fake",
+            secret_key="fake",
+            debug=True,
+            verbose=False,
+        )
+        assert len(responses) == 1
+        assert responses[0].method == "PUT"
+        assert responses[0].url.endswith("/ficha-synthetic-probe/companies-07.zip")
+        assert responses[0].headers["Content-Length"] == "7"
