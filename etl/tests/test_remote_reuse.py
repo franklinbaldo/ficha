@@ -147,8 +147,84 @@ def test_metadata_unavailable_forces_recompute_without_raising() -> None:
 def test_partial_metadata_response_yields_no_false_reuse() -> None:
     """Resposta transitória sem a chave `files` não pode virar reuse."""
     verdicts = _classify({"metadata": {"identifier": "ficha-2026-05"}})
-    assert all(v.state is ReuseState.ABSENT for v in verdicts.values())
+    assert all(v.state is ReuseState.INVALID for v in verdicts.values())
     assert not all_outputs_reusable(verdicts)
+
+
+
+# --- catálogo IA ambíguo: jamais consultar footer/JSON ----------------------
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+def test_duplicate_expected_name_invalidates_catalog_before_probes(reverse: bool) -> None:
+    files = _full_metadata()["files"]
+    extra = {"name": "cnpjs.parquet", "size": "0"}
+    files = [extra, *files] if reverse else [*files, extra]
+
+    def forbidden(url: str):
+        pytest.fail(f"catálogo duplicado não pode abrir sonda remota: {url}")
+
+    verdicts = _classify(_metadata(files), probe=forbidden, json_fetch=forbidden)
+    assert all(v.state is ReuseState.INVALID for v in verdicts.values())
+    assert not all_outputs_reusable(verdicts)
+
+
+@pytest.mark.parametrize(
+    "bad_metadata",
+    [
+        [], {}, {"files": None}, {"files": {}}, {"files": "texto"},
+        {"files": [None]}, {"files": [42]}, {"files": [{"size": "1"}]},
+        {"files": [{"name": None}]}, {"files": [{"name": 42}]},
+        {"files": [{"name": ""}]},
+    ],
+)
+def test_malformed_catalog_is_invalid_without_probes(bad_metadata) -> None:
+    def forbidden(url: str):
+        pytest.fail(f"catálogo ilegível não pode abrir sonda remota: {url}")
+
+    verdicts = _classify(bad_metadata, probe=forbidden, json_fetch=forbidden)
+    assert all(v.state is ReuseState.INVALID for v in verdicts.values())
+    assert not all_outputs_reusable(verdicts)
+
+
+@pytest.mark.parametrize(
+    "bad_size",
+    [True, False, 1.9, 1.0, None, "", " 1", "1 ", "-1", "+1", "1.0", "１", "١", "²", "9" * 5000],
+)
+def test_expected_size_is_strict_before_probe(bad_size) -> None:
+    def forbidden(url: str):
+        pytest.fail(f"size não canônico não pode abrir sonda remota: {url}")
+
+    verdicts = _classify(
+        _metadata([{"name": "cnpjs.parquet", "size": bad_size}]),
+        probe=forbidden,
+        json_fetch=forbidden,
+    )
+    assert verdicts["cnpjs.parquet"].state is ReuseState.INVALID
+    assert verdicts["cnpjs.parquet"].must_recompute
+
+
+def test_unrelated_valid_file_names_even_if_repeated_do_not_invalidate() -> None:
+    metadata = _full_metadata()
+    metadata["files"].extend([
+        {"name": "_meta.xml", "size": "1"},
+        {"name": "_meta.xml", "size": "2"},
+    ])
+    assert all_outputs_reusable(_classify(metadata))
+
+
+def test_clean_catalog_recovers_after_ambiguous_observation() -> None:
+    metadata = _full_metadata()
+    metadata["files"].append({"name": "lookups.json", "size": "1024"})
+    assert not all_outputs_reusable(_classify(metadata))
+    assert all_outputs_reusable(_classify(_full_metadata()))
+
+
+@pytest.mark.parametrize("good_size", [1, "1", "0001"])
+def test_positive_ascii_size_preserves_reuse(good_size) -> None:
+    metadata = _full_metadata()
+    metadata["files"][0]["size"] = good_size
+    assert all_outputs_reusable(_classify(metadata))
 
 
 # --- presença sozinha nunca basta -------------------------------------------
