@@ -796,6 +796,37 @@ def all_zips_dir(tmp_path):
     return zips
 
 
+@pytest.mark.parametrize("part", [0, 1, 5, 9])
+def test_extract_all_rejects_empty_estabelecimento_csv_when_strict(tmp_path, all_zips_dir, part):
+    """Target the selected empty ZIP without earlier empty fixtures masking it."""
+    for index in range(10):
+        zip_path = all_zips_dir / f"Estabelecimentos{index}.zip"
+        with zipfile.ZipFile(zip_path) as zf:
+            members = [member for member in zf.infolist() if not member.is_dir()]
+            assert len(members) == 1
+            member_name = members[0].filename
+
+        # The fixture leaves parts 1..9 empty. Fill the other parts with real
+        # fixture rows so the strict gate must reach the chosen failing part.
+        if index == part:
+            with zipfile.ZipFile(zip_path, "w") as zf:
+                zf.writestr(member_name, b"")
+        else:
+            _zip_with_csv(zip_path, member_name, [ESTABELECIMENTO_ROWS[0]])
+
+    chain = fetcher.ChainedFetcher(fetchers=[_ZipDirFetcher(all_zips_dir)])
+    with pytest.raises(
+        RuntimeError,
+        match=rf"Estabelecimentos{part}\.zip.*empty estabelecimento CSV",
+    ):
+        transform.extract_all(
+            "2026-04",
+            chain,
+            tmp_path / "strict-extracted",
+            reject_empty_estabelecimentos=True,
+        )
+
+
 def test_extract_all_rejects_zip_with_multiple_files(tmp_path, all_zips_dir):
     # Adiciona arquivo extra dentro de Cnaes.zip
     cnaes_zip = all_zips_dir / "Cnaes.zip"
