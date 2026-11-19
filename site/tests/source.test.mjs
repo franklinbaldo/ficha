@@ -40,3 +40,17 @@ test('aviso público distingue falha de transporte de ausência cadastral', asyn
   assert.match(sobre, /Chromium 152/);
   assert.match(sobre, /não.*a integridade do arquivo inteiro/);
 });
+
+
+test('botão Pesquisar tem nome acessível português explícito na fonte SSG', async () => {
+  const home = await read('../content/index.md');
+  assert.match(home, /<button\b[^>]*\bid="busca-enviar"[^>]*\baria-label="Pesquisar"[^>]*>Pesquisar\s*<span aria-hidden="true">↗<\/span><\/button>/);
+  assert.doesNotMatch(home, /aria-label="north-east-arrow"/);
+});
+
+
+test('botão Abrir ficha tem nome acessível explícito na fonte SSG', async () => {
+  const empresa = await read('../content/empresa.md');
+  assert.match(empresa, /<button\b[^>]*\bid="empresa-enviar"[^>]*\baria-label="Abrir ficha"[^>]*>Abrir ficha<\/button>/);
+  assert.doesNotMatch(empresa, /aria-label="abrir-ficha"/);
+});

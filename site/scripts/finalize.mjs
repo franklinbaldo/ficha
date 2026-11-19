@@ -67,6 +67,19 @@ const indexURL = new URL('index.html',root);
 const aboutURL = new URL('sobre/index.html',root);
 let index = (await required(indexURL)).toString('utf8');
 const about = (await required(aboutURL)).toString('utf8');
+const companyPage = (await required(new URL('empresa/index.html', root))).toString('utf8');
+const companyButtons = companyPage.match(/<button\b[^>]*\bid="empresa-enviar"[^>]*>/g) ?? [];
+if (companyButtons.length !== 1 || !/\saria-label="Abrir ficha"(?=[\s>])/.test(companyButtons[0])) {
+  throw new Error('Botão Abrir ficha sem nome acessível em português no HTML SSG');
+}
+
+// The pinned SSG can infer an English icon label for the decorative arrow
+// and override the visible 'Pesquisar' name. Reject such generated output.
+const searchButtons = index.match(/<button\b[^>]*\bid="busca-enviar"[^>]*>/g) ?? [];
+if (searchButtons.length !== 1 || !/\saria-label="Pesquisar"(?=[\s>])/.test(searchButtons[0])) {
+  throw new Error('Botão Pesquisar sem nome acessível em português no HTML SSG');
+}
+
 const [year,month] = manifest.current.split('-').map(Number);
 const label = new Intl.DateTimeFormat('pt-BR', {month:'long',year:'numeric',timeZone:'UTC'})
   .format(new Date(Date.UTC(year,month-1,1))) + ' (' + manifest.current + ')';
