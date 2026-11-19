@@ -22,8 +22,10 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 import re
 import zipfile
+from contextlib import ExitStack
 from pathlib import Path
 from typing import Iterator
 
@@ -363,6 +365,8 @@ def pack_companies(
     lookup_rows: dict[str, list[dict]],
     output_path: Path,
     snapshot_month: str,
+    *,
+    attest_output: bool = False,
 ) -> dict:
     """Write companies.zip.
 
@@ -373,7 +377,7 @@ def pack_companies(
         snapshot_month: "YYYY-MM" string.
 
     Returns:
-        { count, size_bytes, schema_sha256 }
+        { count, size_bytes, schema_sha256, zip_sha256 (when attested) }
     """
     schema_desc = _schema_desc_bytes()
     schema_sha256 = hashlib.sha256(schema_desc).hexdigest()
@@ -406,67 +410,100 @@ def pack_companies(
     parcial = output_path.with_name(output_path.name + ".part")
     parcial.unlink(missing_ok=True)
 
-    with SpoolingZipFile(
-        parcial, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6, allowZip64=True
-    ) as zf:
-        # schema artifacts
-        zf.writestr(_membro(zf, "_schema.desc", data_zip), schema_desc)
-        zf.writestr(_membro(zf, "_schema.proto", data_zip), _schema_proto_text())
+    with ExitStack() as producer_handles:
+        with SpoolingZipFile(
+            parcial, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6, allowZip64=True
+        ) as zf:
+            if attest_output:
+                witness = producer_handles.enter_context(os.fdopen(os.dup(zf.fp.fileno()), "rb"))
+            # schema artifacts
+            zf.writestr(_membro(zf, "_schema.desc", data_zip), schema_desc)
+            zf.writestr(_membro(zf, "_schema.proto", data_zip), _schema_proto_text())
 
-        # lookups
-        for kind, lrows in lookup_rows.items():
-            pb_bytes = build_lookup_pb(kind, lrows)
-            zf.writestr(_membro(zf, f"_lookups/{kind}.pb", data_zip), pb_bytes)
+            # lookups
+            for kind, lrows in lookup_rows.items():
+                pb_bytes = build_lookup_pb(kind, lrows)
+                zf.writestr(_membro(zf, f"_lookups/{kind}.pb", data_zip), pb_bytes)
 
-        # company docs
-        for row in rows:
-            company = row_to_company(row)
-            base = company_root(company)
-            # Enforce strictly-increasing cnpj_base. Two reasons:
-            #   1. Duplicates: zipfile silently writes both entries under the
-            #      same name and different ZIP readers resolve conflicts
-            #      differently — safer to fail at pack time.
-            #   2. Sorted-input contract: the adjacent-only duplicate check
-            #      above would miss non-adjacent duplicates in unsorted input.
-            #      Requiring strictly-increasing keys makes the guard complete.
-            if prev_cnpj_base is not None and base <= prev_cnpj_base:
-                if base == prev_cnpj_base:
+            # company docs
+            for row in rows:
+                company = row_to_company(row)
+                base = company_root(company)
+                # Enforce strictly-increasing cnpj_base. Two reasons:
+                #   1. Duplicates: zipfile silently writes both entries under the
+                #      same name and different ZIP readers resolve conflicts
+                #      differently — safer to fail at pack time.
+                #   2. Sorted-input contract: the adjacent-only duplicate check
+                #      above would miss non-adjacent duplicates in unsorted input.
+                #      Requiring strictly-increasing keys makes the guard complete.
+                if prev_cnpj_base is not None and base <= prev_cnpj_base:
+                    if base == prev_cnpj_base:
+                        raise ValueError(
+                            f"duplicate cnpj_base in input rows: {base} "
+                            f"— caller must sort and deduplicate by cnpj_base before packing"
+                        )
                     raise ValueError(
-                        f"duplicate cnpj_base in input rows: {base} "
-                        f"— caller must sort and deduplicate by cnpj_base before packing"
+                        f"unsorted input rows: cnpj_base {base} "
+                        f"< previous {prev_cnpj_base} — caller must sort by cnpj_base"
                     )
-                raise ValueError(
-                    f"unsorted input rows: cnpj_base {base} "
-                    f"< previous {prev_cnpj_base} — caller must sort by cnpj_base"
-                )
-            prev_cnpj_base = base
-            company.snapshot_yyyymm = snapshot_yyyymm
-            pb_bytes = company.SerializeToString()
-            zf.writestr(_membro(zf, cnpjpath(base), data_zip), pb_bytes)
-            count += 1
+                prev_cnpj_base = base
+                company.snapshot_yyyymm = snapshot_yyyymm
+                pb_bytes = company.SerializeToString()
+                zf.writestr(_membro(zf, cnpjpath(base), data_zip), pb_bytes)
+                count += 1
 
-        # meta (written last so count is accurate)
-        meta = {
-            "schema_version": SCHEMA_VERSION,
-            "schema_sha256": schema_sha256,
-            "snapshot_month": snapshot_month,
-            "count": count,
-        }
-        zf.writestr(_membro(zf, "_meta.json", data_zip), json.dumps(meta, indent=2))
+            # meta (written last so count is accurate)
+            meta = {
+                "schema_version": SCHEMA_VERSION,
+                "schema_sha256": schema_sha256,
+                "snapshot_month": snapshot_month,
+                "count": count,
+            }
+            zf.writestr(_membro(zf, "_meta.json", data_zip), json.dumps(meta, indent=2))
 
-    # fsync antes do rename: sem isso, uma queda de máquina pode deixar o nome
-    # final publicado apontando para dados ainda não persistidos — exatamente a
-    # confusão entre "existe" e "está completo" que o `.part` existe para evitar.
-    # `close` (feito pelo `with` acima) seguido de rename atômico. Sem fsync:
-    # a garantia desta função é de processo — nunca expor o nome final
-    # parcialmente escrito —, não de durabilidade contra queda de SO ou falta de
-    # energia. Durabilidade exigiria também fsync do diretório, tem semântica
-    # diferente por plataforma, e não teria consumidor: se a máquina cai, o job
-    # cai junto e a retomada redescobre o estado pelo item remoto, que é a fonte
-    # de verdade do checkpoint (#147) — não o disco local.
+        # fsync antes do rename: sem isso, uma queda de máquina pode deixar o nome
+        # final publicado apontando para dados ainda não persistidos — exatamente a
+        # confusão entre "existe" e "está completo" que o `.part` existe para evitar.
+        # `close` (feito pelo `with` acima) seguido de rename atômico. Sem fsync:
+        # a garantia desta função é de processo — nunca expor o nome final
+        # parcialmente escrito —, não de durabilidade contra queda de SO ou falta de
+        # energia. Durabilidade exigiria também fsync do diretório, tem semântica
+        # diferente por plataforma, e não teria consumidor: se a máquina cai, o job
+        # cai junto e a retomada redescobre o estado pelo item remoto, que é a fonte
+        # de verdade do checkpoint (#147) — não o disco local.
+
+        # Read the writer's inode (an already-open fd), not a reopened .part.
+        # This adds a SHA-256 contract without materializing the ZIP in RAM.
+        zip_sha256 = None
+        attested_size = None
+        if attest_output:
+            witness.seek(0)
+            before = os.fstat(witness.fileno())
+            digest = hashlib.sha256()
+            attested_size = 0
+            for chunk in iter(lambda: witness.read(1024 * 1024), b""):
+                digest.update(chunk)
+                attested_size += len(chunk)
+            after = os.fstat(witness.fileno())
+            path_stat = parcial.stat()
+            if (
+                attested_size != before.st_size
+                or before.st_size != after.st_size
+                or before.st_mtime_ns != after.st_mtime_ns
+                or before.st_ctime_ns != after.st_ctime_ns
+                or (after.st_dev, after.st_ino) != (path_stat.st_dev, path_stat.st_ino)
+            ):
+                raise ValueError("companies.zip changed during producer attestation")
+            zip_sha256 = digest.hexdigest()
+
     parcial.replace(output_path)
     size = output_path.stat().st_size
-    return {"count": count, "size_bytes": size, "schema_sha256": schema_sha256}
+    result = {"count": count, "size_bytes": size, "schema_sha256": schema_sha256}
+    if attest_output:
+        if size != attested_size:
+            raise ValueError("companies.zip size changed after producer attestation")
+        result["zip_sha256"] = zip_sha256
+    return result
 
 
 # ---- read from parquets (IA or local) ----------------------------------------
@@ -614,6 +651,7 @@ def pack_from_parquets(
     parquets_base: str | None = None,
     batch_size: int = 10_000,
     memory_limit_gb: float | None = None,
+    attest_output: bool = False,
 ) -> dict:
     """Build companies.zip by reading parquets from IA (or a local directory).
 
@@ -659,7 +697,13 @@ def pack_from_parquets(
             socios_url=socios_url,
             batch_size=batch_size,
         )
-        return pack_companies(rows, lookup_rows, output_path, snapshot_month=month)
+        return pack_companies(
+            rows,
+            lookup_rows,
+            output_path,
+            snapshot_month=month,
+            attest_output=attest_output,
+        )
     finally:
         # O pack monolítico terminava junto com o processo, então vazar a
         # conexão não aparecia. Fechar aqui é pré-requisito do modo shardado,
