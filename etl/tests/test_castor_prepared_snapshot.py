@@ -35,9 +35,7 @@ class _Session:
     wire_version = "1.0.0"
     shard_by = "cnpj_base_prefix_2"
 
-    def materialization_spec(
-        self, prefix: str, *, input_sha1s: dict[str, str]
-    ) -> _Spec:
+    def materialization_spec(self, prefix: str, *, input_sha1s: dict[str, str]) -> _Spec:
         assert prefix == "07"
         return _Spec()
 
