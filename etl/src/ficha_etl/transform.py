@@ -2337,7 +2337,7 @@ def transform_snapshot(
 
         # --- Step 3b: Roundtrip-equivalence verify (ADR 0009) ---
         # Must happen BEFORE deleting estabelecimento CSVs (step 4).
-        if verify:
+        if verify or reject_empty_estabelecimentos:
             cnpjs_parquet = output_dir / "cnpjs.parquet"
             if cnpjs_parquet.exists():
                 log.info(
@@ -2369,7 +2369,28 @@ def transform_snapshot(
                         p.stat().st_size for p in estabelecimento_csv_paths if p.exists()
                     )
                     _mh_verify.files_read = len(estabelecimento_csv_paths)
-                    assert_roundtrip(con, cnpjs_parquet, sample_size=verify_sample_size)
+                    if verify:
+                        assert_roundtrip(con, cnpjs_parquet, sample_size=verify_sample_size)
+                    if reject_empty_estabelecimentos:
+                        # Monthly-only exact multiset witness from the ten CSVs
+                        # reloaded through the SAME DuckDB reader as the writer.
+                        # This must run before source deletion and first raw PUT.
+                        from .monthly_source_bag_gate import reconcile_loaded_source_keys
+
+                        source_parts = [
+                            (ef.zip_name, ef.csv_path)
+                            for ef in extracted
+                            if ef.kind == "estabelecimentos"
+                        ]
+                        reconcile_loaded_source_keys(
+                            con,
+                            month,
+                            source_parts,
+                            cnpjs_parquet,
+                            output_dir.parent
+                            / "evidence"
+                            / "monthly-estabelecimento-source-bag.json",
+                        )
                     _mh_verify.rows_read = min(
                         verify_sample_size,
                         con.execute("SELECT COUNT(*) FROM estabelecimento").fetchone()[0],
