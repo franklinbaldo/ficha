@@ -2,7 +2,7 @@
 type: RFC
 title: "Consulta exata de CNPJ por Protobuf atômico"
 description: "Rota Protobuf-first no site SSG, custos observados e critérios de promoção sem Parquet de 6 GB"
-status: "Proposta técnica; teste remoto parcial concluído, implementação no produto pendente"
+status: "Proposta técnica; biblioteca SSG integrada, decoder e UX de consulta pendentes"
 date: 2026-11-19
 ---
 
@@ -102,15 +102,19 @@ requests de bootstrap do site, custo econômico, teste de longa duração,
 p95 nem validação da UI atualmente publicada. Os 383.382 B são
 desta janela controlada e não limite máximo de qualquer empresa.
 
-O leitor atualmente proposto pela [PR #358](https://github.com/franklinbaldo/ficha/pull/358)
-introduz teto preventivo de **32 MiB por membro** antes do decode,
-com leitura incremental que recusa `Content-Length` ou stream
-grande demais. A proposta ainda não está integrada ao site SSG
-e **32 MiB não foi aferido como máximo do acervo**. O fluxo SSG
-deve reusar essa semântica, adicionar timeout/cancelamento e jamais
-tratar excesso como CNPJ inexistente. Não usar `arrayBuffer()`
-sem limite no navegador. A comparação com a meta de 100 MB
-é evidência **somente destes dois CNPJs**, não garantia global.
+As [PRs #362](https://github.com/franklinbaldo/ficha/pull/362)
+e [#365](https://github.com/franklinbaldo/ficha/pull/365) já foram integradas
+à `main` em 19/11/2026. O leitor `site/static/js/atomic-record.mjs`
+impõe **32 MiB por membro** mediante stream com limite e rejeição
+antecipada de `Content-Length`; recusa DV inválido antes de GET, contador
+divergente, raiz/competência erradas e filiais duplicadas.
+A [#358](https://github.com/franklinbaldo/ficha/pull/358), que tratava
+o leitor Astro legado, foi encerrada **sem merge**. O teto de 32 MiB
+não é máximo empírico do acervo. **Ainda não há decoder canônico
+empacotado nem conexão desse leitor com a interface pública SSG**;
+a página atual consulta a trilha analítica. Limite/excesso não
+significam CNPJ ausente. Não usar `arrayBuffer()` sem limite.
+A meta de 100 MB foi observada apenas nas duas fichas medidas.
 
 ## Contrato proposto para a interface
 
@@ -245,8 +249,9 @@ completa. Se contagem estiver ausente, divergente ou inconsistente,
 retornar **consulta inconclusiva / ficha incompleta**, nunca ausência.
 Mesmo quando a contagem bate, `absent-in-snapshot` continua
 sendo conclusão **condicional aos bytes publicados**, não certidão
-de inexistência cadastral na Receita. Os casos RED precisam virar
-testes de regressão na branch da 🦊 #362, sem PR concorrente.
+de inexistência cadastral na Receita. Os casos RED foram convertidos em testes na [#362](https://github.com/franklinbaldo/ficha/pull/362)
+e a unicidade das filiais foi complementada pela
+[#365](https://github.com/franklinbaldo/ficha/pull/365).
 
 **Atualização SHA-exata na mesma rodada:** a 🦊 incorporou as duas
 proteções na [PR #362, HEAD `a41f0701`](https://github.com/franklinbaldo/ficha/commit/a41f07018fb0d5895e77068ceec0b1fc18647eec).
@@ -255,9 +260,53 @@ blob novo `08753b6c` no Ifro: `--strict` **PASS (rc=0)**,
 CNPJ/DV inválido recusado antes de novo GET e contagens divergente
 ou ausente recusadas. O contraste é **RED no blob `a3765909`
 → GREEN no blob `08753b6c`**, ambos em Node com mocks de
-rede/decoder e hash Git conferido. Ainda exige integração com
-o decoder real, testes Chromium/Pages e aprovação da fila; não
-prova completude de todos os registros publicados.
+rede/decoder e hash Git conferido. Após os merges da #362 e #365, o leitor defensivo está na
+`main`; ainda exige integração do decoder real ao produto e testes
+Chromium/Pages do fluxo público completo. Não prova completude do acervo.
+
+## Gate R92: renderer SSG não deve destruir o estado de evidência
+
+**Contraprova executável de 19/11/2026**, na
+[`main@03490dfa`](https://github.com/franklinbaldo/ficha/commit/03490dfa6c4513653b8519b5306394b19bc7c319),
+módulos `pages.mjs` (blob Git `eb990058`) e `atomic-record.mjs`
+(`3b63cc91`). O
+[probe independente R92](https://github.com/franklinbaldo/polvo/blob/main/scripts/ficha_atomic_ssg_contract_r92.mjs)
+chama o **renderer e o controlador SSG reais** com um DOM mínimo e
+`lookup` injetado, sem rede/IA. Para reproduzir no checkout do Ficha:
+`node /path/ficha_atomic_ssg_contract_r92.mjs "$PWD/site/static/js/pages.mjs" --strict`.
+Resultado atual: **1 PASS / 4 RED esperados**:
+
+1. `renderCompanyRecord` recebe `state:artifact-unavailable, data:null,
+   httpStatus:404` e apresenta **“Nenhum registro encontrado”**. É
+   interpretação indevida: 404 de membro/ZIP é **consulta inconclusiva**.
+2. `renderCompanyRecord` recebe `state:absent-in-snapshot` e apresenta
+   a mesma mensagem genérica. A evidência é apenas **ausência daquela
+   filial nos bytes válidos da competência**, não inexistência da empresa.
+3. `mountCompany` recebe resultado tipado `artifact-unavailable` e
+   anuncia **“Consulta concluída”**, promovendo um 404 inconclusivo a
+   sucesso de UX.
+4. A exceção por **HTTP 503** é corretamente reportada como indisponível,
+   mas o texto adicional exige **HTTP Range**, específico do caminho
+   Parquet, irrelevante para GET de membro PB.
+   O positivo com ficha `found` renderizou a razão social corretamente.
+
+Essas falhas foram reproduzidas **com injeção do resultado PB**, não são
+alegação de que a busca PB já esteja ativada no Pages. Integração deve
+ser **por `result.state`, nunca por `!result.data`**. Estados:
+`found` renderiza ficha e só ele recebe anúncio de consulta concluída
+com registro; `absent-in-snapshot` recebe texto limitado a filial e
+competência; `artifact-unavailable` avisa consulta inconclusiva,
+com ação para tentar novamente; exceções 503/CORS/timeout/integridade
+não apagam a distinção nem mostram resultados anteriores. A história
+de dois snapshots precisa de tratamento próprio para não colapsar
+`artifact-unavailable` e `absent-in-snapshot`.
+
+**Aceite antes da conexão com o formulário:** replay R92 estrito GREEN,
+regressão com 404, 503, agregado incoerente, duplicata, A→B tardio e
+A→B→A, decoder canônico real, origem/lookup da mesma competência,
+Chromium Pages móvel/desktop. Não redirecionar silenciosamente para o
+Parquet se a camada PB falhar. Donos da vertical: 🦊 Raposa e
+🦇 Morcego, QA 🦉 Coruja/🦎 Lagarto, contrato 🐙 Polvo.
 
 ## Divisão de consultas
 
@@ -294,8 +343,9 @@ prova completude de todos os registros publicados.
 
 ## Situação
 
-**Prova de transporte + decode + busca exata de dois CNPJs completos em
-Chromium: PASS. Produto SSG integrado: NÃO FEITO.** Os testes não
+**Prova de transporte + decode + seleção exata em Chromium experimental:
+PASS. Leitor defensivo na main via #362/#365: SIM. Decoder real + formulário
+público SSG com estados corretos: NÃO FEITO (R92: 4 RED).** Os testes não
 comprovaram lookup por nome, histórico, alfanumérico v1.1, hashes
 integrais dos 100 ZIPs, disponibilidade permanente do IA ou orçamento
 p95 global. Esta RFC é proposta; não muda o comportamento publicado.
