@@ -2375,15 +2375,23 @@ def transform_snapshot(
                     # each chunk's table was dropped; we reload the full set here.
                     parsed_part_counts: dict[Path, int] = {}
                     if estabelecimento_csv_paths:
-                        _create_table_from_csvs(
-                            con,
-                            "estabelecimento",
-                            estabelecimento_csv_paths,
-                            registry.main_table("estabelecimento").source,
-                            per_file_counts=(
-                                parsed_part_counts if reject_empty_estabelecimentos else None
-                            ),
-                        )
+                        # Preserve the legacy reader signature for non-monthly
+                        # paths, including instrumentation that wraps this call.
+                        if reject_empty_estabelecimentos:
+                            _create_table_from_csvs(
+                                con,
+                                "estabelecimento",
+                                estabelecimento_csv_paths,
+                                registry.main_table("estabelecimento").source,
+                                per_file_counts=parsed_part_counts,
+                            )
+                        else:
+                            _create_table_from_csvs(
+                                con,
+                                "estabelecimento",
+                                estabelecimento_csv_paths,
+                                registry.main_table("estabelecimento").source,
+                            )
                     _mh_verify.bytes_read = sum(
                         p.stat().st_size for p in estabelecimento_csv_paths if p.exists()
                     )
