@@ -64,6 +64,7 @@ jobs:
           for module in boot search-app duckdb-runtime query-core dataset catalog record pages; do
             cmp "static/js/$module.mjs" "dist/ficha/js/$module.mjs"
           done
+          cmp static/css/site.css dist/ficha/css/site.css
           # A newly declared page must also load its ES module in the built output.
           for page in empresa historia explorar acervo; do
             test -f "dist/ficha/$page/index.html"
@@ -140,5 +141,6 @@ jobs:
           cmp site/static/js/catalog.mjs catalog.mjs
           cmp site/static/js/record.mjs record.mjs
           cmp site/static/js/pages.mjs pages.mjs
+          cmp site/static/css/site.css site.css
           cmp web/public/manifest.json manifest-live.json
           node -e "const d=require('./manifest-live.json');if(!d.current||!d.snapshots?.some(s=>s.date===d.current))process.exit(1); console.log('Pages MVP + manifest OK: '+d.current)"
