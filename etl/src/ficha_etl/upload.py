@@ -266,10 +266,14 @@ def _existing_raw_files_on_ia(identifier: str) -> set[str]:
                 "ia:%s metadata returned HTTP %d -- assuming new item", identifier, resp.status_code
             )
             return set()
-        data = resp.json()
-    except (httpx.HTTPError, ValueError) as exc:
+    except httpx.HTTPError as exc:
         log.warning("ia:%s metadata fetch failed (%s) -- will stream all", identifier, exc)
         return set()
+
+    try:
+        data = resp.json()
+    except ValueError as exc:
+        raise RuntimeError(f"IA raw metadata: invalid JSON for {identifier}") from exc
 
     if not isinstance(data, dict) or not isinstance(data.get("files"), list):
         raise RuntimeError(f"IA raw metadata: invalid file catalog for {identifier}")
