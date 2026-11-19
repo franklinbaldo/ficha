@@ -796,33 +796,6 @@ def all_zips_dir(tmp_path):
     return zips
 
 
-def test_extract_all_rejects_zip_with_multiple_files(tmp_path, all_zips_dir):
-    # Adiciona arquivo extra dentro de Cnaes.zip
-    cnaes_zip = all_zips_dir / "Cnaes.zip"
-    cnaes_zip.unlink()
-    rows = LOOKUP_FIXTURES["cnaes"]
-    body = ("\n".join(";".join(f'"{c}"' for c in row) for row in rows) + "\n").encode("latin-1")
-    with zipfile.ZipFile(cnaes_zip, "w") as zf:
-        zf.writestr("K3241.K03200$Z.D40410.CNAECSV", body)
-        zf.writestr("README.txt", b"unexpected extra")
-
-    chain = fetcher.ChainedFetcher(fetchers=[_ZipDirFetcher(all_zips_dir)])
-    with pytest.raises(RuntimeError, match="expected exactly 1 CSV"):
-        transform.extract_all("2026-04", chain, tmp_path / "extracted")
-
-
-def test_extract_all_rejects_empty_zip(tmp_path, all_zips_dir):
-    # Esvazia Cnaes.zip
-    cnaes_zip = all_zips_dir / "Cnaes.zip"
-    cnaes_zip.unlink()
-    with zipfile.ZipFile(cnaes_zip, "w") as _:
-        pass
-
-    chain = fetcher.ChainedFetcher(fetchers=[_ZipDirFetcher(all_zips_dir)])
-    with pytest.raises(RuntimeError, match="contained no files"):
-        transform.extract_all("2026-04", chain, tmp_path / "extracted")
-
-
 @pytest.mark.parametrize("part", [0, 1, 9])
 def test_extract_all_rejects_empty_estabelecimento_csv_when_strict(tmp_path, all_zips_dir, part):
     """Reject a zero-byte CSV in an early, middle, or late RFB part.
@@ -856,6 +829,35 @@ def test_extract_all_rejects_empty_estabelecimento_csv_when_strict(tmp_path, all
             tmp_path / "strict-extracted",
             reject_empty_estabelecimentos=True,
         )
+
+
+def test_extract_all_rejects_zip_with_multiple_files(tmp_path, all_zips_dir):
+    # Adiciona arquivo extra dentro de Cnaes.zip
+    cnaes_zip = all_zips_dir / "Cnaes.zip"
+    cnaes_zip.unlink()
+    rows = LOOKUP_FIXTURES["cnaes"]
+    body = ("\n".join(";".join(f'"{c}"' for c in row) for row in rows) + "\n").encode("latin-1")
+    with zipfile.ZipFile(cnaes_zip, "w") as zf:
+        zf.writestr("K3241.K03200$Z.D40410.CNAECSV", body)
+        zf.writestr("README.txt", b"unexpected extra")
+
+    chain = fetcher.ChainedFetcher(fetchers=[_ZipDirFetcher(all_zips_dir)])
+    with pytest.raises(RuntimeError, match="expected exactly 1 CSV"):
+        transform.extract_all("2026-04", chain, tmp_path / "extracted")
+
+
+def test_extract_all_rejects_empty_zip(tmp_path, all_zips_dir):
+    # Esvazia Cnaes.zip
+    cnaes_zip = all_zips_dir / "Cnaes.zip"
+    cnaes_zip.unlink()
+    with zipfile.ZipFile(cnaes_zip, "w") as _:
+        pass
+
+    chain = fetcher.ChainedFetcher(fetchers=[_ZipDirFetcher(all_zips_dir)])
+    with pytest.raises(RuntimeError, match="contained no files"):
+        transform.extract_all("2026-04", chain, tmp_path / "extracted")
+
+
 
 
 # -----------------------------------------------------------------------------
