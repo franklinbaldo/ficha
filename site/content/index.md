@@ -25,7 +25,7 @@ layout: index
       <h2 id="resultados-titulo">Resultados da consulta</h2>
       <ul class="companies" id="consulta-lista"></ul>
     </div>
-    <p class="fineprint notice"><strong>Busca experimental.</strong> Em 19/11/2026, um teste no navegador do próprio site confirmou bloqueio CORS da origem arquivística do Parquet CNPJ. A pesquisa ainda não passou pelos testes de paridade completa com os Parquets remotos, e não há consulta remota funcional comprovada. Uma falha de leitura não significa ausência da empresa; a interface deve informar indisponibilidade sem apresentar resultados simulados. <a href="https://github.com/franklinbaldo/ficha/issues/208#issuecomment-6999541728">Ver evidência e estado da investigação</a> ou <a href="/ficha/acervo/">consultar o acervo</a>.</p>
+    <p class="fineprint notice"><strong>Busca experimental nesta página.</strong> O formulário inicial ainda usa Parquet/DuckDB, cujo acesso remoto falhou por CORS em teste de 19/11/2026. Isso não significa ausência cadastral. Para um CNPJ numérico completo, <a href="/ficha/empresa/">abra a ficha por Protobuf</a>: essa rota independente foi exercitada em navegador com registros reais, mas também pode ficar indisponível. A busca por nome e a comparação histórica não foram resolvidas por esse avanço. <a href="https://github.com/franklinbaldo/ficha/issues/208">Acompanhe as evidências</a> ou <a href="/ficha/acervo/">consulte o acervo</a>.</p>
   </div>
   <div class="hero-bottom">
     <div class="fact"><span>Competência de referência no manifesto</span><strong id="competencia">__FICHA_CURRENT_COMPETENCE__</strong></div>
