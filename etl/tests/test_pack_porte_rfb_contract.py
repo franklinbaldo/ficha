@@ -62,3 +62,38 @@ def test_wire_emitido_hoje_e_inadequado_para_rotulo_ingenuo():
     assert decoded.porte_empresa == 1
     assert Porte.Name(decoded.porte_empresa) == "NAO_INFORMADO"
     assert decoded.porte_empresa != Porte.MICRO_EMPRESA
+
+
+def test_wire_publicado_202607_evidencia_numero_nao_origem_rfb():
+    """Fixture de bytes reais publicados em schema 1.0.0, sem reinterpretar RFB.
+
+    Fonte: https://archive.org/download/ficha-2026-07/companies-00.zip/00/000/006.pb
+    Metadado: https://archive.org/download/ficha-2026-07/companies-00.zip/_meta.json
+    Custódia: https://github.com/franklinbaldo/lontra/blob/main/workspace/ficha_pb_202607_00000006.b64
+
+    O packer atual declara 1.1.0, mas o ZIP publicado declara 1.0.0.
+    Isto prova a existência de wire=1 publicado, NÃO que a RFB originalmente
+    atribuiu 01 a esta raiz. UI não deve traduzir o enum cru em fato.
+    """
+    import base64
+    import hashlib
+
+    published_b64 = (
+        "CAYSJUFDQURFTUlBIERFIEJBTExFVCBQQVVMQSBGSVJFVFRJIExUREEaJUFDQURFTUlBIERFIEJBTExF"
+        "VCBQQVVMQSBGSVJFVFRJIExUREFQjhBYAWEAAAAAAECPQHABeAGiAZ0BCAEQRRgBUAJYn+nHCXj/icEJ"
+        "oAGFvIwEqgEIlPqPBMy2uATyAQNSVUH6AQ9MVUlTIERFIEFORFJBREWCAgI5OZICFFZJTEEgUEVSRUlS"
+        "QSBCQVJSRVRPmALAnLIBogICU1CoAsM3wgICMTHKAgg5MzU4NTk5MPICGFBBVUxBRklSRVRUSUBIT1RN"
+        "QUlMLkNPTZgDhdnPCaAD/6/QCaoBJwgCEhZQQVVMQSBDUklTVElOQSBGSVJFVFRJGIqwBigxMP+JwQlA"
+        "BqAG764M"
+    )
+    payload = base64.b64decode(published_b64, validate=True)
+    assert len(payload) == 306
+    assert hashlib.sha256(payload).hexdigest() == (
+        "515e989c74e5d44c4e7199f77d30b2ec578f85659ccfa5bf73f56bf9078aa203"
+    )
+
+    archived = Company.FromString(payload)
+    assert archived.cnpj_base == 6
+    assert archived.snapshot_yyyymm == 202607
+    assert archived.porte_empresa == 1
+    assert Porte.Name(archived.porte_empresa) == "NAO_INFORMADO"
