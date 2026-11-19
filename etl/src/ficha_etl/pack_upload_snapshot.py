@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import stat
 import tempfile
 from contextlib import ExitStack
@@ -17,7 +18,9 @@ from typing import BinaryIO
 _CHUNK = 1024 * 1024
 
 
-def freeze_pack_snapshot(stack: ExitStack, path: Path, expected_size: int) -> BinaryIO:
+def freeze_pack_snapshot(
+    stack: ExitStack, path: Path, expected_size: int, *, expected_sha256: str
+) -> BinaryIO:
     """Verify and freeze the pack output in an anonymous handle.
 
     Re-reading the opened inode detects same-size rewrites during the copy.
@@ -26,6 +29,8 @@ def freeze_pack_snapshot(stack: ExitStack, path: Path, expected_size: int) -> Bi
     """
     if type(expected_size) is not int or expected_size <= 0:
         raise ValueError("pack returned invalid ZIP size")
+    if not isinstance(expected_sha256, str) or not re.fullmatch(r"[0-9a-f]{64}", expected_sha256):
+        raise ValueError("pack returned invalid ZIP SHA-256")
 
     frozen = stack.enter_context(tempfile.TemporaryFile(mode="w+b"))
     if hasattr(os, "fstatvfs"):
@@ -54,6 +59,8 @@ def freeze_pack_snapshot(stack: ExitStack, path: Path, expected_size: int) -> Bi
             digest.update(chunk)
         if copied != expected_size:
             raise ValueError("companies.zip truncated during snapshot")
+        if digest.hexdigest() != expected_sha256:
+            raise ValueError("companies.zip differs from producer SHA-256")
 
         # Check the same inode again, not a path that another process can replace.
         original.seek(0)

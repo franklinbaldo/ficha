@@ -14,7 +14,8 @@ A interface greenfield do FICHA traduz a [visão de produto](../docs/rfc/ficha-g
 - `templates/`: HTML semântico; `product.html` carrega JavaScript apenas nas páginas interativas.
 - `static/css/site.css`: identidade editorial responsiva.
 - `static/js/catalog.mjs`: catálogo e proveniência do manifesto.
-- `static/js/record.mjs`: consulta de CNPJ por competência, com DuckDB sob demanda e encerramento de recursos.
+- `static/js/atomic-record.mjs` e `atomic-browser.mjs`: ficha por CNPJ numérico v1, validação da raiz/membro Protobuf e lookup RFB de competência; o decoder canônico é empacotado pelo build SSG.
+- `static/js/record.mjs`: acesso legado por Parquet/DuckDB mantido para a comparação histórica, ainda experimental.
 - `static/js/pages.mjs`: UI das páginas novas, sem resultados simulados.
 - `static/js/search-app.mjs`: busca experimental da home, com links de resultado para a ficha.
 - `scripts/finalize.mjs`: copia o manifesto original byte a byte e os módulos para o diretório de publicação.
@@ -22,7 +23,7 @@ A interface greenfield do FICHA traduz a [visão de produto](../docs/rfc/ficha-g
 
 ## Estado funcional e limites
 
-A navegação, o catálogo e os gráficos de **tamanho de arquivos declarados** funcionam a partir do manifesto do próprio site. A ficha e a comparação temporal executam consulta real **somente quando** os Parquets puderem ser acessados via CORS/Range. A [issue #208](https://github.com/franklinbaldo/ficha/issues/208) documenta uma falha desse transporte. Sem esse acesso, a UI mostra falha e ligação para a origem, não dados fictícios.
+A navegação, o catálogo e os gráficos de **tamanho de arquivos declarados** funcionam a partir do manifesto do próprio site. A ficha numérica completa agora tenta ler **somente um membro Protobuf v1**, com orçamento e estados explícitos de ausência/indisponibilidade. A comparação temporal e a busca por nome na home continuam usando o transporte legado Parquet/DuckDB, dependente de CORS/Range. O [E2E Chromium #44586268099](https://github.com/franklinbaldo/ficha/actions/runs/44586268099), executado no HEAD da [PR #367](https://github.com/franklinbaldo/ficha/pull/367), consultou Nubank e Petrobras em PB público e testou os caminhos negativos; o [deploy Pages #44586905819](https://github.com/franklinbaldo/ficha/actions/runs/44586905819) atestou publicação/HTTP após o merge, **não** uma repetição do E2E na URL publicada. Esses testes tampouco atestam todos os shards nem disponibilidade contínua. A [issue #208](https://github.com/franklinbaldo/ficha/issues/208) mantém esse escopo e documenta a falha CORS do transporte legado. Sem acesso, a UI informa indisponibilidade, não dados fictícios.
 
 Os gráficos em Explorar descrevem arquivos, **não** quantidade de empresas, movimento econômico ou mapas por UF. Indicadores regionais demandam agregados com proveniência e contrato próprios. Não existe fallback opaco para uma API de terceiros.
 
@@ -36,7 +37,7 @@ node --test site/tests/*.test.mjs
 # Workflow deploy.yml: build SSG + HTTP smoke do site publicado
 ```
 
-O smoke HTTP comprova páginas e arquivos publicados, **não** a consulta real. O teste end-to-end real de CNPJ numérico/alfanumérico segue como condição de promoção funcional em #208.
+O smoke HTTP comprova páginas e arquivos publicados, **não** a consulta real. O pipeline de captura inclui agora um E2E específico com dois CNPJs numéricos publicados e casos negativos, distinto do smoke. A pesquisa alfanumérica v1.1 e a busca textual permanecem fora da fatia Protobuf v1; validar separadamente antes de declarar completude de #208.
 
 **Motto:** menos páginas que explicam o FICHA; mais páginas nas quais se utiliza o FICHA.
 
