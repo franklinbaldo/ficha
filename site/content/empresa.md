@@ -2,7 +2,7 @@
 type: Page
 name: Ficha da empresa
 title: Ficha da empresa — FICHA
-description: Consulte a ficha cadastral de um CNPJ em uma competência publicada.
+description: Ficha cadastral em competência arquivada; consulta remota por CNPJ ainda experimental.
 language: pt-BR
 permalink: https://franklinbaldo.github.io/ficha/empresa/
 layout: product
@@ -11,7 +11,8 @@ layout: product
 <section class="page-lead">
   <p class="eyebrow">01 / FICHA CADASTRAL</p>
   <h1>Uma empresa, uma ficha.</h1>
-  <p class="lede">Consulte um registro cadastral público na competência arquivada. Cada resultado identifica de quando é o dado e de onde veio.</p>
+  <p class="lede">Uma ficha reúne informações públicas de uma competência arquivada quando a origem pode ser lida no navegador. A consulta remota ainda é experimental; um erro de leitura não significa que a empresa esteja ausente do acervo.</p>
+  <p class="fineprint notice"><strong>Consulta sujeita a indisponibilidade.</strong> Em 19/11/2026, um teste no site publicado encontrou bloqueio CORS ao acessar o Parquet de CNPJ no Internet Archive. Se a pesquisa falhar, <a href="/ficha/acervo/">consulte os arquivos declarados no acervo</a>. <a href="https://github.com/franklinbaldo/ficha/issues/208">Entenda a investigação</a>.</p>
 </section>
 <section class="workspace" aria-labelledby="consulta-empresa">
   <h2 id="consulta-empresa">Consultar CNPJ</h2>

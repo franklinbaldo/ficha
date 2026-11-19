@@ -35,6 +35,7 @@ def violations(workflow: dict, auditor: str) -> list[str]:
         "site/**",
         "web/public/manifest.json",
         "web/scripts/check-accessibility.mjs",
+        "web/scripts/check-greenfield.mjs",
         "web/package.json",
         "web/bun.lock",
         ".github/workflows/visual-capture.yml",
@@ -98,6 +99,19 @@ def violations(workflow: dict, auditor: str) -> list[str]:
             or audit.get("run", "") != expected_audit_run
         ):
             errors.append("real browser auditor must run in SSG mode")
+        greenfield = _step(
+            steps,
+            "Exercise product pages in Chromium (manifest real, no Parquet fetch)",
+        )
+        expected_greenfield_run = (
+            "node scripts/check-greenfield.mjs "
+            "http://127.0.0.1:4321/ficha/ ../accessibility-evidence"
+        )
+        if (
+            greenfield.get("working-directory") != "web"
+            or greenfield.get("run", "") != expected_greenfield_run
+        ):
+            errors.append("greenfield Chromium smoke must execute and propagate failure")
         upload = _step(steps, "Upload browser accessibility evidence")
         if (
             upload.get("if") != "always()"
@@ -147,7 +161,11 @@ def test_reject_mutations_that_restore_false_green() -> None:
     variants["old astro paths"] = w
     # The browser auditor installs through web/package.json + web/bun.lock.
     # Their changes must not bypass the actual SSG audit.
-    for missing in ("web/package.json", "web/bun.lock"):
+    for missing in (
+        "web/package.json",
+        "web/bun.lock",
+        "web/scripts/check-greenfield.mjs",
+    ):
         w = mutated()
         w.get("on", w.get(True))["pull_request"]["paths"].remove(missing)
         variants[f"missing browser audit dependency: {missing}"] = w
@@ -194,6 +212,20 @@ def test_reject_mutations_that_restore_false_green() -> None:
     w = mutated()
     _step(w["jobs"]["capture"]["steps"], "Install Chromium")["run"] = "echo chromium"
     variants["no real browser"] = w
+    w = mutated()
+    w["jobs"]["capture"]["steps"] = [
+        step
+        for step in w["jobs"]["capture"]["steps"]
+        if step.get("name")
+        != "Exercise product pages in Chromium (manifest real, no Parquet fetch)"
+    ]
+    variants["no product pages Chromium"] = w
+    w = mutated()
+    _step(
+        w["jobs"]["capture"]["steps"],
+        "Exercise product pages in Chromium (manifest real, no Parquet fetch)",
+    )["run"] += " || true"
+    variants["masked product pages Chromium"] = w
 
     for name, variant in variants.items():
         assert violations(variant, auditor), name
