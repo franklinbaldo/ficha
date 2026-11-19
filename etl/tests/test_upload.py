@@ -203,6 +203,87 @@ def test_upload_raw_zips_raises_on_http_error(mock_upload, tmp_path):
 # ---------------------------------------------------------------------------
 
 
+def _fake_rfb_get(monkeypatch, *, status=200, length="4", encoding="identity"):
+    """Provide a complete synthetic response without an RFB or IA connection."""
+    class FakeResponse:
+        status_code = status
+        headers = {"content-length": length, "content-encoding": encoding}
+
+        def raise_for_status(self):
+            pass  # HTTP 201/206 are valid 2xx for httpx.raise_for_status
+
+        def iter_bytes(self, _size):
+            yield b"PKxx"
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+    class FakeClient:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def stream(self, method, _url, **_kwargs):
+            assert method == "GET"
+            return FakeResponse()
+
+    monkeypatch.setattr(upload_mod.httpx, "Client", FakeClient)
+
+
+@pytest.mark.parametrize(
+    ("status", "length", "encoding", "message"),
+    [
+        (206, "4", "identity", "unexpected HTTP 206"),
+        (201, "4", "identity", "unexpected HTTP 201"),
+        (200, "0", "identity", "invalid Content-Length"),
+        (200, "-4", "identity", "invalid Content-Length"),
+        (200, "4", "gzip", "Content-Encoding"),
+    ],
+)
+def test_raw_stream_rejects_untrusted_get_before_ia_put(
+    monkeypatch, status, length, encoding, message
+):
+    """A misleading upstream reply must not invoke a remote IA PUT."""
+    _fake_rfb_get(monkeypatch, status=status, length=length, encoding=encoding)
+
+    def unexpected_put(*_args, **_kwargs):
+        pytest.fail("untrusted RFB response reached the IA PUT boundary")
+
+    monkeypatch.setattr(upload_mod, "_ia_s3_put", unexpected_put)
+    spec = next(iter(canonical_inventory()))
+    with pytest.raises(RuntimeError, match=message):
+        upload_mod._stream_one_zip(
+            spec, rfb_token="t", month="2026-04",
+            identifier=item_id("2026-04"), access_key="A", secret_key="S", is_first=False,
+        )
+
+
+def test_raw_stream_accepts_full_identity_get(monkeypatch):
+    """A valid full-body GET still reaches the mock IA PUT unchanged."""
+    _fake_rfb_get(monkeypatch)
+    sent = []
+
+    def capture_put(identifier, name, chunks, **kwargs):
+        sent.append((identifier, name, b"".join(chunks), kwargs["content_length"]))
+
+    monkeypatch.setattr(upload_mod, "_ia_s3_put", capture_put)
+    spec = next(iter(canonical_inventory()))
+    got = upload_mod._stream_one_zip(
+        spec, rfb_token="t", month="2026-04",
+        identifier=item_id("2026-04"), access_key="A", secret_key="S", is_first=False,
+    )
+    assert got == spec.name
+    assert sent == [(item_id("2026-04"), f"raw/{spec.name}", b"PKxx", "4")]
+
+
 def test_ias3_error_message_is_ascii():
     """Error messages must be ASCII so they survive a runner with stderr=ascii.
 
