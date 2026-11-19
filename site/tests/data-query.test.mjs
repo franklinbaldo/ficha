@@ -205,6 +205,8 @@ test('206 com headers corretos precisa entregar um byte, jamais vazio ou excessi
   await assert.rejects(check(body([])), /exatamente 1 byte/);
   await assert.rejects(check(body([[0x50, 0x41]])), /exatamente 1 byte/);
   await assert.rejects(check(body([[0x50], [0x41]])), /maior que 1 byte/);
+  // A 206 with the correct length but a wrong prefix is not Parquet.
+  await assert.rejects(check(body([[0x00]])), /assinatura Parquet inicial/);
   await check(body([[0x50]])); // Positive control: one byte followed by EOF.
 });
 

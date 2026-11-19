@@ -1,0 +1,32 @@
+---
+type: Page
+name: História de empresas
+title: História — FICHA
+description: Compare observações cadastrais em competências realmente arquivadas.
+language: pt-BR
+permalink: https://franklinbaldo.github.io/ficha/historia/
+layout: product
+---
+
+<section class="page-lead">
+  <p class="eyebrow">02 / TEMPO</p>
+  <h1>O tempo deixa registros.</h1>
+  <p class="lede">Compare como uma mesma empresa aparece em duas competências arquivadas. A diferença entre observações não determina a data em que algo mudou.</p>
+</section>
+<section class="workspace">
+  <h2>Competências no acervo</h2>
+  <ol id="historia-competencias" class="timeline-list" aria-label="Snapshots publicados"></ol>
+  <h2>Comparar duas observações</h2>
+  <form id="historia-form" class="query-form">
+    <div class="form-field"><label for="historia-cnpj">CNPJ completo</label><input id="historia-cnpj" name="cnpj" type="search" required maxlength="24" placeholder="Digite o CNPJ"></div>
+    <div class="form-field"><label for="historia-inicio">Competência inicial</label><select id="historia-inicio" required></select></div>
+    <div class="form-field"><label for="historia-fim">Competência final</label><select id="historia-fim" required></select></div>
+    <button id="historia-enviar" class="button-primary" type="submit">Comparar</button>
+  </form>
+  <p class="interface-status" id="historia-estado" role="status" aria-live="polite">Lendo o manifesto…</p>
+  <div class="result-panel" id="historia-resultado" aria-label="Comparação cadastral"></div>
+</section>
+<section class="footnote-section">
+  <h2>Limites da comparação</h2>
+  <p>Um campo diferente em dois arquivos é evidência de uma diferença observada, não da data precisa da alteração. Uma competência ausente não pode ser preenchida por suposição; a ausência de um CNPJ em um snapshot não prova encerramento.</p>
+</section>

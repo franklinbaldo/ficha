@@ -60,6 +60,13 @@ jobs:
           ssg check --config config.toml
           ssg build --config config.toml
           node scripts/finalize.mjs
+          # The data transport module must survive SSG/finalize byte-for-byte.
+          cmp static/js/dataset.mjs dist/ficha/js/dataset.mjs
+          # A newly declared page must also load its ES module in the built output.
+          for page in empresa historia explorar acervo; do
+            test -f "dist/ficha/$page/index.html"
+            grep -q '/ficha/js/pages.mjs' "dist/ficha/$page/index.html"
+          done
       - uses: actions/upload-pages-artifact@v3
         if: github.event_name != 'pull_request'
         with:
@@ -86,6 +93,9 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+          ref: ${{ github.sha }}
+      - name: Conferir SHA do checkout de verificação
+        run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
       - name: HTTP smoke do Pages e identidade do manifesto RFB
         env:
           PAGE_URL: ${{ needs.deploy.outputs.page_url }}
@@ -94,12 +104,28 @@ jobs:
           BASE="${PAGE_URL%/}"
           curl -fsSL --retry 3 "$BASE/" -o index.html
           curl -fsSL --retry 3 "$BASE/sobre/" -o sobre.html
+          curl -fsSL --retry 3 "$BASE/empresa/" -o empresa.html
+          curl -fsSL --retry 3 "$BASE/historia/" -o historia.html
+          curl -fsSL --retry 3 "$BASE/explorar/" -o explorar.html
+          curl -fsSL --retry 3 "$BASE/acervo/" -o acervo.html
+          curl -fsSL --retry 3 "$BASE/js/pages.mjs" -o pages.mjs
+          curl -fsSL --retry 3 "$BASE/js/catalog.mjs" -o catalog.mjs
+          curl -fsSL --retry 3 "$BASE/js/record.mjs" -o record.mjs
           curl -fsSL --retry 3 "$BASE/css/site.css" -o site.css
           curl -fsSL --retry 3 "$BASE/js/boot.mjs" -o boot.mjs
+          curl -fsSL --retry 3 "$BASE/js/dataset.mjs" -o dataset-live.mjs
           curl -fsSL --retry 3 "$BASE/manifest.json" -o manifest-live.json
           grep -q 'id="busca-form"' index.html
+          grep -q 'id="empresa-form"' empresa.html
+          grep -q 'id="historia-form"' historia.html
+          grep -q 'id="explorar-grafico"' explorar.html
+          grep -q 'id="acervo-competencia"' acervo.html
+          grep -q 'mountCompany' pages.mjs
+          grep -q 'snapshotsDescending' catalog.mjs
+          grep -q 'fetchRecordAt' record.mjs
           grep -q 'Sobre o FICHA' sobre.html
           grep -q 'focus-visible' site.css
           grep -q 'mountSearch' boot.mjs
+          cmp site/static/js/dataset.mjs dataset-live.mjs
           cmp web/public/manifest.json manifest-live.json
           node -e "const d=require('./manifest-live.json');if(!d.current||!d.snapshots?.some(s=>s.date===d.current))process.exit(1); console.log('Pages MVP + manifest OK: '+d.current)"

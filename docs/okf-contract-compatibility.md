@@ -116,6 +116,28 @@ O adaptador `web/src/lib/okf-row-schemas.ts` também não seleciona o
 contrato pela versão do snapshot. Ambas são dependências de decisão do
 Elefante/Polvo e não foram alteradas.
 
+### Consumidor de views do Astro legado: fronteira observável
+
+O módulo legado `web/src/lib/okf-views.ts` chama
+`getOkfParquetRowSchema(view.output)` e depois `safeParse(row)`.
+Esse adaptador usa **Zod gerado OKF** (`web/src/lib/okf-row-schemas.ts`),
+não o schema público v1. Para `Socio`, o v1 permite
+`cnpj_socio: null`, enquanto o gerado exige `z.string()`. Uma linha
+sintética de sócio PF com esse campo nulo é aceita por
+`web/src/schemas/v1/socio.ts`, mas recusada por
+`validateOkfConvenienceViewRows('socios_de_raizes_ativas', ...)`.
+O teste Vitest do consumidor registra explicitamente as duas expectativas,
+sem alterar o comportamento atual.
+
+Essa diferença é **dívida já conhecida**, não um incidente novo na
+home pública SSG (`site/`), que é separada do módulo Astro `web/`.
+O teste não consulta Parquet remoto nem prova que determinada linha
+foi publicada. Antes de usar esse validador numa busca SSG ou substituir
+o contrato gerado, decidir com 🐙 Polvo/🐘 Elefante qual contrato lógico
+e versão governam valores `null`, enums e campos ausentes (ADR 0027,
+PR #253 ainda em proposta). Não equiparar a paridade estática SQL/Zod
+à aceitação de linhas pelo validador.
+
 ## Baseline independente de colunas públicas v1 (18/11/2026)
 
 O teste adicional `knowledge/tests/test_public_v1_column_baseline.py` congela
