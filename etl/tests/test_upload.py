@@ -351,7 +351,6 @@ def test_existing_raw_files_on_ia_parses_metadata(monkeypatch):
     assert out == {"raw/Empresas0.zip", "raw/Empresas1.zip"}
 
 
-
 @pytest.mark.parametrize(
     "files",
     [
