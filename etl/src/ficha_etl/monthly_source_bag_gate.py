@@ -11,7 +11,7 @@ import json
 import os
 import tempfile
 from pathlib import Path
-from typing import Sequence
+from typing import Mapping, Sequence
 
 import duckdb
 
@@ -52,6 +52,7 @@ def reconcile_loaded_source_keys(
     parts: Sequence[tuple[str, Path]],
     cnpjs_path: Path,
     receipt_path: Path,
+    parsed_part_counts: Mapping[Path, int],
 ) -> dict:
     """Compare key multiplicities using the production CSV parser.
 
@@ -84,11 +85,33 @@ def reconcile_loaded_source_keys(
         _write_receipt(receipt_path, payload)
         raise MonthlySourceBagError(payload["reason"])
 
+    # Source rows must be counted in the same DuckDB load that produced the
+    # union table. Bytes > 0 are not evidence of a logical CSV record.
+    # Refuse missing/aliased counters rather than silently skipping a part.
+    expected_paths = {p.resolve() for p in paths}
+    counts = {Path(path).resolve(): value for path, value in parsed_part_counts.items()}
+    if (
+        set(counts) != expected_paths
+        or any(type(value) is not int or value <= 0 for value in counts.values())
+    ):
+        payload["reason"] = "missing or zero logical rows in an RFB source part"
+        _write_receipt(receipt_path, payload)
+        raise MonthlySourceBagError(payload["reason"])
+
     payload["parts"] = [
-        {"zip_name": name, "parsed_csv_size": p.stat().st_size}
+        {
+            "zip_name": name,
+            "parsed_csv_size": p.stat().st_size,
+            "parsed_csv_rows": counts[p.resolve()],
+        }
         for (name, _), p in zip(parts, paths, strict=True)
     ]
     src_rows = con.execute(f"SELECT COUNT(*) FROM ({_SOURCE_KEYS})").fetchone()[0]
+    if sum(counts.values()) != src_rows:
+        payload["reason"] = "per-part logical row totals differ from loaded source table"
+        payload["parsed_source_rows"] = int(src_rows)
+        _write_receipt(receipt_path, payload)
+        raise MonthlySourceBagError(payload["reason"])
     dst_rows = con.execute("SELECT COUNT(*) FROM read_parquet(?)", [str(cnpjs_path)]).fetchone()[0]
     payload["parsed_source_rows"] = int(src_rows)
     payload["produced_rows"] = int(dst_rows)
