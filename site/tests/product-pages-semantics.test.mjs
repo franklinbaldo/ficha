@@ -39,7 +39,7 @@ function fakeDocument(ids = []) {
 function manifestWithShards() {
   const snapshot = date => ({
     date, row_counts: { cnpjs: 2 }, files: {
-      companies: { shards: [
+      companies: { shard_by:'cnpj_base_prefix_2', schema_version:'1.0.0', shards: [
         { shard: '00', size: 10, url: 'https://archive.org/00' },
         { shard: '01', size: 20, url: 'https://archive.org/01' },
       ] },
@@ -125,7 +125,7 @@ test('história preserva ordem anterior → posterior numa comparação válida'
       loadManifest: async () => manifestWithShards(),
       lookup: async (_manifest, date, cnpj) => {
         lookups.push([date, cnpj]);
-        return { date, cnpj, data: null, source: 'https://archive.org/' + date };
+        return { date, cnpj, state:'found', data: {razao_social:'Empresa '+date}, source: 'https://archive.org/' + date };
       },
     });
     doc.at('historia-cnpj').value = '00000000E08G12';
@@ -230,7 +230,7 @@ test('história descarta segunda resposta tardia após mudança do CNPJ', async 
     await mountHistory(doc, {
       loadManifest: async () => manifestWithShards(),
       lookup: async (_manifest, date, cnpj) => date === '2026-06'
-        ? { date, cnpj, source: 'https://archive.org/old', data: null }
+        ? { date, cnpj, source: 'https://archive.org/old', state:'found', data:{razao_social:'Antiga'} }
         : new Promise(resolve => { finishNewer = resolve; }),
     });
     doc.at('historia-cnpj').value = '00000000E08G12';
@@ -317,7 +317,7 @@ test('história: editar competência limpa link antigo mas mantém parâmetros a
       loadManifest:async()=>manifestWithShards(),
       lookup:async (_manifest,date,cnpj)=>{
         calls++;
-        return {date,cnpj,data:null,source:'https://archive.org/'+date};
+        return {date,cnpj,state:'found',data:{razao_social:'Empresa '+date},source:'https://archive.org/'+date};
       },
     });
     doc.at('historia-cnpj').value='00000000E08G12';
@@ -347,7 +347,7 @@ test('história: edição A→B→A enquanto segunda fonte demora descarta compa
     await mountHistory(doc,{
       loadManifest:async()=>manifestWithShards(),
       lookup:async (_manifest,date,cnpj)=>date==='2026-06'
-        ? {date,cnpj,data:null,source:'https://archive.org/old'}
+        ? {date,cnpj,state:'found',data:{razao_social:'Antiga'},source:'https://archive.org/old'}
         : new Promise(resolve=>{finishNewer=resolve;}),
     });
     doc.at('historia-cnpj').value='00000000E08G12';
