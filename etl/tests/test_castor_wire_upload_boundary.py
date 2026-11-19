@@ -272,8 +272,12 @@ def test_monthly_legacy_wire_transforms_before_raw_upload_and_descriptor(
 
     monthly_sharded.command_produce(args)
     assert calls == [
-        "transform", "secret:IA_ACCESS_KEY", "secret:IA_SECRET_KEY",
-        "raw", "descriptor", "write",
+        "transform",
+        "secret:IA_ACCESS_KEY",
+        "secret:IA_SECRET_KEY",
+        "raw",
+        "descriptor",
+        "write",
     ]
 
 
