@@ -57,6 +57,27 @@ test('guarda 32 MiB configurada, Content-Length e corpo fragmentado',async()=>{
   assert.deepEqual([...await readBoundedMember(new Response(Uint8Array.of(1,2,3)),3)],[1,2,3]);
   await assert.rejects(readBoundedMember(new Response(Uint8Array.of(1)),0),/inválido/);
 });
+test('erro de excesso não aguarda cancelamento de stream que nunca resolve',async()=>{
+  let cancelCount=0,releaseCount=0;
+  const pending=new Promise(()=>{});
+  const response={headers:{get:()=>null},body:{getReader:()=>({
+    async read(){return {done:false,value:Uint8Array.of(1,2,3,4)};},
+    cancel(){cancelCount++;return pending;},
+    releaseLock(){releaseCount++;},
+  })}};
+  const result=await Promise.race([
+    readBoundedMember(response,3).then(
+      ()=>({state:'unexpected-success'}),
+      error=>({state:'rejected',message:error.message}),
+    ),
+    new Promise(resolve=>setTimeout(()=>resolve({state:'stalled'}),150)),
+  ]);
+  assert.deepEqual(result,{state:'rejected',
+    message:'Membro Protobuf excede orçamento de leitura'});
+  assert.equal(cancelCount,1,'o cancelamento foi solicitado');
+  assert.equal(releaseCount,1,'o reader foi liberado mesmo sem teardown');
+});
+
 test('decoder canônico injetado recebe bytes, sem baixar ZIP ou Parquet',async()=>{
   const urls=[];let observed;
   const result=await lookup(manifest,DATE,CNPJ,{fetchImpl:async(url,options)=>{
