@@ -454,6 +454,14 @@ def _cmd_run(
             result["size_bytes"] / 1e6,
         )
 
+        # Validate the local manifest identity before any raw/output PUT.
+        # Missing Parquet, row count or hash errors must fail before publication.
+        try:
+            entry = manifest_mod.build_snapshot_entry(month, output_dir)
+        except Exception as exc:
+            _eprint(f"error: manifest build falhou: {exc}")
+            return 1
+
         _advance("[run 3/5] stream ZIPs")
 
         if not skip_upload:
@@ -494,11 +502,6 @@ def _cmd_run(
 
         # ── 5. Manifest ───────────────────────────────────────────────────────
         log.info("[run 5/5] atualizar manifest → %s", manifest_path)
-        try:
-            entry = manifest_mod.build_snapshot_entry(month, output_dir)
-        except Exception as exc:
-            _eprint(f"error: manifest build falhou: {exc}")
-            return 1
 
         if not skip_upload:
             # Local existence (build_snapshot_entry) e upload HTTP OK

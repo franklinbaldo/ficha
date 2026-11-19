@@ -96,6 +96,40 @@ def test_legacy_run_refuses_raw_put_when_local_pack_fails(
     assert not (tmp_path / "manifest.json").exists()
 
 
+def test_legacy_run_refuses_raw_put_when_local_manifest_build_fails(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Local manifest validation and hashing precede remote publication."""
+    monkeypatch.setenv("IA_ACCESS_KEY", "synthetic-access")
+    monkeypatch.setenv("IA_SECRET_KEY", "synthetic-secret")
+    monkeypatch.setattr(cli, "make_progress", _Progress)
+    events: list[str] = []
+
+    def transform(*_args: object, **kwargs: object) -> None:
+        assert kwargs["reject_empty_estabelecimentos"] is True
+        events.append("transform")
+
+    def pack(*_args: object, **_kwargs: object) -> dict[str, int]:
+        events.append("pack")
+        return {"count": 1, "size_bytes": 10}
+
+    def fail_manifest(*_args: object, **_kwargs: object) -> None:
+        events.append("build")
+        raise RuntimeError("synthetic missing local parquet")
+
+    monkeypatch.setattr(cli.transform, "transform_snapshot", transform)
+    monkeypatch.setattr(cli.pack_mod, "pack_from_parquets", pack)
+    monkeypatch.setattr(cli.manifest_mod, "build_snapshot_entry", fail_manifest)
+    monkeypatch.setattr(cli.upload_mod, "stream_raw_zips_to_ia", _reject)
+    monkeypatch.setattr(cli.upload_mod, "upload_outputs", _reject)
+    monkeypatch.setattr(cli.upload_mod, "upload_companies_zip", _reject)
+    monkeypatch.setattr(cli.manifest_mod, "update_manifest", _reject)
+
+    assert _run(tmp_path, skip_upload=False) == 1
+    assert events == ["transform", "pack", "build"]
+    assert not (tmp_path / "manifest.json").exists()
+
+
 def test_legacy_run_rejects_missing_ia_credentials_before_work(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -157,10 +191,10 @@ def test_legacy_run_orders_transform_before_every_remote_effect(
         assert events == [
             "transform",
             "pack",
+            "build",
             "raw",
             "outputs",
             "companies",
-            "build",
             "verify",
             "manifest",
         ]
