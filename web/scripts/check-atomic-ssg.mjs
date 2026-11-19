@@ -69,7 +69,7 @@ try {
     assert.match(message,/Comparação concluída/,message);
     const table=await history.locator('#historia-resultado').textContent();
     assert.match(table,/Razão social/);
-    assert.match(table,/Porte.*não permite determinar/i);
+    assert.match(table,/não permite determinar o porte/i);
     const pb=visited.filter(url=>url.includes('.zip/')&&url.endsWith('.pb'));
     assert.equal(pb.length,2,'comparação exige dois membros Protobuf distintos');
     assert.ok(!visited.some(url=>url.endsWith('.parquet')),
