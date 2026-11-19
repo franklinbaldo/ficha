@@ -145,11 +145,30 @@ def _stream_one_zip(
     with httpx.Client(timeout=_STREAM_TIMEOUT, follow_redirects=True) as dl:
         with dl.stream("GET", rfb_url, auth=(rfb_token, "")) as rfb_resp:
             rfb_resp.raise_for_status()
-            content_length = rfb_resp.headers.get("content-length", "")
-            if not content_length:
+            # We asked for a whole object, not a byte range. Other 2xx codes
+            # (notably 206) could publish an incomplete ZIP as raw evidence.
+            if rfb_resp.status_code != 200:
                 raise RuntimeError(
-                    f"RFB não retornou Content-Length para {spec.name} "
-                    "— streaming sem tamanho não é suportado"
+                    f"RFB returned unexpected HTTP {rfb_resp.status_code} "
+                    f"for full GET of {spec.name}"
+                )
+            # httpx.iter_bytes transparently decodes Content-Encoding, while
+            # Content-Length describes bytes on the wire. Never mislabel those
+            # decoded bytes as a byte-for-byte RFB ZIP in the IA mirror.
+            encoding = rfb_resp.headers.get("content-encoding", "identity").strip().lower()
+            if encoding != "identity":
+                raise RuntimeError(
+                    f"RFB returned Content-Encoding {encoding!r} for {spec.name}"
+                )
+            content_length = rfb_resp.headers.get("content-length", "")
+            if (
+                not content_length.isascii()
+                or not content_length.isdecimal()
+                or int(content_length) <= 0
+            ):
+                raise RuntimeError(
+                    f"RFB returned invalid Content-Length for {spec.name}: "
+                    f"{content_length!r}"
                 )
             log.info(
                 "streaming %s → IA (%.1f MB)",
