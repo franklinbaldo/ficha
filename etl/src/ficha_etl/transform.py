@@ -13,6 +13,7 @@ import collections
 import json
 import logging
 import os
+import re
 import shutil
 import tempfile
 import time
@@ -83,7 +84,7 @@ def extract_all(
     progress: Progress | None = None,
     reject_empty_estabelecimentos: bool = False,
 ) -> list[ExtractedFile]:
-    """Resolve cada ZIP via chain, extrai pra `extract_dir/{kind}/`.
+    """Resolve cada ZIP via chain, extrai pra `extract_dir/{kind}/{spec.name}/`.
 
     RFB publica exatamente 1 CSV por ZIP. A invariante é checada explicitamente
     aqui — se RFB mudar e empacotar arquivos extras (ex.: checksum), falhamos
@@ -121,7 +122,11 @@ def extract_all(
         for i, spec in enumerate(inventory, 1):
             t0 = time.monotonic()
             zip_path = zip_paths[spec.name]
-            kind_dir = extract_dir / spec.kind
+            # Give each canonical ZIP its own extraction root: different RFB
+            # parts may contain a member with the same internal filename.
+            # A shared kind directory would overwrite the earlier part before
+            # DuckDB reads it, silently duplicating the later part instead.
+            kind_dir = extract_dir / spec.kind / spec.name
             extracted = extract_zip(zip_path, kind_dir)
             files = [p for p in extracted if p.is_file()]
             if not files:
@@ -1605,14 +1610,25 @@ def write_enderecos_parquet(
     auxiliar e nunca é necessário só para interpretar uma linha de endereço.
     Ver docs/perf-plan-2026-05.md §7 e ADR 0023.
 
-    Normalização vetorizada: CTE computa a base normalizada uma vez por linha
-    (UPPER + strip_accents + TRIM + whitespace collapse); depois uma única
-    extração de prefixo + MAP lookup substitui as 10 chamadas regexp_replace
-    anteriores, passando de 11 para 4 operações regex/map por linha.
+    Quando o logradouro não começa com um tipo conhecido, acrescenta tipo_logradouro
+    separado (origem RFB) antes de normalizar. Um prefixo já explícito no
+    logradouro prevalece, evitando duplicação e preservando conflitos para
+    diagnóstico separado.
+
+    Normalização vetorizada em DuckDB (UPPER, strip_accents e espaços).
+    Os prefixos conhecidos vêm da mesma tabela de abreviações usada pelo MAP.
+    A verificação do prefixo adiciona trabalho ao writer; medir o custo
+    sobre um volume representativo antes de publicar novo snapshot.
     """
     output_path.parent.mkdir(parents=True, exist_ok=True)
     log.info("    writing enderecos.parquet...")
     abbrev_map = "MAP {" + ", ".join(f"'{k}': '{v} '" for k, v in _LOGRADOURO_ABBREVS.items()) + "}"
+    prefixos = set(_LOGRADOURO_ABBREVS) | set(_LOGRADOURO_ABBREVS.values())
+    tipo_prefix_pattern = (
+        r"^(?:"
+        + "|".join(re.escape(p) for p in sorted(prefixos, key=lambda p: (-len(p), p)))
+        + r")\.?\s+"
+    )
     has_lookup = _has_lookup_table(con, "lookup_municipios")
     municipio_name_sql = "mun.descricao" if has_lookup else "NULL::VARCHAR"
     municipio_join_sql = (
@@ -1627,7 +1643,19 @@ def write_enderecos_parquet(
                     est.municipio AS municipio_codigo,
                     {municipio_name_sql} AS municipio_nome,
                     UPPER(strip_accents(TRIM(
-                        regexp_replace(est.logradouro, '\s+', ' ', 'g')
+                        regexp_replace(
+                            CASE
+                                WHEN est.tipo_logradouro IS NULL
+                                  OR TRIM(est.tipo_logradouro) = ''
+                                  OR regexp_matches(
+                                      UPPER(strip_accents(TRIM(est.logradouro))),
+                                      '{tipo_prefix_pattern}'
+                                  )
+                                THEN est.logradouro
+                                ELSE TRIM(est.tipo_logradouro) || ' ' || est.logradouro
+                            END,
+                            '\s+', ' ', 'g'
+                        )
                     ))) AS _logr,
                     est.numero,
                     est.cep,

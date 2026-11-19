@@ -37,7 +37,9 @@ export function compareRecords(before, after) {
     field, label,
     before: displayValue(before?.[field]),
     after: displayValue(after?.[field]),
-    changed: displayValue(before?.[field]) !== displayValue(after?.[field]),
+    // Presentation collapses null, empty strings and some scalar types.
+    // Compare observed values, never their labels.
+    changed: before?.[field] !== after?.[field],
   }));
 }
 
@@ -53,7 +55,9 @@ export async function fetchRecordAt(manifest, date, cnpj, {
   if (!canonical) throw new Error('Informe um CNPJ completo, numérico ou alfanumérico');
   const snapshot = manifest?.snapshots?.find(s => s.date === date);
   if (!snapshot) throw new Error('Competência não publicada no manifesto');
-  const dataset = currentDataset({ current: date, snapshots:[snapshot] });
+  // Keep the original snapshot set: reducing it to [snapshot] would bypass
+  // currentDataset's fail-closed check against duplicate competence dates.
+  const dataset = currentDataset({ ...manifest, current: date });
   await probeRange({url:dataset.files.cnpjs.url, size:dataset.files.cnpjs.size});
   const engine = await createEngine();
   try {
