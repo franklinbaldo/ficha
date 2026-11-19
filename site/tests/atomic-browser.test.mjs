@@ -78,6 +78,33 @@ test('lookup alterado com mesmo tamanho falha pelo SHA-256 do manifesto',async()
   }),/SHA-256.*difere/);
 });
 
+test('lookup com schema incompatível ou ausente é recusado mesmo com SHA e mês corretos',async()=>{
+  for (const version of ['2.0.0', null]) {
+    const modified=structuredClone(lookups);
+    if (version === null) delete modified.schema_version;
+    else modified.schema_version=version;
+    const payload=new TextEncoder().encode(JSON.stringify(modified));
+    const declared=structuredClone(manifest);
+    declared.snapshots[0].files.lookups.size=payload.byteLength;
+    declared.snapshots[0].files.lookups.sha256=sha256(payload);
+    await assert.rejects(fetchSnapshotLookups(declared,date,{
+      fetchImpl:async()=>new Response(payload),cacheMap:new Map(),
+    }),/versão|schema|incompatível/i);
+  }
+});
+
+test("cache não ignora tamanho declarado divergente para o mesmo SHA-256",async()=>{
+  const cacheMap=new Map();
+  let calls=0;
+  const fetchImpl=async()=>{calls++;return new Response(bytes);};
+  await fetchSnapshotLookups(manifest,date,{fetchImpl,cacheMap});
+  const incompatible=structuredClone(manifest);
+  incompatible.snapshots[0].files.lookups.size++;
+  await assert.rejects(fetchSnapshotLookups(incompatible,date,{fetchImpl,cacheMap}),
+    /tamanho divergente/);
+  assert.equal(calls,2);
+});
+
 test('404 do membro é inconclusivo e não acessa o lookup',async()=>{
   let calls=0;
   const result=await fetchCompanyByCnpj(manifest,date,cnpj,{

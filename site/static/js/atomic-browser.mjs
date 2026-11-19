@@ -22,7 +22,7 @@ export async function fetchSnapshotLookups(manifest, date, {
   if (!/^[0-9a-f]{64}$/.test(sha256 ?? '')) {
     throw new Error('SHA-256 do lookup ausente ou inválido no manifesto');
   }
-  const cacheKey = url + '#' + sha256;
+  const cacheKey = url + '#' + sha256 + ':' + snapshot.files.lookups.size;
   let promise = cacheMap.get(cacheKey);
   if (!promise) {
     promise = (async () => {
@@ -39,7 +39,8 @@ export async function fetchSnapshotLookups(manifest, date, {
       let value;
       try { value = JSON.parse(new TextDecoder('utf-8', {fatal:true}).decode(bytes)); }
       catch { throw new Error('Lookup JSON inválido'); }
-      if (value?.snapshot_date !== date || !value.municipios ||
+      if (value?.schema_version !== '1.0.0' ||
+          value?.snapshot_date !== date || !value.municipios ||
           !value.cnaes || typeof value.municipios !== 'object' ||
           typeof value.cnaes !== 'object' || Array.isArray(value.municipios) ||
           Array.isArray(value.cnaes)) {
