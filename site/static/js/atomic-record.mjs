@@ -61,7 +61,9 @@ export async function readBoundedMember(response, limit = MAX_COMPANY_BYTES) {
       chunks.push(part.value);
     }
   } catch (error) {
-    await reader.cancel().catch(() => {});
+    // A transport may never settle its cancellation promise. Keep the original
+    // byte-budget error observable; cleanup is deliberately best-effort.
+    try { void reader.cancel().catch(() => {}); } catch { /* Already unusable. */ }
     throw error;
   } finally {
     reader.releaseLock();
