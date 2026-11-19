@@ -70,7 +70,7 @@ test('ausência PB íntegra é condicional à competência, nunca nascimento/enc
     await mount(doc,async (_m,date)=>observe(date,date==='2026-06'?'absent-in-snapshot':'found'));
     await submit(doc);
     const text=treeText(doc.at('historia-resultado'));
-    assert.match(text,/não localizado no registro Protobuf íntegro de 2026-06/i);
+    assert.match(text,/não localizado no registro Protobuf de 2026-06/i);
     assert.match(text,/não comprova nascimento, encerramento/i);
     assert.match(text,/porte histórico não pode ser determinado/i);
     assert.equal(doc.at('historia-estado').dataset.kind,'info');
