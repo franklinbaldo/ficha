@@ -220,3 +220,24 @@ def test_meta_zip_publicado_202607_prefixo00_evidencia_versao_nao_semantica():
     assert hashlib.sha256(canonical_json(altered_meta["materialization"]["spec"])).hexdigest() == (
         original_id
     )
+
+
+def test_wire_legado_colapsa_entradas_distintas_e_aceita_02_invalido():
+    """Contraprova observacional: os bytes atuais nao permitem recuperar RFB.
+
+    O produtor v1.1 atual perde a distincao entre 00, null e codigo invalido.
+    O wire=2 tambem pode resultar de 02 invalido, embora o enum o chame de ME.
+    Nao extrapolar o mesmo comportamento ao produtor historico do ZIP 1.0.0.
+    Quando o produtor mudar, este baseline legado deve migrar para fixture
+    versionada, sem apagar os XFAIL normativos de #359 prematuramente.
+    """
+
+    def emit(code):
+        return row_to_company({"cnpj_base": "12345678", "porte_empresa": code}).SerializeToString()
+
+    zeros = [emit(code) for code in ("00", None, "99", "invalido")]
+    assert len(set(zeros)) == 1
+    assert Company.FromString(zeros[0]).porte_empresa == Porte.PORTE_UNSPECIFIED
+
+    invalid = Company.FromString(emit("02"))
+    assert invalid.porte_empresa == Porte.MICRO_EMPRESA
