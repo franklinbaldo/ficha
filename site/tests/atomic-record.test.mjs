@@ -11,7 +11,7 @@ const manifest = { snapshots: [{date:DATE, files:{companies:{
   shards:[{shard:'33',url:archive}],
 }}}]};
 const company = {cnpj_base:33000167,snapshot_yyyymm:202607,razao_social:'EMPRESA TESTE',
-  porte_empresa:1,estabelecimentos:[{cnpj_ordem:1,cnpj_dv:1,uf:'RJ',
+  porte_empresa:1,qtd_estabelecimentos:1,estabelecimentos:[{cnpj_ordem:1,cnpj_dv:1,uf:'RJ',
     municipio_codigo:7107,cnae_principal_codigo:6201501,opcao_simples:false,
     opcao_mei:true,data_opcao_mei:20260711}],socios:[{tipo:2}]};
 function mock(status=200, bytes=[1,2,3]) {
@@ -24,6 +24,18 @@ test('CNPJ completo resolve somente o membro do shard declarado',()=>{
   assert.equal(planAtomicRecord(manifest,DATE,'33.000.167/0001-01').memberUrl,
     archive+'/33/000/167.pb');
   assert.equal(planAtomicRecord(manifest,DATE,CNPJ).archiveUrl,archive);
+});
+test('CNPJ inválido não consulta a rede nem invoca decodificação',async()=>{
+  let fetched=0,decoded=0;
+  for (const invalid of ['33000167000102','00000000000000','11111111111111']) {
+    assert.throws(()=>planAtomicRecord(manifest,DATE,invalid),/CNPJ inválido/);
+    await assert.rejects(fetchAtomicRecord(manifest,DATE,invalid,{
+      fetchImpl:async()=>{fetched++;return mock()();},
+      decodeCompany:()=>{decoded++;return company;},
+    }),/CNPJ inválido/);
+  }
+  assert.equal(fetched,0);
+  assert.equal(decoded,0);
 });
 test('sem rota silenciosa para CNPJ alfanumérico, mês ausente ou legado sem camada',()=>{
   assert.throws(()=>planAtomicRecord(manifest,DATE,'33000167E08G12'),/1\.1/);
@@ -113,11 +125,27 @@ test('404 de membro ou ZIP é indisponibilidade, ausência só após PB íntegro
   assert.equal(absent.state,'absent-in-snapshot');
   await assert.rejects(lookup(manifest,DATE,CNPJ,{fetchImpl:mock(503)}),/HTTP 503/);
 });
+test('contagem de filiais incompatível ou não declarada nunca prova ausência',async()=>{
+  for (const mutate of [
+    c=>{c.qtd_estabelecimentos=3;c.estabelecimentos=[];},
+    c=>{c.qtd_estabelecimentos=2;},
+    c=>{delete c.qtd_estabelecimentos;},
+  ]) {
+    const bad=structuredClone(company);
+    mutate(bad);
+    await assert.rejects(lookup(manifest,DATE,CNPJ,{decodeCompany:()=>bad}),
+      /Quantidade de estabelecimentos inconsistente/);
+  }
+  const absent=structuredClone(company);
+  absent.estabelecimentos[0].cnpj_ordem=2;
+  assert.equal((await lookup(manifest,DATE,CNPJ,{decodeCompany:()=>absent})).state,
+    'absent-in-snapshot');
+});
 test('erro de raiz, competência, duplicata e wire 1.1 não vira registro',async()=>{
   for(const [mutation,expected] of [
     [c=>{c.cnpj_base=33000168},/Raiz/],
     [c=>{delete c.snapshot_yyyymm},/Competência/],
-    [c=>{c.estabelecimentos.push({...c.estabelecimentos[0]})},/duplicado/],
+    [c=>{c.estabelecimentos.push({...c.estabelecimentos[0]});c.qtd_estabelecimentos=2},/duplicado/],
     [c=>{c.estabelecimentos[0].cnpj_ordem_text='E08G'},/1\.1/],
     [c=>{c.socios[0].cnpj_socio_text='AB'},/1\.1/],
     [c=>{c.estabelecimentos[0].cnpj_ordem=10000},/Identificador/],
