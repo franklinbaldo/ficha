@@ -16,7 +16,7 @@ O que interessa não é apenas descobrir como uma empresa aparece em uma lista. 
 
 ## As duas portas de entrada
 
-O [fichário](/ficha/empresa/) permite consultar uma empresa em determinada competência. A [história](/ficha/historia/) permite selecionar snapshots existentes e comparar diferenças observadas. Uma diferença entre arquivos não prova quando ocorreu um evento cadastral.
+O [fichário](/ficha/empresa/) oferece uma interface experimental de consulta por CNPJ e competência. A [história](/ficha/historia/) apresenta os snapshots existentes e uma comparação condicionada à leitura dos dados remotos. Uma diferença entre arquivos não prova quando ocorreu um evento cadastral.
 
 O [acervo](/ficha/acervo/) apresenta os arquivos, tamanhos e hashes declarados no manifesto. [Explorar](/ficha/explorar/) exibe uma visualização dos tamanhos dos conjuntos realmente publicados, sem confundi-los com estatísticas populacionais sobre empresas.
 
@@ -24,7 +24,7 @@ O [acervo](/ficha/acervo/) apresenta os arquivos, tamanhos e hashes declarados n
 
 A camada atômica organiza registros por raiz de CNPJ em Protobuf/ZIP nos snapshots que declaram esses artefatos. A camada analítica utiliza Parquet e DuckDB-WASM para consulta no navegador. O projeto preserva arquivos no Internet Archive e publica o contrato de dados pelo [manifesto](/ficha/manifest.json).
 
-A disponibilidade de um artefato no manifesto **não é prova de acesso remoto**. Nem o êxito do deploy significa que uma consulta real funcionará: o Internet Archive pode não permitir as leituras CORS/HTTP Range exigidas pelo navegador. Nessa situação o FICHA deve exibir indisponibilidade, nunca registros inventados.
+A disponibilidade de um artefato no manifesto **não é prova de acesso remoto**. Em [teste com Chromium 152 na home publicada, em 19/11/2026](https://github.com/franklinbaldo/ficha/issues/208#issuecomment-6999541728), a tentativa de ler um byte do `cnpjs.parquet` canônico no Internet Archive foi bloqueada por CORS (ausência de `Access-Control-Allow-Origin`). Esse teste mede o transporte no navegador, **não** a integridade do arquivo inteiro, nem uma consulta SQL de CNPJ; um HTTP Range 206 fora do navegador não remove a restrição. O formulário continua experimental. Em caso de falha, a interface deve informar indisponibilidade, nunca inventar registros. O [catálogo](/ficha/acervo/) e o [manifesto](/ficha/manifest.json) permanecem como portas de consulta documental.
 
 ## Origem, atualidade e limitações
 
