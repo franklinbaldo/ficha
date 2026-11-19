@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from contextlib import ExitStack
 import sys
 from pathlib import Path
 from typing import Annotated
@@ -14,9 +15,11 @@ from rich.logging import RichHandler
 from . import download as download_mod
 from . import (
     fetcher,
+    legacy_upload_snapshot,
     manifest as manifest_mod,
     mirror,
     pack as pack_mod,
+    pack_upload_snapshot,
     smoke,
     sources,
     transform,
@@ -366,9 +369,19 @@ def _cmd_pack(
             )
             return 1
         try:
-            upload_mod.upload_companies_zip(
-                month, output, access_key=access_key, secret_key=secret_key
-            )
+            # Never let the uploader reopen a mutable pathname after validation.
+            # Anonymous scratch remains open for the entire synchronous IA call.
+            with ExitStack() as stack:
+                frozen = pack_upload_snapshot.freeze_pack_snapshot(
+                    stack, output, result["size_bytes"]
+                )
+                upload_mod.upload_companies_zip(
+                    month,
+                    output,
+                    access_key=access_key,
+                    secret_key=secret_key,
+                    frozen=frozen,
+                )
         except Exception as exc:
             _eprint(f"error: upload companies.zip falhou: {exc}")
             return 1
@@ -402,6 +415,7 @@ def _cmd_run(
         output_dir = cache_dir / month / "output"
 
     progress = make_progress()
+    snapshots_stack = ExitStack()
     progress.start()
     stage = progress.add_task("run", total=5)
 
@@ -419,8 +433,6 @@ def _cmd_run(
                 )
                 return 1
 
-        # Fail before the first raw IA PUT when local extraction/transform fails.
-        # This does not bind the later raw RFB GET to the consumed ZIP bytes.
         log.info("[run 1/5] transform %s → %s", month, output_dir)
         try:
             transform.transform_snapshot(
@@ -454,13 +466,18 @@ def _cmd_run(
             result["size_bytes"] / 1e6,
         )
 
-        # Validate the local manifest identity before any raw/output PUT.
-        # Missing Parquet, row count or hash errors must fail before publication.
         try:
             entry = manifest_mod.build_snapshot_entry(month, output_dir)
         except Exception as exc:
             _eprint(f"error: manifest build falhou: {exc}")
             return 1
+
+        if not skip_upload:
+            try:
+                frozen = legacy_upload_snapshot.freeze_uploads(snapshots_stack, output_dir, entry)
+            except Exception as exc:
+                _eprint(f"error: snapshot de upload falhou: {exc}")
+                return 1
 
         _advance("[run 3/5] stream ZIPs")
 
@@ -482,7 +499,11 @@ def _cmd_run(
             log.info("[run 4/5] upload outputs (parquets + lookups.json) → IA")
             try:
                 upload_mod.upload_outputs(
-                    month, output_dir, access_key=access_key, secret_key=secret_key
+                    month,
+                    output_dir,
+                    access_key=access_key,
+                    secret_key=secret_key,
+                    frozen={k: v for k, v in frozen.items() if k != "companies.zip"},
                 )
             except Exception as exc:
                 _eprint(f"error: upload outputs falhou: {exc}")
@@ -493,7 +514,11 @@ def _cmd_run(
             log.info("[run 4/5] upload companies.zip → IA")
             try:
                 upload_mod.upload_companies_zip(
-                    month, companies_zip, access_key=access_key, secret_key=secret_key
+                    month,
+                    companies_zip,
+                    access_key=access_key,
+                    secret_key=secret_key,
+                    frozen=frozen["companies.zip"],
                 )
             except Exception as exc:
                 _eprint(f"error: upload companies.zip falhou: {exc}")
@@ -504,12 +529,7 @@ def _cmd_run(
         log.info("[run 5/5] atualizar manifest → %s", manifest_path)
 
         if not skip_upload:
-            # Local existence (build_snapshot_entry) e upload HTTP OK
-            # (upload_outputs) não garantem que o arquivo segue baixável — IA
-            # processa uploads assincronamente. Sem essa checagem o manifest
-            # pode acabar publicado com URLs 404 (foi o que aconteceu com
-            # cnpj_contatos/cnpj_cnaes em 2026-04). Só faz sentido com
-            # --skip-upload desligado: em dry-run local nada foi upado ainda.
+            # HEAD checks availability, not cryptographic identity.
             log.info("[run 5/5] verificando que todos os arquivos publicados respondem 200")
             broken = manifest_mod.verify_snapshot_files(entry)
             if broken:
@@ -527,6 +547,7 @@ def _cmd_run(
 
         progress.update(stage, description="[run 5/5] done", completed=5)
     finally:
+        snapshots_stack.close()
         progress.stop()
 
     companies_size_mb = companies_zip.stat().st_size / 1e6 if companies_zip.exists() else 0

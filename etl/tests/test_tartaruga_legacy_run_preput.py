@@ -176,6 +176,11 @@ def test_legacy_run_orders_transform_before_every_remote_effect(
         return object()
 
     monkeypatch.setattr(cli.manifest_mod, "build_snapshot_entry", build)
+    monkeypatch.setattr(
+        cli.legacy_upload_snapshot,
+        "freeze_uploads",
+        lambda *_: {"companies.zip": object()},
+    )
 
     def verify(*_args: object, **_kwargs: object) -> list[str]:
         events.append("verify")
