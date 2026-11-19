@@ -151,7 +151,6 @@ def test_partial_metadata_response_yields_no_false_reuse() -> None:
     assert not all_outputs_reusable(verdicts)
 
 
-
 # --- catálogo IA ambíguo: jamais consultar footer/JSON ----------------------
 
 
@@ -172,9 +171,16 @@ def test_duplicate_expected_name_invalidates_catalog_before_probes(reverse: bool
 @pytest.mark.parametrize(
     "bad_metadata",
     [
-        [], {}, {"files": None}, {"files": {}}, {"files": "texto"},
-        {"files": [None]}, {"files": [42]}, {"files": [{"size": "1"}]},
-        {"files": [{"name": None}]}, {"files": [{"name": 42}]},
+        [],
+        {},
+        {"files": None},
+        {"files": {}},
+        {"files": "texto"},
+        {"files": [None]},
+        {"files": [42]},
+        {"files": [{"size": "1"}]},
+        {"files": [{"name": None}]},
+        {"files": [{"name": 42}]},
         {"files": [{"name": ""}]},
     ],
 )
@@ -189,7 +195,23 @@ def test_malformed_catalog_is_invalid_without_probes(bad_metadata) -> None:
 
 @pytest.mark.parametrize(
     "bad_size",
-    [True, False, 1.9, 1.0, None, "", " 1", "1 ", "-1", "+1", "1.0", "１", "١", "²", "9" * 5000],
+    [
+        True,
+        False,
+        1.9,
+        1.0,
+        None,
+        "",
+        " 1",
+        "1 ",
+        "-1",
+        "+1",
+        "1.0",
+        "１",
+        "١",
+        "²",
+        "9" * 5000,
+    ],
 )
 def test_expected_size_is_strict_before_probe(bad_size) -> None:
     def forbidden(url: str):
@@ -206,10 +228,12 @@ def test_expected_size_is_strict_before_probe(bad_size) -> None:
 
 def test_unrelated_valid_file_names_even_if_repeated_do_not_invalidate() -> None:
     metadata = _full_metadata()
-    metadata["files"].extend([
-        {"name": "_meta.xml", "size": "1"},
-        {"name": "_meta.xml", "size": "2"},
-    ])
+    metadata["files"].extend(
+        [
+            {"name": "_meta.xml", "size": "1"},
+            {"name": "_meta.xml", "size": "2"},
+        ]
+    )
     assert all_outputs_reusable(_classify(metadata))
 
 
