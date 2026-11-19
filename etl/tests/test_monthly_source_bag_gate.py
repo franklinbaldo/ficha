@@ -412,25 +412,19 @@ def test_duckdb_error_replaces_prior_success_receipt(tmp_path: Path, bad_input: 
         counts = {path.resolve(): 1 for _, path in parts}
         receipt_path = tmp_path / "evidence" / "receipt.json"
 
-        receipt = reconcile_loaded_source_keys(
-            con, "2026-08", parts, good, receipt_path, counts
-        )
+        receipt = reconcile_loaded_source_keys(con, "2026-08", parts, good, receipt_path, counts)
         assert receipt["status"] == "ok"
 
         bad = tmp_path / "bad.parquet"
         if bad_input == "not_parquet":
             bad.write_bytes(b"not a Parquet file")
         with pytest.raises(duckdb.Error):
-            reconcile_loaded_source_keys(
-                con, "2026-08", parts, bad, receipt_path, counts
-            )
+            reconcile_loaded_source_keys(con, "2026-08", parts, bad, receipt_path, counts)
         # The exception must propagate, but never preserve a stale success.
         after_error = json.loads(receipt_path.read_text())
         assert after_error["status"] == "failed"
 
-        retry = reconcile_loaded_source_keys(
-            con, "2026-08", parts, good, receipt_path, counts
-        )
+        retry = reconcile_loaded_source_keys(con, "2026-08", parts, good, receipt_path, counts)
         assert retry["status"] == "ok"
         assert json.loads(receipt_path.read_text())["status"] == "ok"
     finally:
