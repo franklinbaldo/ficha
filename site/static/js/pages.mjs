@@ -33,7 +33,7 @@ export function renderCompanyRecord(doc, parent, result) {
   }
   if (!result.data) {
     add(doc,parent,'h2',result.state === 'absent-in-snapshot'
-      ? 'CNPJ não localizado no registro íntegro desta competência'
+      ? 'CNPJ não localizado no registro Protobuf desta competência'
       : 'Nenhum registro encontrado nesta competência');
     add(doc,parent,'p','A ausência nesta consulta não comprova encerramento, inexistência histórica ou mudança cadastral.');
     showProvenance(doc,parent,result.date,result.archiveUrl || result.source);
