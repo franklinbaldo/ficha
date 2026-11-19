@@ -110,3 +110,42 @@ for (const [label, rows] of [
     assert.deepEqual([fetches,queries],[1,2], 'consulta nova mantém sessão reutilizável');
   });
 }
+
+test('erro de transporte não permanece atribuído a outro termo após editar', async () => {
+  const {nodes,documentRef}=mockDOM();
+  let requests=0;
+  mountSearch({documentRef,fetchDataset:async()=>{requests++;throw Error('Falha CORS');}});
+  nodes['busca-termo'].value='00000000E08G12';
+  await nodes['busca-form'].dispatch('submit');
+  assert.match(nodes['consulta-estado'].textContent,/Falha CORS/);
+  nodes['busca-termo'].value='11222333000181';
+  nodes['busca-termo'].dispatch('input');
+  assert.match(nodes['consulta-estado'].textContent,/Termo alterado.*Pesquise novamente/);
+  const message=nodes['consulta-estado'].textContent;
+  nodes['busca-termo'].value='11222333000182';
+  nodes['busca-termo'].dispatch('input');
+  assert.equal(nodes['consulta-estado'].textContent,message, 'região viva não deve repetir a cada tecla');
+  assert.equal(requests,1,'digitação não abre consulta nem WASM');
+  await nodes['busca-form'].dispatch('submit');
+  assert.equal(requests,2,'o novo termo ainda permite uma tentativa explícita');
+  assert.match(nodes['consulta-estado'].textContent,/Falha CORS/);
+});
+
+test('erro de validação e manifesto ausente são feedbacks obsoletos após editar', async () => {
+  const {nodes,documentRef}=mockDOM();
+  let requests=0;
+  mountSearch({documentRef,fetchDataset:async()=>{requests++;return null;}});
+  nodes['busca-termo'].value='ab';
+  await nodes['busca-form'].dispatch('submit');
+  assert.match(nodes['consulta-estado'].textContent,/ao menos três/);
+  nodes['busca-termo'].value='abc';
+  nodes['busca-termo'].dispatch('input');
+  assert.match(nodes['consulta-estado'].textContent,/Termo alterado/);
+  assert.equal(requests,0);
+  await nodes['busca-form'].dispatch('submit');
+  assert.match(nodes['consulta-estado'].textContent,/manifesto ausente/);
+  nodes['busca-termo'].value='abcd';
+  nodes['busca-termo'].dispatch('input');
+  assert.match(nodes['consulta-estado'].textContent,/Termo alterado/);
+  assert.equal(requests,1,'a edição não faz retry automático');
+});

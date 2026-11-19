@@ -184,7 +184,10 @@ def test_monthly_dry_run_still_reaches_transform_under_v11(
     class ReachedTransform(Exception):
         pass
 
-    def stop_at_transform(*_args: object, **_kwargs: object) -> None:
+    passed_flags: list[bool] = []
+
+    def stop_at_transform(*_args: object, **kwargs: object) -> None:
+        passed_flags.append(kwargs.get("reject_empty_estabelecimentos") is True)
         raise ReachedTransform
 
     def no_upload(*_args: object, **_kwargs: object) -> None:
@@ -195,6 +198,7 @@ def test_monthly_dry_run_still_reaches_transform_under_v11(
     monkeypatch.setattr(monthly_sharded.transform, "transform_snapshot", stop_at_transform)
     with pytest.raises(ReachedTransform):
         monthly_sharded.command_produce(args)
+    assert passed_flags == [True]
 
 
 def test_monthly_legacy_wire_still_reaches_raw_upload(
