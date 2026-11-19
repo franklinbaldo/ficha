@@ -28,3 +28,15 @@ test('sobre informa camadas sem prometer disponibilidade live', async () => {
   assert.match(about, /Protobuf\/ZIP/);
   assert.match(about, /não é prova de acesso remoto/);
 });
+
+test('aviso público distingue falha de transporte de ausência cadastral', async () => {
+  const home = await read('../content/index.md');
+  const sobre = await read('../content/sobre.md');
+  assert.match(home, /A busca por empresa ainda é experimental/);
+  assert.match(home, /bloqueio CORS/);
+  assert.match(home, /não há consulta remota funcional comprovada/);
+  assert.match(home, /Uma falha de leitura não significa ausência da empresa/);
+  assert.match(home, /\/ficha\/acervo\//);
+  assert.match(sobre, /Chromium 152/);
+  assert.match(sobre, /não.*a integridade do arquivo inteiro/);
+});
