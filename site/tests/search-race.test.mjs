@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mountSearch } from '../static/js/search-app.mjs';
 
 class Element {
-  constructor() { this.children = []; this.textContent = ''; this.listeners = {}; this.attributes = {}; }
+  constructor() { this.children = []; this.textContent = ''; this.listeners = {}; this.attributes = {}; this.dataset = {}; }
   setAttribute(name, value) { this.attributes[name] = value; }
   append(...nodes) { this.children.push(...nodes); }
   replaceChildren(...nodes) { this.children = nodes; }
