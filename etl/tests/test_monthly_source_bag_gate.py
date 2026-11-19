@@ -398,3 +398,40 @@ def test_crlf_only_part_is_not_a_logical_record(tmp_path: Path) -> None:
         assert json.loads((tmp_path / "receipt.json").read_text())["status"] == "failed"
     finally:
         con.close()
+
+
+@pytest.mark.parametrize("bad_input", ["missing", "not_parquet"])
+def test_duckdb_error_replaces_prior_success_receipt(tmp_path: Path, bad_input: str) -> None:
+    """A failed second attempt must not leave a previous status=ok artifact."""
+    parts = _parts(tmp_path / "sources")
+    expected = [f"{i:08d}000195" for i in range(10)]
+    con = duckdb.connect()
+    try:
+        good = tmp_path / "ok.parquet"
+        _tables(con, expected, expected, good)
+        counts = {path.resolve(): 1 for _, path in parts}
+        receipt_path = tmp_path / "evidence" / "receipt.json"
+
+        receipt = reconcile_loaded_source_keys(
+            con, "2026-08", parts, good, receipt_path, counts
+        )
+        assert receipt["status"] == "ok"
+
+        bad = tmp_path / "bad.parquet"
+        if bad_input == "not_parquet":
+            bad.write_bytes(b"not a Parquet file")
+        with pytest.raises(duckdb.Error):
+            reconcile_loaded_source_keys(
+                con, "2026-08", parts, bad, receipt_path, counts
+            )
+        # The exception must propagate, but never preserve a stale success.
+        after_error = json.loads(receipt_path.read_text())
+        assert after_error["status"] == "failed"
+
+        retry = reconcile_loaded_source_keys(
+            con, "2026-08", parts, good, receipt_path, counts
+        )
+        assert retry["status"] == "ok"
+        assert json.loads(receipt_path.read_text())["status"] == "ok"
+    finally:
+        con.close()
