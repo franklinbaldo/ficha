@@ -4,7 +4,8 @@ import { mountSearch, renderCompanies } from '../static/js/search-app.mjs';
 import { createDuckDBEngine } from '../static/js/duckdb-runtime.mjs';
 
 class Element {
-  constructor(tag = '') { this.tag = tag; this.children = []; this.textContent = ''; }
+  constructor(tag = '') { this.tag = tag; this.children = []; this.textContent = ''; this.attributes = {}; }
+  setAttribute(name, value) { this.attributes[name] = value; }
   append(...nodes) { this.children.push(...nodes); }
   replaceChildren(...nodes) { this.children = nodes; }
   addEventListener(type, cb) { this[type] = cb; }
@@ -27,6 +28,30 @@ test('resultados são texto puro, não HTML interpretado', () => {
   assert.equal(li.children[1].textContent, '00000000E08G12 · RO');
   assert.equal(li.children.length, 2);
 });
+test('cada ficha tem link distinguível e separado dos dados da empresa', () => {
+  const { nodes,doc } = mockDOM();
+  renderCompanies(doc, nodes['consulta-lista'], [
+    {cnpj:'00.000.000/e08g-12',razao_social:'Empresa repetida',uf:'RO'},
+    {cnpj:'11.222.333/0001-81',razao_social:'Empresa repetida',uf:'RO'},
+    {cnpj:'INVALIDO',razao_social:'Sem link'},
+  ]);
+  const items = nodes['consulta-lista'].children;
+  const expected = ['00000000E08G12','11222333000181'];
+  for (const [index, cnpj] of expected.entries()) {
+    const details = items[index].children[1];
+    assert.equal(details.children[0], ' · ', 'separador antes da ação');
+    const link = details.children[1];
+    assert.equal(link.tag, 'a');
+    assert.equal(link.textContent, 'Abrir ficha');
+    assert.equal(link.href, '/ficha/empresa/?cnpj=' + cnpj);
+    assert.equal(link.attributes['aria-label'], 'Abrir ficha do CNPJ ' + cnpj);
+  }
+  assert.equal(items[2].children[1].children.length, 0,
+    'não criar atalho para CNPJ inválido');
+  assert.notEqual(items[0].children[1].children[1].attributes['aria-label'],
+    items[1].children[1].children[1].attributes['aria-label']);
+});
+
 test('formulário só abre sessão com entrada válida; reutiliza DB e anuncia resultado', async () => {
   const { nodes,doc } = mockDOM();
   let fetches=0, probed=0, created=0, attached=0, queried=0;
