@@ -287,6 +287,35 @@ describe('OKF convenience views', () => {
     ).toThrow(/returned invalid Socio row/);
   });
 
+  it('separates absent required columns from unknown future columns for every v1 row type', () => {
+    // A nullable field is still required in the wire shape: omitted != null.
+    // Conversely, public v1 strips unknown keys, while generated OKF rejects them.
+    const cases = [
+      { name: 'Cnpj', row: cnpjWholeRow, required: 'nome_fantasia',
+        publicSchema: PublicV1CnpjSchema, generatedSchema: okfParquetRowSchemas.Cnpj },
+      { name: 'Raiz', row: raizWholeRow, required: 'ente_federativo_responsavel',
+        publicSchema: PublicV1RaizSchema, generatedSchema: okfParquetRowSchemas.Raiz },
+      { name: 'Socio', row: socioRow, required: 'cnpj_socio',
+        publicSchema: PublicV1SocioSchema, generatedSchema: okfParquetRowSchemas.Socio },
+    ] as const;
+
+    for (const { name, row, required, publicSchema, generatedSchema } of cases) {
+      expect(publicSchema.safeParse(row).success, `v1 ${name} baseline`).toBe(true);
+      expect(generatedSchema.safeParse(row).success, `OKF ${name} baseline`).toBe(true);
+
+      const omitted = { ...row } as Record<string, unknown>;
+      delete omitted[required];
+      expect(publicSchema.safeParse(omitted).success, `v1 ${name} missing ${required}`).toBe(false);
+      expect(generatedSchema.safeParse(omitted).success, `OKF ${name} missing ${required}`).toBe(false);
+
+      const future = { ...row, future_column: 'synthetic' };
+      const parsed = publicSchema.safeParse(future);
+      expect(parsed.success, `v1 ${name} extra column`).toBe(true);
+      if (parsed.success) expect(parsed.data).not.toHaveProperty('future_column');
+      expect(generatedSchema.safeParse(future).success, `OKF ${name} extra column`).toBe(false);
+    }
+  });
+
   it('fails closed when a view returns a row outside its declared output shape', () => {
     expect(() => validateOkfConvenienceViewRows('socios_de_raizes_ativas', [{}])).toThrow(
       /returned invalid Socio row/
