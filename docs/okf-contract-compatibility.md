@@ -148,8 +148,13 @@ aceitam a linha de controle. Em seguida comprovam, por `safeParse` da
 **linha inteira**, a rejeição OKF de `null` permitido pelo v1 em
 `Cnpj.nome_fantasia` e `Raiz.ente_federativo_responsavel`, e a aceitação
 OKF de valores inválidos em quatro enums v1 de Cnpj/Raiz. Isso estende a
-contraprova runtime aos três tipos, mas ainda não prova os 28 desacordos
-de nulabilidade, os valores de Parquet real ou a política do novo site SSG.
+contraprova runtime aos três tipos. Um teste posterior percorre **28 testemunhas
+literais de nulabilidade** em linhas sintéticas completas, independentes dos
+schemas gerados: 22 campos Cnpj, 1 Raiz e 5 Socio. Para cada mutação isolada,
+`safeParse` da linha no v1 deve aceitar o `null`, enquanto o OKF gerado
+deve rejeitá-lo. Isso exercita os 28 desvios em runtime sem inferir que a
+nulabilidade física dos Parquets reais ou a política do novo site SSG sejam
+equivalentes.
 
 Uma terceira diferença ocorre com coluna futura: o `z.object` público v1
 aceita a linha e retira a chave desconhecida, enquanto o adaptador de views
