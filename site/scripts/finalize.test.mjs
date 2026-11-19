@@ -26,13 +26,14 @@ const index = `<!doctype html><html lang="pt-BR"><body>${nav}<main id="main">
   <span>__FICHA_CURRENT_COMPETENCE__</span><a href="/ficha/manifest.json">Dados</a>
   <a href="__FICHA_CURRENT_SOURCE_URL__">Fonte</a><span>__FICHA_CURRENT_SOURCE_SIZE__ GB</span>
 </main><script type="module" src="/ficha/js/boot.mjs"></script></body></html>`;
+const empresa = '<!doctype html><html lang="pt-BR"><button id="empresa-enviar" aria-label="Abrir ficha" type="submit">Abrir ficha</button></html>';
 const about = `<!doctype html><html lang="pt-BR"><body>${nav}<main id="main">Sobre o FICHA</main></body></html>`;
 
 async function fixture(mutator = async () => {}) {
   const root = await mkdtemp(join(tmpdir(), 'ficha-finalize-'));
   dirs.push(root);
   const file = path => join(root, path);
-  for (const dir of ['web/public', 'site/scripts', 'site/static/css', 'site/static/js', 'site/dist/ficha/sobre']) {
+  for (const dir of ['web/public', 'site/scripts', 'site/static/css', 'site/static/js', 'site/dist/ficha/sobre', 'site/dist/ficha/empresa']) {
     await mkdir(file(dir), { recursive: true });
   }
   for (const jsFile of ['boot.mjs', 'search-app.mjs', 'duckdb-runtime.mjs', 'query-core.mjs',
@@ -47,6 +48,7 @@ async function fixture(mutator = async () => {}) {
   await writeFile(file('site/static/css/site.css'), 'a:focus-visible{outline:2px solid}');
   await writeFile(file('site/dist/ficha/index.html'), index);
   await writeFile(file('site/dist/ficha/sobre/index.html'), about);
+  await writeFile(file('site/dist/ficha/empresa/index.html'), empresa);
   await writeFile(file('site/dist/ficha/manifest.json'), JSON.stringify(pwa));
   return { file, canonical, manifest };
 }
@@ -149,4 +151,12 @@ test('rejeita botão Pesquisar sem rótulo explícito no SSG', async () => {
   await writeFile(f.file('site/dist/ficha/index.html'),
     index.replace(' aria-label="Pesquisar"', ''));
   rejected(f, /Botão Pesquisar sem nome acessível em português/);
+});
+
+
+test('rejeita rótulo slug no botão Abrir ficha da página empresa', async () => {
+  const f = await fixture();
+  await writeFile(f.file('site/dist/ficha/empresa/index.html'),
+    empresa.replace('aria-label="Abrir ficha"', 'aria-label="abrir-ficha"'));
+  rejected(f, /Botão Abrir ficha sem nome acessível em português/);
 });
