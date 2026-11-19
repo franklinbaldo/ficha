@@ -466,6 +466,38 @@ def test_stream_raw_rejects_http_200_invalid_json_before_get_or_put(monkeypatch)
         upload_mod.stream_raw_zips_to_ia("2026-04", access_key="A", secret_key="S")
 
 
+@pytest.mark.parametrize("status", [401, 403])
+def test_stream_raw_denies_metadata_auth_errors_before_get_or_put(monkeypatch, status):
+    """A denied IA metadata read must not authorize RFB GET or IA PUT."""
+
+    class _FakeResp:
+        status_code = status
+
+    class _FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def get(self, url):
+            return _FakeResp()
+
+    monkeypatch.setattr(upload_mod.httpx, "Client", _FakeClient)
+
+    def forbid_network(*args, **kwargs):
+        pytest.fail("RFB GET or IA PUT after IA metadata access denial")
+
+    monkeypatch.setattr(upload_mod.upstream, "discover_token", forbid_network)
+    monkeypatch.setattr(upload_mod, "_stream_one_zip_with_retry", forbid_network)
+
+    with pytest.raises(RuntimeError, match=f"access denied HTTP {status}"):
+        upload_mod.stream_raw_zips_to_ia("2026-04", access_key="A", secret_key="S")
+
+
 def test_existing_raw_files_on_ia_returns_empty_on_404(monkeypatch):
     class _FakeResp:
         status_code = 404
