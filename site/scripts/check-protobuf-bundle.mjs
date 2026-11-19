@@ -19,4 +19,20 @@ assert.equal(decoded.estabelecimentos.length,1);
 assert.equal(decoded.estabelecimentos[0].cnpj_ordem,1);
 assert.equal(decoded.estabelecimentos[0].cnpj_dv,1);
 assert.equal(decoded.estabelecimentos[0].municipio_codigo,7107);
+// Wire Protobuf3 does not carry absent scalar uint32 with implicit zero.
+// This is a common case for CNPJ check digits ending in 00/0.
+const omittedDv=decodeCompany(ficha.v1.Company.encode({
+  ...original,estabelecimentos:[{cnpj_ordem:2,uf:'RJ'}],
+}).finish());
+assert.equal(omittedDv.estabelecimentos[0].cnpj_dv,0,
+  'DV ausente no wire proto3 é numericamente zero');
+const omittedOrder=decodeCompany(ficha.v1.Company.encode({
+  ...original,estabelecimentos:[{cnpj_dv:1,uf:'RJ'}],
+}).finish());
+assert.equal(omittedOrder.estabelecimentos[0].cnpj_ordem,0);
+const missingCount={...original};
+delete missingCount.qtd_estabelecimentos;
+const uncounted=decodeCompany(ficha.v1.Company.encode(missingCount).finish());
+assert.equal(Object.hasOwn(uncounted,'qtd_estabelecimentos'),false,
+  'não fabricar completude do agregado ausente');
 console.log('Bundle canônico PB: roundtrip sintético PASS');
