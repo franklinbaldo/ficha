@@ -129,6 +129,15 @@ sintética de sócio PF com esse campo nulo é aceita por
 O teste Vitest do consumidor registra explicitamente as duas expectativas,
 sem alterar o comportamento atual.
 
+Uma segunda diferença de aceitação também é exercitável sem consultar dados
+remotos: o v1 rejeita códigos fora dos enums `tipo`, `tipo_descricao` e
+`faixa_etaria` de `Socio`, mas o gerado usa `z.string()` e os admite.
+Uma terceira diferença ocorre com coluna futura: o `z.object` público v1
+aceita a linha e retira a chave desconhecida, enquanto o adaptador de views
+aplica `.strict()` e a rejeita. Os testes Vitest usam somente linhas
+sintéticas e documentam estas fronteiras, **sem corrigir nem aprovar**
+qualquer mudança de validador, contrato ou versão.
+
 Essa diferença é **dívida já conhecida**, não um incidente novo na
 home pública SSG (`site/`), que é separada do módulo Astro `web/`.
 O teste não consulta Parquet remoto nem prova que determinada linha
