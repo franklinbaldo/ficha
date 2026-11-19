@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import io
 from pathlib import Path
 
 import pytest
@@ -130,6 +131,24 @@ def test_remote_race_during_snapshot_causes_reuse_or_refusal(tmp_path, monkeypat
         with pytest.raises(p.OutputPublishError, match="diverges"):
             _run(tmp_path, desc, metadata=metadata, head=lambda _: 404)
     assert calls == 2
+    assert uploads == []
+
+
+def test_corrupted_staged_bytes_are_refused_before_put(tmp_path, monkeypatch):
+    """Source SHA-1 alone cannot attest bytes actually written to the snapshot."""
+    desc, _ = _fixtures(tmp_path)
+    uploads = []
+
+    class CorruptingSnapshot(io.BytesIO):
+        def write(self, data):
+            # Simulate silent, length-preserving corruption in the local staging layer.
+            return super().write(bytes(value ^ 1 for value in data))
+
+    monkeypatch.setattr(p.tempfile, "TemporaryFile", lambda **_kwargs: CorruptingSnapshot())
+    monkeypatch.setattr(p.ia, "upload", lambda *args, **kwargs: uploads.append((args, kwargs)))
+
+    with pytest.raises(p.OutputPublishError, match="local bytes changed during upload snapshot"):
+        _run(tmp_path, desc, metadata=lambda: _catalog(desc), head=lambda _: 404)
     assert uploads == []
 
 
