@@ -124,6 +124,11 @@ export async function probeParquetRange({url, size, fetchImpl = fetch, timeoutMs
           first.value.byteLength !== 1) {
         throw new Error('Origem de dados não entregou corpo de exatamente 1 byte');
       }
+      // The Parquet magic prefix starts with 0x50 ('P'). This catches a
+      // wrong 206 body cheaply; it is not a SHA-256 or full PAR1 check.
+      if (first.value[0] !== 0x50) {
+        throw new Error('Origem de dados com assinatura Parquet inicial inválida');
+      }
       // Also reject a second chunk, not just an oversized first chunk.
       const rest = await withinDeadline(reader.read());
       if (!rest.done) {
