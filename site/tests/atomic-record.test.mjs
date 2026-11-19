@@ -141,6 +141,23 @@ test('contagem de filiais incompatível ou não declarada nunca prova ausência'
   assert.equal((await lookup(manifest,DATE,CNPJ,{decodeCompany:()=>absent})).state,
     'absent-in-snapshot');
 });
+test('duplicata de outra filial invalida agregado antes de declarar ausência',async()=>{
+  const bad=structuredClone(company);
+  bad.qtd_estabelecimentos=2;
+  bad.estabelecimentos=[
+    {...bad.estabelecimentos[0],cnpj_ordem:2,cnpj_dv:92},
+    {...bad.estabelecimentos[0],cnpj_ordem:2,cnpj_dv:92},
+  ];
+  // Count matches list length, but both rows represent the SAME full CNPJ.
+  // Querying a different, valid CNPJ must be inconclusive, not 'absent'.
+  await assert.rejects(lookup(manifest,DATE,CNPJ,{decodeCompany:()=>bad}),
+    /Estabelecimento duplicado/);
+  const sound=structuredClone(bad);
+  sound.estabelecimentos=[bad.estabelecimentos[0]];
+  sound.qtd_estabelecimentos=1;
+  assert.equal((await lookup(manifest,DATE,CNPJ,{decodeCompany:()=>sound})).state,
+    'absent-in-snapshot');
+});
 test('erro de raiz, competência, duplicata e wire 1.1 não vira registro',async()=>{
   for(const [mutation,expected] of [
     [c=>{c.cnpj_base=33000168},/Raiz/],
