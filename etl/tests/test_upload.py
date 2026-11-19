@@ -323,7 +323,7 @@ def test_existing_raw_files_on_ia_parses_metadata(monkeypatch):
             {"name": "raw/Empresas1.zip", "size": "74300000"},
             {"name": "raw/Cnaes.zip", "size": "0"},  # zero-size: not yet uploaded
             {"name": "cnpjs.parquet", "size": "3000000000"},  # not a raw zip
-            {"name": "raw/Estabelecimentos0.zip"},  # missing size
+            {"name": "raw/Estabelecimentos0.zip", "size": "0"},  # empty: not uploaded
         ]
     }
 
@@ -349,6 +349,88 @@ def test_existing_raw_files_on_ia_parses_metadata(monkeypatch):
     monkeypatch.setattr(upload_mod.httpx, "Client", _FakeClient)
     out = upload_mod._existing_raw_files_on_ia("ficha-2026-04")
     assert out == {"raw/Empresas0.zip", "raw/Empresas1.zip"}
+
+
+
+@pytest.mark.parametrize(
+    "files",
+    [
+        [{"name": "raw/Empresas0.zip", "size": True}],
+        [{"name": "raw/Empresas0.zip", "size": 1.5}],
+        [{"name": "raw/Empresas0.zip", "size": "１"}],
+        [{"name": "raw/Empresas0.zip", "size": " 1 "}],
+        [{"name": "raw/Empresas0.zip", "size": "-1"}],
+        [{"name": "raw/Empresas0.zip"}],
+        [
+            {"name": "raw/Empresas0.zip", "size": "1"},
+            {"name": "raw/Empresas0.zip", "size": "1"},
+        ],
+    ],
+)
+def test_stream_raw_rejects_ambiguous_catalog_before_get_or_put(monkeypatch, files):
+    """A malformed IA inventory cannot authorize skipping or any remote write."""
+
+    class _FakeResp:
+        status_code = 200
+
+        def json(self):
+            return {"files": files}
+
+    class _FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def get(self, url):
+            return _FakeResp()
+
+    monkeypatch.setattr(upload_mod.httpx, "Client", _FakeClient)
+
+    def forbid_network(*args, **kwargs):
+        pytest.fail("GET/PUT attempted before validating IA raw metadata")
+
+    monkeypatch.setattr(upload_mod.upstream, "discover_token", forbid_network)
+    monkeypatch.setattr(upload_mod, "_stream_one_zip_with_retry", forbid_network)
+
+    with pytest.raises(RuntimeError, match="IA raw metadata"):
+        upload_mod.stream_raw_zips_to_ia("2026-04", access_key="A", secret_key="S")
+
+
+def test_stream_raw_rejects_non_list_catalog_before_get_or_put(monkeypatch):
+    """A 200 with a malformed catalog is not equivalent to a new IA item."""
+
+    class _FakeResp:
+        status_code = 200
+
+        def json(self):
+            return {"files": {"raw/Empresas0.zip": {"size": "1"}}}
+
+    class _FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def get(self, url):
+            return _FakeResp()
+
+    monkeypatch.setattr(upload_mod.httpx, "Client", _FakeClient)
+    monkeypatch.setattr(
+        upload_mod.upstream,
+        "discover_token",
+        lambda: pytest.fail("upstream touched with malformed IA catalog"),
+    )
+    with pytest.raises(RuntimeError, match="IA raw metadata"):
+        upload_mod.stream_raw_zips_to_ia("2026-04", access_key="A", secret_key="S")
 
 
 def test_existing_raw_files_on_ia_returns_empty_on_404(monkeypatch):
