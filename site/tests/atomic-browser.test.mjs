@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {createHash} from 'node:crypto';
 import {fetchCompanyByCnpj, fetchSnapshotLookups} from '../static/js/atomic-browser.mjs';
 
 const date='2026-07', cnpj='33000167000101';
@@ -7,10 +8,11 @@ const archive='https://archive.org/download/ficha-2026-07/';
 const lookups={schema_version:'1.0.0',snapshot_date:date,
   municipios:{'7107':'SÃO PAULO'},cnaes:{'6201501':'PROGRAMAS DE COMPUTADOR'}};
 const bytes=new TextEncoder().encode(JSON.stringify(lookups));
+const sha256=bytes=>createHash('sha256').update(bytes).digest('hex');
 const manifest={snapshots:[{date,files:{
   companies:{shard_by:'cnpj_base_prefix_2',schema_version:'1.0.0',
     shards:[{shard:'33',url:archive+'companies-33.zip'}]},
-  lookups:{url:archive+'lookups.json',size:bytes.byteLength},
+  lookups:{url:archive+'lookups.json',size:bytes.byteLength,sha256:sha256(bytes)},
 }}]};
 const company={cnpj_base:33000167,snapshot_yyyymm:202607,qtd_estabelecimentos:1,
   razao_social:'EMPRESA TESTE',estabelecimentos:[{cnpj_ordem:1,cnpj_dv:1,
@@ -55,6 +57,7 @@ test('CNAE RFB com zero inicial mantém sete dígitos no lookup',async()=>{
   const body=new TextEncoder().encode(JSON.stringify(lookup));
   const data=structuredClone(manifest);
   data.snapshots[0].files.lookups.size=body.byteLength;
+  data.snapshots[0].files.lookups.sha256=sha256(body);
   const modified=structuredClone(company);
   modified.estabelecimentos[0].cnae_principal_codigo=600001;
   const result=await fetchCompanyByCnpj(data,date,cnpj,{
@@ -65,6 +68,14 @@ test('CNAE RFB com zero inicial mantém sete dígitos no lookup',async()=>{
   assert.equal(result.state,'found');
   assert.equal(result.data.cnae_principal_codigo,600001);
   assert.equal(result.data.cnae_principal_descricao,'EXTRAÇÃO DE PETRÓLEO');
+});
+
+test('lookup alterado com mesmo tamanho falha pelo SHA-256 do manifesto',async()=>{
+  const corrupted=new Uint8Array(bytes);
+  corrupted[corrupted.length-2]^=1;
+  await assert.rejects(fetchSnapshotLookups(manifest,date,{
+    fetchImpl:async()=>new Response(corrupted),cacheMap:new Map(),
+  }),/SHA-256.*difere/);
 });
 
 test('404 do membro é inconclusivo e não acessa o lookup',async()=>{
@@ -105,6 +116,7 @@ test('404 de lookup, competência trocada e tamanho divergente são erro, não a
     {...lookups,snapshot_date:'2026-08'}));
   const edited=structuredClone(manifest);
   edited.snapshots[0].files.lookups.size=equalSize.byteLength;
+  edited.snapshots[0].files.lookups.sha256=sha256(equalSize);
   await assert.rejects(fetchSnapshotLookups(edited,date,{
     fetchImpl:async()=>new Response(equalSize),cacheMap:new Map(),
   }),/incompatível/);
