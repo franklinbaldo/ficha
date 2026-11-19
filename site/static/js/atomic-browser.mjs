@@ -18,7 +18,12 @@ export async function fetchSnapshotLookups(manifest, date, {
       snapshot.files.lookups.size < 1 || snapshot.files.lookups.size > LOOKUP_LIMIT) {
     throw new Error('Tamanho do lookup não declarado ou fora do orçamento');
   }
-  let promise = cacheMap.get(url);
+  const sha256 = snapshot.files.lookups.sha256;
+  if (!/^[0-9a-f]{64}$/.test(sha256 ?? '')) {
+    throw new Error('SHA-256 do lookup ausente ou inválido no manifesto');
+  }
+  const cacheKey = url + '#' + sha256;
+  let promise = cacheMap.get(cacheKey);
   if (!promise) {
     promise = (async () => {
       const response = await fetchImpl(url, {mode:'cors'});
@@ -27,6 +32,10 @@ export async function fetchSnapshotLookups(manifest, date, {
       if (bytes.byteLength !== snapshot.files.lookups.size) {
         throw new Error('Lookup com tamanho divergente do manifesto');
       }
+      if (!globalThis.crypto?.subtle) throw new Error('SHA-256 indisponível neste navegador');
+      const hash = new Uint8Array(await globalThis.crypto.subtle.digest('SHA-256', bytes));
+      const actual = [...hash].map(byte => byte.toString(16).padStart(2, '0')).join('');
+      if (actual !== sha256) throw new Error('SHA-256 do lookup difere do manifesto');
       let value;
       try { value = JSON.parse(new TextDecoder('utf-8', {fatal:true}).decode(bytes)); }
       catch { throw new Error('Lookup JSON inválido'); }
@@ -38,8 +47,8 @@ export async function fetchSnapshotLookups(manifest, date, {
       }
       return value;
     })();
-    cacheMap.set(url, promise);
-    promise.catch(() => { if (cacheMap.get(url) === promise) cacheMap.delete(url); });
+    cacheMap.set(cacheKey, promise);
+    promise.catch(() => { if (cacheMap.get(cacheKey) === promise) cacheMap.delete(cacheKey); });
   }
   return promise;
 }
