@@ -8,10 +8,24 @@ const MONTH = /^\d{4}-(0[1-9]|1[0-2])$/;
 const NUMERIC = /^\d{14}$/;
 const VALID_CNPJ = /^[A-Z0-9]{12}\d{2}$/;
 
+/** Check digits for numeric CNPJ (RFB módulo 11); reject repetitive placeholders. */
+function validNumericCnpj(cnpj) {
+  if (/^(\d)\1{13}$/.test(cnpj)) return false;
+  const digits = [...cnpj].map(Number);
+  const calculate = weights => {
+    const sum = weights.reduce((acc, weight, i) => acc + digits[i] * weight, 0);
+    const remainder = sum % 11;
+    return remainder < 2 ? 0 : 11 - remainder;
+  };
+  return digits[12] === calculate([5,4,3,2,9,8,7,6,5,4,3,2]) &&
+    digits[13] === calculate([6,5,4,3,2,9,8,7,6,5,4,3,2]);
+}
+
 export function planAtomicRecord(manifest, date, value) {
   const cnpj = String(value ?? '').trim().replace(/[.\/\-\s]/g, '').toUpperCase();
   if (!VALID_CNPJ.test(cnpj)) throw new Error('Informe um CNPJ completo de 14 caracteres');
   if (!NUMERIC.test(cnpj)) throw new Error('CNPJ alfanumérico exige índice Protobuf 1.1 explícito');
+  if (!validNumericCnpj(cnpj)) throw new Error('CNPJ inválido: confira os dígitos verificadores');
   if (!MONTH.test(date) || !Array.isArray(manifest?.snapshots)) {
     throw new Error('Competência inválida ou manifesto ausente');
   }
@@ -115,6 +129,13 @@ export async function fetchAtomicRecord(manifest, date, input, {
   }
   const establishments = company.estabelecimentos;
   if (!Array.isArray(establishments)) throw new Error('Lista de estabelecimentos inválida');
+  // pack.py serializes the raizes aggregate derived by COUNT from cnpjs.
+  // A decoded root with fewer members cannot certify an establishment's absence.
+  if (!Object.hasOwn(company, 'qtd_estabelecimentos') ||
+      !Number.isSafeInteger(company.qtd_estabelecimentos) ||
+      company.qtd_estabelecimentos !== establishments.length) {
+    throw new Error('Quantidade de estabelecimentos inconsistente ou não comprovada no Protobuf');
+  }
   if (establishments.some(est => !est || !Number.isSafeInteger(est.cnpj_ordem) ||
       est.cnpj_ordem < 0 || est.cnpj_ordem > 9999 ||
       !Number.isSafeInteger(est.cnpj_dv) || est.cnpj_dv < 0 || est.cnpj_dv > 99)) {
