@@ -3,6 +3,7 @@ import { archiveView, archivalFileEntries, catalogueTotals, competenceLabel,
   snapshotsDescending } from './catalog.mjs';
 import { canonicalCnpj, compareRecords, displayValue, fetchRecordAt, RECORD_FIELDS } from './record.mjs';
 import { fetchCompanyByCnpj } from './atomic-browser.mjs';
+import { CnpjInputError } from './atomic-record.mjs';
 
 const BASE = '/ficha/';
 const byId = (doc, id) => doc.getElementById(id);
@@ -151,7 +152,7 @@ export async function mountCompany(doc, {loadManifest = fetchManifest, lookup = 
     event?.preventDefault();
     if (busy) return;
     const cnpj = canonicalCnpj(input.value);
-    if (!cnpj) { status(state,'Informe um CNPJ completo, numérico ou alfanumérico.',true); output.replaceChildren(); selection.markTerminal(); return; }
+    if (!cnpj) { setParams({cnpj:null,competencia:null}); status(state,'Informe um CNPJ completo, numérico ou alfanumérico.',true); output.replaceChildren(); selection.markTerminal(); return; }
     const date = select.value;
     const version = selection.begin();
     const stillCurrent = () => selection.current(version) &&
@@ -176,10 +177,18 @@ export async function mountCompany(doc, {loadManifest = fetchManifest, lookup = 
       }
     } catch (error) {
       if (!stillCurrent()) { status(state,discarded); return; }
-      setParams({cnpj,competencia:date});
-      status(state,'Consulta indisponível: '+error.message,true);
-      add(doc,output,'p','Não foi possível concluir a leitura remota. Isso não demonstra ausência de CNPJ no acervo.');
-      anchor(doc,output,'Consultar o catálogo de arquivos',BASE+'acervo/?competencia='+date);
+      if (error instanceof CnpjInputError) {
+        // Validation rejected this input before decoder or GET: do not
+        // announce an archival outage or share a URL as a completed query.
+        setParams({cnpj:null,competencia:null});
+        status(state,error.message,true);
+        add(doc,output,'p','Corrija o CNPJ antes de pesquisar novamente.');
+      } else {
+        setParams({cnpj,competencia:date});
+        status(state,'Consulta indisponível: '+error.message,true);
+        add(doc,output,'p','Não foi possível concluir a leitura remota. Isso não demonstra ausência de CNPJ no acervo.');
+        anchor(doc,output,'Consultar o catálogo de arquivos',BASE+'acervo/?competencia='+date);
+      }
     } finally { busy = false; selection.finish(); submit.disabled = false; }
   }
   form.addEventListener('submit',lookupSubmit);
