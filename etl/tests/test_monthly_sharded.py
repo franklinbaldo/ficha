@@ -286,9 +286,13 @@ def test_finalize_rejects_malformed_receipt_before_remote_probe(
         raise AssertionError("invalid local receipt must not touch remote metadata")
 
     monkeypatch.setattr("ficha_etl.monthly_sharded.wait_for_descriptor_remote", must_not_fetch)
+    monkeypatch.setattr(
+        "ficha_etl.monthly_sharded._require_source_attestation", lambda *a, **kw: None
+    )
     args = argparse.Namespace(
         month="2026-06",
         descriptor=str(descriptor_path),
+        source_receipt=str(tmp_path / "source-receipt.json"),
         receipts_dir=str(receipts_dir),
         snapshot_entry=str(tmp_path / "snapshot.json"),
         verification=str(tmp_path / "verification.json"),

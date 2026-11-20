@@ -100,7 +100,14 @@ def _bind_source_receipt(month: str, output_dir: Path, descriptor: dict) -> None
     }
 
 
-def _require_source_attestation(month: str, output_dir: Path, descriptor: dict) -> None:
+def _require_source_attestation(
+    month: str,
+    output_dir: Path,
+    descriptor: dict,
+    *,
+    receipt_path: Path | None = None,
+    require_run_id: bool = False,
+) -> None:
     """Refuse old/stale/failed source receipts BEFORE the upload entrypoint."""
     entry = descriptor.get("source_attestation")
     if not isinstance(entry, dict) or (
@@ -115,10 +122,18 @@ def _require_source_attestation(month: str, output_dir: Path, descriptor: dict) 
     if entry.get("raw_upload_status") != "complete":
         raise ValueError("raw source upload did not complete for this descriptor")
     run_id = entry["run_id"]
+    # Promotion must match the current Actions attempt independently of an
+    # override that could replay a previous attempt's signed-looking receipt.
+    if require_run_id and ("GITHUB_RUN_ID" in os.environ) != ("GITHUB_RUN_ATTEMPT" in os.environ):
+        raise ValueError("finalize requires complete GitHub run and attempt identity")
+    if require_run_id and os.environ.get("GITHUB_RUN_ID") and "FICHA_SOURCE_RUN_ID" in os.environ:
+        raise ValueError("FICHA_SOURCE_RUN_ID cannot override GitHub finalize attempt")
     expected_run_id = _expected_source_run_id()
+    if require_run_id and expected_run_id is None:
+        raise ValueError("finalize requires an explicit execution identity")
     if expected_run_id is not None and run_id != expected_run_id:
         raise ValueError("source attestation belongs to a different execution attempt")
-    raw = _source_receipt_bytes(_source_receipt_path(output_dir), month, run_id)
+    raw = _source_receipt_bytes(receipt_path or _source_receipt_path(output_dir), month, run_id)
     if entry.get("receipt_sha256") != hashlib.sha256(raw).hexdigest():
         raise ValueError("source receipt changed after descriptor production")
     if entry.get("cnpjs_sha256") != descriptor["files"]["cnpjs"]["sha256"]:

@@ -22,6 +22,7 @@ def _args(tmp_path: Path) -> argparse.Namespace:
     return argparse.Namespace(
         month="2026-08",
         descriptor=tmp_path / "descriptor.json",
+        source_receipt=tmp_path / "source-receipt.json",
         receipts_dir=tmp_path / "receipts",
         attempts=1,
         interval_seconds=0,
@@ -62,6 +63,9 @@ def _mock_offline_inputs(monkeypatch: pytest.MonkeyPatch, *, alpha: bool) -> Non
     def forbidden(*_args, **_kwargs):
         raise AssertionError("network access is forbidden in fixture")
 
+    # Atomicity suite isolates the existing manifest gate. A separate suite
+    # exercises the real external source receipt/attempt preflight.
+    monkeypatch.setattr(monthly_sharded, "_require_source_attestation", lambda *a, **kw: None)
     monkeypatch.setattr(monthly_sharded, "_load_descriptor", lambda *_: {"date": month})
     monkeypatch.setattr(monthly_sharded, "materialization_inputs_from_descriptor", lambda _: {})
     monkeypatch.setattr(monthly_sharded, "_load_all_receipts", lambda *_: receipts)
