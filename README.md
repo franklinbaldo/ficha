@@ -6,14 +6,14 @@ O **FICHA** é um fichário aberto das empresas brasileiras e um Data Lakehouse 
 
 ## Usar agora
 
-- **Abrir o site público (SSG Rust):** https://franklinbaldo.github.io/ficha/. A busca por nome/CNPJ na home ainda usa Parquet/DuckDB e é experimental.
+- **Abrir o site público (SSG Rust):** https://franklinbaldo.github.io/ficha/. Na home, CNPJ numérico completo abre a ficha Protobuf v1; busca por nome e CNPJ alfanumérico continua experimental via Parquet/DuckDB.
 - **Consultar um CNPJ numérico completo:** https://franklinbaldo.github.io/ficha/empresa/ (leitura Protobuf v1, independente do Parquet).
 - **Comparar duas competências para um CNPJ numérico:** https://franklinbaldo.github.io/ficha/historia/ (somente competências com Protobuf v1; sem fallback automático).
 - **Inspecionar o contrato público do snapshot vigente:** https://franklinbaldo.github.io/ficha/manifest.json
 
 **Manifesto ≠ disponibilidade live.** O JSON versionado declara competências, URLs e identidades dos artefatos; isso **não comprova** que as URLs do Internet Archive estejam acessíveis, que a busca no navegador funcione ou que o mês mais recente da RFB já esteja publicado. No corte de **16/11/2026** (`main@98329ff`), `manifest.current` declara **2026-07**, não 2026-08. A investigação e a recuperação de agosto estão na [issue #247](https://github.com/franklinbaldo/ficha/issues/247). A disponibilidade exige conferência independente de URLs, dados e interface.
 
-**Site público atual (19/11/2026):** o Pages usa **SSG Rust em `site/`**. A home ainda consulta Parquet/DuckDB-WASM: seu transporte remoto apresentou erro de CORS em teste de 19/11/2026. Uma falha de transporte **não** significa que o CNPJ não exista no snapshot. `web/` guarda o protótipo Astro/Svelte, não publicado.
+**Site público atual (20/11/2026):** o Pages usa **SSG Rust em `site/`**. Na home, um CNPJ numérico completo é encaminhado à ficha Protobuf sem iniciar Parquet/DuckDB-WASM. Busca por nome e CNPJ alfanumérico ainda usam a rota analítica legada, cujo transporte remoto apresentou erro de CORS em teste de 19/11/2026. Uma falha de transporte **não** significa que o CNPJ não exista no snapshot. `web/` guarda o protótipo Astro/Svelte, não publicado.
 
 A **ficha por CNPJ numérico completo** em `/ficha/empresa/` usa o leitor de **Protobuf v1** sem Parquet. A página `/ficha/historia/` compara duas competências que declaram essa camada para CNPJ numérico, também sem Parquet. CNPJ alfanumérico, competência sem Protobuf compatível e busca por nome **não** têm alternativa automática por Protobuf v1. Estados como arquivo indisponível, resposta inválida e ausência dentro de um snapshot íntegro precisam permanecer distintos.
 
@@ -33,7 +33,7 @@ O projeto opera em duas camadas de acesso para máxima eficiência:
 - **Tecnologia:** explora a funcionalidade de "unzip" transparente do Internet Archive.
 - **Uso:** consultas diretas por raiz de CNPJ por URL estática previsível.
 - **Vantagem:** acesso pontual sem precisar varrer a base analítica inteira; protobuf é compacto.
-- **Status:** o leitor atômico está integrado à **ficha numérica em `/ficha/empresa/`** e à comparação numérica em `/ficha/historia/`, com provas específicas em Chromium. A **home** mantém formulário experimental de Parquet/DuckDB, não o leitor Protobuf. O manifesto declara artefatos, mas não atesta por si só disponibilidade HTTP nem a versão de wire dos ZIPs ([#208](https://github.com/franklinbaldo/ficha/issues/208), [#383](https://github.com/franklinbaldo/ficha/issues/383)).
+- **Status:** o leitor atômico está integrado à **ficha numérica em `/ficha/empresa/`** e à comparação numérica em `/ficha/historia/`, com provas específicas em Chromium. Na **home**, CNPJ numérico completo é encaminhado à ficha Protobuf v1, sem consulta Parquet/DuckDB; nome e CNPJ alfanumérico permanecem na rota analítica experimental. O manifesto declara artefatos, mas não atesta por si só disponibilidade HTTP nem a versão de wire dos ZIPs ([#208](https://github.com/franklinbaldo/ficha/issues/208), [#383](https://github.com/franklinbaldo/ficha/issues/383)).
 
 ### 2. Camada Analítica (Data Lakehouse)
 
