@@ -1,4 +1,3 @@
-import { fetchCurrentDataset, probeParquetRange } from './dataset.mjs';
 import { attachAnalyticalFiles, planCompanyQuery, queryCompanies, stripCnpj } from './query-core.mjs';
 import { validNumericCnpj } from './atomic-record.mjs';
 
@@ -32,8 +31,10 @@ export function renderCompanies(documentRef, list, rows) {
 /** No request on module import. Data and WASM load only on a valid submission. */
 export function mountSearch({
   documentRef,
-  fetchDataset = fetchCurrentDataset,
-  probeRange = probeParquetRange,
+  // Do not fetch the analytical loader on a numeric Protobuf-first visit.
+  // The legacy name/alphanumeric path still imports it on first use.
+  fetchDataset = async () => (await import('./dataset.mjs')).fetchCurrentDataset(),
+  probeRange = async args => (await import('./dataset.mjs')).probeParquetRange(args),
   // A numeric Protobuf redirect or failed Range probe must not load DuckDB JS.
   createEngine = async () => (await import('./duckdb-runtime.mjs')).createDuckDBEngine(),
   attach = attachAnalyticalFiles,
