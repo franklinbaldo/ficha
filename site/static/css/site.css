@@ -163,7 +163,8 @@ footer { border-top:1px solid var(--line); font-size:.82rem; color:var(--muted);
 @media(prefers-reduced-motion:reduce) { html { scroll-behavior:auto; } }
 
 /* Home */
-.home { padding-top:clamp(2.5rem,6vw,5.25rem); }
+/* Permite reflow de palavras longas e CNPJs com texto ampliado a 200%. */
+.home { padding-top:clamp(2.5rem,6vw,5.25rem); overflow-wrap:anywhere; }
 .hero-intro { margin-bottom:clamp(1.8rem,4vw,2.8rem); }
 .hero-intro .eyebrow { margin:0 0 1rem; font-size:.875rem; letter-spacing:.1em; }
 .hero h1 { max-width:18ch; margin:0 0 1.15rem; font-size:clamp(2.6rem,6.35vw,5.5rem); }
