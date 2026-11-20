@@ -75,6 +75,17 @@ PUBLISH_NAME = "Publish verified manifest"
 SHARD_RECEIPT_NAME = "Persist shard production receipt before PUT"
 SHARD_SUBMIT_NAME = "Submit exactly the receipted bytes"
 
+# Exact fail-closed shell payload. A substring match can be satisfied by echo or dead code.
+EXPECTED_SHARD_SUBMIT_RUN = (
+    'uv run python -m ficha_etl.monthly_sharded submit-shard \\',
+    '  --month "$MONTH" \\',
+    '  --prefix "$PREFIX" \\',
+    '  --descriptor ".publication/$MONTH/production-descriptor.json" \\',
+    '  --shard-path ".publication/$MONTH/shards/companies-$PREFIX.zip" \\',
+    '  --receipt ".publication/$MONTH/receipt-$PREFIX.json" \\',
+    '  --summary ".publication/$MONTH/submit-$PREFIX.json"',
+)
+
 
 def _require(condition: bool, message: str) -> None:
     if not condition:
@@ -192,8 +203,17 @@ def _assert_artifact_policy(source: str) -> None:
     _require("if" not in submit, "remote submit must use default success() gating")
     _require("continue-on-error" not in submit, "remote submit failure must propagate")
     _require(
-        isinstance(submit.get("run"), str) and "monthly_sharded submit-shard" in submit["run"],
-        "remote submit step changed or lost its CLI invocation",
+        submit.get("shell") in (None, "bash"),
+        "remote submit must use a Bash-compatible shell",
+    )
+    _require(
+        jobs["shards"].get("defaults", {}).get("run", {}).get("shell") in (None, "bash"),
+        "shards job must not override the default Bash shell",
+    )
+    run = submit.get("run")
+    _require(
+        isinstance(run, str) and run.strip() == "\n".join(EXPECTED_SHARD_SUBMIT_RUN),
+        "remote submit must retain its exact executable CLI and receipt arguments",
     )
 
 
@@ -247,6 +267,32 @@ class TestMonthlyUploadArtifactPolicy(unittest.TestCase):
                     header,
                     header.replace("        run: |", f"        {insertion}\n        run: |"),
                 )
+                with self.assertRaises(AssertionError):
+                    _assert_artifact_policy(mutant)
+
+    def test_submit_shell_is_executable_not_a_quoted_or_unreachable_reference(self) -> None:
+        for label, replacement, shell in (
+            ("echo_only", 'echo "monthly_sharded submit-shard"', None),
+            (
+                "early_exit",
+                "exit 0\n" + "\n".join(EXPECTED_SHARD_SUBMIT_RUN),
+                None,
+            ),
+            ("comment_only", "true # monthly_sharded submit-shard", None),
+            ("ignored_failure", "false || echo monthly_sharded submit-shard", None),
+            ("wrong_shell", "\n".join(EXPECTED_SHARD_SUBMIT_RUN), "python"),
+        ):
+            with self.subTest(mutant=label):
+                data = yaml.safe_load(self.workflow)
+                submit = next(
+                    step
+                    for step in data["jobs"]["shards"]["steps"]
+                    if step.get("name") == SHARD_SUBMIT_NAME
+                )
+                submit["run"] = replacement
+                if shell is not None:
+                    submit["shell"] = shell
+                mutant = yaml.safe_dump(data, sort_keys=False)
                 with self.assertRaises(AssertionError):
                     _assert_artifact_policy(mutant)
 
