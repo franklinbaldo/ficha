@@ -64,7 +64,8 @@ export async function fetchCurrentDataset({
 } = {}) {
   const response = await fetchImpl(url, { cache: 'no-store' });
   if (response.status === 404) return null;
-  if (!response.ok) throw new Error(`manifest.json: HTTP ${response.status}`);
+  // No Range was requested; a 201/206 body must not masquerade as a full manifest.
+  if (response.status !== 200) throw new Error(`manifest.json: HTTP ${response.status}`);
   return currentDataset(await response.json());
 }
 
