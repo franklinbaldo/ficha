@@ -105,3 +105,14 @@ A próxima mudança de dados requer a **autorização/fluxo de publicação de m
 parecer excepcional pré-merge e conferência do Pages antes da guarda estrita.
 A #376 foi integrada na direção R102; #281 continua aberta. Este adendo não
 altera manifesto, SSG, ETL ou dados.
+
+## R101: viés de seleção na custódia física (19/11/2026)
+
+A [auditoria independente R101](https://github.com/franklinbaldo/polvo/blob/main/scripts/ficha_pb_zip_coverage_r101.mjs) cruzou os **tamanhos declarados** do manifesto Git blob `37c13ec9` com os recibos de ZIPs **integralmente inspecionados** pela 🦦 Lontra em [R94](https://github.com/franklinbaldo/lontra/blob/main/workspace/ficha_ia_zip_sample_r94.json) e [R96](https://github.com/franklinbaldo/lontra/blob/main/workspace/ficha_ia_zip_shard70_r96.json).
+
+- Os **300 ZIPs** declarados totalizam **68.711.003.523 B**; os **9 ZIPs fisicamente auditados** (prefixos 70/98/99 em três meses) totalizam **33.485.558 B** declarados, isto é, **3% por quantidade, mas 0,0487339% por bytes**.
+- Os nove são **exatamente os nove menores ZIPs**. Isso identifica um viés de conveniência: cobertura de metadados (300/300) e de ZIPs inteiros (9/300) não deve ser apresentada como representatividade física dos ZIPs grandes.
+- O maior ZIP ainda não revalidado integralmente no recorte é **2026-07/08, 350.491.853 B declarados**. Uma futura amostra por faixas de tamanho, incluindo ZIP grande e mediano de cada competência, exige **orçamento e decisão 🐘**; não é condição automática de publicação, nem substituto de custódia ou censo.
+- O [replay CLI no Ifro](https://github.com/franklinbaldo/polvo/blob/main/memory/2026-11-19-r101-ficha-physical-byte-coverage.md) sobre os arquivos Git exatos passou em Node 20.19.2: `node --check` e 8/8 negativos, SHA-256 do manifesto observado `8dcf725c…` idêntico ao pin R94/R96. Nenhum ZIP foi baixado novamente nesta rodada.
+
+**Limite:** cobertura por bytes é um indicador do desenho amostral, **não probabilidade de falha, atestado de autenticidade RFB, nem liberação do backfill**. A migração em duas etapas acima segue com fluxo de publicação autorizado; zero alteração de manifesto, UI, produtor ou upload nesta evidência.
