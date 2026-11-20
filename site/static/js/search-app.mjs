@@ -1,6 +1,5 @@
 import { fetchCurrentDataset, probeParquetRange } from './dataset.mjs';
 import { attachAnalyticalFiles, planCompanyQuery, queryCompanies, stripCnpj } from './query-core.mjs';
-import { createDuckDBEngine } from './duckdb-runtime.mjs';
 import { validNumericCnpj } from './atomic-record.mjs';
 
 /** Render only text nodes; public CNPJ/empresa data must never become HTML. */
@@ -35,7 +34,8 @@ export function mountSearch({
   documentRef,
   fetchDataset = fetchCurrentDataset,
   probeRange = probeParquetRange,
-  createEngine = createDuckDBEngine,
+  // A numeric Protobuf redirect or failed Range probe must not load DuckDB JS.
+  createEngine = async () => (await import('./duckdb-runtime.mjs')).createDuckDBEngine(),
   attach = attachAnalyticalFiles,
   query = queryCompanies,
   // Opt-in navigation: an exact numeric CNPJ already has a Protobuf-first page.

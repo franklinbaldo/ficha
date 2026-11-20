@@ -185,3 +185,31 @@ test('SSG tem páginas novas com formulários e navegação, sem Astro/Svelte', 
   assert.ok(home.includes('Consulte empresas e seu'));
   assert.ok(home.includes('id="busca-form"'));
 });
+
+
+test('grafo estático Protobuf não carrega módulos analíticos ao abrir Empresa/História', async () => {
+  // The browser downloads static ESM dependencies before any form submission.
+  // Dynamic imports inside fetchRecordAt are intentionally excluded.
+  const staticDeps = source => [...source.matchAll(
+    /^\s*(?:import|export)\s+(?:[^;]*?\s+from\s+)?['"](\.\/[^'"]+\.mjs)['"]\s*;?/gm,
+  )].map(match => match[1]);
+  // Negative control: prove the auditor would catch the import that caused
+  // the unwanted eager download.
+  assert.deepEqual(staticDeps("import { createDuckDBEngine } from './duckdb-runtime.mjs';"),
+    ['./duckdb-runtime.mjs']);
+  const visited = new Set();
+  async function visit(name) {
+    if (visited.has(name)) return;
+    visited.add(name);
+    const source = await read('../static/js/' + name);
+    for (const relative of staticDeps(source)) {
+      assert.match(relative, /^\.\/[a-z0-9-]+\.mjs$/, 'revisar import ESM fora da pasta');
+      await visit(relative.slice(2));
+    }
+  }
+  await visit('pages.mjs');
+  assert.ok(visited.has('record.mjs'), 'o teste deve atravessar o módulo legado de apresentação');
+  for (const forbidden of ['duckdb-runtime.mjs', 'dataset.mjs', 'search-app.mjs']) {
+    assert.ok(!visited.has(forbidden), 'módulo analítico eager: ' + forbidden);
+  }
+});

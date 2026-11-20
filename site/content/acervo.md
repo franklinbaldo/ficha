@@ -24,5 +24,5 @@ layout: product
 </section>
 <section class="footnote-section">
   <h2>Custódia e disponibilidade são coisas diferentes.</h2>
-  <p>O Internet Archive preserva os artefatos. O manifesto registra referências, tamanhos e hashes, mas não garante que cada arquivo esteja acessível em tempo real. O FICHA separa o que foi declarado da consulta efetivamente realizada.</p>
+  <p>O Internet Archive é o destino de guarda indicado para os arquivos do FICHA. O manifesto registra referências, tamanhos e hashes declarados, mas isso, por si só, não certifica os bytes de cada ZIP, a versão de todos os registros Protobuf nem o acesso aos arquivos em tempo real. Nas competências Protobuf atuais, a versão do wire ainda não é atestada pelo catálogo (<a href="https://github.com/franklinbaldo/ficha/issues/383">limite documentado</a>). A consulta e a custódia de um arquivo específico exigem conferência própria.</p>
 </section>

@@ -148,3 +148,14 @@ test('História documenta amostra pública independente sem prometer completude'
   assert.match(historia, /não um teste de todas as competências/);
   assert.match(historia, /não há fallback para Parquet/);
 });
+
+
+test('Acervo não confunde manifesto com prova de custódia ou versão Protobuf', async () => {
+  const acervo = await read('../content/acervo.md');
+  assert.match(acervo, /destino de guarda indicado/);
+  assert.match(acervo, /não certifica os bytes de cada ZIP/);
+  assert.match(acervo, /versão de todos os registros Protobuf/);
+  assert.match(acervo, /wire ainda não é atestada pelo catálogo/);
+  assert.match(acervo, /https:\/\/github\.com\/franklinbaldo\/ficha\/issues\/383/);
+  assert.doesNotMatch(acervo, /O Internet Archive preserva os artefatos/);
+});
