@@ -25,6 +25,7 @@ Ver ADR 0012 e mirror.py (URLs de leitura).
 
 from __future__ import annotations
 
+import json
 import logging
 import threading
 import time
@@ -303,9 +304,26 @@ def _existing_raw_files_on_ia(identifier: str) -> set[str]:
     except httpx.HTTPError as exc:
         raise RuntimeError(f"IA raw metadata: fetch failed for {identifier}") from exc
 
+    # IA metadata determines whether a raw ZIP is skipped. Ambiguous JSON must
+    # not decide that an upstream object already exists (last-key-wins).
+    def unique_pairs(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError(f"duplicate JSON key: {key!r}")
+            result[key] = value
+        return result
+
+    def no_nonfinite(value):
+        raise ValueError(f"non-standard JSON number: {value}")
+
     try:
-        data = resp.json()
-    except ValueError as exc:
+        data = json.loads(
+            resp.content,
+            object_pairs_hook=unique_pairs,
+            parse_constant=no_nonfinite,
+        )
+    except (ValueError, UnicodeDecodeError) as exc:
         raise RuntimeError(f"IA raw metadata: invalid JSON for {identifier}") from exc
 
     if not isinstance(data, dict) or not isinstance(data.get("files"), list):
