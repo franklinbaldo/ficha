@@ -44,6 +44,20 @@ test('busca manifesto sem cache e diferencia 404 de HTTP 500', async () => {
   await assert.rejects(fetchCurrentDataset({fetchImpl:async () => ({status:500,ok:false})}), /HTTP 500/);
 });
 
+test('manifesto recusa HTTP 201 e 206 sem pedir Range, mesmo com JSON válido', async () => {
+  const raw = await fixture();
+  for (const status of [201, 206]) {
+    let parsed = false;
+    await assert.rejects(fetchCurrentDataset({
+      fetchImpl: async () => ({
+        status, ok: true,
+        json: async () => { parsed = true; return raw; },
+      }),
+    }), new RegExp(`HTTP ${status}`));
+    assert.equal(parsed, false, 'não decodificar corpo de resposta HTTP não integral');
+  }
+});
+
 test('SQL parametrizado preserva CNPJ numérico, alfa e busca por nome', () => {
   for (const [raw,text] of [
     ['11.222.333/0001-81','11222333000181'],
