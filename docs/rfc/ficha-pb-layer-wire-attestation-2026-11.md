@@ -99,7 +99,7 @@ arquivo remoto. Apenas **6/300 ZIPs inteiros** receberam outra prova física;
 os demais têm metadados lidos e hashes ZIP *declarados*, não rehash do ZIP.
 Também não há prova da semântica de porte legada (#359).
 A invocação do algoritmo e dos mutantes passou no executor JavaScript da sessão;
-**CLI Node, Prek/OKF integral e Chromium não foram executados por Polvo nesta fatia**.
+**Ifro Node 20.19.2:** três blobs Git exatos conferidos (`manifest`, `ledger` e script), `node --check` e execução CLI `--self-test` com **exit 0**, `pinsOK:true` e **10/10 mutações rejeitadas**. O Jatobá foi apenas controle de SSH. Prek/OKF integral e Chromium próprios continuam **NOT_RUN**.
 
 A próxima mudança de dados requer a **autorização/fluxo de publicação de manifesto**,
 parecer excepcional pré-merge e conferência do Pages antes da guarda estrita.
