@@ -11,13 +11,14 @@ import yaml
 WORKFLOW = Path(__file__).resolve().parents[2] / ".github/workflows/etl-monthly.yml"
 MONTH_EXPR = "${{ needs.resolve.outputs.month }}"
 PREFIX_EXPR = "${{ matrix.prefix }}"
+ATTEMPT_SUFFIX = "-attempt-${{ github.run_attempt }}"
 MONTH = "2026-09"
 
 # (job, step) -> (artifact name, exact paths, missing-file policy, step condition)
 # Keep paths explicit; uploads of directories, traversal, and globs are not allowed.
 EXPECTED_UPLOADS = {
     ("produce", "Preserve estabelecimento key-gate evidence"): (
-        f"estabelecimento-key-gate-{MONTH_EXPR}",
+        f"estabelecimento-key-gate-{MONTH_EXPR}{ATTEMPT_SUFFIX}",
         (
             f"etl/.cache/{MONTH_EXPR}/evidence/monthly-estabelecimento-key-gate.json",
             f"etl/.cache/{MONTH_EXPR}/evidence/monthly-estabelecimento-source-bag.json",
@@ -26,37 +27,37 @@ EXPECTED_UPLOADS = {
         "always()",
     ),
     ("produce", "Persist mandatory source-bag attestation"): (
-        f"estabelecimento-source-bag-{MONTH_EXPR}",
+        f"estabelecimento-source-bag-{MONTH_EXPR}{ATTEMPT_SUFFIX}",
         (f"etl/.cache/{MONTH_EXPR}/evidence/monthly-estabelecimento-source-bag.json",),
         "error",
         None,
     ),
     ("produce", "Persist production descriptor before upload"): (
-        f"production-descriptor-{MONTH_EXPR}",
+        f"production-descriptor-{MONTH_EXPR}{ATTEMPT_SUFFIX}",
         (f"etl/.cache/{MONTH_EXPR}/production-descriptor.json",),
         "error",
         None,
     ),
     ("produce", "Upload transform metrics"): (
-        f"transform-metrics-{MONTH_EXPR}",
+        f"transform-metrics-{MONTH_EXPR}{ATTEMPT_SUFFIX}",
         (f"etl/.cache/{MONTH_EXPR}/metrics/transform_metrics.json",),
         "warn",
         "always()",
     ),
     ("shards", "Persist shard production receipt before PUT"): (
-        f"shard-receipt-{PREFIX_EXPR}-{MONTH_EXPR}",
+        f"shard-receipt-{PREFIX_EXPR}-{MONTH_EXPR}{ATTEMPT_SUFFIX}",
         (f"etl/.publication/{MONTH_EXPR}/receipt-{PREFIX_EXPR}.json",),
         "error",
         None,
     ),
     ("shards", "Preserve submit result"): (
-        f"shard-submit-{PREFIX_EXPR}-{MONTH_EXPR}",
+        f"shard-submit-{PREFIX_EXPR}-{MONTH_EXPR}{ATTEMPT_SUFFIX}",
         (f"etl/.publication/{MONTH_EXPR}/submit-{PREFIX_EXPR}.json",),
         "warn",
         "always()",
     ),
     ("finalize", "Persist exact promoted candidate and evidence"): (
-        f"manifest-candidate-{MONTH_EXPR}",
+        f"manifest-candidate-{MONTH_EXPR}{ATTEMPT_SUFFIX}",
         (
             "web/public/manifest.json",
             f"etl/.publication/{MONTH_EXPR}/production-descriptor.json",
@@ -151,6 +152,7 @@ def _assert_artifact_policy(source: str) -> None:
         _require(config.get("if-no-files-found") == missing_policy, f"missing-file policy: {key}")
         _require(step.get("if") == condition, f"conditional upload: {key}")
         _require("continue-on-error" not in step, f"failure suppressed: {key}")
+        _require("overwrite" not in config, f"immutable artifact replaced: {key}")
 
     final = jobs["finalize"]["steps"]
     names = [step.get("name") for step in final]
@@ -209,6 +211,7 @@ class TestMonthlyUploadArtifactPolicy(unittest.TestCase):
         before = (
             "          name: production-descriptor-"
             + MONTH_EXPR
+            + ATTEMPT_SUFFIX
             + "\n"
             + ("          path: etl/.cache/" + MONTH_EXPR + "/production-descriptor.json\n")
             + "          if-no-files-found: error"
