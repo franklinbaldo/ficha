@@ -1,6 +1,5 @@
 /** Public record access. Never substitute another source or invent data. */
 import { currentDataset, probeParquetRange } from './dataset.mjs';
-import { createDuckDBEngine } from './duckdb-runtime.mjs';
 import { attachAnalyticalFiles, queryCompanies, stripCnpj } from './query-core.mjs';
 
 export const RECORD_FIELDS = Object.freeze([
@@ -48,7 +47,9 @@ export function compareRecords(before, after) {
  * The reader does not claim SHA-256 verification of the complete remote Parquet.
  */
 export async function fetchRecordAt(manifest, date, cnpj, {
-  probeRange = probeParquetRange, createEngine = createDuckDBEngine,
+  probeRange = probeParquetRange,
+  // Load analytical code only after a Parquet lookup reaches engine creation.
+  createEngine = async () => (await import('./duckdb-runtime.mjs')).createDuckDBEngine(),
   attach = attachAnalyticalFiles, query = queryCompanies,
 } = {}) {
   const canonical = canonicalCnpj(cnpj);
