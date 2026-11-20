@@ -330,7 +330,7 @@ def test_existing_raw_files_on_ia_parses_metadata(monkeypatch):
     class _FakeResp:
         status_code = 200
 
-        def json(self):
+        def json(self, **_kwargs):
             return payload
 
     class _FakeClient:
@@ -372,7 +372,7 @@ def test_stream_raw_rejects_ambiguous_catalog_before_get_or_put(monkeypatch, fil
     class _FakeResp:
         status_code = 200
 
-        def json(self):
+        def json(self, **_kwargs):
             return {"files": files}
 
     class _FakeClient:
@@ -406,7 +406,7 @@ def test_stream_raw_rejects_non_list_catalog_before_get_or_put(monkeypatch):
     class _FakeResp:
         status_code = 200
 
-        def json(self):
+        def json(self, **_kwargs):
             return {"files": {"raw/Empresas0.zip": {"size": "1"}}}
 
     class _FakeClient:
@@ -438,7 +438,7 @@ def test_stream_raw_rejects_http_200_invalid_json_before_get_or_put(monkeypatch)
     class _FakeResp:
         status_code = 200
 
-        def json(self):
+        def json(self, **_kwargs):
             raise ValueError("malformed JSON")
 
     class _FakeClient:
@@ -507,7 +507,7 @@ def test_existing_raw_files_on_ia_returns_empty_on_404(monkeypatch):
     class _FakeResp:
         status_code = 404
 
-        def json(self):
+        def json(self, **_kwargs):
             return {}
 
     class _FakeClient:
