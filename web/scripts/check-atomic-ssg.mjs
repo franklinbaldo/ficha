@@ -188,6 +188,75 @@ try {
     results.push({name:'História móvel: tabela acessível por teclado',widths,status:'PASS'});
     results.push({name:'História PB real 2026-06/07',requests:visited.length,status:'PASS'});
   } finally {await history.close();}
+  // Unlike the preceding cases, this opens the already published GitHub Pages
+  // site: an SSG PR artifact cannot prove post-merge mobile/keyboard behavior.
+  // The declared real CNPJ is read-only; no mutation or Parquet fallback.
+  const publicHistory = await browser.newPage({serviceWorkers:'block',
+    viewport:{width:375,height:812}});
+  try {
+    const requests=[];
+    publicHistory.on('request',r=>{
+      if(r.url().includes('archive.org/download/'))requests.push(r.url());
+    });
+    const pageUrl='https://franklinbaldo.github.io/ficha/historia/';
+    await publicHistory.goto(pageUrl,{waitUntil:'domcontentloaded',timeout:30_000});
+    await publicHistory.locator('#historia-inicio option[value="2026-06"]')
+      .waitFor({state:'attached'});
+    await publicHistory.locator('#historia-cnpj').fill('33000167000101');
+    await publicHistory.locator('#historia-inicio').selectOption('2026-06');
+    await publicHistory.locator('#historia-fim').selectOption('2026-07');
+    await publicHistory.locator('#historia-enviar').click();
+    await publicHistory.locator('#historia-estado')
+      .filter({hasText:/Comparação concluída|Comparação indisponível/})
+      .waitFor({timeout:MAX_MS});
+    const message=await publicHistory.locator('#historia-estado').textContent();
+    assert.match(message,/Comparação concluída/,'Pages público: '+message);
+    assert.ok(requests.filter(url=>url.endsWith('.pb')).length>=2,
+      'Pages público não consultou duas competências Protobuf');
+    assert.ok(!requests.some(url=>/\.parquet|\.wasm/.test(url)),
+      'Pages público solicitou Parquet ou WASM inesperadamente');
+    const region=publicHistory.locator('.comparison-scroll');
+    await region.waitFor({state:'visible'});
+    for(const width of [320,375]){
+      await publicHistory.setViewportSize({width,height:812});
+      const dims=await region.evaluate(el=>({
+        viewport:document.documentElement.clientWidth,
+        document:document.documentElement.scrollWidth,
+        client:el.clientWidth,scroll:el.scrollWidth,
+      }));
+      assert.ok(dims.document<=dims.viewport+1,
+        'Pages '+width+'px: overflow horizontal de toda a página: '+JSON.stringify(dims));
+      assert.ok(dims.scroll>dims.client,
+        'Pages '+width+'px: comparação perdeu rolagem interna: '+JSON.stringify(dims));
+      assert.equal(await region.getAttribute('tabindex'),'0');
+      assert.equal(await region.getAttribute('role'),'region');
+      assert.equal(await region.locator('thead th[scope="col"]').count(),3);
+      assert.ok(await region.locator('tbody th[scope="row"]').count()>0);
+      // Prove Tab focusability, not just an artificial .focus() call.
+      await publicHistory.locator('#historia-enviar').focus();
+      let reached=false;
+      for(let tab=0;tab<12;tab++){
+        await publicHistory.keyboard.press('Tab');
+        if(await region.evaluate(el=>document.activeElement===el)){reached=true;break;}
+      }
+      assert.ok(reached,'Pages '+width+'px: região ausente da ordem Tab');
+      await region.evaluate(el=>{el.scrollLeft=0;});
+      await publicHistory.keyboard.press('ArrowRight');
+      await publicHistory.waitForFunction(
+        ()=>document.querySelector('.comparison-scroll')?.scrollLeft>0,
+        null,{timeout:5000});
+      await publicHistory.screenshot({path:out+'/pages-history-'+width+'-keyboard.png',
+        fullPage:true});
+      results.push({name:'Pages público História: teclado e reflow '+width+'px',
+        url:pageUrl,dimensions:dims,status:'PASS'});
+    }
+  } catch(error) {
+    results.push({name:'Pages público História: teclado e reflow',status:'FAIL',
+      error:String(error)});
+    await publicHistory.screenshot({path:out+'/pages-history-failure.png',
+      fullPage:true}).catch(()=>{});
+    throw error;
+  } finally {await publicHistory.close();}
   const missingHistory = await browser.newPage({serviceWorkers:'block'});
   try {
     let members=0;
