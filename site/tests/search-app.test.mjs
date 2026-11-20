@@ -55,7 +55,7 @@ test('falha analítica revela alternativa no acervo, edição e recuperação a 
   const {readFile}=await import('node:fs/promises');
   const html=await readFile(new URL('../content/index.md',import.meta.url),'utf8');
   assert.match(html,/<p id="consulta-recuperacao"[^>]*hidden>/);
-  assert.match(html,/<a href="\\/ficha\\/acervo\\/">consultar os arquivos/);
+  assert.ok(html.includes('<a href="/ficha/acervo/">consultar os arquivos'));
 });
 
 test('resposta obsoleta após edição não revela recuperação de busca antiga', async () => {
