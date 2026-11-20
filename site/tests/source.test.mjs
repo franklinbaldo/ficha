@@ -36,6 +36,16 @@ test('sobre informa camadas sem prometer disponibilidade live', async () => {
   assert.match(about, /não é prova de acesso remoto/);
 });
 
+test('Sobre não confunde metadados declarados com arquivos comprovadamente custodiados', async () => {
+  const sobre = await read('../content/sobre.md');
+  assert.match(sobre, /tamanhos e as contagens de linhas declarados por competência/);
+  assert.match(sobre, /não verificam a presença nem a integridade dos arquivos/);
+  assert.match(sobre, /destino de guarda indicado/);
+  assert.match(sobre, /busca experimental por Parquet e DuckDB-WASM/);
+  assert.doesNotMatch(sobre, /conjuntos realmente publicados/);
+  assert.doesNotMatch(sobre, /O projeto preserva arquivos no Internet Archive/);
+});
+
 test('aviso público distingue falha de transporte de ausência cadastral', async () => {
   const home = await read('../content/index.md');
   const sobre = await read('../content/sobre.md');
