@@ -75,3 +75,33 @@ A rejeição deve ocorrer em `planAtomicRecord`, **antes de qualquer GET**. Abri
 🦦 Lontra e 🐝 Abelha: ledger materializado e prova de pins/heterogeneidade. 🐙 Polvo: política de agregação e revisão arquitetural. 🦎 Lagarto com 🦊 Raposa/🦇 Morcego: guarda SSG e testes **depois** do manifesto publicado. 🐘 Elefante: sequência e autorização. A fila excepcional [#376](https://github.com/franklinbaldo/ficha/pull/376) precede essas alterações.
 
 **Fora de escopo:** ETL produtivo, PUT/DELETE no IA, promoção de manifesto nesta PR, provisionamento de rede, cron, custos e afirmação de autenticidade dos dados RFB.
+## Evidência R100: cruzamento do ledger integral R95 (19/11/2026)
+
+Após o censo de metadados da 🦦 Lontra R95, o 🐙 Polvo executou
+[verificador independente, read-only](https://github.com/franklinbaldo/polvo/blob/main/scripts/ficha_pb_wire_crosswalk_r100.mjs)
+sobre `manifest.json` Git blob `37c13ec9f6fdff11c9a563db6bff5d4cf52e54c4`
+e o [ledger de 300 linhas](https://github.com/franklinbaldo/lontra/blob/main/workspace/ficha_ia_wire_ledger_r95.tsv)
+Git blob `b34f6669ab6de81a161a06c37c0b15d667050163`.
+Os **300/300** vínculos competência/slot/URL/SHA-1 ZIP declarado/tamanho/meta URL/digest
+R93=R95/versão `1.0.0`/contagem foram coerentes. Totais:
+maio **68.081.781**, junho **68.629.147**, julho **69.062.849**,
+iguais aos `row_counts.raizes`; abril sem PB.
+O manifesto ainda possui **0/3 camadas versionadas**.
+Resultado: `META_WIRE_UNANIMOUS_NEEDS_AUTHORIZED_BACKFILL`, não aprovação de promoção.
+O reprodutor rejeitou **10/10 mutações** sintéticas (linha ausente/duplicada,
+versão divergente, digest discordante, ZIP SHA declarado divergente, count,
+competência trocada, abril com PB, layer incompatível e snapshot duplicado).
+
+**Limite demonstrado por controle negativo:** falsificar os *dois* hashes de
+metadados do TSV para o mesmo valor bem formado passa no crosswalk.
+Logo, o gate atesta **coerência entre dois inventários**, não autenticidade do
+arquivo remoto. Apenas **6/300 ZIPs inteiros** receberam outra prova física;
+os demais têm metadados lidos e hashes ZIP *declarados*, não rehash do ZIP.
+Também não há prova da semântica de porte legada (#359).
+A invocação do algoritmo e dos mutantes passou no executor JavaScript da sessão;
+**CLI Node, Prek/OKF integral e Chromium não foram executados por Polvo nesta fatia**.
+
+A próxima mudança de dados requer a **autorização/fluxo de publicação de manifesto**,
+parecer excepcional pré-merge e conferência do Pages antes da guarda estrita.
+A #376 foi integrada na direção R102; #281 continua aberta. Este adendo não
+altera manifesto, SSG, ETL ou dados.
