@@ -125,3 +125,13 @@ test('links em parágrafos HTML das páginas SSG não vazam sintaxe Markdown', a
     }
   }
 });
+
+
+test('README SSG explicita lookup adicional e limite de versão do wire', async () => {
+  const readme = await read('../README.md');
+  assert.match(readme, /`lookups\.json` da mesma competência/);
+  assert.match(readme, /SHA-256 declarados desse lookup/);
+  assert.match(readme, /schema_version` ausente no manifesto/);
+  assert.match(readme, /issuecomment-7032628482/);
+  assert.doesNotMatch(readme, /somente um membro Protobuf v1/);
+});
