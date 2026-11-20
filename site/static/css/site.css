@@ -72,7 +72,8 @@ button:disabled { opacity:.6; cursor:progress; }
 .companies p { margin:.3rem 0; font-size:.94rem; overflow-wrap:anywhere; }
 .companies a { margin-left:.75rem; white-space:nowrap; }
 .fineprint { color:var(--muted); font-size:.84rem; line-height:1.6; }
-.notice { border-left:2px solid var(--green); padding-left:1rem; margin:1.4rem 0 2rem; }
+.notice { border-left:2px solid var(--green); padding-left:1rem; margin:1.4rem 0 2rem;
+  overflow-wrap:anywhere; }
 .hero-bottom { border-top:1px solid var(--line); border-bottom:1px solid var(--line);
   margin-top:3.8rem; display:flex; gap:1.5rem; flex-wrap:wrap; align-items:center; padding:1.2rem 0; }
 .fact { flex:1 1 15rem; }
