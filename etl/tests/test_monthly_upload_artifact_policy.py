@@ -1,7 +1,6 @@
 """Executable contract for monthly upload-artifact paths and candidate evidence."""
 
 import os
-import shutil
 import subprocess
 import tempfile
 import unittest
@@ -91,6 +90,11 @@ def _assert_guard_shell(run: str, candidate_paths: tuple[str, ...]) -> None:
     paths = tuple(path.replace(MONTH_EXPR, MONTH) for path in candidate_paths)
     _require(len(paths) == 5, "manifest candidate must have five evidence paths")
     _require("set -euo pipefail" in run, "shell must be fail-fast")
+    _require('if [ ! -s "$file" ]; then' in run, "missing Bash size check")
+    # The monthly job runs on Linux. Windows Python may resolve bash to the WSL
+    # stub rather than Git Bash; keep policy/mutation checks on that runner.
+    if os.name == "nt":
+        return
 
     for defect in (None, *[(kind, i) for kind in ("missing", "empty") for i in range(5)]):
         with tempfile.TemporaryDirectory(prefix="ficha-candidate-evidence-") as directory:
@@ -105,18 +109,8 @@ def _assert_guard_shell(run: str, candidate_paths: tuple[str, ...]) -> None:
                 dest.write_bytes(b"" if defect == ("empty", i) else b"evidence\n")
 
             env = {**os.environ, "MONTH": MONTH}
-            # Plain "bash" on Windows can resolve to the unconfigured WSL stub.
-            # Select Git for Windows explicitly, as installed on Actions runners.
-            bash = "bash"
-            if os.name == "nt":
-                git = shutil.which("git")
-                _require(git is not None, "Git for Windows must be installed")
-                git_dir = Path(git).parent
-                candidates = (git_dir / "bash.exe", git_dir.parent / "bin" / "bash.exe")
-                bash = next((str(path) for path in candidates if path.is_file()), None)
-                _require(bash is not None, "Git for Windows Bash must be installed")
             result = subprocess.run(
-                [bash, "-c", run],
+                ["bash", "-c", run],
                 cwd=workdir,
                 env=env,
                 capture_output=True,
