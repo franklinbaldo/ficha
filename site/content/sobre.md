@@ -10,7 +10,7 @@ layout: page
 
 # Sobre o FICHA
 
-**Cada empresa tem uma história.** O FICHA, *Fichário de Identificação de CNPJ Hospedado no Archive*, é um projeto de acesso a dados públicos do CNPJ da Receita Federal, preservados por competência.
+**Cada empresa tem uma história.** O FICHA, *Fichário de Identificação de CNPJ Hospedado no Archive*, é um projeto de acesso a dados públicos do CNPJ da Receita Federal, organizados em competências declaradas no catálogo.
 
 O que interessa não é apenas descobrir como uma empresa aparece em uma lista. É saber **de quando é o registro**, de onde veio e quais observações sobrevivem no acervo histórico.
 
@@ -20,7 +20,7 @@ O [fichário](/ficha/empresa/) oferece uma interface experimental de consulta po
 
 O [acervo](/ficha/acervo/) apresenta os arquivos, tamanhos e hashes declarados no manifesto. [Explorar](/ficha/explorar/) exibe os tamanhos e as contagens de linhas declarados por competência. Esses números não verificam a presença nem a integridade dos arquivos no Internet Archive e não são estatísticas populacionais sobre empresas.
 
-## O que o sistema armazena
+## O que o sistema organiza
 
 A camada atômica organiza registros por raiz de CNPJ em Protobuf/ZIP nos snapshots que declaram esses artefatos. A camada analítica oferece busca experimental por Parquet e DuckDB-WASM no navegador. O Internet Archive é o destino de guarda indicado para os arquivos do projeto, e o [manifesto](/ficha/manifest.json) publica suas referências declaradas, sem atestar a custódia de cada arquivo.
 
