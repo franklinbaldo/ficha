@@ -37,6 +37,7 @@ def violations(workflow: dict, auditor: str) -> list[str]:
         "web/scripts/check-accessibility.mjs",
         "web/scripts/check-greenfield.mjs",
         "web/scripts/check-atomic-ssg.mjs",
+        "web/src/generated/company.pb.js",
         "web/package.json",
         "web/bun.lock",
         ".github/workflows/visual-capture.yml",
@@ -59,8 +60,12 @@ def violations(workflow: dict, auditor: str) -> list[str]:
     checkout = steps[0].get("with") or {}
     if checkout.get("ref") != EXPECTED_SHA or checkout.get("persist-credentials") is not False:
         errors.append("checkout must pin PR head and discard credentials")
-    if any(s.get("continue-on-error") or s.get("if") == "${{ false }}" for s in steps):
-        errors.append("no failure-masking or disabled steps")
+    if any(
+        s.get("continue-on-error")
+        or (s.get("if") is not None and s.get("name") != "Upload browser accessibility evidence")
+        for s in steps
+    ):
+        errors.append("no failure-masking or conditional mandatory steps")
     try:
         sha_step = _step(steps, "Conferir SHA do checkout")
         sha_command = 'test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"'
@@ -177,6 +182,7 @@ def test_reject_mutations_that_restore_false_green() -> None:
         "web/bun.lock",
         "web/scripts/check-greenfield.mjs",
         "web/scripts/check-atomic-ssg.mjs",
+        "web/src/generated/company.pb.js",
     ):
         w = mutated()
         w.get("on", w.get(True))["pull_request"]["paths"].remove(missing)
@@ -254,6 +260,17 @@ def test_reject_mutations_that_restore_false_green() -> None:
         )
         atomic["run"] += suffix
         variants[f"masked numeric Protobuf Chromium: {suffix}"] = w
+
+    # A conditionally skipped step can make a success-status browser gate misleading.
+    for step_name in (
+        "Build the published SSG artifact (not Astro)",
+        "Audit actual SSG home with Chromium, axe and keyboard",
+        "Exercise product pages in Chromium (manifest real, no Parquet fetch)",
+        "Exercise numeric Protobuf SSG against public IA member endpoints",
+    ):
+        w = mutated()
+        _step(w["jobs"]["capture"]["steps"], step_name)["if"] = "${{ github.event_name == 'push' }}"
+        variants[f"conditionally skipped mandatory step: {step_name}"] = w
 
     for name, variant in variants.items():
         assert violations(variant, auditor), name
