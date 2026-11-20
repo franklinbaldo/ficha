@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 const cli = fileURLToPath(new URL('../scripts/remove-ssg-manifest.mjs', import.meta.url));
 const pwa = {
   background_color: '#ffffff',
-  description: 'Dados públicos de CNPJ por competência, preservados no Internet Archive.',
+  description: 'Dados públicos de CNPJ por competência e arquivos declarados no catálogo FICHA.',
   display: 'standalone', name: 'FICHA', orientation: 'portrait-primary',
   scope: '/', short_name: null, start_url: '.', theme_color: null,
 };

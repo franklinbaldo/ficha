@@ -2,7 +2,7 @@
 type: Page
 name: FICHA
 title: FICHA — Consulte empresas e seu histórico cadastral
-description: Dados públicos de CNPJ por competência, preservados no Internet Archive.
+description: Dados públicos de CNPJ por competência e arquivos declarados no catálogo FICHA.
 language: pt-BR
 permalink: https://franklinbaldo.github.io/ficha/
 layout: index
@@ -51,7 +51,7 @@ layout: index
       <p id="competencia">__FICHA_CURRENT_COMPETENCE__</p>
       <dl class="reference-data">
         <div><dt>Origem dos dados</dt><dd>Receita Federal</dd></div>
-        <div><dt>Preservação dos arquivos</dt><dd>Internet Archive</dd></div>
+        <div><dt>Destino de arquivamento</dt><dd>Internet Archive</dd></div>
       </dl>
       <a href="/ficha/manifest.json">Consultar manifesto JSON</a>
     </aside>

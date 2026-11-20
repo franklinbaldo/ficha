@@ -2,7 +2,7 @@
 
 **F**ichário de **I**dentificação de **C**NPJ **H**ospedado no **A**rchive
 
-O **FICHA** é um fichário aberto das empresas brasileiras e um Data Lakehouse *serverless* para os dados públicos de CNPJ da Receita Federal. Os snapshots mensais são preservados no Internet Archive e podem ser usados tanto pela interface pública quanto diretamente como dados abertos.
+O **FICHA** é um fichário aberto das empresas brasileiras e um Data Lakehouse *serverless* para os dados públicos de CNPJ da Receita Federal. O manifesto declara snapshots e artefatos destinados ao Internet Archive, para consulta pela interface pública ou análise direta quando os arquivos estiverem disponíveis. A custódia de cada objeto exige conferência independente.
 
 ## Usar agora
 
@@ -19,7 +19,7 @@ A **ficha por CNPJ numérico completo** em `/ficha/empresa/` usa o leitor de **P
 
 **Evidência e limite:** o [Chromium na #367](https://github.com/franklinbaldo/ficha/actions/runs/44586268099) consultou Nubank e Petrobras com dados Protobuf; a [#208](https://github.com/franklinbaldo/ficha/issues/208#issuecomment-7019004782) registra prova adicional no navegador após a publicação da rota numérica. O [Pages pós-merge da #387](https://github.com/franklinbaldo/ficha/actions/runs/44665995643) executou build, deploy e verificação HTTP, **não** um novo E2E de consulta nem testes de zoom nativo/leitor de tela. Isso não atesta os 300 ZIPs, disponibilidade contínua, versão de wire declarada em cada shard ou completude do acervo; [#383](https://github.com/franklinbaldo/ficha/issues/383) acompanha essa fronteira de custódia.
 
-O `manifest.json` é a porta para reutilização fora do site: ele declara a competência vigente, snapshots publicados e URLs dos artefatos preservados, com identidade verificável quando disponível. Assim, quem precisa analisar a base inteira não depende da interface do Ficha.
+O `manifest.json` é a porta para reutilização fora do site: ele declara a competência vigente, snapshots e URLs dos artefatos, com tamanhos e hashes quando disponíveis. Verificar a identidade exige conferir os bytes dos arquivos. Assim, quem precisa analisar a base inteira não depende da interface do Ficha.
 
 ---
 
