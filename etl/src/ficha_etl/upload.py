@@ -143,8 +143,17 @@ def _stream_one_zip(
     remote_name = f"raw/{spec.name}"
 
     with httpx.Client(timeout=_STREAM_TIMEOUT, follow_redirects=True) as dl:
-        with dl.stream("GET", rfb_url, auth=(rfb_token, "")) as rfb_resp:
+        with dl.stream(
+            "GET", rfb_url, auth=(rfb_token, ""), headers={"Accept-Encoding": "identity"}
+        ) as rfb_resp:
             rfb_resp.raise_for_status()
+            # httpx.iter_bytes() transparently decompresses encoded HTTP bodies.
+            # A ZIP mirror must upload the identical octets whose length RFB reports.
+            content_encoding = rfb_resp.headers.get("content-encoding", "identity").strip().lower()
+            if content_encoding != "identity":
+                raise RuntimeError(
+                    f"RFB unexpected Content-Encoding for {spec.name}: {content_encoding!r}"
+                )
             content_length = rfb_resp.headers.get("content-length", "")
             if not content_length:
                 raise RuntimeError(
@@ -159,7 +168,7 @@ def _stream_one_zip(
             _ia_s3_put(
                 identifier,
                 remote_name,
-                rfb_resp.iter_bytes(_CHUNK),
+                rfb_resp.iter_raw(_CHUNK),
                 content_length=content_length,
                 access_key=access_key,
                 secret_key=secret_key,
