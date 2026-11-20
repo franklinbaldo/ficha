@@ -250,7 +250,7 @@ test('ausência na competência inicial informa ausência apenas no PB, sem anun
     await secondStarted;
     assert.deepEqual(calls,['2026-06','2026-07']);
     assert.match(state.textContent,/CNPJ não localizado no registro Protobuf de 2026-06/);
-    assert.match(state.textContent,/Consultando competência final \\(2026-07\\)/);
+    assert.ok(state.textContent.includes('Consultando competência final (2026-07)'));
     assert.doesNotMatch(state.textContent,/Observação de 2026-06 recebida/);
     second.resolve(outcome('2026-07','found'));
     await pending;
