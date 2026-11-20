@@ -204,3 +204,71 @@ footer { border-top:1px solid var(--line); font-size:.82rem; color:var(--muted);
   .comparison-table th,.comparison-table td { padding:.5rem .3rem; }
 }
 @media(prefers-reduced-motion:reduce) { html { scroll-behavior:auto; } }
+
+
+/* Busca como ação principal da home; sem alterar os formulários internos. */
+.hero { text-align:center; padding-top:clamp(1.5rem,3vw,2.8rem); }
+.hero h1 { max-width:22ch; margin:.55rem auto 1rem; font-size:clamp(2.55rem,5.4vw,5.3rem); }
+.hero .lede { margin:0 auto 1.8rem; max-width:54ch; }
+.hero-search { width:100%; max-width:55rem; margin-inline:auto; }
+.hero-search form label {
+  position:absolute; width:1px; height:1px; padding:0; margin:-1px;
+  overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0;
+}
+.hero-search .search-controls {
+  display:flex; flex-direction:row; align-items:center; min-height:4.8rem;
+  padding:.45rem; gap:.35rem; background:var(--white);
+  border:1px solid #bccfc1; border-radius:999px;
+  box-shadow:0 10px 32px rgba(24,50,47,.12);
+  transition:box-shadow .15s, border-color .15s;
+}
+.hero-search .search-controls:focus-within {
+  border-color:var(--green); box-shadow:0 9px 34px rgba(24,50,47,.17);
+}
+.hero-search .search-controls input {
+  flex:1; min-width:0; min-height:3.5rem; border:0; background:transparent;
+  border-radius:999px; padding:.65rem 1.3rem; font-size:1.12rem; outline:none;
+}
+.hero-search .search-controls input:focus-visible {
+  outline:2px solid var(--focus); outline-offset:-3px;
+}
+.hero-search .search-controls button {
+  width:auto; min-height:3.55rem; flex-shrink:0; padding:.7rem 1.65rem;
+  border-radius:999px;
+}
+.example-suggestions { margin:1rem auto 0; }
+.example-caption { color:var(--muted); font-size:.86rem; font-weight:650; }
+.example-pills { display:flex; align-items:center; justify-content:center;
+  flex-wrap:wrap; gap:.55rem; margin:.65rem auto .45rem; }
+.example-pill {
+  display:inline-flex; flex-wrap:wrap; justify-content:center; align-items:center;
+  gap:.4rem; padding:.55rem .85rem; min-height:2.75rem;
+  border:1px solid #bfd1c5; border-radius:999px; background:var(--white);
+  color:var(--ink); text-decoration:none; font-weight:650; font-size:.87rem;
+}
+.example-pill .mono { font-size:.78rem; color:var(--muted); font-weight:500; }
+.example-pill:hover { background:var(--pale); border-color:var(--green); color:var(--green); }
+.example-hint { max-width:none; margin:.65rem auto 0; font-size:.78rem; color:var(--muted); }
+.hero-search .interface-status { margin:.8rem 0 0; font-size:.83rem; }
+.hero-search .home-results { text-align:left; }
+.search-limits { max-width:55rem; margin:1.2rem auto 0; text-align:left; }
+.search-limits summary { display:list-item; width:fit-content; margin:auto;
+  color:var(--green); font-size:.83rem; text-decoration:underline; cursor:pointer; }
+.search-limits .notice { margin:1rem 0 0; }
+.hero-bottom { text-align:left; }
+@media(max-width:620px) {
+  .hero h1 { font-size:clamp(2.3rem,10vw,3.8rem); }
+  .hero .lede { font-size:1rem; margin-bottom:1.3rem; }
+  .hero-search .search-controls { flex-direction:row; }
+  .hero-search .search-controls button { width:auto; }
+  .hero-search .search-controls input { padding:.6rem .85rem; font-size:1rem; }
+  .example-pills { gap:.45rem; }
+}
+@media(max-width:410px) {
+  .hero-search .search-controls { flex-wrap:wrap; border-radius:1.4rem; }
+  .hero-search .search-controls input { flex-basis:100%; min-height:3rem; }
+  .hero-search .search-controls button { width:100%; min-height:3rem; }
+}
+@media(prefers-reduced-motion:reduce) {
+  .hero-search .search-controls { transition:none; }
+}
