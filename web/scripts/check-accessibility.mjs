@@ -35,6 +35,39 @@ if (siteMode === 'ssg') {
     await page.locator('footer #ssg-search-btn').waitFor({ state: 'visible' });
     await page.screenshot({ path: `${outputDir}/home-desktop.png`, fullPage: true });
     await page.setViewportSize({ width: 390, height: 844 });
+    // Text-only enlargement (not native browser zoom) must reflow at 320/375px.
+    for (const width of [320, 375]) {
+      await page.setViewportSize({ width, height: 812 });
+      const scrollWidth = await page.evaluate(() => {
+        document.documentElement.style.fontSize = '200%';
+        return document.documentElement.scrollWidth;
+      });
+      if (scrollWidth > width) {
+        throw new Error(`Home SSG: texto 200% transborda ${scrollWidth}px / ${width}px`);
+      }
+    }
+    await page.evaluate(() => document.documentElement.style.removeProperty('font-size'));
+    await page.setViewportSize({ width: 390, height: 844 });
+    // A malformed numeric CNPJ must fail locally, before any PB/Parquet/WASM
+    // request or navigation. This exercises the published UI, not a test stub.
+    const originalUrl = page.url();
+    const invalidCnpjDataRequests = [];
+    const trackInvalidCnpjRequest = (request) => {
+      if (/\.(?:pb|parquet|wasm)(?:[?#]|$)/i.test(request.url())) {
+        invalidCnpjDataRequests.push(request.url());
+      }
+    };
+    page.on('request', trackInvalidCnpjRequest);
+    await page.locator('#busca-termo').fill('12.345.678/0001-99');
+    await page.locator('#busca-enviar').click();
+    await page.waitForFunction(() =>
+      document.querySelector('#consulta-estado')?.textContent?.includes('CNPJ inválido: confira os dígitos verificadores.'),
+    null, { timeout: 5000 });
+    page.off('request', trackInvalidCnpjRequest);
+    if (page.url() !== originalUrl || invalidCnpjDataRequests.length > 0) {
+      throw new Error('Home SSG: CNPJ com DV inválido navegou ou iniciou leitura de dados');
+    }
+    await page.goto(url, { waitUntil: 'domcontentloaded' });
   } else {
     await page.getByRole('heading', {
       name: 'Pesquisa por CNPJ ainda indisponível',

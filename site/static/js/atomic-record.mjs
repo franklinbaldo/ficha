@@ -14,8 +14,8 @@ export class CnpjInputError extends Error {
 }
 
 /** Check digits for numeric CNPJ (RFB módulo 11); reject repetitive placeholders. */
-function validNumericCnpj(cnpj) {
-  if (/^(\d)\1{13}$/.test(cnpj)) return false;
+export function validNumericCnpj(cnpj) {
+  if (!/^\d{14}$/.test(cnpj) || /^(\d)\1{13}$/.test(cnpj)) return false;
   const digits = [...cnpj].map(Number);
   const calculate = weights => {
     const sum = weights.reduce((acc, weight, i) => acc + digits[i] * weight, 0);

@@ -101,3 +101,16 @@ test('avisos públicos não insinuam fallback alfanumérico após a História nu
   assert.match(historia, /CNPJs alfanuméricos e meses sem essa camada não são comparáveis por esta interface/);
   assert.match(historia, /não há fallback para Parquet/);
 });
+
+test('ficha e Sobre distinguem prova pública pontual de CORS da busca legada', async () => {
+  const [empresa, sobre] = await Promise.all([
+    read('../content/empresa.md'), read('../content/sobre.md'),
+  ]);
+  const provaPublica = /https:\/\/github\.com\/franklinbaldo\/ficha\/issues\/208#issuecomment-7030287292/;
+  assert.match(empresa, provaPublica);
+  assert.match(sobre, provaPublica);
+  assert.match(sobre, /busca por nome e CNPJ alfanumérico continua experimental via Parquet\/DuckDB/);
+  assert.match(sobre, /CNPJ numérico completo.*Protobuf v1, sem Parquet/);
+  assert.match(empresa, /não garantem acesso contínuo/);
+  assert.doesNotMatch(sobre, /O formulário continua experimental/);
+});
