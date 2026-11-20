@@ -82,6 +82,9 @@ def reconcile_loaded_source_keys(
             p.parent.name != name or not p.is_file() or p.stat().st_size <= 0
             for (name, _), p in zip(parts, paths, strict=True)
         )
+        # Distinct canonical pathnames may still alias the same inode (hardlinks).
+        # This checks static source inventory, NOT immutability during DuckDB I/O.
+        or len({(p.stat().st_dev, p.stat().st_ino) for p in paths}) != 10
     ):
         payload["reason"] = "missing, duplicate, empty or noncanonical source part"
         _write_receipt(receipt_path, payload)
