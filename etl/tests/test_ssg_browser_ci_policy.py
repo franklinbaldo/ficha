@@ -28,6 +28,12 @@ def violations(workflow: dict, auditor: str) -> list[str]:
     errors = []
     # YAML 1.1 PyYAML resolves 'on' to the boolean key True.
     events = workflow.get("on", workflow.get(True, {}))
+    concurrency = workflow.get("concurrency")
+    if concurrency != {
+        "group": "ssg-browser-${{ github.event.pull_request.number || github.run_id }}",
+        "cancel-in-progress": "${{ github.event_name == 'pull_request' }}",
+    }:
+        errors.append("superseded PR audits cancel; manual replays stay independent")
     if set(events) != {"pull_request", "workflow_dispatch"}:
         errors.append("PR-only/manual gate; no second browser audit on main push")
     paths = set((events.get("pull_request") or {}).get("paths") or [])
@@ -171,6 +177,24 @@ def test_reject_mutations_that_restore_false_green() -> None:
 
     def mutated():
         return deepcopy(baseline)
+
+    # One PR number groups successive commits; dispatch gets a unique run ID.
+    # Any alternative must be reviewed for manual cancellation and collisions.
+    w = mutated()
+    w.pop("concurrency")
+    variants["no concurrency guard"] = w
+    for value in (True, False, "${{ github.event_name == 'workflow_dispatch' }}"):
+        w = mutated()
+        w["concurrency"]["cancel-in-progress"] = value
+        variants[f"wrong cancellation policy: {value}"] = w
+    for group in (
+        "ssg-browser-${{ github.sha }}",
+        "ssg-browser-${{ github.event.pull_request.number || github.ref }}",
+        "${{ github.event.pull_request.number || github.run_id }}",
+    ):
+        w = mutated()
+        w["concurrency"]["group"] = group
+        variants[f"wrong run grouping: {group}"] = w
 
     w = mutated()
     w.get("on", w.get(True))["pull_request"]["paths"] = ["web/**"]
