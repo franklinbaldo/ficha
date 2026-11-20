@@ -205,8 +205,14 @@ try {
           timeline:dimensions(document.querySelector('#historia-competencias')),
           controls:[...document.querySelectorAll(
             '#historia-form input, #historia-form select, #historia-form button'
-          )].map(dimensions)};
+          )].map(dimensions),
+          outside:[...document.querySelectorAll('body *')]
+            .map(el=>({tag:el.tagName,id:el.id,cls:String(el.className).slice(0,60),
+              ...dimensions(el)}))
+            .filter(r=>r.right>root.clientWidth+1).slice(0,16)};
       });
+      await history.screenshot({path:out+'/history-css-text-200-'+width+'.png',
+        fullPage:true});
       assert.equal(geometry.font,'32px','fonte raiz 200% esperada');
       assert.ok(geometry.pageScroll<=geometry.viewport+1,
         '200% CSS '+width+'px: overflow da página: '+JSON.stringify(geometry));
@@ -218,8 +224,6 @@ try {
       assert.ok(geometry.controls.every(r=>r.client>0 &&
         r.left>=-1 && r.right<=geometry.viewport+1),
         '200% CSS '+width+'px: controle recortado: '+JSON.stringify(geometry));
-      await history.screenshot({path:out+'/history-css-text-200-'+width+'.png',
-        fullPage:true});
       results.push({name:'História texto CSS 200% em '+width+'px',
         geometry,status:'PASS'});
       await history.evaluate(() => {document.documentElement.style.fontSize='';});
