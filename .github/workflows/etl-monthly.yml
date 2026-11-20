@@ -154,6 +154,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
+          include-hidden-files: true
           name: estabelecimento-key-gate-${{ needs.resolve.outputs.month }}
           path: |
             etl/.cache/${{ needs.resolve.outputs.month }}/evidence/monthly-estabelecimento-key-gate.json
@@ -166,6 +167,7 @@ jobs:
       - name: Persist mandatory source-bag attestation
         uses: actions/upload-artifact@v4
         with:
+          include-hidden-files: true
           name: estabelecimento-source-bag-${{ needs.resolve.outputs.month }}
           path: etl/.cache/${{ needs.resolve.outputs.month }}/evidence/monthly-estabelecimento-source-bag.json
           if-no-files-found: error
@@ -176,6 +178,7 @@ jobs:
       - name: Persist production descriptor before upload
         uses: actions/upload-artifact@v4
         with:
+          include-hidden-files: true
           name: production-descriptor-${{ needs.resolve.outputs.month }}
           path: etl/.cache/${{ needs.resolve.outputs.month }}/production-descriptor.json
           if-no-files-found: error
@@ -185,6 +188,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
+          include-hidden-files: true
           name: transform-metrics-${{ needs.resolve.outputs.month }}
           path: etl/.cache/${{ needs.resolve.outputs.month }}/metrics/transform_metrics.json
           if-no-files-found: warn
@@ -407,6 +411,7 @@ jobs:
       - name: Persist shard production receipt before PUT
         uses: actions/upload-artifact@v4
         with:
+          include-hidden-files: true
           name: shard-receipt-${{ matrix.prefix }}-${{ needs.resolve.outputs.month }}
           path: etl/.publication/${{ needs.resolve.outputs.month }}/receipt-${{ matrix.prefix }}.json
           if-no-files-found: error
@@ -427,6 +432,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
+          include-hidden-files: true
           name: shard-submit-${{ matrix.prefix }}-${{ needs.resolve.outputs.month }}
           path: etl/.publication/${{ needs.resolve.outputs.month }}/submit-${{ matrix.prefix }}.json
           if-no-files-found: warn
@@ -483,9 +489,29 @@ jobs:
             --attempts 30 \
             --interval-seconds 30
 
+      # upload-artifact's if-no-files-found checks only whether ANY path exists.
+      # Require every independent evidence file before candidate upload/promotion.
+      - name: Assert all manifest candidate files exist and are nonempty
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd ..
+          for file in \
+            "web/public/manifest.json" \
+            "etl/.publication/${MONTH}/production-descriptor.json" \
+            "etl/.publication/${MONTH}/source/monthly-estabelecimento-source-bag.json" \
+            "etl/.publication/${MONTH}/snapshot-entry.json" \
+            "etl/.publication/${MONTH}/verification.json"; do
+            if [ ! -s "$file" ]; then
+              echo "::error file=$file::Missing or empty required promotion evidence"
+              exit 1
+            fi
+          done
+
       - name: Persist exact promoted candidate and evidence
         uses: actions/upload-artifact@v4
         with:
+          include-hidden-files: true
           name: manifest-candidate-${{ needs.resolve.outputs.month }}
           path: |
             web/public/manifest.json
