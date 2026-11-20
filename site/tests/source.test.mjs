@@ -114,3 +114,14 @@ test('ficha e Sobre distinguem prova pública pontual de CORS da busca legada', 
   assert.match(empresa, /não garantem acesso contínuo/);
   assert.doesNotMatch(sobre, /O formulário continua experimental/);
 });
+
+test('links em parágrafos HTML das páginas SSG não vazam sintaxe Markdown', async () => {
+  for (const name of ['index', 'empresa', 'historia', 'explorar', 'acervo', 'sobre']) {
+    const source = await read('../content/' + name + '.md');
+    const paragraphs = source.match(/<p\b[^>]*>[\s\S]*?<\/p>/gi) ?? [];
+    for (const paragraph of paragraphs) {
+      assert.doesNotMatch(paragraph, /\[[^\]\n]+\]\(https?:\/\/[^)\n]+\)/,
+        name + ': parágrafo HTML cru imprime links Markdown literalmente');
+    }
+  }
+});
