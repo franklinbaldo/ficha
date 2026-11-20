@@ -33,7 +33,7 @@ try {
     assert.ok(!requested.some(url => /cnpjs\.parquet|\.wasm(?:[?#]|$)/i.test(url)),
       'home numérica não deve ler Parquet nem carregar WASM');
     assert.equal(requested.filter(url => url.includes('/js/duckdb-runtime.mjs')).length,0,
-      'home numérica e ficha não devem importar DuckDB JS');
+      'não carregar DuckDB JS na navegação Protobuf');
     results.push({name:'Home CNPJ numérico → ficha Protobuf, zero Parquet/WASM',
       requests:requested.length, status:'PASS'});
   } finally {await homePage.close();}
@@ -41,11 +41,11 @@ try {
     const page = await browser.newPage({serviceWorkers:'block'});
     try {
       const visited = [];
-      const runtimeLoads = [];
+      let runtimeLoads=0;
       page.on('request',request=>{
         const url=request.url();
-        if(url.includes('archive.org/download/')) visited.push(url);
-        if(url.includes('/js/duckdb-runtime.mjs')) runtimeLoads.push(url);
+        if(url.includes('archive.org/download/'))visited.push(url);
+        if(url.includes('/js/duckdb-runtime.mjs'))runtimeLoads++;
       });
       await page.goto(base+'empresa/',{waitUntil:'domcontentloaded'});
       await page.locator('#empresa-competencia option[value="2026-07"]').waitFor({state:'attached'});
@@ -68,8 +68,7 @@ try {
         'lookup remoto não observado');
       assert.ok(!visited.some(url=>url.includes('.parquet')),
         'não pode carregar Parquet na ficha numérica');
-      assert.equal(runtimeLoads.length,0,
-        'ficha Protobuf não deve importar DuckDB JS');
+      assert.equal(runtimeLoads,0,'ficha Protobuf não deve importar DuckDB JS');
       results.push({name,cnpj,state:'found',requests:visited.length,status:'PASS'});
     } finally {await page.close();}
   }
@@ -165,11 +164,11 @@ try {
   const history = await browser.newPage({serviceWorkers:'block'});
   try {
     const visited=[];
-    const runtimeLoads=[];
+    let runtimeLoads=0;
     history.on('request',r=>{
       const url=r.url();
       if(url.includes('archive.org/download/'))visited.push(url);
-      if(url.includes('/js/duckdb-runtime.mjs'))runtimeLoads.push(url);
+      if(url.includes('/js/duckdb-runtime.mjs'))runtimeLoads++;
     });
     await history.goto(base+'historia/',{waitUntil:'domcontentloaded'});
     await history.locator('#historia-inicio option[value="2026-06"]').waitFor({state:'attached'});
@@ -191,8 +190,7 @@ try {
       'membros Protobuf das duas competências ausentes');
     assert.ok(!visited.some(url=>/\.parquet|\.wasm/.test(url)),
       'a comparação numérica não deve invocar Parquet ou WASM');
-    assert.equal(runtimeLoads.length,0,
-      'história Protobuf não deve importar DuckDB JS');
+    assert.equal(runtimeLoads,0,'história Protobuf não deve importar DuckDB JS');
     // Audit the rendered result, not a synthetic accessibility fixture.
     // At mobile width the three-column table must stay readable by scrolling
     // within a labelled, keyboard-focusable region, preserving native headers.
@@ -219,8 +217,7 @@ try {
     await history.screenshot({path:out+'/history-mobile-keyboard-scroll.png'});
     results.push({name:'História móvel: tabela acessível por teclado',widths,status:'PASS'});
     results.push({name:'História PB real 2026-06/07',requests:visited.length,status:'PASS'});
-    // The CSS 200% text-size proxy tests reflow, not native browser zoom or
-    // VoiceOver/TalkBack. Use the real built SSG page and real comparison DOM.
+    // CSS 200% testa reflow, não zoom nativo nem leitor de tela.
     for (const width of [320,375]) {
       await history.setViewportSize({width,height:812});
       await history.evaluate(() => {document.documentElement.style.fontSize='200%';});
@@ -261,9 +258,7 @@ try {
       await history.evaluate(() => {document.documentElement.style.fontSize='';});
     }
   } finally {await history.close();}
-  // Unlike the preceding cases, this opens the already published GitHub Pages
-  // site: an SSG PR artifact cannot prove post-merge mobile/keyboard behavior.
-  // The declared real CNPJ is read-only; no mutation or Parquet fallback.
+  // Pages público precisa de auditoria própria após merge; apenas leitura.
   const publicHistory = await browser.newPage({serviceWorkers:'block',
     viewport:{width:375,height:812}});
   try {
