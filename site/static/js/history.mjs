@@ -23,14 +23,22 @@ export function renderHistoryComparison(doc, parent, older, newer) {
     }
     add(doc,parent,'p','Uma diferença de presença entre snapshots não comprova nascimento, encerramento ou data de mudança cadastral.');
   } else {
-    const table = add(doc,parent,'table','','comparison-table');
+    add(doc,parent,'p','Em telas estreitas, role a tabela horizontalmente para ler as duas competências. Pelo teclado, pressione Tab até a tabela e use as setas.','fineprint comparison-hint');
+    const scroll = add(doc,parent,'div','','comparison-scroll');
+    scroll.setAttribute('role','region');
+    scroll.setAttribute('aria-label','Tabela de comparação das competências '+older.date+' e '+newer.date);
+    scroll.setAttribute('tabindex','0');
+    const table = add(doc,scroll,'table','','comparison-table');
+    add(doc,table,'caption','Campos cadastrais em '+older.date+' e '+newer.date);
     const thead = add(doc,table,'thead'); const headers=add(doc,thead,'tr');
-    for(const text of ['Campo',older.date,newer.date]) add(doc,headers,'th',text);
+    for(const text of ['Campo',older.date,newer.date]) {
+      add(doc,headers,'th',text).setAttribute('scope','col');
+    }
     const tbody = add(doc,table,'tbody');
     for(const row of compareRecords(older.data,newer.data)) {
       const tr = add(doc,tbody,'tr');
       if(row.changed) tr.className='changed';
-      add(doc,tr,'th',row.label);
+      add(doc,tr,'th',row.label).setAttribute('scope','row');
       add(doc,tr,'td',row.before);
       add(doc,tr,'td',row.after);
     }
