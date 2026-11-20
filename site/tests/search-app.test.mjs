@@ -43,6 +43,8 @@ test('falha analítica revela alternativa no acervo, edição e recuperação a 
   assert.equal(recovery.hidden,false,'erro de rede revela caminho alternativo');
   assert.equal(nodes['consulta-estado'].dataset.kind,'error');
   assert.match(nodes['consulta-estado'].textContent,/rede ou CORS/);
+  assert.match(nodes['consulta-estado'].textContent,/não comprova ausência cadastral.*Acervo/,
+    'região de status anuncia a alternativa sem mover o link para dentro dela');
   assert.equal(nodes['consulta-lista'].children.length,0);
   input.value='PETROBRAS SA';
   input.input();
@@ -74,6 +76,8 @@ test('resposta obsoleta após edição não revela recuperação de busca antiga
   assert.equal(nodes['consulta-recuperacao'].hidden,true);
   assert.match(nodes['consulta-estado'].textContent,/Termo alterado/);
   assert.doesNotMatch(nodes['consulta-estado'].textContent,/HTTP 500/);
+  assert.doesNotMatch(nodes['consulta-estado'].textContent,/Acervo/,
+    'resposta atrasada não pode anunciar alternativa da consulta obsoleta');
 });
 
 test('resultados são texto puro, não HTML interpretado', () => {
@@ -183,12 +187,16 @@ test('manifesto 404 não fica em cache: nova tentativa observa HTTP 500 e depois
   const submit = () => nodes['busca-form'].submit({preventDefault() {}});
   await submit();
   assert.match(nodes['consulta-estado'].textContent, /manifesto ausente/);
+  assert.match(nodes['consulta-estado'].textContent, /Acervo/,
+    'manifesto ausente também anuncia alternativa na região viva');
   await submit();
   assert.equal(attempts, 2, 'HTTP 404 anterior deve permitir novo fetch');
   assert.match(nodes['consulta-estado'].textContent, /HTTP 500/);
   await submit();
   assert.equal(attempts, 3);
   assert.match(nodes['consulta-estado'].textContent, /2026-07: 1 resultado/);
+  assert.doesNotMatch(nodes['consulta-estado'].textContent, /Acervo/,
+    'sucesso posterior não herda texto de recuperação');
   assert.equal(nodes['busca-enviar'].disabled, false);
 });
 
