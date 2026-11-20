@@ -165,11 +165,14 @@ export async function mountHistory(doc,{loadManifest=fetchManifest,lookup=fetchH
     const discarded = 'CNPJ ou competências alterados durante a comparação. Pesquise novamente.';
     busy = true;
     button.disabled=true;
-    status(state,'Consultando os dois snapshots de forma sequencial…');
+    status(state,'Consultando competência inicial ('+start+')…');
     try {
       const older=requireHistoryObservation(await lookup(manifest,start,cnpj));
       // Avoid a second archival GET if the user changed the requested comparison.
       if (!stillCurrent()) { status(state,discarded); return; }
+      status(state,older.state === 'absent-in-snapshot'
+        ? 'CNPJ não localizado no registro Protobuf de '+start+'. Consultando competência final ('+end+')…'
+        : 'Observação de '+start+' recebida. Consultando competência final ('+end+')…');
       const newer=requireHistoryObservation(await lookup(manifest,end,cnpj));
       if (!stillCurrent()) { status(state,discarded); return; }
       setParams({cnpj,de:start,ate:end});

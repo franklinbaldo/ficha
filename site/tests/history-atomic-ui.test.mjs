@@ -202,3 +202,94 @@ test('deep links com meses iguais ou invertidos são limpos antes de qualquer GE
     }
   });
 });
+
+function pendingObservation() {
+  let resolve;
+  const promise = new Promise(done => { resolve = done; });
+  return {promise,resolve};
+}
+
+test('estado acessível anuncia cada competência na ordem serial, sem antecipar conclusão',async()=>{
+  await withLocation(async()=>{
+    const first=pendingObservation(),second=pendingObservation(),calls=[];
+    let signalSecond;
+    const secondStarted=new Promise(resolve=>{signalSecond=resolve;});
+    const doc=await setup(async(_m,date)=>{
+      calls.push(date);
+      if (date==='2026-07') { signalSecond(); return second.promise; }
+      return first.promise;
+    });
+    const pending=submit(doc);
+    const state=doc.at('historia-estado');
+    assert.match(state.textContent,/Consultando competência inicial \(2026-06\)/);
+    assert.deepEqual(calls,['2026-06']);
+    first.resolve(outcome('2026-06','found'));
+    await secondStarted;
+    assert.deepEqual(calls,['2026-06','2026-07']);
+    assert.match(state.textContent,/Observação de 2026-06 recebida.*competência final \(2026-07\)/);
+    assert.doesNotMatch(state.textContent,/Comparação concluída/);
+    second.resolve(outcome('2026-07','found'));
+    await pending;
+    assert.match(state.textContent,/Comparação concluída/);
+  });
+});
+
+test('ausência na competência inicial informa ausência apenas no PB, sem anunciar registro encontrado',async()=>{
+  await withLocation(async()=>{
+    const first=pendingObservation(),second=pendingObservation(),calls=[];
+    let announceSecond;
+    const secondStarted=new Promise(resolve=>{announceSecond=resolve;});
+    const doc=await setup(async(_m,date)=>{
+      calls.push(date);
+      if(date==='2026-07') {announceSecond();return second.promise;}
+      return first.promise;
+    });
+    const pending=submit(doc), state=doc.at('historia-estado');
+    assert.deepEqual(calls,['2026-06']);
+    first.resolve(outcome('2026-06','absent-in-snapshot'));
+    await secondStarted;
+    assert.deepEqual(calls,['2026-06','2026-07']);
+    assert.match(state.textContent,/CNPJ não localizado no registro Protobuf de 2026-06/);
+    assert.ok(state.textContent.includes('Consultando competência final (2026-07)'));
+    assert.doesNotMatch(state.textContent,/Observação de 2026-06 recebida/);
+    second.resolve(outcome('2026-07','found'));
+    await pending;
+    assert.match(state.textContent,/Comparação incompleta/);
+  });
+});
+
+test('404 inicial nunca anuncia segunda competência nem emite segundo GET',async()=>{
+  await withLocation(async()=>{
+    const calls=[];
+    const doc=await setup(async(_m,date)=>{
+      calls.push(date);
+      return outcome(date,'artifact-unavailable');
+    });
+    await submit(doc);
+    assert.deepEqual(calls,['2026-06']);
+    assert.match(doc.at('historia-estado').textContent,/inconclusiva.*404/i);
+    assert.doesNotMatch(doc.at('historia-estado').textContent,/competência final/i);
+  });
+});
+
+test('edição A→B→A descarta primeira leitura sem anunciar progresso final ou GET seguinte',async()=>{
+  await withLocation(async()=>{
+    const first=pendingObservation(),calls=[];
+    const doc=await setup(async(_m,date)=>{
+      calls.push(date);
+      return first.promise;
+    });
+    const pending=submit(doc);
+    const input=doc.at('historia-cnpj');
+    input.value='00360305000104';
+    input.listeners.get('input')();
+    input.value=cnpj;
+    input.listeners.get('input')();
+    first.resolve(outcome('2026-06','found'));
+    await pending;
+    assert.deepEqual(calls,['2026-06']);
+    assert.match(doc.at('historia-estado').textContent,/alterados.*Pesquise novamente/);
+    assert.doesNotMatch(doc.at('historia-estado').textContent,/competência final/i);
+    assert.equal(doc.at('historia-resultado').children.length,0);
+  });
+});

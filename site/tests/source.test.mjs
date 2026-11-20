@@ -106,12 +106,14 @@ test('ficha e Sobre distinguem prova pública pontual de CORS da busca legada', 
   const [empresa, sobre] = await Promise.all([
     read('../content/empresa.md'), read('../content/sobre.md'),
   ]);
-  const provaPublica = /https:\/\/github\.com\/franklinbaldo\/ficha\/issues\/208#issuecomment-7030287292/;
-  assert.match(empresa, provaPublica);
-  assert.match(sobre, provaPublica);
+  assert.match(empresa, /issuecomment-7032628482/);
+  assert.match(empresa, /quatro fichas por CNPJ numérico/);
+  assert.match(empresa, /Banco do Brasil, Petrobras, Caixa e Correios/);
+  assert.match(empresa, /competência 2026-07, sem requisições Parquet\/WASM/);
+  assert.match(sobre, /issuecomment-7030287292/);
   assert.match(sobre, /busca por nome e CNPJ alfanumérico continua experimental via Parquet\/DuckDB/);
   assert.match(sobre, /CNPJ numérico completo.*Protobuf v1, sem Parquet/);
-  assert.match(empresa, /não garantem acesso contínuo/);
+  assert.match(empresa, /não garante acesso contínuo/);
   assert.doesNotMatch(sobre, /O formulário continua experimental/);
 });
 

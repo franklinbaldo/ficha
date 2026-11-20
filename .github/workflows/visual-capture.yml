@@ -17,6 +17,12 @@ on:
 permissions:
   contents: read
 
+# A new commit supersedes an older PR browser audit; independent manual
+# replays keep their own run ID and are never cancelled.
+concurrency:
+  group: ssg-browser-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   capture:
     runs-on: ubuntu-24.04
