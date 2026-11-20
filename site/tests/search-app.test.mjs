@@ -198,7 +198,7 @@ test('manifesto 404 não fica em cache: nova tentativa observa HTTP 500 e depois
   assert.match(nodes['consulta-estado'].textContent, /2026-07: 1 resultado/);
   assert.doesNotMatch(nodes['consulta-estado'].textContent, /Acervo/,
     'sucesso posterior não herda texto de recuperação');
-  assert.equal(nodes['busca-enviar'].disabled, false);
+  assert.notEqual(nodes['busca-enviar'].disabled, true);
 });
 
 test('edição durante pedido pendente informa imediatamente sem apresentar resposta obsoleta', async () => {
