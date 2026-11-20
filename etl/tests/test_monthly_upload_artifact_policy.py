@@ -77,7 +77,7 @@ SHARD_SUBMIT_NAME = "Submit exactly the receipted bytes"
 
 # Exact fail-closed shell payload. A substring match can be satisfied by echo or dead code.
 EXPECTED_SHARD_SUBMIT_RUN = (
-    'uv run python -m ficha_etl.monthly_sharded submit-shard \\',
+    "uv run python -m ficha_etl.monthly_sharded submit-shard \\",
     '  --month "$MONTH" \\',
     '  --prefix "$PREFIX" \\',
     '  --descriptor ".publication/$MONTH/production-descriptor.json" \\',
@@ -148,7 +148,14 @@ def _assert_guard_shell(run: str, candidate_paths: tuple[str, ...]) -> None:
 
 
 def _assert_artifact_policy(source: str) -> None:
-    jobs = yaml.safe_load(source)["jobs"]
+    data = yaml.safe_load(source)
+    _require(
+        data.get("defaults", {}).get("run", {}).get("shell") in (None, "bash"),
+        "workflow default shell must remain Bash-compatible",
+    )
+    jobs = data["jobs"]
+    _require(jobs["shards"].get("runs-on") == "ubuntu-latest", "shards must run on Linux")
+    _require("continue-on-error" not in jobs["shards"], "shards job cannot suppress failures")
     actual = {}
     for job_name, job in jobs.items():
         for step in job.get("steps", []):
@@ -295,6 +302,22 @@ class TestMonthlyUploadArtifactPolicy(unittest.TestCase):
                 mutant = yaml.safe_dump(data, sort_keys=False)
                 with self.assertRaises(AssertionError):
                     _assert_artifact_policy(mutant)
+
+    def test_submit_runner_and_inherited_shell_remain_fail_closed(self) -> None:
+        for label in ("workflow_python", "job_python", "windows", "ignored_shards_failure"):
+            with self.subTest(mutant=label):
+                data = yaml.safe_load(self.workflow)
+                shards = data["jobs"]["shards"]
+                if label == "workflow_python":
+                    data["defaults"] = {"run": {"shell": "python"}}
+                elif label == "job_python":
+                    shards["defaults"]["run"]["shell"] = "python"
+                elif label == "windows":
+                    shards["runs-on"] = "windows-latest"
+                else:
+                    shards["continue-on-error"] = True
+                with self.assertRaises(AssertionError):
+                    _assert_artifact_policy(yaml.safe_dump(data, sort_keys=False))
 
     def test_shard_submit_stays_after_receipt_upload(self) -> None:
         start = f"      - name: {SHARD_RECEIPT_NAME}\n"
