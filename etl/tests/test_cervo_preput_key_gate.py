@@ -118,11 +118,11 @@ def test_produce_valid_keys_pass_gate_before_raw_and_descriptor(
     monkeypatch.setattr(monthly_sharded.upload, "stream_raw_zips_to_ia", raw)
     monkeypatch.setattr(monthly_sharded, "build_production_descriptor", build)
     monkeypatch.setattr(monthly_sharded, "write_production_descriptor", write)
-    monkeypatch.setattr(
-        monthly_sharded,
-        "_bind_source_receipt",
-        lambda *_args: calls.append("source-attestation"),
-    )
+    def source_attestation(_month: str, _output: Path, descriptor: dict) -> None:
+        calls.append("source-attestation")
+        descriptor["source_attestation"] = {"raw_upload_status": "pending"}
+
+    monkeypatch.setattr(monthly_sharded, "_bind_source_receipt", source_attestation)
 
     monthly_sharded.command_produce(args)
-    assert calls == ["transform", "build", "source-attestation", "write", "secret", "secret", "raw"]
+    assert calls == ["transform", "build", "source-attestation", "write", "secret", "secret", "raw", "write"]

@@ -266,11 +266,11 @@ def test_monthly_legacy_wire_attests_descriptor_before_raw_upload(
     monkeypatch.setattr(monthly_sharded.upload, "stream_raw_zips_to_ia", upload_after_transform)
     monkeypatch.setattr(monthly_sharded, "build_production_descriptor", build_after_upload)
     monkeypatch.setattr(monthly_sharded, "write_production_descriptor", write_last)
-    monkeypatch.setattr(
-        monthly_sharded,
-        "_bind_source_receipt",
-        lambda *_args: calls.append("source-attestation"),
-    )
+    def source_attestation(_month: str, _output: Path, descriptor: dict) -> None:
+        calls.append("source-attestation")
+        descriptor["source_attestation"] = {"raw_upload_status": "pending"}
+
+    monkeypatch.setattr(monthly_sharded, "_bind_source_receipt", source_attestation)
 
     monthly_sharded.command_produce(args)
     assert calls == [
@@ -282,6 +282,7 @@ def test_monthly_legacy_wire_attests_descriptor_before_raw_upload(
         "secret:IA_ACCESS_KEY",
         "secret:IA_SECRET_KEY",
         "raw",
+        "write",
     ]
 
 
