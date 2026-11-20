@@ -212,17 +212,19 @@ function pendingObservation() {
 test('estado acessível anuncia cada competência na ordem serial, sem antecipar conclusão',async()=>{
   await withLocation(async()=>{
     const first=pendingObservation(),second=pendingObservation(),calls=[];
+    let signalSecond;
+    const secondStarted=new Promise(resolve=>{signalSecond=resolve;});
     const doc=await setup(async(_m,date)=>{
       calls.push(date);
-      return date==='2026-06'?first.promise:second.promise;
+      if (date==='2026-07') { signalSecond(); return second.promise; }
+      return first.promise;
     });
     const pending=submit(doc);
     const state=doc.at('historia-estado');
     assert.match(state.textContent,/Consultando competência inicial \(2026-06\)/);
     assert.deepEqual(calls,['2026-06']);
     first.resolve(outcome('2026-06','found'));
-    await Promise.resolve();
-    await Promise.resolve();
+    await secondStarted;
     assert.deepEqual(calls,['2026-06','2026-07']);
     assert.match(state.textContent,/Observação de 2026-06 recebida.*competência final \(2026-07\)/);
     assert.doesNotMatch(state.textContent,/Comparação concluída/);
