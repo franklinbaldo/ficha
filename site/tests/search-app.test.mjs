@@ -28,17 +28,22 @@ test('resultados são texto puro, não HTML interpretado', () => {
   assert.equal(li.children[1].textContent, '00000000E08G12 · RO');
   assert.equal(li.children.length, 2);
 });
-test('cada ficha tem link distinguível e separado dos dados da empresa', () => {
-  const { nodes,doc } = mockDOM();
+test('só CNPJs numéricos têm ação acessível para a ficha Protobuf v1', () => {
+  const {nodes,doc} = mockDOM();
   renderCompanies(doc, nodes['consulta-lista'], [
-    {cnpj:'00.000.000/e08g-12',razao_social:'Empresa repetida',uf:'RO'},
+    {cnpj:'00.000.000/e08g-12',razao_social:'CNPJ alfanumérico',uf:'RO'},
     {cnpj:'11.222.333/0001-81',razao_social:'Empresa repetida',uf:'RO'},
+    {cnpj:'33.000.167/0001-01',razao_social:'Empresa repetida',uf:'RJ'},
     {cnpj:'INVALIDO',razao_social:'Sem link'},
   ]);
   const items = nodes['consulta-lista'].children;
-  const expected = ['00000000E08G12','11222333000181'];
+  assert.equal(items.length, 4);
+  assert.equal(items[0].children[1].textContent, '00.000.000/e08g-12 · RO');
+  assert.equal(items[0].children[1].children.length, 0,
+    'resultado alfanumérico permanece legível, mas não abre leitor apenas numérico');
+  const expected = ['11222333000181', '33000167000101'];
   for (const [index, cnpj] of expected.entries()) {
-    const details = items[index].children[1];
+    const details = items[index + 1].children[1];
     assert.equal(details.children[0], ' · ', 'separador antes da ação');
     const link = details.children[1];
     assert.equal(link.tag, 'a');
@@ -46,10 +51,10 @@ test('cada ficha tem link distinguível e separado dos dados da empresa', () => 
     assert.equal(link.href, '/ficha/empresa/?cnpj=' + cnpj);
     assert.equal(link.attributes['aria-label'], 'Abrir ficha do CNPJ ' + cnpj);
   }
-  assert.equal(items[2].children[1].children.length, 0,
-    'não criar atalho para CNPJ inválido');
-  assert.notEqual(items[0].children[1].children[1].attributes['aria-label'],
-    items[1].children[1].children[1].attributes['aria-label']);
+  assert.equal(items[3].children[1].children.length, 0,
+    'não criar atalho para CNPJ malformado');
+  assert.notEqual(items[1].children[1].children[1].attributes['aria-label'],
+    items[2].children[1].children[1].attributes['aria-label']);
 });
 
 test('formulário só abre sessão com entrada válida; reutiliza DB e anuncia resultado', async () => {

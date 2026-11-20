@@ -12,7 +12,7 @@ test('prefixo, rotas e versão explícitos', async () => {
 test('home com formulário, módulo real e limites da busca legada', async () => {
   const home = await read('../content/index.md');
   for (const fragment of ['id="busca-form"', 'id="busca-termo"', 'id="consulta-lista"',
-    'A busca por nome e a comparação histórica completa ainda não foram resolvidas']) assert.ok(home.includes(fragment), fragment);
+    'id="busca-ajuda"']) assert.ok(home.includes(fragment), fragment);
   const template = await read('../templates/index.html');
   assert.match(template, /type="module" src="\/ficha\/js\/boot\.mjs"/);
   assert.match(template, /\{\{!content\}\}/);
@@ -32,14 +32,10 @@ test('sobre informa camadas sem prometer disponibilidade live', async () => {
 test('aviso público distingue falha de transporte de ausência cadastral', async () => {
   const home = await read('../content/index.md');
   const sobre = await read('../content/sobre.md');
-  assert.match(home, /Busca experimental nesta página/);
-  assert.match(home, /falhou por CORS/);
-  assert.match(home, /Um CNPJ numérico completo.*abre a ficha por Protobuf/);
-  assert.match(home, /sem iniciar consulta Parquet\/DuckDB na home/);
-  assert.match(home, /Buscas por nome e CNPJ alfanumérico continuam no caminho analítico/);
-  assert.match(home, /rota independente já foi exercitada em navegador com registros reais/);
-  assert.match(home, /erro de rede não significa ausência cadastral/);
-  assert.match(home, /A busca por nome e a comparação histórica completa ainda não foram resolvidas/);
+  assert.match(home, /A busca por nome é experimental/);
+  assert.match(home, /Um CNPJ numérico completo abre a ficha por Protobuf/);
+  assert.match(home, /A busca por nome e por CNPJ alfanumérico usa Parquet e pode falhar por CORS/);
+  assert.match(home, /Em caso de erro de rede, a presença do registro continua indeterminada/);
   assert.match(home, /\/ficha\/acervo\//);
   assert.match(sobre, /Chromium 152/);
   assert.match(sobre, /não.*a integridade do arquivo inteiro/);
@@ -48,7 +44,7 @@ test('aviso público distingue falha de transporte de ausência cadastral', asyn
 
 test('botão Pesquisar tem nome acessível português explícito na fonte SSG', async () => {
   const home = await read('../content/index.md');
-  assert.match(home, /<button\b[^>]*\bid="busca-enviar"[^>]*\baria-label="Pesquisar"[^>]*>Pesquisar\s*<span aria-hidden="true">↗<\/span><\/button>/);
+  assert.match(home, /<button\b[^>]*\bid="busca-enviar"[^>]*\baria-label="Pesquisar"[^>]*>Pesquisar<\/button>/);
   assert.doesNotMatch(home, /aria-label="north-east-arrow"/);
 });
 
@@ -96,9 +92,9 @@ test('avisos públicos não insinuam fallback alfanumérico após a História nu
     read('../content/empresa.md'),
     read('../content/historia.md'),
   ]);
-  assert.match(home, /CNPJs alfanuméricos e meses sem essa camada não são comparáveis nesta interface/);
-  assert.match(home, /não há fallback automático/);
-  assert.doesNotMatch(home, /CNPJs alfanuméricos continuam sujeitos à rota analítica/);
+  assert.match(home, /História compara CNPJs numéricos entre competências com Protobuf v1/);
+  assert.match(home, /CNPJs alfanuméricos e competências sem Protobuf v1 compatível não podem ser comparados/);
+  assert.match(home, /não há fallback automático para Parquet/);
   assert.match(empresa, /CNPJs alfanuméricos e competências sem essa camada não são comparáveis pela página História/);
   assert.match(empresa, /Não há fallback para Parquet/);
   assert.match(empresa, /a comparação alfanumérica ainda não está disponível/);

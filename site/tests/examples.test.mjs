@@ -23,7 +23,7 @@ test('sugestões são CNPJs completos, distintos, com DV válido e link direto �
   assert.equal(new Set(links).size, 4);
   assert.ok(links.every(cnpjValid));
   assert.match(home, /id="example-pills"/);
-  assert.match(home, /Exemplos públicos: a ficha abre por Protobuf/);
+  assert.match(home, /Experimente um CNPJ/);
   assert.ok(home.indexOf('id="busca-form"') < home.indexOf('id="example-pills"'));
   assert.ok(home.indexOf('id="example-pills"') < home.indexOf('class="hero-bottom"'));
 });
