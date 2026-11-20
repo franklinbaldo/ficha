@@ -41,7 +41,7 @@ layout: index
       <details class="search-limits">
         <summary>Disponibilidade da consulta</summary>
         <p>Um CNPJ numérico completo abre a ficha por Protobuf. A ficha depende da disponibilidade do acervo. A busca por nome e por CNPJ alfanumérico usa Parquet e pode falhar por CORS. Em caso de erro de rede, a presença do registro continua indeterminada.</p>
-        <p>A página História compara CNPJs numéricos entre competências com Protobuf v1. Consulte as <a href="https://github.com/franklinbaldo/ficha/issues/208">evidências de funcionamento</a>.</p>
+        <p>A página História compara CNPJs numéricos entre competências com Protobuf v1. CNPJs alfanuméricos e competências sem Protobuf v1 compatível não podem ser comparados; não há fallback automático para Parquet. Consulte as <a href="https://github.com/franklinbaldo/ficha/issues/208">evidências de funcionamento</a>.</p>
       </details>
     </div>
     <aside class="hero-bottom" aria-labelledby="referencia-titulo">
