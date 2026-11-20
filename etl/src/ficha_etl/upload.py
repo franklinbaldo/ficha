@@ -277,7 +277,6 @@ def _catalog_raw_size(value: object, name: str) -> int:
     return size
 
 
-
 def _reject_duplicate_json_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
     """Reject ambiguous JSON object keys at every nesting level."""
     result: dict[str, object] = {}
