@@ -429,3 +429,51 @@ def test_duckdb_error_replaces_prior_success_receipt(tmp_path: Path, bad_input: 
         assert json.loads(receipt_path.read_text())["status"] == "ok"
     finally:
         con.close()
+
+
+def test_hardlink_alias_of_ten_canonical_csv_paths_is_rejected(tmp_path: Path) -> None:
+    """Ten canonical pathnames are not ten independent parsed source inodes."""
+    import os
+
+    from ficha_etl import registry
+    from ficha_etl.transform import _create_table_from_csvs
+
+    parts = _parts(tmp_path / "sources")
+    columns = [""] * 30
+    columns[0:3] = ["12345678", "0001", "95"]
+    original = parts[0][1]
+    original.write_text(";".join(columns) + "\n", encoding="utf-8")
+    for _, path in parts[1:]:
+        path.unlink()
+        os.link(original, path)
+
+    # Path.resolve() is distinct, even though all ten pathnames share an inode.
+    assert len({p.resolve() for _, p in parts}) == 10
+    assert len({(p.stat().st_dev, p.stat().st_ino) for _, p in parts}) == 1
+
+    con = duckdb.connect()
+    try:
+        counts: dict[Path, int] = {}
+        _create_table_from_csvs(
+            con,
+            "estabelecimento",
+            [path for _, path in parts],
+            registry.main_table("estabelecimento").source,
+            per_file_counts=counts,
+        )
+        assert len(counts) == 10
+        assert set(counts.values()) == {1}
+        parquet = tmp_path / "equal.parquet"
+        con.execute(
+            "COPY (SELECT cnpj_basico || cnpj_ordem || cnpj_dv AS cnpj "
+            "FROM estabelecimento) TO ? (FORMAT PARQUET)",
+            [str(parquet)],
+        )
+        receipt_path = tmp_path / "receipt.json"
+        with pytest.raises(MonthlySourceBagError, match="noncanonical source part"):
+            reconcile_loaded_source_keys(con, "2026-08", parts, parquet, receipt_path, counts)
+        receipt = json.loads(receipt_path.read_text())
+        assert receipt["status"] == "failed"
+        assert "noncanonical" in receipt["reason"]
+    finally:
+        con.close()
