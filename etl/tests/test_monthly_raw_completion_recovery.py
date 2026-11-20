@@ -41,9 +41,7 @@ def _local_outputs(output_dir: Path) -> None:
         for kind in _LOOKUP_KINDS:
             target = output_dir / "lookups" / f"{kind}.parquet"
             literal = str(target).replace("'", "''")
-            connection.execute(
-                f"COPY (SELECT 1 AS n) TO '{literal}' (FORMAT PARQUET)"
-            )
+            connection.execute(f"COPY (SELECT 1 AS n) TO '{literal}' (FORMAT PARQUET)")
 
 
 def _parsed_source_receipt(output_dir: Path) -> None:
@@ -164,9 +162,8 @@ def test_raw_completion_controls_independent_upload_with_real_descriptor(
     if raw_outcome == "complete":
         cli.command_upload_outputs(output_args)
         derived_requests = [url for _, url in seen if "/raw/" not in url]
-        assert len(derived_requests) == (
-            len(cli._STANDARD_FILE_NAMES) + len(_LOOKUP_KINDS)
-        )
+        expected_outputs = len(cli._STANDARD_FILE_NAMES) + len(_LOOKUP_KINDS)
+        assert len(derived_requests) == expected_outputs
     else:
         with pytest.raises(ValueError, match="raw source upload did not complete"):
             cli.command_upload_outputs(output_args)
