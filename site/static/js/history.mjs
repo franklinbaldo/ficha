@@ -23,7 +23,7 @@ export function renderHistoryComparison(doc, parent, older, newer) {
     }
     add(doc,parent,'p','Uma diferença de presença entre snapshots não comprova nascimento, encerramento ou data de mudança cadastral.');
   } else {
-    add(doc,parent,'p','Em telas estreitas, deslize a tabela horizontalmente para ler as duas competências.','fineprint comparison-hint');
+    add(doc,parent,'p','Em telas estreitas, role a tabela horizontalmente para ler as duas competências. Pelo teclado, pressione Tab até a tabela e use as setas.','fineprint comparison-hint');
     const scroll = add(doc,parent,'div','','comparison-scroll');
     scroll.setAttribute('role','region');
     scroll.setAttribute('aria-label','Tabela de comparação das competências '+older.date+' e '+newer.date);

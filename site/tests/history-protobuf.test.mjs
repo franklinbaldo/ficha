@@ -102,6 +102,7 @@ test('dispatcher rejeita alfa antes de acionar qualquer transporte',async()=>{
 test('tabela histórica tem legenda, cabeçalhos com scope e região rolável por teclado',()=> {
   const doc=docFor(), parent=new Element('div');
   pages.renderHistoryComparison(doc,parent,observe('2026-06'),observe('2026-07'));
+  assert.match(treeText(parent),/Pelo teclado, pressione Tab até a tabela e use as setas/);
   const region=parent.children.find(node=>node.attributes.role==='region');
   assert.ok(region,'a tabela está em região navegável');
   assert.equal(region.attributes.tabindex,'0','rolagem acessível por teclado');
