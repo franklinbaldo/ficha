@@ -34,8 +34,11 @@ test('aviso público distingue falha de transporte de ausência cadastral', asyn
   const sobre = await read('../content/sobre.md');
   assert.match(home, /Busca experimental nesta página/);
   assert.match(home, /falhou por CORS/);
-  assert.match(home, /essa rota independente foi exercitada em navegador com registros reais/);
-  assert.match(home, /Isso não significa ausência cadastral/);
+  assert.match(home, /Um CNPJ numérico completo.*abre a ficha por Protobuf/);
+  assert.match(home, /sem iniciar consulta Parquet\/DuckDB na home/);
+  assert.match(home, /Buscas por nome e CNPJ alfanumérico continuam no caminho analítico/);
+  assert.match(home, /rota independente já foi exercitada em navegador com registros reais/);
+  assert.match(home, /erro de rede não significa ausência cadastral/);
   assert.match(home, /A busca por nome e a comparação histórica completa ainda não foram resolvidas/);
   assert.match(home, /\/ficha\/acervo\//);
   assert.match(sobre, /Chromium 152/);

@@ -15,6 +15,24 @@ const cases = [
   {cnpj:'33000167000101', name:'Petrobras', city:/RIO DE JANEIRO/i},
 ];
 try {
+  // Real DOM journey: the home must hand a numeric full CNPJ to the existing
+  // Protobuf-first page before it can open a Parquet/DuckDB session.
+  const homePage = await browser.newPage({serviceWorkers:'block'});
+  try {
+    const requested = [];
+    homePage.on('request', request => requested.push(request.url()));
+    await homePage.goto(base, {waitUntil:'domcontentloaded'});
+    await homePage.locator('#busca-termo').fill('33.000.167/0001-01');
+    await Promise.all([
+      homePage.waitForURL(url => url.pathname === '/ficha/empresa/' &&
+        url.searchParams.get('cnpj') === '33000167000101', {timeout:15000}),
+      homePage.locator('#busca-enviar').click({noWaitAfter:true}),
+    ]);
+    assert.ok(!requested.some(url => /cnpjs\.parquet|\.wasm(?:[?#]|$)/i.test(url)),
+      'home numérica não deve ler Parquet nem carregar WASM');
+    results.push({name:'Home CNPJ numérico → ficha Protobuf, zero Parquet/WASM',
+      requests:requested.length, status:'PASS'});
+  } finally {await homePage.close();}
   for (const {cnpj,name,city} of cases) {
     const page = await browser.newPage({serviceWorkers:'block'});
     try {
