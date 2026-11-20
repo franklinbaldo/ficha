@@ -114,3 +114,24 @@ test('ficha e Sobre distinguem prova pública pontual de CORS da busca legada', 
   assert.match(empresa, /não garantem acesso contínuo/);
   assert.doesNotMatch(sobre, /O formulário continua experimental/);
 });
+
+test('links em parágrafos HTML das páginas SSG não vazam sintaxe Markdown', async () => {
+  for (const name of ['index', 'empresa', 'historia', 'explorar', 'acervo', 'sobre']) {
+    const source = await read('../content/' + name + '.md');
+    const paragraphs = source.match(/<p\b[^>]*>[\s\S]*?<\/p>/gi) ?? [];
+    for (const paragraph of paragraphs) {
+      assert.doesNotMatch(paragraph, /\[[^\]\n]+\]\(https?:\/\/[^)\n]+\)/,
+        name + ': parágrafo HTML cru imprime links Markdown literalmente');
+    }
+  }
+});
+
+
+test('README SSG explicita lookup adicional e limite de versão do wire', async () => {
+  const readme = await read('../README.md');
+  assert.match(readme, /`lookups\.json` da mesma competência/);
+  assert.match(readme, /SHA-256 declarados desse lookup/);
+  assert.match(readme, /schema_version` ausente no manifesto/);
+  assert.match(readme, /issuecomment-7032628482/);
+  assert.doesNotMatch(readme, /somente um membro Protobuf v1/);
+});
