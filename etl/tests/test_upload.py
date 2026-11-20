@@ -1,5 +1,6 @@
 """Testes para ficha_etl.upload (ia.upload mockado)."""
 
+import json
 import zipfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -330,8 +331,9 @@ def test_existing_raw_files_on_ia_parses_metadata(monkeypatch):
     class _FakeResp:
         status_code = 200
 
-        def json(self):
-            return payload
+        @property
+        def content(self):
+            return json.dumps(payload).encode("utf-8")
 
     class _FakeClient:
         def __init__(self, *a, **kw):
@@ -372,8 +374,9 @@ def test_stream_raw_rejects_ambiguous_catalog_before_get_or_put(monkeypatch, fil
     class _FakeResp:
         status_code = 200
 
-        def json(self):
-            return {"files": files}
+        @property
+        def content(self):
+            return json.dumps({"files": files}).encode("utf-8")
 
     class _FakeClient:
         def __init__(self, *args, **kwargs):
@@ -406,8 +409,7 @@ def test_stream_raw_rejects_non_list_catalog_before_get_or_put(monkeypatch):
     class _FakeResp:
         status_code = 200
 
-        def json(self):
-            return {"files": {"raw/Empresas0.zip": {"size": "1"}}}
+        content = b'{"files":{"raw/Empresas0.zip":{"size":"1"}}}'
 
     class _FakeClient:
         def __init__(self, *args, **kwargs):
@@ -438,8 +440,7 @@ def test_stream_raw_rejects_http_200_invalid_json_before_get_or_put(monkeypatch)
     class _FakeResp:
         status_code = 200
 
-        def json(self):
-            raise ValueError("malformed JSON")
+        content = b"<html>malformed JSON</html>"
 
     class _FakeClient:
         def __init__(self, *args, **kwargs):
@@ -461,6 +462,54 @@ def test_stream_raw_rejects_http_200_invalid_json_before_get_or_put(monkeypatch)
 
     monkeypatch.setattr(upload_mod.upstream, "discover_token", forbid_network)
     monkeypatch.setattr(upload_mod, "_stream_one_zip_with_retry", forbid_network)
+
+    with pytest.raises(RuntimeError, match="IA raw metadata: invalid JSON"):
+        upload_mod.stream_raw_zips_to_ia("2026-04", access_key="A", secret_key="S")
+
+
+@pytest.mark.parametrize(
+    "wire",
+    [
+        '{"files":[],"files":[{"name":"raw/Empresas0.zip","size":"1"}]}',
+        '{"files":[{"name":"ignore","name":"raw/Empresas0.zip","size":"1"}]}',
+        '{"files":[{"name":"raw/Empresas0.zip","size":"0","size":"1"}]}',
+        '{"files":[{"name":"raw/Empresas0.zip","size":"1","size":"1"}]}',
+        '{"files":[{"name":"raw/Empresas0.zip","size":"1","extra":NaN}]}',
+        '{"files":[{"name":"raw/Empresas0.zip","size":"1","extra":Infinity}]}',
+        '{"files":[],"nested":{"key":1,"key":1}}',
+    ],
+)
+def test_stream_raw_rejects_ambiguous_ia_json_before_get_or_put(monkeypatch, wire):
+    """No IA metadata ambiguity may authorize RFB GET, IA PUT or raw-file skip."""
+
+    class _FakeResp:
+        status_code = 200
+        content = wire.encode("utf-8")
+
+        def json(self):
+            # Also exercise a last-key-wins parser in the ablation (pre-fix).
+            return json.loads(self.content)
+
+    class _FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def get(self, url):
+            return _FakeResp()
+
+    monkeypatch.setattr(upload_mod.httpx, "Client", _FakeClient)
+
+    def forbid_egress(*args, **kwargs):
+        pytest.fail("ambiguous metadata authorized RFB GET or IA PUT")
+
+    monkeypatch.setattr(upload_mod.upstream, "discover_token", forbid_egress)
+    monkeypatch.setattr(upload_mod, "_stream_one_zip_with_retry", forbid_egress)
 
     with pytest.raises(RuntimeError, match="IA raw metadata: invalid JSON"):
         upload_mod.stream_raw_zips_to_ia("2026-04", access_key="A", secret_key="S")
