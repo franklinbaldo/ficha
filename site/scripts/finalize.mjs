@@ -53,7 +53,7 @@ try { await lstat(cssURL); throw new Error('CSS já existe; não sobrescrever');
 catch (err) { if (err?.code !== 'ENOENT') throw err; }
 await copyFile(new URL('../static/css/site.css', import.meta.url), cssURL);
 
-const jsFiles = ['boot.mjs', 'search-app.mjs', 'duckdb-runtime.mjs', 'query-core.mjs',
+const jsFiles = ['boot.mjs', 'examples.mjs', 'search-app.mjs', 'duckdb-runtime.mjs', 'query-core.mjs',
   'dataset.mjs', 'catalog.mjs', 'record.mjs', 'pages.mjs', 'history.mjs', 'page-helpers.mjs',
   'atomic-record.mjs', 'atomic-browser.mjs'];
 await mkdir(new URL('js/', root), { recursive: true });
