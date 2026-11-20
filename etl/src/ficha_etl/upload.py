@@ -167,6 +167,17 @@ def _stream_one_zip(
                     f"RFB não retornou Content-Length para {spec.name} "
                     "— streaming sem tamanho não é suportado"
                 )
+            # An empty HTTP 200 body is not an RFB ZIP, even with a valid
+            # Content-Length header. Require a positive ASCII decimal size
+            # before opening the first IA PUT.
+            if (
+                not content_length.isascii()
+                or not content_length.isdecimal()
+                or int(content_length) == 0
+            ):
+                raise RuntimeError(
+                    f"RFB invalid Content-Length for {spec.name}: {content_length!r}"
+                )
             log.info(
                 "streaming %s → IA (%.1f MB)",
                 spec.name,

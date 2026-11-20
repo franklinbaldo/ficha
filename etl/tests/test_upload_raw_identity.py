@@ -105,3 +105,15 @@ def test_raw_zip_refuses_non_200_success_before_put(monkeypatch, status):
             seen=seen,
         )
     assert seen["put_count"] == 0
+
+def test_raw_zip_rejects_zero_content_length_before_any_put(monkeypatch):
+    seen = {}
+    with pytest.raises(RuntimeError, match="invalid Content-Length"):
+        _run_stream(
+            monkeypatch,
+            payload=b"",
+            encoding=None,
+            expected_put=False,
+            seen=seen,
+        )
+    assert seen["put_count"] == 0
