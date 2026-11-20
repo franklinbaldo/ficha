@@ -35,6 +35,19 @@ if (siteMode === 'ssg') {
     await page.locator('footer #ssg-search-btn').waitFor({ state: 'visible' });
     await page.screenshot({ path: `${outputDir}/home-desktop.png`, fullPage: true });
     await page.setViewportSize({ width: 390, height: 844 });
+    // Text-only enlargement (not native browser zoom) must reflow at 320/375px.
+    for (const width of [320, 375]) {
+      await page.setViewportSize({ width, height: 812 });
+      const scrollWidth = await page.evaluate(() => {
+        document.documentElement.style.fontSize = '200%';
+        return document.documentElement.scrollWidth;
+      });
+      if (scrollWidth > width) {
+        throw new Error(`Home SSG: texto 200% transborda ${scrollWidth}px / ${width}px`);
+      }
+    }
+    await page.evaluate(() => document.documentElement.style.removeProperty('font-size'));
+    await page.setViewportSize({ width: 390, height: 844 });
   } else {
     await page.getByRole('heading', {
       name: 'Pesquisa por CNPJ ainda indisponível',
