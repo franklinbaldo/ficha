@@ -23,6 +23,18 @@ if (siteMode === 'ssg') {
   const hasSearch = (await page.$('#busca-form')) !== null;
   if (hasSearch) {
     await page.waitForSelector('#busca-form', { timeout: 15_000 });
+    await page.locator('aside[aria-labelledby="referencia-titulo"] #competencia')
+      .waitFor({ state: 'visible' });
+    for (const viewport of [{ width: 390, height: 844 }, { width: 1440, height: 960 }]) {
+      await page.setViewportSize(viewport);
+      const pageWidth = await page.evaluate(() => document.documentElement.scrollWidth);
+      if (pageWidth > viewport.width) {
+        throw new Error(`Home SSG: conteúdo de ${pageWidth}px excede viewport de ${viewport.width}px`);
+      }
+    }
+    await page.locator('footer #ssg-search-btn').waitFor({ state: 'visible' });
+    await page.screenshot({ path: `${outputDir}/home-desktop.png`, fullPage: true });
+    await page.setViewportSize({ width: 390, height: 844 });
   } else {
     await page.getByRole('heading', {
       name: 'Pesquisa por CNPJ ainda indisponível',
