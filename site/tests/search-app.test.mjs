@@ -12,12 +12,74 @@ class Element {
 }
 const mockDOM = () => {
   const nodes = Object.fromEntries(['busca-form','busca-termo','busca-enviar',
-    'consulta-estado','consulta-lista'].map(k => [k,new Element(k)]));
+    'consulta-estado','consulta-lista','consulta-recuperacao'].map(k => [k,new Element(k)]));
+  nodes['consulta-recuperacao'].hidden = true;
   return { nodes, doc: {
     getElementById: id => nodes[id],
     createElement: tag => new Element(tag),
   }};
 };
+
+test('falha analítica revela alternativa no acervo, edição e recuperação a ocultam', async () => {
+  const {nodes,doc}=mockDOM();
+  let fetches=0;
+  mountSearch({documentRef:doc,
+    fetchDataset:async()=> {
+      fetches++;
+      if(fetches===1)throw Error('Origem de dados inacessível no navegador (rede ou CORS)');
+      return {date:'2026-07',files:{cnpjs:{url:'https://example.org/cnpjs.parquet',size:1}}};
+    },
+    probeRange:async()=>{},
+    createEngine:async()=>({db:{},duckdb:{}}),
+    attach:async()=>{},
+    query:async()=>[{cnpj:'33000167000101',razao_social:'Empresa localizada'}],
+  });
+  const input=nodes['busca-termo'], recovery=nodes['consulta-recuperacao'];
+  const submit=()=>nodes['busca-form'].submit({preventDefault(){}});
+  assert.equal(recovery.hidden,true);
+  input.value='PETROBRAS';
+  await submit();
+  assert.equal(fetches,1);
+  assert.equal(recovery.hidden,false,'erro de rede revela caminho alternativo');
+  assert.equal(nodes['consulta-estado'].dataset.kind,'error');
+  assert.match(nodes['consulta-estado'].textContent,/rede ou CORS/);
+  assert.match(nodes['consulta-estado'].textContent,/não comprova ausência cadastral.*Acervo/,
+    'região de status anuncia a alternativa sem mover o link para dentro dela');
+  assert.equal(nodes['consulta-lista'].children.length,0);
+  input.value='PETROBRAS SA';
+  input.input();
+  assert.equal(recovery.hidden,true,'aviso anterior não sobrevive a nova seleção');
+  await submit();
+  assert.equal(fetches,2);
+  assert.equal(recovery.hidden,true,'sucesso não mantém ajuda de erro');
+  assert.match(nodes['consulta-estado'].textContent,/1 resultado encontrado/);
+  assert.equal(nodes['consulta-lista'].children.length,1);
+  const {readFile}=await import('node:fs/promises');
+  const html=await readFile(new URL('../content/index.md',import.meta.url),'utf8');
+  assert.match(html,/<p id="consulta-recuperacao"[^>]*hidden>/);
+  assert.ok(html.includes('<a href="/ficha/acervo/">consultar os arquivos'));
+});
+
+test('resposta obsoleta após edição não revela recuperação de busca antiga', async () => {
+  const {nodes,doc}=mockDOM();
+  let fail;
+  mountSearch({documentRef:doc,
+    fetchDataset:()=>new Promise((_,reject)=>{fail=reject;}),
+  });
+  const input=nodes['busca-termo'];
+  input.value='PETROBRAS';
+  const pending=nodes['busca-form'].submit({preventDefault(){}});
+  input.value='PETROBRAS NOVA';
+  input.input();
+  fail(Error('HTTP 500 da consulta anterior'));
+  await pending;
+  assert.equal(nodes['consulta-recuperacao'].hidden,true);
+  assert.match(nodes['consulta-estado'].textContent,/Termo alterado/);
+  assert.doesNotMatch(nodes['consulta-estado'].textContent,/HTTP 500/);
+  assert.doesNotMatch(nodes['consulta-estado'].textContent,/Acervo/,
+    'resposta atrasada não pode anunciar alternativa da consulta obsoleta');
+});
+
 test('resultados são texto puro, não HTML interpretado', () => {
   const { nodes,doc } = mockDOM();
   renderCompanies(doc,nodes['consulta-lista'],[
@@ -125,12 +187,16 @@ test('manifesto 404 não fica em cache: nova tentativa observa HTTP 500 e depois
   const submit = () => nodes['busca-form'].submit({preventDefault() {}});
   await submit();
   assert.match(nodes['consulta-estado'].textContent, /manifesto ausente/);
+  assert.match(nodes['consulta-estado'].textContent, /Acervo/,
+    'manifesto ausente também anuncia alternativa na região viva');
   await submit();
   assert.equal(attempts, 2, 'HTTP 404 anterior deve permitir novo fetch');
   assert.match(nodes['consulta-estado'].textContent, /HTTP 500/);
   await submit();
   assert.equal(attempts, 3);
   assert.match(nodes['consulta-estado'].textContent, /2026-07: 1 resultado/);
+  assert.doesNotMatch(nodes['consulta-estado'].textContent, /Acervo/,
+    'sucesso posterior não herda texto de recuperação');
   assert.equal(nodes['busca-enviar'].disabled, false);
 });
 

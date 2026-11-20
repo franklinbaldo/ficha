@@ -25,6 +25,7 @@ layout: index
         <p id="busca-ajuda" class="search-help">Use um CNPJ numérico completo para abrir a ficha. A busca por nome é experimental.</p>
       </form>
       <p id="consulta-estado" role="status" aria-live="polite" class="interface-status"></p>
+      <p id="consulta-recuperacao" class="fineprint" hidden>Esta falha de consulta não comprova ausência cadastral. Você pode <a href="/ficha/acervo/">consultar os arquivos e competências declarados no acervo</a>; os links do catálogo também estão sujeitos à disponibilidade das fontes.</p>
       <div class="home-results" aria-labelledby="resultados-titulo">
         <h2 id="resultados-titulo">Resultados da consulta</h2>
         <ul class="companies" id="consulta-lista"></ul>
