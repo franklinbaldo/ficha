@@ -6,14 +6,18 @@ O **FICHA** é um fichário aberto das empresas brasileiras e um Data Lakehouse 
 
 ## Usar agora
 
-- **Abrir o site público (home SSG com formulário experimental):** https://franklinbaldo.github.io/ficha/. A presença do formulário não comprova acesso aos dados remotos.
+- **Abrir o site público (SSG Rust):** https://franklinbaldo.github.io/ficha/. A busca por nome/CNPJ na home ainda usa Parquet/DuckDB e é experimental.
+- **Consultar um CNPJ numérico completo:** https://franklinbaldo.github.io/ficha/empresa/ (leitura Protobuf v1, independente do Parquet).
+- **Comparar duas competências para um CNPJ numérico:** https://franklinbaldo.github.io/ficha/historia/ (somente competências com Protobuf v1; sem fallback automático).
 - **Inspecionar o contrato público do snapshot vigente:** https://franklinbaldo.github.io/ficha/manifest.json
 
 **Manifesto ≠ disponibilidade live.** O JSON versionado declara competências, URLs e identidades dos artefatos; isso **não comprova** que as URLs do Internet Archive estejam acessíveis, que a busca no navegador funcione ou que o mês mais recente da RFB já esteja publicado. No corte de **16/11/2026** (`main@98329ff`), `manifest.current` declara **2026-07**, não 2026-08. A investigação e a recuperação de agosto estão na [issue #247](https://github.com/franklinbaldo/ficha/issues/247). A disponibilidade exige conferência independente de URLs, dados e interface.
 
-**Site público atual (18/11/2026):** home e Sobre geradas com SSG Rust. A [PR #297](https://github.com/franklinbaldo/ficha/pull/297) incorporou à fonte `site/` um **formulário experimental** para CNPJ numérico/alfanumérico ou razão social e módulos JavaScript derivados do shadow da [#276](https://github.com/franklinbaldo/ficha/pull/276). O diretório duplicado `site-ssg/` foi removido; `web/` conserva o protótipo Astro/Svelte, não publicado. Pesquisas por pessoa/sócio, endereço e CNAE não foram integradas à home SSG.
+**Site público atual (19/11/2026):** o Pages usa **SSG Rust em `site/`**. A home ainda consulta Parquet/DuckDB-WASM: seu transporte remoto apresentou erro de CORS em teste de 19/11/2026. Uma falha de transporte **não** significa que o CNPJ não exista no snapshot. `web/` guarda o protótipo Astro/Svelte, não publicado.
 
-Depois da correção do smoke na [PR #298](https://github.com/franklinbaldo/ficha/pull/298), o [deploy pós-merge #44347752600](https://github.com/franklinbaldo/ficha/actions/runs/44347752600) concluiu **build, deploy e verify com sucesso**. Esse resultado comprova a entrega e os checks HTTP previstos pelo workflow, **não** consultas CNPJ funcionais. A carga real de DuckDB-WASM/Worker, CORS+Range sobre os Parquets remotos, identidade dos dados e paridade ainda carecem de prova independente ([issue #208](https://github.com/franklinbaldo/ficha/issues/208)). **Não anunciar resultados de busca como disponíveis até essa comprovação.**
+A **ficha por CNPJ numérico completo** em `/ficha/empresa/` usa o leitor de **Protobuf v1** sem Parquet. A página `/ficha/historia/` compara duas competências que declaram essa camada para CNPJ numérico, também sem Parquet. CNPJ alfanumérico, competência sem Protobuf compatível e busca por nome **não** têm alternativa automática por Protobuf v1. Estados como arquivo indisponível, resposta inválida e ausência dentro de um snapshot íntegro precisam permanecer distintos.
+
+**Evidência e limite:** o [Chromium na #367](https://github.com/franklinbaldo/ficha/actions/runs/44586268099) consultou Nubank e Petrobras com dados Protobuf; a [#208](https://github.com/franklinbaldo/ficha/issues/208#issuecomment-7019004782) registra prova adicional no navegador após a publicação da rota numérica. O [Pages pós-merge da #387](https://github.com/franklinbaldo/ficha/actions/runs/44665995643) executou build, deploy e verificação HTTP, **não** um novo E2E de consulta nem testes de zoom nativo/leitor de tela. Isso não atesta os 300 ZIPs, disponibilidade contínua, versão de wire declarada em cada shard ou completude do acervo; [#383](https://github.com/franklinbaldo/ficha/issues/383) acompanha essa fronteira de custódia.
 
 O `manifest.json` é a porta para reutilização fora do site: ele declara a competência vigente, snapshots publicados e URLs dos artefatos preservados, com identidade verificável quando disponível. Assim, quem precisa analisar a base inteira não depende da interface do Ficha.
 
@@ -29,12 +33,12 @@ O projeto opera em duas camadas de acesso para máxima eficiência:
 - **Tecnologia:** explora a funcionalidade de "unzip" transparente do Internet Archive.
 - **Uso:** consultas diretas por raiz de CNPJ por URL estática previsível.
 - **Vantagem:** acesso pontual sem precisar varrer a base analítica inteira; protobuf é compacto.
-- **Status:** o reader atômico existe no código, e o manifesto versionado declara artefatos atômicos em alguns snapshots. A declaração não prova acesso HTTP live; a home pública oferece um formulário experimental de CNPJ ou razão social, mas não usa o leitor atômico. A consulta analítica real aos Parquets remotos permanece sem comprovação ([Ficha #208](https://github.com/franklinbaldo/ficha/issues/208)); não pressupor integração do reader atômico à jornada de busca.
+- **Status:** o leitor atômico está integrado à **ficha numérica em `/ficha/empresa/`** e à comparação numérica em `/ficha/historia/`, com provas específicas em Chromium. A **home** mantém formulário experimental de Parquet/DuckDB, não o leitor Protobuf. O manifesto declara artefatos, mas não atesta por si só disponibilidade HTTP nem a versão de wire dos ZIPs ([#208](https://github.com/franklinbaldo/ficha/issues/208), [#383](https://github.com/franklinbaldo/ficha/issues/383)).
 
 ### 2. Camada Analítica (Data Lakehouse)
 
 - **Formato:** Apache Parquet, com relações para CNPJs e conjuntos complementares publicados por snapshot.
-- **Tecnologia:** DuckDB-WASM (adaptador experimental incluído em `site/`; consulta remota ainda não comprovada).
+- **Tecnologia:** DuckDB-WASM (adaptador experimental em `site/`; o teste de 19/11 observou CORS nos Parquets remotos). Não se confunde com a leitura Protobuf independente.
 - **Uso:** análises externas dos Parquets e futura pesquisa por empresa, pessoa, endereço e CNAE.
 - **Vantagem:** permite explorar e reutilizar dados sem backend próprio do Ficha.
 
@@ -51,7 +55,7 @@ O projeto opera em duas camadas de acesso para máxima eficiência:
 
 ```text
 ficha/
-├── site/            # Site público SSG Rust e módulos experimentais de busca
+├── site/            # Site SSG Rust; ficha/história Protobuf e busca legada
 ├── web/             # Protótipo Astro/Svelte de busca (não publicado)
 ├── etl/             # Pipeline Python (RFB → artefatos → Internet Archive)
 ├── experiments/     # PoCs e benchmarks numerados
@@ -59,7 +63,7 @@ ficha/
 └── .github/         # Workflows de CI, deploy e publicação
 ```
 
-`site/` é a home pública estática. `web/` contém a interface Astro preservada como protótipo; `etl/` produz os artefatos. O contrato entre produção e consumo é o manifesto e os schemas/artefatos publicados, mas sua presença não comprova a acessibilidade remota dos arquivos.
+`site/` contém a home, ficha, história e catálogo públicos. `web/` contém a interface Astro preservada como protótipo; `etl/` produz os artefatos. O contrato entre produção e consumo é o manifesto e os schemas/artefatos publicados, mas sua presença não comprova a acessibilidade remota dos arquivos.
 
 ## 🚀 Desenvolvimento
 
