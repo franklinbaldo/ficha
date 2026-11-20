@@ -13,7 +13,9 @@ export function renderCompanies(documentRef, list, rows) {
     const location = [company.municipio_nome, company.uf].filter(Boolean).join(' / ');
     details.textContent = [String(company.cnpj ?? ''), location].filter(Boolean).join(' · ');
     const canonical = stripCnpj(String(company.cnpj ?? ''));
-    if (/^[A-Z0-9]{12}[0-9]{2}$/.test(canonical)) {
+    // The published Protobuf-first ficha accepts numeric v1 CNPJs only.
+    // Do not offer an action that rejects an alphanumeric search result.
+    if (/^\d{14}$/.test(canonical)) {
       const link = documentRef.createElement('a');
       link.href = '/ficha/empresa/?cnpj=' + encodeURIComponent(canonical);
       link.textContent = 'Abrir ficha';
