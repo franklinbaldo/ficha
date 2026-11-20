@@ -99,8 +99,13 @@ def _assert_guard_shell(run: str, candidate_paths: tuple[str, ...]) -> None:
     if os.name == "nt":
         return
 
-    for defect in (None, *[(kind, i) for kind in ("missing", "empty") for i in range(5)]):
-        with tempfile.TemporaryDirectory(prefix="ficha-candidate-evidence-") as directory:
+    for defect in (
+        None,
+        *[(kind, i) for kind in ("missing", "empty") for i in range(5)],
+    ):
+        with tempfile.TemporaryDirectory(
+            prefix="ficha-candidate-evidence-"
+        ) as directory:
             root = Path(directory)
             workdir = root / "etl"
             workdir.mkdir()
@@ -147,11 +152,20 @@ def _assert_artifact_policy(source: str) -> None:
     for key, (name, paths, missing_policy, condition) in EXPECTED_UPLOADS.items():
         step = actual[key]
         config = step.get("with", {})
-        _require(step.get("uses") == "actions/upload-artifact@v4", f"wrong action: {key}")
-        _require(config.get("include-hidden-files") is True, f"hidden files disabled: {key}")
+        _require(
+            step.get("uses") == "actions/upload-artifact@v4", f"wrong action: {key}"
+        )
+        _require(
+            config.get("include-hidden-files") is True, f"hidden files disabled: {key}"
+        )
         _require(config.get("name") == name, f"artifact name changed: {key}")
-        _require(_paths(config.get("path")) == paths, f"artifact path not allowlisted: {key}")
-        _require(config.get("if-no-files-found") == missing_policy, f"missing-file policy: {key}")
+        _require(
+            _paths(config.get("path")) == paths, f"artifact path not allowlisted: {key}"
+        )
+        _require(
+            config.get("if-no-files-found") == missing_policy,
+            f"missing-file policy: {key}",
+        )
         _require(step.get("if") == condition, f"conditional upload: {key}")
         _require("continue-on-error" not in step, f"failure suppressed: {key}")
         _require("overwrite" not in config, f"immutable artifact replaced: {key}")
@@ -161,14 +175,18 @@ def _assert_artifact_policy(source: str) -> None:
     for name in (GUARD_NAME, CANDIDATE_NAME, PUBLISH_NAME):
         _require(names.count(name) == 1, f"missing or duplicated finalize step: {name}")
     _require(
-        names.index(GUARD_NAME) < names.index(CANDIDATE_NAME) < names.index(PUBLISH_NAME),
+        names.index(GUARD_NAME)
+        < names.index(CANDIDATE_NAME)
+        < names.index(PUBLISH_NAME),
         "candidate guard must precede artifact and promotion",
     )
     guard = final[names.index(GUARD_NAME)]
     _require(guard.get("shell") == "bash", "candidate guard must run in Bash")
     _require("if" not in guard, "candidate guard cannot be conditional")
     _require("continue-on-error" not in guard, "candidate guard must fail closed")
-    _require(isinstance(guard.get("run"), str), "candidate guard needs an executable script")
+    _require(
+        isinstance(guard.get("run"), str), "candidate guard needs an executable script"
+    )
     _assert_guard_shell(guard["run"], EXPECTED_UPLOADS[("finalize", CANDIDATE_NAME)][1])
 
     # A failing upload-artifact MUST stop the remote PUT. A conditional
@@ -177,7 +195,9 @@ def _assert_artifact_policy(source: str) -> None:
     shard_steps = jobs["shards"]["steps"]
     shard_names = [step.get("name") for step in shard_steps]
     for name in (SHARD_RECEIPT_NAME, SHARD_SUBMIT_NAME):
-        _require(shard_names.count(name) == 1, f"missing or duplicate shard step: {name}")
+        _require(
+            shard_names.count(name) == 1, f"missing or duplicate shard step: {name}"
+        )
     _require(
         shard_names.index(SHARD_RECEIPT_NAME) < shard_names.index(SHARD_SUBMIT_NAME),
         "shard receipt must be persisted before remote submission",
@@ -240,7 +260,9 @@ class TestMonthlyUploadArtifactPolicy(unittest.TestCase):
                 mutant = _replace_one(
                     self.workflow,
                     header,
-                    header.replace("        run: |", f"        {insertion}\n        run: |"),
+                    header.replace(
+                        "        run: |", f"        {insertion}\n        run: |"
+                    ),
                 )
                 with self.assertRaises(AssertionError):
                     _assert_artifact_policy(mutant)
@@ -250,7 +272,10 @@ class TestMonthlyUploadArtifactPolicy(unittest.TestCase):
         middle = f"      - name: {SHARD_SUBMIT_NAME}\n"
         end = "      - name: Preserve submit result\n"
         _require(
-            self.workflow.count(start) == self.workflow.count(middle) == self.workflow.count(end) == 1,
+            self.workflow.count(start)
+            == self.workflow.count(middle)
+            == self.workflow.count(end)
+            == 1,
             "shard-order anchors changed",
         )
         left, rest = self.workflow.split(start, 1)
@@ -266,7 +291,11 @@ class TestMonthlyUploadArtifactPolicy(unittest.TestCase):
             + MONTH_EXPR
             + ATTEMPT_SUFFIX
             + "\n"
-            + ("          path: etl/.cache/" + MONTH_EXPR + "/production-descriptor.json\n")
+            + (
+                "          path: etl/.cache/"
+                + MONTH_EXPR
+                + "/production-descriptor.json\n"
+            )
             + "          if-no-files-found: error"
         )
         mutant = _replace_one(
