@@ -1,5 +1,4 @@
 /** Public record access. Never substitute another source or invent data. */
-import { currentDataset, probeParquetRange } from './dataset.mjs';
 import { attachAnalyticalFiles, queryCompanies, stripCnpj } from './query-core.mjs';
 
 export const RECORD_FIELDS = Object.freeze([
@@ -47,20 +46,22 @@ export function compareRecords(before, after) {
  * The reader does not claim SHA-256 verification of the complete remote Parquet.
  */
 export async function fetchRecordAt(manifest, date, cnpj, {
-  probeRange = probeParquetRange,
-  // Load analytical code only after a Parquet lookup reaches engine creation.
-  createEngine = async () => (await import('./duckdb-runtime.mjs')).createDuckDBEngine(),
+  probeRange, createEngine,
   attach = attachAnalyticalFiles, query = queryCompanies,
 } = {}) {
   const canonical = canonicalCnpj(cnpj);
   if (!canonical) throw new Error('Informe um CNPJ completo, numérico ou alfanumérico');
   const snapshot = manifest?.snapshots?.find(s => s.date === date);
   if (!snapshot) throw new Error('Competência não publicada no manifesto');
+  // Legacy Parquet is an explicit, opt-in path. Keep the Protobuf company and
+  // history pages free of dataset probing and DuckDB module downloads at load.
+  const { currentDataset, probeParquetRange } = await import('./dataset.mjs');
   // Keep the original snapshot set: reducing it to [snapshot] would bypass
   // currentDataset's fail-closed check against duplicate competence dates.
   const dataset = currentDataset({ ...manifest, current: date });
-  await probeRange({url:dataset.files.cnpjs.url, size:dataset.files.cnpjs.size});
-  const engine = await createEngine();
+  await (probeRange ?? probeParquetRange)({url:dataset.files.cnpjs.url, size:dataset.files.cnpjs.size});
+  const engineFactory = createEngine ?? (await import('./duckdb-runtime.mjs')).createDuckDBEngine;
+  const engine = await engineFactory();
   try {
     await attach(engine.db, dataset, engine.duckdb);
     const rows = await query(engine.db, canonical);
