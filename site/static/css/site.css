@@ -55,7 +55,10 @@ p { max-width:70ch; }
   color:#fff; padding:.82rem 1.4rem; border-radius:.2rem; font:inherit;
   font-weight:750; cursor:pointer; }
 .search-controls button:hover,.button-primary:hover { background:var(--green-deep); }
-button:disabled, button[aria-disabled="true"] { opacity:.6; cursor:progress; }
+button:disabled { opacity:.6; cursor:progress; }
+/* Keep the label readable while this keyboard-focusable button is busy.
+   The live status text describes progress; do not fade the whole button. */
+button[aria-disabled="true"] { background:var(--green-deep); opacity:1; cursor:progress; }
 .interface-status { color:var(--muted); font-size:.87rem; margin:1rem 0; }
 .interface-status[data-kind="error"] { color:#8b371d; font-weight:650; }
 .home-results:not(:has(li)) { display:none; }
