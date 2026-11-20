@@ -32,8 +32,8 @@ try {
       .waitFor({state:'attached'});
     assert.ok(!requested.some(url => /cnpjs\.parquet|\.wasm(?:[?#]|$)/i.test(url)),
       'home numérica não deve ler Parquet nem carregar WASM');
-    assert.equal(requested.filter(url => url.includes('/js/duckdb-runtime.mjs')).length,0,
-      'não carregar DuckDB JS na navegação Protobuf');
+    assert.equal(requested.filter(url => /\/js\/(?:duckdb-runtime|dataset)\.mjs/.test(url)).length,0,
+      'não carregar módulos analíticos JS na navegação Protobuf');
     results.push({name:'Home CNPJ numérico → ficha Protobuf, zero Parquet/WASM',
       requests:requested.length, status:'PASS'});
   } finally {await homePage.close();}
