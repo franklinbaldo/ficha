@@ -32,6 +32,7 @@ if (siteMode === 'ssg') {
         throw new Error(`Home SSG: conteúdo de ${pageWidth}px excede viewport de ${viewport.width}px`);
       }
     }
+    await page.locator('footer #ssg-search-btn').waitFor({ state: 'visible' });
     await page.screenshot({ path: `${outputDir}/home-desktop.png`, fullPage: true });
     await page.setViewportSize({ width: 390, height: 844 });
   } else {
