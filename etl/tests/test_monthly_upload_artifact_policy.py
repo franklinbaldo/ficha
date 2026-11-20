@@ -177,7 +177,10 @@ class TestMonthlyUploadArtifactPolicy(unittest.TestCase):
         guard_header = f"      - name: {GUARD_NAME}\n        shell: bash\n"
         mutations = {
             "skipped_guard": (guard_header, guard_header + "        if: false\n"),
-            "ignored_guard_error": (guard_header, guard_header + "        continue-on-error: true\n"),
+            "ignored_guard_error": (
+                guard_header,
+                guard_header + "        continue-on-error: true\n",
+            ),
             "disabled_bash_check": ('if [ ! -s "$file" ]; then', "if false; then"),
             "path_traversal": (
                 f"          path: etl/.cache/{MONTH_EXPR}/metrics/transform_metrics.json",
