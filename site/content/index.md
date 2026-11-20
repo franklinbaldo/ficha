@@ -14,7 +14,6 @@ layout: index
     <h1 id="hero-title">Consulte empresas e seu <em>histórico cadastral.</em></h1>
     <p class="lede">Abra a ficha de um estabelecimento pelo CNPJ e compare seus registros em diferentes meses.</p>
   </div>
-
   <div class="hero-layout">
     <div class="hero-search">
       <form id="busca-form" role="search" aria-labelledby="busca-titulo">
@@ -45,7 +44,6 @@ layout: index
         <p>A página História compara CNPJs numéricos entre competências com Protobuf v1. Consulte as <a href="https://github.com/franklinbaldo/ficha/issues/208">evidências de funcionamento</a>.</p>
       </details>
     </div>
-
     <aside class="hero-bottom" aria-labelledby="referencia-titulo">
       <p class="eyebrow">Referência do catálogo</p>
       <h2 id="referencia-titulo">Competência atual</h2>
