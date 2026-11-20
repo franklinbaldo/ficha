@@ -9,7 +9,6 @@ This does NOT prove that the real RFB bytes or IA SDK retries are pinned.
 from __future__ import annotations
 
 import argparse
-import json
 from pathlib import Path
 from types import SimpleNamespace
 
