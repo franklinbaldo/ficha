@@ -65,6 +65,11 @@ export function mountSearch({
   // interactive child of the live status region. Older test hosts may omit it.
   const showRecovery = visible => { if (recovery) recovery.hidden = !visible; };
   showRecovery(false);
+  // The live status announces that a keyboard-accessible recovery link exists
+  // below it; the link itself stays outside the live region.
+  const recoveryGuidance = recovery
+    ? ' Esta falha não comprova ausência cadastral. Consulte o Acervo pelo link abaixo.'
+    : '';
   // Completed feedback belongs to the previous term. During an in-flight
   // request, notify on the first edit only: repeated live-region updates
   // would announce the same message at each keystroke.
@@ -161,7 +166,7 @@ export function mountSearch({
       }
       if (!session) {
         terminalFeedback = true;
-        setStatus('Os dados ainda não foram publicados (manifesto ausente).', 'error');
+        setStatus('Os dados ainda não foram publicados (manifesto ausente).' + recoveryGuidance, 'error');
         showRecovery(true);
         return;
       }
@@ -180,7 +185,7 @@ export function mountSearch({
     } catch (error) {
       terminalFeedback = true;
       if (stillCurrent()) {
-        setStatus('Consulta indisponível: ' + (error?.message || 'erro desconhecido'), 'error');
+        setStatus('Consulta indisponível: ' + (error?.message || 'erro desconhecido') + recoveryGuidance, 'error');
         showRecovery(true);
       } else {
         setStatus(discardedMessage);
