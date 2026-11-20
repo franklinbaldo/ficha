@@ -114,7 +114,10 @@ def _assert_guard_shell(run: str, candidate_paths: tuple[str, ...]) -> None:
                 check=False,
             )
             if defect is None:
-                _require(result.returncode == 0, f"complete candidate rejected: {result.stderr}")
+                _require(
+                    result.returncode == 0,
+                    f"complete candidate rejected (rc={result.returncode}): {result.stdout!r}; {result.stderr!r}",
+                )
             else:
                 _require(
                     result.returncode != 0,
@@ -198,9 +201,13 @@ class TestMonthlyUploadArtifactPolicy(unittest.TestCase):
                     _assert_artifact_policy(mutant)
 
     def test_required_upload_cannot_turn_into_warning(self) -> None:
-        before = "          name: production-descriptor-" + MONTH_EXPR + "\n" + (
-            "          path: etl/.cache/" + MONTH_EXPR + "/production-descriptor.json\n"
-        ) + "          if-no-files-found: error"
+        before = (
+            "          name: production-descriptor-"
+            + MONTH_EXPR
+            + "\n"
+            + ("          path: etl/.cache/" + MONTH_EXPR + "/production-descriptor.json\n")
+            + "          if-no-files-found: error"
+        )
         mutant = _replace_one(
             self.workflow,
             before,
