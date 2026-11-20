@@ -1,11 +1,10 @@
 """Testes para ficha_etl.upload (ia.upload mockado)."""
 
 import zipfile
-
-import httpx
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
 
 from ficha_etl import upload as upload_mod
