@@ -22,6 +22,13 @@ test('home com formulário, módulo real e limites da busca legada', async () =>
     assert.doesNotMatch(html, /<form|<script|astro-island|svelte|\/views\//i);
   }
 });
+test('home só importa dataset no caminho analítico, não em CNPJ numérico', async () => {
+  const source = await read('../static/js/search-app.mjs');
+  assert.doesNotMatch(source, /^import[^\n]+from ['"]\.\/dataset\.mjs['"];?$/m);
+  assert.match(source, /fetchDataset = async \(\) => \(await import\('\.\/dataset\.mjs'\)\)\.fetchCurrentDataset\(\)/);
+  assert.match(source, /probeRange = async args => \(await import\('\.\/dataset\.mjs'\)\)\.probeParquetRange\(args\)/);
+});
+
 test('sobre informa camadas sem prometer disponibilidade live', async () => {
   const about = await read('../content/sobre.md');
   assert.match(about, /DuckDB-WASM/);
