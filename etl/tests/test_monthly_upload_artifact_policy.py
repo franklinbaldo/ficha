@@ -214,8 +214,7 @@ def _assert_artifact_policy(source: str) -> None:
     # gating and allow egress without a durable pre-PUT receipt.
     shard_steps = jobs["shards"]["steps"]
     _require(
-        tuple((step.get("name"), step.get("uses")) for step in shard_steps)
-        == EXPECTED_SHARD_STEPS,
+        tuple((step.get("name"), step.get("uses")) for step in shard_steps) == EXPECTED_SHARD_STEPS,
         "shards step inventory changed; review all new egress paths",
     )
     for step in shard_steps:
@@ -331,7 +330,9 @@ class TestMonthlyUploadArtifactPolicy(unittest.TestCase):
     def test_early_second_submit_cannot_bypass_receipt(self) -> None:
         data = yaml.safe_load(self.workflow)
         steps = data["jobs"]["shards"]["steps"]
-        receipt_at = next(i for i, step in enumerate(steps) if step.get("name") == SHARD_RECEIPT_NAME)
+        receipt_at = next(
+            i for i, step in enumerate(steps) if step.get("name") == SHARD_RECEIPT_NAME
+        )
         steps.insert(
             receipt_at,
             {
@@ -356,7 +357,9 @@ class TestMonthlyUploadArtifactPolicy(unittest.TestCase):
                     prepare = next(
                         step for step in steps if step.get("name", "").startswith("Produce shard")
                     )
-                    prepare["run"] += "\n" + "uv run python -m ficha_etl.monthly_sharded submit-shard"
+                    prepare["run"] += (
+                        "\n" + "uv run python -m ficha_etl.monthly_sharded submit-shard"
+                    )
                 else:
                     steps.insert(submit_at, {"uses": "malicious/action@v1"})
                 with self.assertRaises(AssertionError):
