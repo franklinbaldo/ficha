@@ -135,3 +135,14 @@ test('README SSG explicita lookup adicional e limite de versão do wire', async 
   assert.match(readme, /issuecomment-7032628482/);
   assert.doesNotMatch(readme, /somente um membro Protobuf v1/);
 });
+
+test('História documenta amostra pública independente sem prometer completude', async () => {
+  const historia = await read('../content/historia.md');
+  assert.match(historia, /issuecomment-7033212714/);
+  assert.match(historia, /quatro comparações numéricas concluídas/);
+  assert.match(historia, /2026-06 e 2026-07/);
+  assert.match(historia, /cada uma com 13 campos/);
+  assert.match(historia, /sem requisições a Parquet ou WASM/);
+  assert.match(historia, /não um teste de todas as competências/);
+  assert.match(historia, /não há fallback para Parquet/);
+});
