@@ -93,6 +93,8 @@ test('avisos públicos não insinuam fallback alfanumérico após a História nu
     read('../content/historia.md'),
   ]);
   assert.match(home, /História compara CNPJs numéricos entre competências com Protobuf v1/);
+  assert.match(home, /CNPJs alfanuméricos e competências sem Protobuf v1 compatível não podem ser comparados/);
+  assert.match(home, /não há fallback automático para Parquet/);
   assert.match(empresa, /CNPJs alfanuméricos e competências sem essa camada não são comparáveis pela página História/);
   assert.match(empresa, /Não há fallback para Parquet/);
   assert.match(empresa, /a comparação alfanumérica ainda não está disponível/);
