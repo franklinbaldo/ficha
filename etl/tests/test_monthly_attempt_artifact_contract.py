@@ -118,7 +118,9 @@ def test_structural_mutations_are_rejected(mutant: str) -> None:
         _check_contract(changed)
 
 
-@pytest.mark.skipif(shutil.which("bash") is None, reason="Bash contract exercised on Linux CI")
+@pytest.mark.skipif(
+    os.name == "nt" or shutil.which("bash") is None, reason="Workflow Bash requires Linux runner"
+)
 @pytest.mark.parametrize(
     ("attempt", "accepted"), [("1", True), ("2", False), ("11", False), ("", False)]
 )
