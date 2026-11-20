@@ -277,6 +277,22 @@ def _catalog_raw_size(value: object, name: str) -> int:
     return size
 
 
+
+def _reject_duplicate_json_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    """Reject ambiguous JSON object keys at every nesting level."""
+    result: dict[str, object] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"duplicate JSON key: {key!r}")
+        result[key] = value
+    return result
+
+
+def _reject_nonfinite_json_constant(value: str) -> object:
+    """Python's permissive JSON parser otherwise accepts NaN/Infinity."""
+    raise ValueError(f"non-finite JSON constant: {value}")
+
+
 def _existing_raw_files_on_ia(identifier: str) -> set[str]:
     """Return raw names with unambiguous positive sizes in the IA catalog.
 
@@ -304,7 +320,10 @@ def _existing_raw_files_on_ia(identifier: str) -> set[str]:
         raise RuntimeError(f"IA raw metadata: fetch failed for {identifier}") from exc
 
     try:
-        data = resp.json()
+        data = resp.json(
+            object_pairs_hook=_reject_duplicate_json_keys,
+            parse_constant=_reject_nonfinite_json_constant,
+        )
     except ValueError as exc:
         raise RuntimeError(f"IA raw metadata: invalid JSON for {identifier}") from exc
 
