@@ -148,19 +148,31 @@ export async function mountHistory(doc,{loadManifest=fetchManifest,lookup=fetchH
       return;
     }
     const start=from.value, end=to.value;
-    if(start===end){status(state,'Selecione duas competências diferentes.',true);selection.markTerminal();return;}
-    if(start>end){status(state,'A competência inicial deve ser anterior à competência final.',true);selection.markTerminal();return;}
+    if (start === end || start > end) {
+      // An invalid pair must not remain shareable from a preloaded deep link.
+      if (['cnpj', 'de', 'ate'].some(key => params().has(key))) {
+        setParams({cnpj:null,de:null,ate:null});
+      }
+      status(state, start === end
+        ? 'Selecione duas competências diferentes.'
+        : 'A competência inicial deve ser anterior à competência final.', true);
+      selection.markTerminal();
+      return;
+    }
     const version = selection.begin();
     const stillCurrent = () => selection.current(version) &&
       canonicalCnpj(input.value) === cnpj && from.value === start && to.value === end;
     const discarded = 'CNPJ ou competências alterados durante a comparação. Pesquise novamente.';
     busy = true;
     button.disabled=true;
-    status(state,'Consultando os dois snapshots de forma sequencial…');
+    status(state,'Consultando competência inicial ('+start+')…');
     try {
       const older=requireHistoryObservation(await lookup(manifest,start,cnpj));
       // Avoid a second archival GET if the user changed the requested comparison.
       if (!stillCurrent()) { status(state,discarded); return; }
+      status(state,older.state === 'absent-in-snapshot'
+        ? 'CNPJ não localizado no registro Protobuf de '+start+'. Consultando competência final ('+end+')…'
+        : 'Observação de '+start+' recebida. Consultando competência final ('+end+')…');
       const newer=requireHistoryObservation(await lookup(manifest,end,cnpj));
       if (!stillCurrent()) { status(state,discarded); return; }
       setParams({cnpj,de:start,ate:end});

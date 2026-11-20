@@ -28,6 +28,12 @@ def violations(workflow: dict, auditor: str) -> list[str]:
     errors = []
     # YAML 1.1 PyYAML resolves 'on' to the boolean key True.
     events = workflow.get("on", workflow.get(True, {}))
+    concurrency = workflow.get("concurrency")
+    if concurrency != {
+        "group": "ssg-browser-${{ github.event.pull_request.number || github.run_id }}",
+        "cancel-in-progress": "${{ github.event_name == 'pull_request' }}",
+    }:
+        errors.append("superseded PR audits cancel; manual replays stay independent")
     if set(events) != {"pull_request", "workflow_dispatch"}:
         errors.append("PR-only/manual gate; no second browser audit on main push")
     paths = set((events.get("pull_request") or {}).get("paths") or [])
@@ -36,6 +42,8 @@ def violations(workflow: dict, auditor: str) -> list[str]:
         "web/public/manifest.json",
         "web/scripts/check-accessibility.mjs",
         "web/scripts/check-greenfield.mjs",
+        "web/scripts/check-atomic-ssg.mjs",
+        "web/src/generated/company.pb.js",
         "web/package.json",
         "web/bun.lock",
         ".github/workflows/visual-capture.yml",
@@ -58,8 +66,12 @@ def violations(workflow: dict, auditor: str) -> list[str]:
     checkout = steps[0].get("with") or {}
     if checkout.get("ref") != EXPECTED_SHA or checkout.get("persist-credentials") is not False:
         errors.append("checkout must pin PR head and discard credentials")
-    if any(s.get("continue-on-error") or s.get("if") == "${{ false }}" for s in steps):
-        errors.append("no failure-masking or disabled steps")
+    if any(
+        s.get("continue-on-error")
+        or (s.get("if") is not None and s.get("name") != "Upload browser accessibility evidence")
+        for s in steps
+    ):
+        errors.append("no failure-masking or conditional mandatory steps")
     try:
         sha_step = _step(steps, "Conferir SHA do checkout")
         sha_command = 'test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"'
@@ -112,6 +124,16 @@ def violations(workflow: dict, auditor: str) -> list[str]:
             or greenfield.get("run", "") != expected_greenfield_run
         ):
             errors.append("greenfield Chromium smoke must execute and propagate failure")
+        atomic = _step(
+            steps,
+            "Exercise numeric Protobuf SSG against public IA member endpoints",
+        )
+        expected_atomic_run = (
+            "node scripts/check-atomic-ssg.mjs "
+            "http://127.0.0.1:4321/ficha/ ../accessibility-evidence"
+        )
+        if atomic.get("working-directory") != "web" or atomic.get("run", "") != expected_atomic_run:
+            errors.append("numeric Protobuf Chromium gate must propagate failure")
         upload = _step(steps, "Upload browser accessibility evidence")
         if (
             upload.get("if") != "always()"
@@ -156,6 +178,24 @@ def test_reject_mutations_that_restore_false_green() -> None:
     def mutated():
         return deepcopy(baseline)
 
+    # One PR number groups successive commits; dispatch gets a unique run ID.
+    # Any alternative must be reviewed for manual cancellation and collisions.
+    w = mutated()
+    w.pop("concurrency")
+    variants["no concurrency guard"] = w
+    for value in (True, False, "${{ github.event_name == 'workflow_dispatch' }}"):
+        w = mutated()
+        w["concurrency"]["cancel-in-progress"] = value
+        variants[f"wrong cancellation policy: {value}"] = w
+    for group in (
+        "ssg-browser-${{ github.sha }}",
+        "ssg-browser-${{ github.event.pull_request.number || github.ref }}",
+        "${{ github.event.pull_request.number || github.run_id }}",
+    ):
+        w = mutated()
+        w["concurrency"]["group"] = group
+        variants[f"wrong run grouping: {group}"] = w
+
     w = mutated()
     w.get("on", w.get(True))["pull_request"]["paths"] = ["web/**"]
     variants["old astro paths"] = w
@@ -165,6 +205,8 @@ def test_reject_mutations_that_restore_false_green() -> None:
         "web/package.json",
         "web/bun.lock",
         "web/scripts/check-greenfield.mjs",
+        "web/scripts/check-atomic-ssg.mjs",
+        "web/src/generated/company.pb.js",
     ):
         w = mutated()
         w.get("on", w.get(True))["pull_request"]["paths"].remove(missing)
@@ -226,6 +268,33 @@ def test_reject_mutations_that_restore_false_green() -> None:
         "Exercise product pages in Chromium (manifest real, no Parquet fetch)",
     )["run"] += " || true"
     variants["masked product pages Chromium"] = w
+
+    w = mutated()
+    w["jobs"]["capture"]["steps"] = [
+        step
+        for step in w["jobs"]["capture"]["steps"]
+        if step.get("name") != "Exercise numeric Protobuf SSG against public IA member endpoints"
+    ]
+    variants["no numeric Protobuf Chromium"] = w
+    for suffix in (" || true", " || echo ignored"):
+        w = mutated()
+        atomic = _step(
+            w["jobs"]["capture"]["steps"],
+            "Exercise numeric Protobuf SSG against public IA member endpoints",
+        )
+        atomic["run"] += suffix
+        variants[f"masked numeric Protobuf Chromium: {suffix}"] = w
+
+    # A conditionally skipped step can make a success-status browser gate misleading.
+    for step_name in (
+        "Build the published SSG artifact (not Astro)",
+        "Audit actual SSG home with Chromium, axe and keyboard",
+        "Exercise product pages in Chromium (manifest real, no Parquet fetch)",
+        "Exercise numeric Protobuf SSG against public IA member endpoints",
+    ):
+        w = mutated()
+        _step(w["jobs"]["capture"]["steps"], step_name)["if"] = "${{ github.event_name == 'push' }}"
+        variants[f"conditionally skipped mandatory step: {step_name}"] = w
 
     for name, variant in variants.items():
         assert violations(variant, auditor), name

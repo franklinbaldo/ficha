@@ -106,11 +106,45 @@ test('ficha e Sobre distinguem prova pública pontual de CORS da busca legada', 
   const [empresa, sobre] = await Promise.all([
     read('../content/empresa.md'), read('../content/sobre.md'),
   ]);
-  const provaPublica = /https:\/\/github\.com\/franklinbaldo\/ficha\/issues\/208#issuecomment-7030287292/;
-  assert.match(empresa, provaPublica);
-  assert.match(sobre, provaPublica);
+  assert.match(empresa, /issuecomment-7032628482/);
+  assert.match(empresa, /quatro fichas por CNPJ numérico/);
+  assert.match(empresa, /Banco do Brasil, Petrobras, Caixa e Correios/);
+  assert.match(empresa, /competência 2026-07, sem requisições Parquet\/WASM/);
+  assert.match(sobre, /issuecomment-7030287292/);
   assert.match(sobre, /busca por nome e CNPJ alfanumérico continua experimental via Parquet\/DuckDB/);
   assert.match(sobre, /CNPJ numérico completo.*Protobuf v1, sem Parquet/);
-  assert.match(empresa, /não garantem acesso contínuo/);
+  assert.match(empresa, /não garante acesso contínuo/);
   assert.doesNotMatch(sobre, /O formulário continua experimental/);
+});
+
+test('links em parágrafos HTML das páginas SSG não vazam sintaxe Markdown', async () => {
+  for (const name of ['index', 'empresa', 'historia', 'explorar', 'acervo', 'sobre']) {
+    const source = await read('../content/' + name + '.md');
+    const paragraphs = source.match(/<p\b[^>]*>[\s\S]*?<\/p>/gi) ?? [];
+    for (const paragraph of paragraphs) {
+      assert.doesNotMatch(paragraph, /\[[^\]\n]+\]\(https?:\/\/[^)\n]+\)/,
+        name + ': parágrafo HTML cru imprime links Markdown literalmente');
+    }
+  }
+});
+
+
+test('README SSG explicita lookup adicional e limite de versão do wire', async () => {
+  const readme = await read('../README.md');
+  assert.match(readme, /`lookups\.json` da mesma competência/);
+  assert.match(readme, /SHA-256 declarados desse lookup/);
+  assert.match(readme, /schema_version` ausente no manifesto/);
+  assert.match(readme, /issuecomment-7032628482/);
+  assert.doesNotMatch(readme, /somente um membro Protobuf v1/);
+});
+
+test('História documenta amostra pública independente sem prometer completude', async () => {
+  const historia = await read('../content/historia.md');
+  assert.match(historia, /issuecomment-7033212714/);
+  assert.match(historia, /quatro comparações numéricas concluídas/);
+  assert.match(historia, /2026-06 e 2026-07/);
+  assert.match(historia, /cada uma com 13 campos/);
+  assert.match(historia, /sem requisições a Parquet ou WASM/);
+  assert.match(historia, /não um teste de todas as competências/);
+  assert.match(historia, /não há fallback para Parquet/);
 });
