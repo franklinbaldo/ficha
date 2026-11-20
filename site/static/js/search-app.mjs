@@ -46,6 +46,7 @@ export function mountSearch({
   const input = documentRef.getElementById('busca-termo');
   const submit = documentRef.getElementById('busca-enviar');
   const status = documentRef.getElementById('consulta-estado');
+  const recovery = documentRef.getElementById('consulta-recuperacao');
   const list = documentRef.getElementById('consulta-lista');
   if (![form, input, submit, status, list].every(Boolean)) {
     throw new Error('Formulário de consulta SSG incompleto');
@@ -60,11 +61,16 @@ export function mountSearch({
     status.textContent = message;
     status.dataset.kind = kind;
   };
+  // The fallback link is a separate, keyboard-accessible paragraph, not an
+  // interactive child of the live status region. Older test hosts may omit it.
+  const showRecovery = visible => { if (recovery) recovery.hidden = !visible; };
+  showRecovery(false);
   // Completed feedback belongs to the previous term. During an in-flight
   // request, notify on the first edit only: repeated live-region updates
   // would announce the same message at each keystroke.
   input.addEventListener('input', () => {
     inputVersion++;
+    showRecovery(false);
     if (active) {
       if (!pendingEditAnnounced) {
         pendingEditAnnounced = true;
@@ -108,6 +114,7 @@ export function mountSearch({
   async function onSubmit(event) {
     event.preventDefault();
     if (active) return;
+    showRecovery(false);
     const term = input.value.trim();
     const plan = planCompanyQuery(term);
     if (!plan) {
@@ -155,6 +162,7 @@ export function mountSearch({
       if (!session) {
         terminalFeedback = true;
         setStatus('Os dados ainda não foram publicados (manifesto ausente).', 'error');
+        showRecovery(true);
         return;
       }
       setStatus('Consultando a base analítica…');
@@ -173,6 +181,7 @@ export function mountSearch({
       terminalFeedback = true;
       if (stillCurrent()) {
         setStatus('Consulta indisponível: ' + (error?.message || 'erro desconhecido'), 'error');
+        showRecovery(true);
       } else {
         setStatus(discardedMessage);
       }
