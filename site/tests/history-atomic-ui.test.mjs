@@ -234,6 +234,30 @@ test('estado acessível anuncia cada competência na ordem serial, sem antecipar
   });
 });
 
+test('ausência na competência inicial informa ausência apenas no PB, sem anunciar registro encontrado',async()=>{
+  await withLocation(async()=>{
+    const first=pendingObservation(),second=pendingObservation(),calls=[];
+    let announceSecond;
+    const secondStarted=new Promise(resolve=>{announceSecond=resolve;});
+    const doc=await setup(async(_m,date)=>{
+      calls.push(date);
+      if(date==='2026-07') {announceSecond();return second.promise;}
+      return first.promise;
+    });
+    const pending=submit(doc), state=doc.at('historia-estado');
+    assert.deepEqual(calls,['2026-06']);
+    first.resolve(outcome('2026-06','absent-in-snapshot'));
+    await secondStarted;
+    assert.deepEqual(calls,['2026-06','2026-07']);
+    assert.match(state.textContent,/CNPJ não localizado no registro Protobuf de 2026-06/);
+    assert.match(state.textContent,/Consultando competência final \\(2026-07\\)/);
+    assert.doesNotMatch(state.textContent,/Observação de 2026-06 recebida/);
+    second.resolve(outcome('2026-07','found'));
+    await pending;
+    assert.match(state.textContent,/Comparação incompleta/);
+  });
+});
+
 test('404 inicial nunca anuncia segunda competência nem emite segundo GET',async()=>{
   await withLocation(async()=>{
     const calls=[];
