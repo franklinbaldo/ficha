@@ -164,7 +164,9 @@ def test_raw_completion_controls_independent_upload_with_real_descriptor(
     if raw_outcome == "complete":
         cli.command_upload_outputs(output_args)
         derived_requests = [url for _, url in seen if "/raw/" not in url]
-        assert len(derived_requests) == len(cli._STANDARD_FILE_NAMES) + len(_LOOKUP_KINDS)
+        assert len(derived_requests) == (
+            len(cli._STANDARD_FILE_NAMES) + len(_LOOKUP_KINDS)
+        )
     else:
         with pytest.raises(ValueError, match="raw source upload did not complete"):
             cli.command_upload_outputs(output_args)
