@@ -36,6 +36,7 @@ def violations(workflow: dict, auditor: str) -> list[str]:
         "web/public/manifest.json",
         "web/scripts/check-accessibility.mjs",
         "web/scripts/check-greenfield.mjs",
+        "web/scripts/check-atomic-ssg.mjs",
         "web/package.json",
         "web/bun.lock",
         ".github/workflows/visual-capture.yml",
@@ -112,6 +113,19 @@ def violations(workflow: dict, auditor: str) -> list[str]:
             or greenfield.get("run", "") != expected_greenfield_run
         ):
             errors.append("greenfield Chromium smoke must execute and propagate failure")
+        atomic = _step(
+            steps,
+            "Exercise numeric Protobuf SSG against public IA member endpoints",
+        )
+        expected_atomic_run = (
+            "node scripts/check-atomic-ssg.mjs "
+            "http://127.0.0.1:4321/ficha/ ../accessibility-evidence"
+        )
+        if (
+            atomic.get("working-directory") != "web"
+            or atomic.get("run", "") != expected_atomic_run
+        ):
+            errors.append("numeric Protobuf Chromium gate must propagate failure")
         upload = _step(steps, "Upload browser accessibility evidence")
         if (
             upload.get("if") != "always()"
@@ -165,6 +179,7 @@ def test_reject_mutations_that_restore_false_green() -> None:
         "web/package.json",
         "web/bun.lock",
         "web/scripts/check-greenfield.mjs",
+        "web/scripts/check-atomic-ssg.mjs",
     ):
         w = mutated()
         w.get("on", w.get(True))["pull_request"]["paths"].remove(missing)
@@ -226,6 +241,23 @@ def test_reject_mutations_that_restore_false_green() -> None:
         "Exercise product pages in Chromium (manifest real, no Parquet fetch)",
     )["run"] += " || true"
     variants["masked product pages Chromium"] = w
+
+    w = mutated()
+    w["jobs"]["capture"]["steps"] = [
+        step
+        for step in w["jobs"]["capture"]["steps"]
+        if step.get("name")
+        != "Exercise numeric Protobuf SSG against public IA member endpoints"
+    ]
+    variants["no numeric Protobuf Chromium"] = w
+    for suffix in (" || true", " || echo ignored"):
+        w = mutated()
+        atomic = _step(
+            w["jobs"]["capture"]["steps"],
+            "Exercise numeric Protobuf SSG against public IA member endpoints",
+        )
+        atomic["run"] += suffix
+        variants[f"masked numeric Protobuf Chromium: {suffix}"] = w
 
     for name, variant in variants.items():
         assert violations(variant, auditor), name
