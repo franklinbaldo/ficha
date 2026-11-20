@@ -50,6 +50,8 @@ def _prepare(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     _write_receipt(path, _receipt())
     descriptor = _descriptor()
     cli._bind_source_receipt("2026-07", out, descriptor)
+    # The helper prepares an eligible fixture. Production starts at pending.
+    descriptor["source_attestation"]["raw_upload_status"] = "complete"
     return out, path, descriptor
 
 
@@ -181,6 +183,10 @@ def test_initial_failed_receipt_can_be_overwritten_after_gate(tmp_path: Path, mo
         cli._bind_source_receipt("2026-07", out, descriptor)
     _write_receipt(path, _receipt())
     cli._bind_source_receipt("2026-07", out, descriptor)
+    assert descriptor["source_attestation"]["raw_upload_status"] == "pending"
+    with pytest.raises(ValueError, match="raw source upload did not complete"):
+        cli._require_source_attestation("2026-07", out, descriptor)
+    descriptor["source_attestation"]["raw_upload_status"] = "complete"
     cli._require_source_attestation("2026-07", out, descriptor)
 
 
@@ -215,7 +221,9 @@ def test_produce_writes_attestation_before_first_raw_boundary(
     def raw_upload(*_args, **_kwargs):
         calls.append("raw")
         descriptor = json.loads(args.descriptor.read_text())
-        cli._require_source_attestation(args.month, args.output_dir, descriptor)
+        assert descriptor["source_attestation"]["raw_upload_status"] == "pending"
+        with pytest.raises(ValueError, match="raw source upload did not complete"):
+            cli._require_source_attestation(args.month, args.output_dir, descriptor)
         assert descriptor["source_attestation"]["run_id"] == "test:run:7"
 
     monkeypatch.setattr(cli.transform, "transform_snapshot", parsed_source)
@@ -225,7 +233,10 @@ def test_produce_writes_attestation_before_first_raw_boundary(
     monkeypatch.setattr(cli, "_require_secret", lambda name: "offline-test-only")
     monkeypatch.setattr(cli.upload, "stream_raw_zips_to_ia", raw_upload)
     cli.command_produce(args)
-    assert calls == ["transform", "key-gate", "build", "write", "raw"]
+    assert calls == ["transform", "key-gate", "build", "write", "raw", "write"]
+    persisted = json.loads(args.descriptor.read_text())
+    assert persisted["source_attestation"]["raw_upload_status"] == "complete"
+    cli._require_source_attestation(args.month, args.output_dir, persisted)
 
 
 def test_produce_invalidates_stale_success_before_extract_failure(

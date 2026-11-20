@@ -95,6 +95,8 @@ def _bind_source_receipt(month: str, output_dir: Path, descriptor: dict) -> None
         "run_id": run_id,
         "receipt_sha256": hashlib.sha256(raw).hexdigest(),
         "cnpjs_sha256": descriptor["files"]["cnpjs"]["sha256"],
+        # Written before the first raw PUT; not eligible for derived uploads yet.
+        "raw_upload_status": "pending",
     }
 
 
@@ -108,6 +110,10 @@ def _require_source_attestation(month: str, output_dir: Path, descriptor: dict) 
         or not entry["run_id"]
     ):
         raise ValueError("production descriptor lacks matching source attestation")
+    # The parsed-source receipt can be valid even if raw streaming aborted.
+    # Never authorize the independent output uploader on a pending/failed raw run.
+    if entry.get("raw_upload_status") != "complete":
+        raise ValueError("raw source upload did not complete for this descriptor")
     run_id = entry["run_id"]
     expected_run_id = _expected_source_run_id()
     if expected_run_id is not None and run_id != expected_run_id:

@@ -365,11 +365,22 @@ def command_produce(args: argparse.Namespace) -> None:
     write_production_descriptor(descriptor_path, descriptor)
 
     if not args.skip_raw_upload:
-        upload.stream_raw_zips_to_ia(
-            month,
-            access_key=_require_secret("IA_ACCESS_KEY"),
-            secret_key=_require_secret("IA_SECRET_KEY"),
-        )
+        try:
+            upload.stream_raw_zips_to_ia(
+                month,
+                access_key=_require_secret("IA_ACCESS_KEY"),
+                secret_key=_require_secret("IA_SECRET_KEY"),
+            )
+        except Exception:
+            # The descriptor may survive a partial remote raw upload, but may
+            # never authorize independent derived uploads after that failure.
+            descriptor["source_attestation"]["raw_upload_status"] = "failed"
+            write_production_descriptor(descriptor_path, descriptor)
+            raise
+        descriptor["source_attestation"]["raw_upload_status"] = "complete"
+        write_production_descriptor(descriptor_path, descriptor)
+    # --skip-raw-upload deliberately leaves the descriptor pending. A future
+    # publication requires a separately verified raw completion contract.
     print(f"production descriptor written before output upload: {descriptor_path}")
 
 
