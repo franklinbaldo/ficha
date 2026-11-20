@@ -4,7 +4,7 @@ import { readFile } from 'node:fs/promises';
 import { mountExamplePills, pickExamplePills } from '../static/js/examples.mjs';
 
 function cnpjValid(value) {
-  if (!/^\\d{14}$/.test(value)) return false;
+  if (!/^[0-9]{14}$/.test(value)) return false;
   const digits = [...value].map(Number);
   const digit = (size, weights) => {
     const remainder = digits.slice(0, size).reduce((sum, number, index) =>
