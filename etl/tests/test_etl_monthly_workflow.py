@@ -90,7 +90,10 @@ def test_production_descriptor_is_persisted_before_output_upload() -> None:
     artifact = _step("produce", "Persist production descriptor before upload")
     assert artifact["uses"].startswith("actions/upload-artifact@")
     with_block = artifact["with"]
-    assert with_block["name"] == "production-descriptor-${{ needs.resolve.outputs.month }}"
+    assert (
+        with_block["name"]
+        == "production-descriptor-${{ needs.resolve.outputs.month }}-attempt-${{ github.run_attempt }}"
+    )
     assert with_block["if-no-files-found"] == "error"
     assert with_block["retention-days"] == 90
 
@@ -100,7 +103,10 @@ def test_upload_transform_metrics_step_exists_and_runs_always() -> None:
     assert "always()" in step["if"]
     assert step["uses"].startswith("actions/upload-artifact@")
     with_block = step["with"]
-    assert with_block["name"] == "transform-metrics-${{ needs.resolve.outputs.month }}"
+    assert (
+        with_block["name"]
+        == "transform-metrics-${{ needs.resolve.outputs.month }}-attempt-${{ github.run_attempt }}"
+    )
     assert with_block["path"] == (
         "etl/.cache/${{ needs.resolve.outputs.month }}/metrics/transform_metrics.json"
     )
@@ -137,22 +143,29 @@ def test_finalize_requires_successful_shards_and_preserves_candidate_before_publ
     assert "--auto" in publish["run"]
 
 
-def test_shard_rerun_compares_receipt_before_overwriting_artifact_or_put() -> None:
+def test_shard_rerun_is_refused_before_receipt_generation_or_put() -> None:
     steps = _job("shards")["steps"]
     names = [step.get("name") for step in steps]
-    assert names.index("Restore previous receipt on job rerun") < names.index(
+    guard_name = "Refuse unproven monthly workflow attempt"
+    assert names[0] == guard_name
+    assert names.index(guard_name) < names.index(
         "Produce shard bytes and receipt — no remote write"
     )
     assert names.index("Produce shard bytes and receipt — no remote write") < names.index(
-        "Require receipt stability across attempts"
-    )
-    assert names.index("Require receipt stability across attempts") < names.index(
         "Persist shard production receipt before PUT"
     )
     assert names.index("Persist shard production receipt before PUT") < names.index(
         "Submit exactly the receipted bytes"
     )
+    assert "Restore previous receipt on job rerun" not in names
+    assert "Require receipt stability across attempts" not in names
+    guard = _step("shards", guard_name)
+    assert guard["env"]["RUN_ATTEMPT"] == "${{ github.run_attempt }}"
+    assert 'if [ "$RUN_ATTEMPT" != "1" ]; then' in guard["run"]
+    assert "exit 1" in guard["run"]
     artifact = _step("shards", "Persist shard production receipt before PUT")
-    assert artifact["with"]["overwrite"] is True
-    compare = _step("shards", "Require receipt stability across attempts")["run"]
-    assert "cmp -s" in compare
+    assert artifact["with"]["name"] == (
+        "shard-receipt-${{ matrix.prefix }}-${{ needs.resolve.outputs.month }}"
+        "-attempt-${{ github.run_attempt }}"
+    )
+    assert not artifact["with"].get("overwrite", False)

@@ -143,13 +143,40 @@ def _stream_one_zip(
     remote_name = f"raw/{spec.name}"
 
     with httpx.Client(timeout=_STREAM_TIMEOUT, follow_redirects=True) as dl:
-        with dl.stream("GET", rfb_url, auth=(rfb_token, "")) as rfb_resp:
+        with dl.stream(
+            "GET", rfb_url, auth=(rfb_token, ""), headers={"Accept-Encoding": "identity"}
+        ) as rfb_resp:
             rfb_resp.raise_for_status()
+            # raise_for_status() accepts 2xx including 206 Partial Content. No
+            # byte range was requested: uploading a partial ZIP would silently
+            # publish a truncated object with a matching Content-Length.
+            if rfb_resp.status_code != 200:
+                raise RuntimeError(
+                    f"RFB unexpected HTTP status for {spec.name}: {rfb_resp.status_code}"
+                )
+            # httpx.iter_bytes() transparently decompresses encoded HTTP bodies.
+            # A ZIP mirror must upload the identical octets whose length RFB reports.
+            content_encoding = rfb_resp.headers.get("content-encoding", "identity").strip().lower()
+            if content_encoding != "identity":
+                raise RuntimeError(
+                    f"RFB unexpected Content-Encoding for {spec.name}: {content_encoding!r}"
+                )
             content_length = rfb_resp.headers.get("content-length", "")
             if not content_length:
                 raise RuntimeError(
                     f"RFB não retornou Content-Length para {spec.name} "
                     "— streaming sem tamanho não é suportado"
+                )
+            # An empty HTTP 200 body is not an RFB ZIP, even with a valid
+            # Content-Length header. Require a positive ASCII decimal size
+            # before opening the first IA PUT.
+            if (
+                not content_length.isascii()
+                or not content_length.isdecimal()
+                or int(content_length) == 0
+            ):
+                raise RuntimeError(
+                    f"RFB invalid Content-Length for {spec.name}: {content_length!r}"
                 )
             log.info(
                 "streaming %s → IA (%.1f MB)",
@@ -159,7 +186,7 @@ def _stream_one_zip(
             _ia_s3_put(
                 identifier,
                 remote_name,
-                rfb_resp.iter_bytes(_CHUNK),
+                rfb_resp.iter_raw(_CHUNK),
                 content_length=content_length,
                 access_key=access_key,
                 secret_key=secret_key,
