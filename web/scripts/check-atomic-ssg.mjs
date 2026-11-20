@@ -187,6 +187,47 @@ try {
     await history.screenshot({path:out+'/history-mobile-keyboard-scroll.png'});
     results.push({name:'História móvel: tabela acessível por teclado',widths,status:'PASS'});
     results.push({name:'História PB real 2026-06/07',requests:visited.length,status:'PASS'});
+    // The CSS 200% text-size proxy tests reflow, not native browser zoom or
+    // VoiceOver/TalkBack. Use the real built SSG page and real comparison DOM.
+    for (const width of [320,375]) {
+      await history.setViewportSize({width,height:812});
+      await history.evaluate(() => {document.documentElement.style.fontSize='200%';});
+      const geometry=await history.evaluate(() => {
+        const root=document.documentElement;
+        const dimensions=el=>{
+          const box=el.getBoundingClientRect();
+          return {left:box.left,right:box.right,client:el.clientWidth,
+            scroll:el.scrollWidth};
+        };
+        return {viewport:root.clientWidth,pageScroll:root.scrollWidth,
+          font:getComputedStyle(root).fontSize,
+          title:dimensions(document.querySelector('main h1')),
+          timeline:dimensions(document.querySelector('#historia-competencias')),
+          controls:[...document.querySelectorAll(
+            '#historia-form input, #historia-form select, #historia-form button'
+          )].map(dimensions),
+          outside:[...document.querySelectorAll('body *')]
+            .map(el=>({tag:el.tagName,id:el.id,cls:String(el.className).slice(0,60),
+              ...dimensions(el)}))
+            .filter(r=>r.right>root.clientWidth+1).slice(0,16)};
+      });
+      await history.screenshot({path:out+'/history-css-text-200-'+width+'.png',
+        fullPage:true});
+      assert.equal(geometry.font,'32px','fonte raiz 200% esperada');
+      assert.ok(geometry.pageScroll<=geometry.viewport+1,
+        '200% CSS '+width+'px: overflow da página: '+JSON.stringify(geometry));
+      assert.ok(geometry.title.scroll<=geometry.title.client+1,
+        '200% CSS '+width+'px: título recortado: '+JSON.stringify(geometry));
+      assert.ok(geometry.timeline.right<=geometry.viewport+1,
+        '200% CSS '+width+'px: cronologia sai da tela: '+JSON.stringify(geometry));
+      assert.equal(geometry.controls.length,4,'CNPJ, duas competências e botão');
+      assert.ok(geometry.controls.every(r=>r.client>0 &&
+        r.left>=-1 && r.right<=geometry.viewport+1),
+        '200% CSS '+width+'px: controle recortado: '+JSON.stringify(geometry));
+      results.push({name:'História texto CSS 200% em '+width+'px',
+        geometry,status:'PASS'});
+      await history.evaluate(() => {document.documentElement.style.fontSize='';});
+    }
   } finally {await history.close();}
   // Unlike the preceding cases, this opens the already published GitHub Pages
   // site: an SSG PR artifact cannot prove post-merge mobile/keyboard behavior.
