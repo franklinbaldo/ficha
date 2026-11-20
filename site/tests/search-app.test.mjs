@@ -6,6 +6,7 @@ import { createDuckDBEngine } from '../static/js/duckdb-runtime.mjs';
 class Element {
   constructor(tag = '') { this.tag = tag; this.children = []; this.textContent = ''; this.attributes = {}; this.dataset = {}; }
   setAttribute(name, value) { this.attributes[name] = value; }
+  removeAttribute(name) { delete this.attributes[name]; }
   append(...nodes) { this.children.push(...nodes); }
   replaceChildren(...nodes) { this.children = nodes; }
   addEventListener(type, cb) { this[type] = cb; }
@@ -147,7 +148,7 @@ test('formulário só abre sessão com entrada válida; reutiliza DB e anuncia r
   nodes['busca-termo'].value = 'Empresa';
   await submit();
   assert.deepEqual([fetches,probed,created,attached,queried],[1,1,1,1,2]);
-  assert.equal(nodes['busca-enviar'].disabled,false);
+  assert.notEqual(nodes['busca-enviar'].disabled,true);
 });
 test('HTTP/engine indisponível é visível, busca seguinte pode repetir', async () => {
   const { nodes,doc } = mockDOM();
@@ -213,7 +214,13 @@ test('edição durante pedido pendente informa imediatamente sem apresentar resp
   });
   nodes['busca-termo'].value='00000000E08G12';
   const pending = nodes['busca-form'].submit({preventDefault() {}});
-  assert.equal(nodes['busca-enviar'].disabled,true);
+  assert.equal(nodes['busca-enviar'].attributes['aria-disabled'], 'true',
+    'busy state must be announced without removing keyboard focus');
+  assert.notEqual(nodes['busca-enviar'].disabled, true,
+    'native disabled would make the focused button lose focus in Chromium');
+  // A second submit during the pending request must not dispatch another fetch.
+  await nodes['busca-form'].submit({preventDefault() {}});
+  assert.equal(queries, 0);
   nodes['busca-termo'].value='00000000E08G13';
   nodes['busca-termo'].input();
   assert.match(nodes['consulta-estado'].textContent,/Termo alterado.*Aguarde/);
@@ -221,9 +228,11 @@ test('edição durante pedido pendente informa imediatamente sem apresentar resp
   assert.equal(nodes['consulta-lista'].children.length,0);
   resolveDataset({date:'2026-07',files:{cnpjs:{url:'https://example.org/cnpjs.parquet',size:1}}});
   await pending;
+  assert.equal(nodes['busca-enviar'].attributes['aria-disabled'], undefined,
+    'aria-disabled must clear after async completion');
   assert.equal(queries,0,'não executar SQL com parâmetro obsoleto');
   assert.match(nodes['consulta-estado'].textContent,/Termo alterado/);
-  assert.equal(nodes['busca-enviar'].disabled,false);
+  assert.notEqual(nodes['busca-enviar'].disabled,true);
 });
 
 test('DuckDB runtime usa bundle selecionado e encerra falha de instanciação', async () => {
