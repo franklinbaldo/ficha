@@ -1,4 +1,5 @@
 """Contract checks for upload-artifact hidden source paths and promotion evidence."""
+
 from pathlib import Path
 
 import pytest
@@ -9,12 +10,12 @@ WORKFLOW = Path(__file__).resolve().parents[2] / ".github/workflows/etl-monthly.
 
 def _assert_artifact_policy(source: str) -> None:
     jobs = yaml.safe_load(source)["jobs"]
-    uploads = [
-        step
-        for job in jobs.values()
-        for step in job.get("steps", [])
-        if str(step.get("uses", "")).startswith("actions/upload-artifact@")
-    ]
+    uploads = []
+    for job in jobs.values():
+        for step in job.get("steps", []):
+            if str(step.get("uses", "")).startswith("actions/upload-artifact@"):
+                uploads.append(step)
+
     assert uploads, "monthly workflow must preserve producer evidence"
     required = {
         "Persist mandatory source-bag attestation",
@@ -23,31 +24,29 @@ def _assert_artifact_policy(source: str) -> None:
     }
     assert required <= {step.get("name") for step in uploads}
 
+    prefixes = ("etl/.cache/", "etl/.publication/", "web/public/manifest.json")
     for step in uploads:
         config = step["with"]
-        assert config.get("include-hidden-files") is True, step.get("name")
+        assert config.get("include-hidden-files") is True
         paths = str(config["path"]).splitlines()
         assert paths
         for item in paths:
             path = item.strip()
-            assert path.startswith(
-                ("etl/.cache/", "etl/.publication/", "web/public/manifest.json")
-            ), (step.get("name"), path)
-            assert path.endswith(".json"), (step.get("name"), path)
-            assert not any(x in path for x in ("*", "?", "!")), (step.get("name"), path)
+            assert path.startswith(prefixes)
+            assert path.endswith(".json")
+            assert not any(x in path for x in ("*", "?", "!"))
 
     final = jobs["finalize"]["steps"]
     named = {step.get("name"): i for i, step in enumerate(final)}
-    assert (
-        named["Assert all manifest candidate files exist and are nonempty"]
-        < named["Persist exact promoted candidate and evidence"]
-        < named["Publish verified manifest"]
-    )
-    check = final[named["Assert all manifest candidate files exist and are nonempty"]]["run"]
-    candidate = next(
-        step for step in final if step.get("name") == "Persist exact promoted candidate and evidence"
-    )
-    for item in str(candidate["with"]["path"]).splitlines():
+    guard_name = "Assert all manifest candidate files exist and are nonempty"
+    artifact_name = "Persist exact promoted candidate and evidence"
+    publish_name = "Publish verified manifest"
+    assert named[guard_name] < named[artifact_name] < named[publish_name]
+
+    check = final[named[guard_name]]["run"]
+    candidate = final[named[artifact_name]]
+    paths = str(candidate["with"]["path"]).splitlines()
+    for item in paths:
         path = item.strip().replace("${{ needs.resolve.outputs.month }}", "${MONTH}")
         assert f'"{path}"' in check
     assert "set -euo pipefail" in check
