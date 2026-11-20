@@ -184,7 +184,8 @@ footer { border-top:1px solid var(--line); font-size:.82rem; color:var(--muted);
 .example-pills { display:flex; flex-wrap:wrap; gap:.45rem; }
 .example-pill { display:inline-flex; flex-direction:column; justify-content:center; min-height:2.75rem;
   padding:.4rem .65rem; background:var(--paper); border:1px solid var(--line); border-radius:.4rem;
-  color:var(--ink); text-decoration:none; font-size:.875rem; font-weight:700; line-height:1.35; }
+  color:var(--ink); text-decoration:none; font-size:.875rem; font-weight:700; line-height:1.35;
+  max-width:100%; min-width:0; overflow-wrap:anywhere; }
 .example-pill .mono { color:var(--muted); font-size:.8rem; font-weight:500; }
 .example-pill:hover { background:var(--pale); border-color:#829d90; }
 .search-limits { margin-top:1rem; }
