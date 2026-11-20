@@ -8,7 +8,7 @@ import { pathToFileURL } from 'node:url';
 // Any variation stops the shadow build; never silently overwrite RFB data.
 const expected = {
   background_color: '#ffffff',
-  description: 'Dados públicos de CNPJ por competência, preservados no Internet Archive.',
+  description: 'Dados públicos de CNPJ por competência e arquivos declarados no catálogo FICHA.',
   display: 'standalone',
   name: 'FICHA',
   orientation: 'portrait-primary',

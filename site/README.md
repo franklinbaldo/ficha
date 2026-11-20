@@ -1,7 +1,7 @@
 ---
 type: Documentation
 title: Site público do FICHA (SSG Rust)
-description: Produto público e acervo com dados por competência, preservados no Internet Archive
+description: Site público e acervo de dados de CNPJ declarados por competência, com custódia a conferir
 ---
 
 # Site público FICHA · SSG Rust
