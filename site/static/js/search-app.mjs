@@ -1,6 +1,7 @@
 import { fetchCurrentDataset, probeParquetRange } from './dataset.mjs';
 import { attachAnalyticalFiles, planCompanyQuery, queryCompanies, stripCnpj } from './query-core.mjs';
 import { createDuckDBEngine } from './duckdb-runtime.mjs';
+import { validNumericCnpj } from './atomic-record.mjs';
 
 /** Render only text nodes; public CNPJ/empresa data must never become HTML. */
 export function renderCompanies(documentRef, list, rows) {
@@ -15,7 +16,7 @@ export function renderCompanies(documentRef, list, rows) {
     const canonical = stripCnpj(String(company.cnpj ?? ''));
     // The published Protobuf-first ficha accepts numeric v1 CNPJs only.
     // Do not offer an action that rejects an alphanumeric search result.
-    if (/^\d{14}$/.test(canonical)) {
+    if (validNumericCnpj(canonical)) {
       const link = documentRef.createElement('a');
       link.href = '/ficha/empresa/?cnpj=' + encodeURIComponent(canonical);
       link.textContent = 'Abrir ficha';
@@ -121,6 +122,12 @@ export function mountSearch({
         typeof openNumericFicha === 'function') {
       list.replaceChildren();
       terminalFeedback = true;
+      // The destination already enforces RFB check digits; reject here too,
+      // before navigating to a page that must refuse the invalid input.
+      if (!validNumericCnpj(plan.param)) {
+        setStatus('CNPJ inválido: confira os dígitos verificadores.', 'error');
+        return;
+      }
       setStatus('Abrindo ficha numérica por Protobuf. A consulta continua sujeita à disponibilidade do acervo.');
       try { openNumericFicha('/ficha/empresa/?cnpj=' + encodeURIComponent(plan.param)); }
       catch (error) {
