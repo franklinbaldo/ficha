@@ -28,8 +28,12 @@ try {
         url.searchParams.get('cnpj') === '33000167000101', {timeout:15000}),
       homePage.locator('#busca-enviar').click({noWaitAfter:true}),
     ]);
+    await homePage.locator('#empresa-competencia option[value="2026-07"]')
+      .waitFor({state:'attached'});
     assert.ok(!requested.some(url => /cnpjs\.parquet|\.wasm(?:[?#]|$)/i.test(url)),
       'home numérica não deve ler Parquet nem carregar WASM');
+    assert.equal(requested.filter(url => url.includes('/js/duckdb-runtime.mjs')).length,0,
+      'home numérica e ficha não devem importar DuckDB JS');
     results.push({name:'Home CNPJ numérico → ficha Protobuf, zero Parquet/WASM',
       requests:requested.length, status:'PASS'});
   } finally {await homePage.close();}
@@ -37,8 +41,11 @@ try {
     const page = await browser.newPage({serviceWorkers:'block'});
     try {
       const visited = [];
+      const runtimeLoads = [];
       page.on('request',request=>{
-        if(request.url().includes('archive.org/download/')) visited.push(request.url());
+        const url=request.url();
+        if(url.includes('archive.org/download/')) visited.push(url);
+        if(url.includes('/js/duckdb-runtime.mjs')) runtimeLoads.push(url);
       });
       await page.goto(base+'empresa/',{waitUntil:'domcontentloaded'});
       await page.locator('#empresa-competencia option[value="2026-07"]').waitFor({state:'attached'});
@@ -61,6 +68,8 @@ try {
         'lookup remoto não observado');
       assert.ok(!visited.some(url=>url.includes('.parquet')),
         'não pode carregar Parquet na ficha numérica');
+      assert.equal(runtimeLoads.length,0,
+        'ficha Protobuf não deve importar DuckDB JS');
       results.push({name,cnpj,state:'found',requests:visited.length,status:'PASS'});
     } finally {await page.close();}
   }
@@ -156,8 +165,11 @@ try {
   const history = await browser.newPage({serviceWorkers:'block'});
   try {
     const visited=[];
+    const runtimeLoads=[];
     history.on('request',r=>{
-      if(r.url().includes('archive.org/download/'))visited.push(r.url());
+      const url=r.url();
+      if(url.includes('archive.org/download/'))visited.push(url);
+      if(url.includes('/js/duckdb-runtime.mjs'))runtimeLoads.push(url);
     });
     await history.goto(base+'historia/',{waitUntil:'domcontentloaded'});
     await history.locator('#historia-inicio option[value="2026-06"]').waitFor({state:'attached'});
@@ -179,6 +191,8 @@ try {
       'membros Protobuf das duas competências ausentes');
     assert.ok(!visited.some(url=>/\.parquet|\.wasm/.test(url)),
       'a comparação numérica não deve invocar Parquet ou WASM');
+    assert.equal(runtimeLoads.length,0,
+      'história Protobuf não deve importar DuckDB JS');
     // Audit the rendered result, not a synthetic accessibility fixture.
     // At mobile width the three-column table must stay readable by scrolling
     // within a labelled, keyboard-focusable region, preserving native headers.
