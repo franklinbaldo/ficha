@@ -46,10 +46,16 @@ const axeResult = await page.evaluate(async () => window.axe.run(document, {
 }));
 const serious = axeResult.violations.filter((item) => ['serious', 'critical'].includes(item.impact));
 
-const interactiveSelector = 'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+const interactiveSelector = 'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), summary, [tabindex]:not([tabindex="-1"])';
 const expectedControls = await page.evaluate((selector) => {
   return [...document.querySelectorAll(selector)]
     .filter((el) => {
+      // Descendants of a closed <details> are not in the tab sequence, even if
+      // getBoundingClientRect() reports a box. The owning summary remains focusable.
+      const closedDetails = el.closest('details:not([open])');
+      if (closedDetails && !(el.tagName === 'SUMMARY' && el.parentElement === closedDetails)) {
+        return false;
+      }
       const style = getComputedStyle(el);
       const rect = el.getBoundingClientRect();
       return style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0 && rect.height > 0;
