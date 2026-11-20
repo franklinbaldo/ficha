@@ -195,3 +195,66 @@ test('CORS/Range indisponível impede iniciar WASM e permite nova tentativa', as
   assert.deepEqual([created,probes],[1,2], 'recuperação sem cachear falha');
   assert.match(nodes['consulta-estado'].textContent,/nenhum resultado/);
 });
+
+
+test('home encaminha somente CNPJ numérico exato à ficha PB, sem abrir Parquet/WASM', async () => {
+  const {nodes,doc} = mockDOM();
+  const routes=[], queries=[];
+  let fetched=0, probed=0, engines=0;
+  mountSearch({
+    documentRef:doc,
+    openNumericFicha:url=>routes.push(url),
+    fetchDataset:async()=>{fetched++;return {date:'2026-07',
+      files:{cnpjs:{url:'https://example.org/cnpjs.parquet',size:1}}};},
+    probeRange:async()=>{probed++;},
+    createEngine:async()=>{engines++;return {db:{},duckdb:{}};},
+    attach:async()=>{},
+    query:async(_,term)=>{queries.push(term);return [{cnpj:term,razao_social:'Empresa'}];},
+  });
+  const submit=()=>nodes['busca-form'].submit({preventDefault() {}});
+  nodes['busca-termo'].value='11.222.333/0001-81';
+  await submit();
+  assert.deepEqual(routes,['/ficha/empresa/?cnpj=11222333000181']);
+  assert.deepEqual([fetched,probed,engines,queries.length],[0,0,0,0],
+    'número completo não toca na origem Parquet nem em WASM');
+  assert.equal(nodes['consulta-lista'].children.length,0);
+  assert.match(nodes['consulta-estado'].textContent,/Protobuf/);
+  assert.equal(nodes['busca-enviar'].disabled,undefined,'navegação não deixa o botão bloqueado');
+
+  // The existing analytics route is still used for alphanumeric CNPJ and names:
+  // never misroute these into a numeric-only PB v1 decoder.
+  nodes['busca-termo'].value='00.000.000/E08G-12';
+  await submit();
+  assert.deepEqual(routes,['/ficha/empresa/?cnpj=11222333000181']);
+  assert.deepEqual(queries,['00.000.000/E08G-12']);
+  nodes['busca-termo'].value='PETROBRAS';
+  await submit();
+  assert.deepEqual(queries,['00.000.000/E08G-12','PETROBRAS']);
+  assert.deepEqual([fetched,probed,engines],[1,1,1]);
+});
+
+test('home numérica não mascara erro de navegação, nem contamina consulta subsequente', async () => {
+  const {nodes,doc}=mockDOM();
+  let fetches=0;
+  mountSearch({documentRef:doc,
+    openNumericFicha:()=>{throw new Error('navegação recusada');},
+    fetchDataset:async()=>{fetches++;throw new Error('CORS');},
+  });
+  nodes['busca-termo'].value='11222333000181';
+  await nodes['busca-form'].submit({preventDefault() {}});
+  assert.match(nodes['consulta-estado'].textContent,/navegação recusada/);
+  assert.equal(nodes['consulta-estado'].dataset.kind,'error');
+  assert.equal(fetches,0);
+  nodes['busca-termo'].value='EMPRESA';
+  nodes['busca-termo'].input();
+  assert.match(nodes['consulta-estado'].textContent,/Termo alterado/);
+  await nodes['busca-form'].submit({preventDefault() {}});
+  assert.equal(fetches,1,'a busca por nome mantém caminho de falha CORS');
+  assert.match(nodes['consulta-estado'].textContent,/CORS/);
+});
+
+test('boot da home ativa explicitamente a rota numérica Protobuf', async () => {
+  const {readFile} = await import('node:fs/promises');
+  const boot = await readFile(new URL('../static/js/boot.mjs',import.meta.url),'utf8');
+  assert.match(boot,/openNumericFicha:\s*url\s*=>\s*globalThis\.location\.assign\(url\)/);
+});
