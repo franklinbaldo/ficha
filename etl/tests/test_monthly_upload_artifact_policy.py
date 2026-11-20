@@ -69,6 +69,20 @@ EXPECTED_UPLOADS = {
         None,
     ),
 }
+# Closed inventory: a second step can PUT before the named receipt gate even
+# when the canonical submit remains untouched. Changes require explicit review.
+EXPECTED_SHARD_STEPS = (
+    ("Refuse unproven monthly workflow attempt", None),
+    (None, "actions/checkout@v4"),
+    (None, "astral-sh/setup-uv@v3"),
+    (None, None),  # uv python install
+    (None, None),  # uv sync
+    (None, "actions/download-artifact@v4"),
+    ("Produce shard bytes and receipt — no remote write", None),
+    ("Persist shard production receipt before PUT", "actions/upload-artifact@v4"),
+    ("Submit exactly the receipted bytes", None),
+    ("Preserve submit result", "actions/upload-artifact@v4"),
+)
 GUARD_NAME = "Assert all manifest candidate files exist and are nonempty"
 CANDIDATE_NAME = "Persist exact promoted candidate and evidence"
 PUBLISH_NAME = "Publish verified manifest"
@@ -199,6 +213,17 @@ def _assert_artifact_policy(source: str) -> None:
     # submit (notably if: always()) would bypass GitHub's default success()
     # gating and allow egress without a durable pre-PUT receipt.
     shard_steps = jobs["shards"]["steps"]
+    _require(
+        tuple((step.get("name"), step.get("uses")) for step in shard_steps)
+        == EXPECTED_SHARD_STEPS,
+        "shards step inventory changed; review all new egress paths",
+    )
+    for step in shard_steps:
+        if step.get("name") != SHARD_SUBMIT_NAME:
+            _require(
+                "submit-shard" not in str(step.get("run", "")),
+                "submit-shard appears outside the authorized submit step",
+            )
     shard_names = [step.get("name") for step in shard_steps]
     for name in (SHARD_RECEIPT_NAME, SHARD_SUBMIT_NAME):
         _require(shard_names.count(name) == 1, f"missing or duplicate shard step: {name}")
@@ -302,6 +327,40 @@ class TestMonthlyUploadArtifactPolicy(unittest.TestCase):
                 mutant = yaml.safe_dump(data, sort_keys=False)
                 with self.assertRaises(AssertionError):
                     _assert_artifact_policy(mutant)
+
+    def test_early_second_submit_cannot_bypass_receipt(self) -> None:
+        data = yaml.safe_load(self.workflow)
+        steps = data["jobs"]["shards"]["steps"]
+        receipt_at = next(i for i, step in enumerate(steps) if step.get("name") == SHARD_RECEIPT_NAME)
+        steps.insert(
+            receipt_at,
+            {
+                "name": "Early unreceipted submit (mutation only)",
+                "run": "\n".join(EXPECTED_SHARD_SUBMIT_RUN),
+            },
+        )
+        with self.assertRaises(AssertionError):
+            _assert_artifact_policy(yaml.safe_dump(data, sort_keys=False))
+
+    def test_other_shard_steps_cannot_gain_submit_or_extra_egress(self) -> None:
+        for label in ("post_receipt_step", "prepare_step_submit", "extra_action"):
+            with self.subTest(mutant=label):
+                data = yaml.safe_load(self.workflow)
+                steps = data["jobs"]["shards"]["steps"]
+                submit_at = next(
+                    i for i, step in enumerate(steps) if step.get("name") == SHARD_SUBMIT_NAME
+                )
+                if label == "post_receipt_step":
+                    steps.insert(submit_at, {"name": "Hidden second submit", "run": "submit-shard"})
+                elif label == "prepare_step_submit":
+                    prepare = next(
+                        step for step in steps if step.get("name", "").startswith("Produce shard")
+                    )
+                    prepare["run"] += "\n" + "uv run python -m ficha_etl.monthly_sharded submit-shard"
+                else:
+                    steps.insert(submit_at, {"uses": "malicious/action@v1"})
+                with self.assertRaises(AssertionError):
+                    _assert_artifact_policy(yaml.safe_dump(data, sort_keys=False))
 
     def test_submit_runner_and_inherited_shell_remain_fail_closed(self) -> None:
         for label in ("workflow_python", "job_python", "windows", "ignored_shards_failure"):
