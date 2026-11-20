@@ -154,7 +154,9 @@ export function mountSearch({
     active = true;
     terminalFeedback = false;
     pendingEditAnnounced = false;
-    submit.disabled = true;
+    // Keep the submit button focusable while busy. `disabled` would drop keyboard
+    // focus to BODY in Chromium; the `active` guard still suppresses duplicate work.
+    submit.setAttribute('aria-disabled', 'true');
     list.replaceChildren(); // never leave stale results visible during failures
     setStatus('Preparando consulta à competência publicada…');
     try {
@@ -193,7 +195,7 @@ export function mountSearch({
     } finally {
       active = false;
       pendingEditAnnounced = false;
-      submit.disabled = false;
+      submit.removeAttribute('aria-disabled');
     }
   }
   form.addEventListener('submit', onSubmit);
