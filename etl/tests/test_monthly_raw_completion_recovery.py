@@ -32,8 +32,7 @@ def _local_outputs(output_dir: Path) -> None:
                 rows = 10 if name == "cnpjs.parquet" else 1
                 literal = str(target).replace("'", "''")
                 connection.execute(
-                    f"COPY (SELECT n FROM range({rows}) t(n)) "
-                    f"TO '{literal}' (FORMAT PARQUET)"
+                    f"COPY (SELECT n FROM range({rows}) t(n)) TO '{literal}' (FORMAT PARQUET)"
                 )
             else:
                 target.write_text("{}", encoding="utf-8")
