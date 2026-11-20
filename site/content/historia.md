@@ -11,8 +11,8 @@ layout: product
 <section class="page-lead">
   <p class="eyebrow">02 / TEMPO</p>
   <h1>O tempo deixa registros.</h1>
-  <p class="lede">As competências preservadas mostram observações cadastrais de momentos distintos. A comparação de CNPJ numérico entre competências com Protobuf v1 utiliza arquivos arquivados menores. CNPJs alfanuméricos e meses sem essa camada ainda dependem da rota analítica experimental. Diferenças entre arquivos não determinam a data exata de uma alteração.</p>
-  <p class="fineprint notice"><strong>Comparação sujeita a indisponibilidade.</strong> A rota numérica Protobuf não exige Parquet, mas pode falhar por arquivo ausente ou rede. A comparação legada por Parquet continua bloqueada por CORS no teste de 19/11/2026. Isso não demonstra ausência de registros. Os <a href="/ficha/acervo/">arquivos e competências declarados</a> continuam documentados, mesmo quando a consulta no navegador falha. <a href="https://github.com/franklinbaldo/ficha/issues/208">Consulte o diagnóstico</a>.</p>
+  <p class="lede">As competências preservadas mostram observações cadastrais de momentos distintos. A comparação de CNPJ numérico entre competências com Protobuf v1 utiliza arquivos arquivados menores. CNPJs alfanuméricos e meses sem essa camada não são comparáveis por esta interface; não há fallback para Parquet. Diferenças entre arquivos não determinam a data exata de uma alteração.</p>
+  <p class="fineprint notice"><strong>Comparação sujeita a indisponibilidade.</strong> A rota numérica Protobuf não exige Parquet, mas pode falhar por arquivo ausente ou rede. A comparação legada por Parquet não é acionada nesta página; seu transporte foi bloqueado por CORS no teste de 19/11/2026. Isso não demonstra ausência de registros. Os <a href="/ficha/acervo/">arquivos e competências declarados</a> continuam documentados, mesmo quando a consulta no navegador falha. <a href="https://github.com/franklinbaldo/ficha/issues/208">Consulte o diagnóstico</a>.</p>
 </section>
 <section class="workspace">
   <h2>Competências no acervo</h2>

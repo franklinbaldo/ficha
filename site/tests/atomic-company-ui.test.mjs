@@ -29,14 +29,15 @@ const manifest={current:date,snapshots:[{date,files:{}}]};
 const base={cnpj,date,source,archiveUrl:'https://archive.org/download/ficha-2026-07/companies-33.zip',
   partial:true};
 
-test('renderizador diferencia 404 inconclusivo de PB íntegro sem CNPJ',()=>{
+test('renderizador distingue 404 de ausência no PB sem alegar integridade de todo o acervo',()=>{
   const doc=documentFor(),output=new Element();
   renderCompanyRecord(doc,output,{...base,state:'artifact-unavailable',data:null,httpStatus:404});
   assert.match(treeText(output),/Arquivo indisponível/);
   assert.match(treeText(output),/Consulta inconclusiva/);
   assert.doesNotMatch(treeText(output),/Nenhum registro encontrado/);
   renderCompanyRecord(doc,output,{...base,state:'absent-in-snapshot',data:null});
-  assert.match(treeText(output),/não localizado no registro íntegro/);
+  assert.match(treeText(output),/não localizado no registro Protobuf/);
+  assert.doesNotMatch(treeText(output),/registro íntegro|integridade (?:completa|verificada)/i);
 });
 
 test('registro encontrado não atribui porte desconhecido ao enum Protobuf',()=>{

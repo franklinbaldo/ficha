@@ -100,7 +100,7 @@ test('história rejeita competência inicial posterior antes de consultar ou alt
       loadManifest: async () => manifestWithShards(),
       lookup: async () => { lookups++; throw new Error('lookup não deve ocorrer'); },
     });
-    doc.at('historia-cnpj').value = '00000000E08G12';
+    doc.at('historia-cnpj').value = '33000167000101';
     doc.at('historia-inicio').value = '2026-07';
     doc.at('historia-fim').value = '2026-06';
     const originalUrl = globalThis.location.href;
@@ -128,7 +128,7 @@ test('história preserva ordem anterior → posterior numa comparação válida'
         return { date, cnpj, state:'found', data: {razao_social:'Empresa '+date}, source: 'https://archive.org/' + date };
       },
     });
-    doc.at('historia-cnpj').value = '00000000E08G12';
+    doc.at('historia-cnpj').value = '33000167000101';
     doc.at('historia-inicio').value = '2026-06';
     doc.at('historia-fim').value = '2026-07';
     await doc.at('historia-form').listeners.get('submit')({ preventDefault() {} });
@@ -203,7 +203,7 @@ test('história interrompe segundo lookup quando a seleção muda após o primei
         throw new Error('second lookup must not run after a selection change');
       },
     });
-    doc.at('historia-cnpj').value = '00000000E08G12';
+    doc.at('historia-cnpj').value = '33000167000101';
     doc.at('historia-inicio').value = '2026-06';
     doc.at('historia-fim').value = '2026-07';
     const submit = () => doc.at('historia-form').listeners.get('submit')({ preventDefault() {} });
@@ -233,13 +233,13 @@ test('história descarta segunda resposta tardia após mudança do CNPJ', async 
         ? { date, cnpj, source: 'https://archive.org/old', state:'found', data:{razao_social:'Antiga'} }
         : new Promise(resolve => { finishNewer = resolve; }),
     });
-    doc.at('historia-cnpj').value = '00000000E08G12';
+    doc.at('historia-cnpj').value = '33000167000101';
     doc.at('historia-inicio').value = '2026-06';
     doc.at('historia-fim').value = '2026-07';
     const pending = doc.at('historia-form').listeners.get('submit')({ preventDefault() {} });
     await Promise.resolve(); // first lookup resolved; second has started
     assert.equal(typeof finishNewer, 'function');
-    doc.at('historia-cnpj').value = '00000000E08G13';
+    doc.at('historia-cnpj').value = '18236120000158';
     finishNewer({ date: '2026-07', source: 'https://archive.org/new', data: null });
     await pending;
     assert.equal(doc.at('historia-resultado').children.length, 0);
@@ -320,7 +320,7 @@ test('história: editar competência limpa link antigo mas mantém parâmetros a
         return {date,cnpj,state:'found',data:{razao_social:'Empresa '+date},source:'https://archive.org/'+date};
       },
     });
-    doc.at('historia-cnpj').value='00000000E08G12';
+    doc.at('historia-cnpj').value='33000167000101';
     doc.at('historia-inicio').value='2026-06';
     doc.at('historia-fim').value='2026-07';
     await doc.at('historia-form').listeners.get('submit')({preventDefault(){}});
@@ -350,15 +350,15 @@ test('história: edição A→B→A enquanto segunda fonte demora descarta compa
         ? {date,cnpj,state:'found',data:{razao_social:'Antiga'},source:'https://archive.org/old'}
         : new Promise(resolve=>{finishNewer=resolve;}),
     });
-    doc.at('historia-cnpj').value='00000000E08G12';
+    doc.at('historia-cnpj').value='33000167000101';
     doc.at('historia-inicio').value='2026-06';
     doc.at('historia-fim').value='2026-07';
     const pending=doc.at('historia-form').listeners.get('submit')({preventDefault(){}});
     await Promise.resolve();
     assert.equal(typeof finishNewer,'function');
-    doc.at('historia-cnpj').value='00000000E08G13';
+    doc.at('historia-cnpj').value='18236120000158';
     doc.at('historia-cnpj').listeners.get('input')();
-    doc.at('historia-cnpj').value='00000000E08G12';
+    doc.at('historia-cnpj').value='33000167000101';
     doc.at('historia-cnpj').listeners.get('input')();
     finishNewer({date:'2026-07',data:null,source:'https://archive.org/new'});
     await pending;

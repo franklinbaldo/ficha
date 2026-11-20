@@ -161,6 +161,31 @@ try {
       'membros Protobuf das duas competências ausentes');
     assert.ok(!visited.some(url=>/\.parquet|\.wasm/.test(url)),
       'a comparação numérica não deve invocar Parquet ou WASM');
+    // Audit the rendered result, not a synthetic accessibility fixture.
+    // At mobile width the three-column table must stay readable by scrolling
+    // within a labelled, keyboard-focusable region, preserving native headers.
+    await history.setViewportSize({width:375,height:812});
+    const table=history.locator('.comparison-scroll');
+    await table.waitFor({state:'visible'});
+    const widths=await table.evaluate(el=>({
+      client:el.clientWidth,scroll:el.scrollWidth,
+    }));
+    assert.ok(widths.scroll>widths.client,'a tabela móvel deve rolar sem achatar as colunas');
+    assert.equal(await table.getAttribute('role'),'region');
+    assert.match(await table.getAttribute('aria-label'),/2026-06.*2026-07/);
+    assert.equal(await table.getAttribute('tabindex'),'0');
+    assert.equal(await table.locator('table caption').count(),1);
+    assert.equal(await table.locator('thead th[scope="col"]').count(),3);
+    assert.ok(await table.locator('tbody th[scope="row"]').count()>0);
+    await table.focus();
+    assert.equal(await table.evaluate(el=>document.activeElement===el),true);
+    await history.keyboard.press('ArrowRight');
+    await history.waitForFunction(
+      ()=>document.querySelector('.comparison-scroll')?.scrollLeft>0,
+      null,{timeout:5000},
+    );
+    await history.screenshot({path:out+'/history-mobile-keyboard-scroll.png'});
+    results.push({name:'História móvel: tabela acessível por teclado',widths,status:'PASS'});
     results.push({name:'História PB real 2026-06/07',requests:visited.length,status:'PASS'});
   } finally {await history.close();}
   const missingHistory = await browser.newPage({serviceWorkers:'block'});

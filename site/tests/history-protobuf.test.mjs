@@ -86,14 +86,35 @@ test('validação CNPJ do PB é local e não deixa deep link de consulta inváli
     assert.equal(globalThis.location.search,'');
   });
 });
-test('dispatcher usa somente PB para CNPJ numérico e preserva legado para alfanumérico',async()=>{
+test('dispatcher rejeita alfa antes de acionar qualquer transporte',async()=>{
   const route=pages.fetchHistoryRecordAt;
   assert.equal(typeof route,'function');
   let atom=0,old=0;
   const deps={atomic:async()=>{atom++;return observe('2026-06');},
-    legacy:async()=>{old++;return {data:null};}};
+    legacy:async()=>{old++;throw Error('legado não deve ser acionado');}};
   const result=await route(manifest,'2026-06',numeric,deps);
   assert.equal(result.state,'found');assert.equal(atom,1);assert.equal(old,0);
-  await route(manifest,'2026-06','AB123456000158',deps);
-  assert.equal(atom,1);assert.equal(old,1);
+  await assert.rejects(route(manifest,'2026-06','AB123456000158',deps),
+    /Comparação alfanumérica ainda não disponível/);
+  assert.equal(atom,1);assert.equal(old,0);
+});
+
+test('tabela histórica tem legenda, cabeçalhos com scope e região rolável por teclado',()=> {
+  const doc=docFor(), parent=new Element('div');
+  pages.renderHistoryComparison(doc,parent,observe('2026-06'),observe('2026-07'));
+  assert.match(treeText(parent),/Pelo teclado, pressione Tab até a tabela e use as setas/);
+  const region=parent.children.find(node=>node.attributes.role==='region');
+  assert.ok(region,'a tabela está em região navegável');
+  assert.equal(region.attributes.tabindex,'0','rolagem acessível por teclado');
+  assert.match(region.attributes['aria-label'],/2026-06.*2026-07/);
+  const table=region.children.find(node=>node.tag==='table');
+  assert.ok(table);
+  assert.match(table.children.find(node=>node.tag==='caption').textContent,
+    /2026-06.*2026-07/);
+  const head=table.children.find(node=>node.tag==='thead');
+  assert.deepEqual(head.children[0].children.map(node=>[node.textContent,node.attributes.scope]),
+    [['Campo','col'],['2026-06','col'],['2026-07','col']]);
+  const body=table.children.find(node=>node.tag==='tbody');
+  assert.ok(body.children.length>0,'a tabela mantém as linhas de comparação');
+  assert.ok(body.children.every(row=>row.children[0].attributes.scope==='row'));
 });

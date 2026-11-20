@@ -133,6 +133,24 @@ test('CNPJ numérico de DV inválido não faz GET nem cria deep link histórico'
   });
 });
 
+test('alfa válido é recusado antes de GET, sem deep link e sem erro CORS',async()=>{
+  await withLocation(async()=>{
+    let lookups=0,network=0;
+    globalThis.fetch=async()=>{network++;throw Error('GET indevido');};
+    const doc=await setup(async()=>{lookups++;throw Error('lookup indevido');});
+    doc.at('historia-cnpj').value='AB123456000158';
+    globalThis.location.search='?origem=teste&cnpj=AB123456000158&de=2026-06&ate=2026-07';
+    await submit(doc);
+    assert.equal(lookups,0);
+    assert.equal(network,0);
+    assert.equal(doc.at('historia-estado').dataset.kind,'error');
+    assert.match(doc.at('historia-estado').textContent,/Comparação alfanumérica ainda não disponível/);
+    assert.doesNotMatch(doc.at('historia-estado').textContent,/CORS|rede|indisponível: Origem/);
+    assert.equal(globalThis.location.search,'?origem=teste');
+    assert.equal(doc.at('historia-resultado').children.length,0);
+  });
+});
+
 test('found sem payload não é comparação concluída e não faz segunda consulta',async()=>{
   await withLocation(async()=>{
     const calls=[];
