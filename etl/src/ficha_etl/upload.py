@@ -147,6 +147,13 @@ def _stream_one_zip(
             "GET", rfb_url, auth=(rfb_token, ""), headers={"Accept-Encoding": "identity"}
         ) as rfb_resp:
             rfb_resp.raise_for_status()
+            # raise_for_status() accepts 2xx including 206 Partial Content. No
+            # byte range was requested: uploading a partial ZIP would silently
+            # publish a truncated object with a matching Content-Length.
+            if rfb_resp.status_code != 200:
+                raise RuntimeError(
+                    f"RFB unexpected HTTP status for {spec.name}: {rfb_resp.status_code}"
+                )
             # httpx.iter_bytes() transparently decompresses encoded HTTP bodies.
             # A ZIP mirror must upload the identical octets whose length RFB reports.
             content_encoding = rfb_resp.headers.get("content-encoding", "identity").strip().lower()

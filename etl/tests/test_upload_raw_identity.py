@@ -20,7 +20,13 @@ def _zip_bytes() -> bytes:
 
 
 def _run_stream(
-    monkeypatch, *, payload: bytes, encoding: str | None, expected_put: bool, seen=None
+    monkeypatch,
+    *,
+    payload: bytes,
+    encoding: str | None,
+    expected_put: bool,
+    status: int = 200,
+    seen=None,
 ):
     if seen is None:
         seen = {}
@@ -33,7 +39,7 @@ def _run_stream(
         if encoding is not None:
             headers["Content-Encoding"] = encoding
         return httpx.Response(
-            200,
+            status,
             headers=headers,
             stream=httpx.ByteStream(payload),
             request=request,
@@ -84,3 +90,18 @@ def test_raw_zip_rejects_content_encoding_before_any_put(monkeypatch, header):
         _run_stream(monkeypatch, payload=compressed, encoding=header, expected_put=False, seen=seen)
     assert seen["put_count"] == 0
     assert seen["header"] == "identity"
+
+
+@pytest.mark.parametrize("status", [201, 206])
+def test_raw_zip_refuses_non_200_success_before_put(monkeypatch, status):
+    seen = {}
+    with pytest.raises(RuntimeError, match="unexpected HTTP status"):
+        _run_stream(
+            monkeypatch,
+            payload=_zip_bytes(),
+            encoding=None,
+            expected_put=False,
+            status=status,
+            seen=seen,
+        )
+    assert seen["put_count"] == 0
