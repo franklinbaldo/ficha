@@ -22,11 +22,28 @@ test('home com formulário, módulo real e limites da busca legada', async () =>
     assert.doesNotMatch(html, /<form|<script|astro-island|svelte|\/views\//i);
   }
 });
+test('home só importa dataset no caminho analítico, não em CNPJ numérico', async () => {
+  const source = await read('../static/js/search-app.mjs');
+  assert.doesNotMatch(source, /^import[^\n]+from ['"]\.\/dataset\.mjs['"];?$/m);
+  assert.match(source, /fetchDataset = async \(\) => \(await import\('\.\/dataset\.mjs'\)\)\.fetchCurrentDataset\(\)/);
+  assert.match(source, /probeRange = async args => \(await import\('\.\/dataset\.mjs'\)\)\.probeParquetRange\(args\)/);
+});
+
 test('sobre informa camadas sem prometer disponibilidade live', async () => {
   const about = await read('../content/sobre.md');
   assert.match(about, /DuckDB-WASM/);
   assert.match(about, /Protobuf\/ZIP/);
   assert.match(about, /não é prova de acesso remoto/);
+});
+
+test('Sobre não confunde metadados declarados com arquivos comprovadamente custodiados', async () => {
+  const sobre = await read('../content/sobre.md');
+  assert.match(sobre, /tamanhos e as contagens de linhas declarados por competência/);
+  assert.match(sobre, /não verificam a presença nem a integridade dos arquivos/);
+  assert.match(sobre, /destino de guarda indicado/);
+  assert.match(sobre, /busca experimental por Parquet e DuckDB-WASM/);
+  assert.doesNotMatch(sobre, /conjuntos realmente publicados/);
+  assert.doesNotMatch(sobre, /O projeto preserva arquivos no Internet Archive/);
 });
 
 test('aviso público distingue falha de transporte de ausência cadastral', async () => {

@@ -125,6 +125,21 @@ test('404 de membro ou ZIP é indisponibilidade, ausência só após PB íntegro
   assert.equal(absent.state,'absent-in-snapshot');
   await assert.rejects(lookup(manifest,DATE,CNPJ,{fetchImpl:mock(503)}),/HTTP 503/);
 });
+test('GET Protobuf exige HTTP 200 integral, não 201/206 decodificável',async()=>{
+  let decoded=0;
+  for (const status of [201,206]) {
+    const response = new Response(Uint8Array.of(23,42), {
+      status,headers: status===206 ? {'Content-Range':'bytes 0-1/100'} : {},
+    });
+    await assert.rejects(lookup(manifest,DATE,CNPJ,{
+      fetchImpl:async()=>response,
+      decodeCompany:()=>{decoded++;return structuredClone(company);},
+    }),new RegExp('HTTP '+status));
+  }
+  assert.equal(decoded,0,
+    'um 2xx não integral não pode ser decodificado nem declarar presença');
+});
+
 test('contagem de filiais incompatível ou não declarada nunca prova ausência',async()=>{
   for (const mutate of [
     c=>{c.qtd_estabelecimentos=3;c.estabelecimentos=[];},
