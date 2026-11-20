@@ -2,7 +2,7 @@
 type: Page
 name: FICHA
 title: FICHA — Consulte empresas e seu histórico cadastral
-description: Dados públicos de CNPJ por competência, preservados no Internet Archive.
+description: Dados públicos de CNPJ por competência e arquivos declarados no catálogo FICHA.
 language: pt-BR
 permalink: https://franklinbaldo.github.io/ficha/
 layout: index
@@ -25,6 +25,7 @@ layout: index
         <p id="busca-ajuda" class="search-help">Use um CNPJ numérico completo para abrir a ficha. A busca por nome é experimental.</p>
       </form>
       <p id="consulta-estado" role="status" aria-live="polite" class="interface-status"></p>
+      <p id="consulta-recuperacao" class="fineprint" hidden>Esta falha de consulta não comprova ausência cadastral. Você pode <a href="/ficha/acervo/">consultar os arquivos e competências declarados no acervo</a>; os links do catálogo também estão sujeitos à disponibilidade das fontes.</p>
       <div class="home-results" aria-labelledby="resultados-titulo">
         <h2 id="resultados-titulo">Resultados da consulta</h2>
         <ul class="companies" id="consulta-lista"></ul>
@@ -50,7 +51,7 @@ layout: index
       <p id="competencia">__FICHA_CURRENT_COMPETENCE__</p>
       <dl class="reference-data">
         <div><dt>Origem dos dados</dt><dd>Receita Federal</dd></div>
-        <div><dt>Preservação dos arquivos</dt><dd>Internet Archive</dd></div>
+        <div><dt>Destino de arquivamento</dt><dd>Internet Archive</dd></div>
       </dl>
       <a href="/ficha/manifest.json">Consultar manifesto JSON</a>
     </aside>

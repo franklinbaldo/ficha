@@ -46,6 +46,7 @@ export function mountSearch({
   const input = documentRef.getElementById('busca-termo');
   const submit = documentRef.getElementById('busca-enviar');
   const status = documentRef.getElementById('consulta-estado');
+  const recovery = documentRef.getElementById('consulta-recuperacao');
   const list = documentRef.getElementById('consulta-lista');
   if (![form, input, submit, status, list].every(Boolean)) {
     throw new Error('Formulário de consulta SSG incompleto');
@@ -60,11 +61,21 @@ export function mountSearch({
     status.textContent = message;
     status.dataset.kind = kind;
   };
+  // The fallback link is a separate, keyboard-accessible paragraph, not an
+  // interactive child of the live status region. Older test hosts may omit it.
+  const showRecovery = visible => { if (recovery) recovery.hidden = !visible; };
+  showRecovery(false);
+  // The live status announces that a keyboard-accessible recovery link exists
+  // below it; the link itself stays outside the live region.
+  const recoveryGuidance = recovery
+    ? ' Esta falha não comprova ausência cadastral. Consulte o Acervo pelo link abaixo.'
+    : '';
   // Completed feedback belongs to the previous term. During an in-flight
   // request, notify on the first edit only: repeated live-region updates
   // would announce the same message at each keystroke.
   input.addEventListener('input', () => {
     inputVersion++;
+    showRecovery(false);
     if (active) {
       if (!pendingEditAnnounced) {
         pendingEditAnnounced = true;
@@ -108,6 +119,7 @@ export function mountSearch({
   async function onSubmit(event) {
     event.preventDefault();
     if (active) return;
+    showRecovery(false);
     const term = input.value.trim();
     const plan = planCompanyQuery(term);
     if (!plan) {
@@ -142,7 +154,9 @@ export function mountSearch({
     active = true;
     terminalFeedback = false;
     pendingEditAnnounced = false;
-    submit.disabled = true;
+    // Keep the submit button focusable while busy. `disabled` would drop keyboard
+    // focus to BODY in Chromium; the `active` guard still suppresses duplicate work.
+    submit.setAttribute('aria-disabled', 'true');
     list.replaceChildren(); // never leave stale results visible during failures
     setStatus('Preparando consulta à competência publicada…');
     try {
@@ -154,7 +168,8 @@ export function mountSearch({
       }
       if (!session) {
         terminalFeedback = true;
-        setStatus('Os dados ainda não foram publicados (manifesto ausente).', 'error');
+        setStatus('Os dados ainda não foram publicados (manifesto ausente).' + recoveryGuidance, 'error');
+        showRecovery(true);
         return;
       }
       setStatus('Consultando a base analítica…');
@@ -172,14 +187,15 @@ export function mountSearch({
     } catch (error) {
       terminalFeedback = true;
       if (stillCurrent()) {
-        setStatus('Consulta indisponível: ' + (error?.message || 'erro desconhecido'), 'error');
+        setStatus('Consulta indisponível: ' + (error?.message || 'erro desconhecido') + recoveryGuidance, 'error');
+        showRecovery(true);
       } else {
         setStatus(discardedMessage);
       }
     } finally {
       active = false;
       pendingEditAnnounced = false;
-      submit.disabled = false;
+      submit.removeAttribute('aria-disabled');
     }
   }
   form.addEventListener('submit', onSubmit);

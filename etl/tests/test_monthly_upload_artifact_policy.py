@@ -69,9 +69,36 @@ EXPECTED_UPLOADS = {
         None,
     ),
 }
+# Closed inventory: a second step can PUT before the named receipt gate even
+# when the canonical submit remains untouched. Changes require explicit review.
+EXPECTED_SHARD_STEPS = (
+    ("Refuse unproven monthly workflow attempt", None),
+    (None, "actions/checkout@v4"),
+    (None, "astral-sh/setup-uv@v3"),
+    (None, None),  # uv python install
+    (None, None),  # uv sync
+    (None, "actions/download-artifact@v4"),
+    ("Produce shard bytes and receipt — no remote write", None),
+    ("Persist shard production receipt before PUT", "actions/upload-artifact@v4"),
+    ("Submit exactly the receipted bytes", None),
+    ("Preserve submit result", "actions/upload-artifact@v4"),
+)
 GUARD_NAME = "Assert all manifest candidate files exist and are nonempty"
 CANDIDATE_NAME = "Persist exact promoted candidate and evidence"
 PUBLISH_NAME = "Publish verified manifest"
+SHARD_RECEIPT_NAME = "Persist shard production receipt before PUT"
+SHARD_SUBMIT_NAME = "Submit exactly the receipted bytes"
+
+# Exact fail-closed shell payload. A substring match can be satisfied by echo or dead code.
+EXPECTED_SHARD_SUBMIT_RUN = (
+    "uv run python -m ficha_etl.monthly_sharded submit-shard \\",
+    '  --month "$MONTH" \\',
+    '  --prefix "$PREFIX" \\',
+    '  --descriptor ".publication/$MONTH/production-descriptor.json" \\',
+    '  --shard-path ".publication/$MONTH/shards/companies-$PREFIX.zip" \\',
+    '  --receipt ".publication/$MONTH/receipt-$PREFIX.json" \\',
+    '  --summary ".publication/$MONTH/submit-$PREFIX.json"',
+)
 
 
 def _require(condition: bool, message: str) -> None:
@@ -97,7 +124,10 @@ def _assert_guard_shell(run: str, candidate_paths: tuple[str, ...]) -> None:
     if os.name == "nt":
         return
 
-    for defect in (None, *[(kind, i) for kind in ("missing", "empty") for i in range(5)]):
+    for defect in (
+        None,
+        *[(kind, i) for kind in ("missing", "empty") for i in range(5)],
+    ):
         with tempfile.TemporaryDirectory(prefix="ficha-candidate-evidence-") as directory:
             root = Path(directory)
             workdir = root / "etl"
@@ -132,7 +162,14 @@ def _assert_guard_shell(run: str, candidate_paths: tuple[str, ...]) -> None:
 
 
 def _assert_artifact_policy(source: str) -> None:
-    jobs = yaml.safe_load(source)["jobs"]
+    data = yaml.safe_load(source)
+    _require(
+        data.get("defaults", {}).get("run", {}).get("shell") in (None, "bash"),
+        "workflow default shell must remain Bash-compatible",
+    )
+    jobs = data["jobs"]
+    _require(jobs["shards"].get("runs-on") == "ubuntu-latest", "shards must run on Linux")
+    _require("continue-on-error" not in jobs["shards"], "shards job cannot suppress failures")
     actual = {}
     for job_name, job in jobs.items():
         for step in job.get("steps", []):
@@ -149,7 +186,10 @@ def _assert_artifact_policy(source: str) -> None:
         _require(config.get("include-hidden-files") is True, f"hidden files disabled: {key}")
         _require(config.get("name") == name, f"artifact name changed: {key}")
         _require(_paths(config.get("path")) == paths, f"artifact path not allowlisted: {key}")
-        _require(config.get("if-no-files-found") == missing_policy, f"missing-file policy: {key}")
+        _require(
+            config.get("if-no-files-found") == missing_policy,
+            f"missing-file policy: {key}",
+        )
         _require(step.get("if") == condition, f"conditional upload: {key}")
         _require("continue-on-error" not in step, f"failure suppressed: {key}")
         _require("overwrite" not in config, f"immutable artifact replaced: {key}")
@@ -168,6 +208,44 @@ def _assert_artifact_policy(source: str) -> None:
     _require("continue-on-error" not in guard, "candidate guard must fail closed")
     _require(isinstance(guard.get("run"), str), "candidate guard needs an executable script")
     _assert_guard_shell(guard["run"], EXPECTED_UPLOADS[("finalize", CANDIDATE_NAME)][1])
+
+    # A failing upload-artifact MUST stop the remote PUT. A conditional
+    # submit (notably if: always()) would bypass GitHub's default success()
+    # gating and allow egress without a durable pre-PUT receipt.
+    shard_steps = jobs["shards"]["steps"]
+    _require(
+        tuple((step.get("name"), step.get("uses")) for step in shard_steps) == EXPECTED_SHARD_STEPS,
+        "shards step inventory changed; review all new egress paths",
+    )
+    for step in shard_steps:
+        if step.get("name") != SHARD_SUBMIT_NAME:
+            _require(
+                "submit-shard" not in str(step.get("run", "")),
+                "submit-shard appears outside the authorized submit step",
+            )
+    shard_names = [step.get("name") for step in shard_steps]
+    for name in (SHARD_RECEIPT_NAME, SHARD_SUBMIT_NAME):
+        _require(shard_names.count(name) == 1, f"missing or duplicate shard step: {name}")
+    _require(
+        shard_names.index(SHARD_RECEIPT_NAME) < shard_names.index(SHARD_SUBMIT_NAME),
+        "shard receipt must be persisted before remote submission",
+    )
+    submit = shard_steps[shard_names.index(SHARD_SUBMIT_NAME)]
+    _require("if" not in submit, "remote submit must use default success() gating")
+    _require("continue-on-error" not in submit, "remote submit failure must propagate")
+    _require(
+        submit.get("shell") in (None, "bash"),
+        "remote submit must use a Bash-compatible shell",
+    )
+    _require(
+        jobs["shards"].get("defaults", {}).get("run", {}).get("shell") in (None, "bash"),
+        "shards job must not override the default Bash shell",
+    )
+    run = submit.get("run")
+    _require(
+        isinstance(run, str) and run.strip() == "\n".join(EXPECTED_SHARD_SUBMIT_RUN),
+        "remote submit must retain its exact executable CLI and receipt arguments",
+    )
 
 
 def _replace_one(original: str, before: str, after: str) -> str:
@@ -206,6 +284,120 @@ class TestMonthlyUploadArtifactPolicy(unittest.TestCase):
                 mutant = _replace_one(self.workflow, before, after)
                 with self.assertRaises(AssertionError):
                     _assert_artifact_policy(mutant)
+
+    def test_remote_submit_cannot_bypass_receipt_failure(self) -> None:
+        header = f"      - name: {SHARD_SUBMIT_NAME}\n        run: |"
+        for label, insertion in (
+            ("always", "if: always()"),
+            ("ignored-submit-failure", "continue-on-error: true"),
+            ("explicit-failure", "if: failure()"),
+        ):
+            with self.subTest(mutant=label):
+                mutant = _replace_one(
+                    self.workflow,
+                    header,
+                    header.replace("        run: |", f"        {insertion}\n        run: |"),
+                )
+                with self.assertRaises(AssertionError):
+                    _assert_artifact_policy(mutant)
+
+    def test_submit_shell_is_executable_not_a_quoted_or_unreachable_reference(self) -> None:
+        for label, replacement, shell in (
+            ("echo_only", 'echo "monthly_sharded submit-shard"', None),
+            (
+                "early_exit",
+                "exit 0\n" + "\n".join(EXPECTED_SHARD_SUBMIT_RUN),
+                None,
+            ),
+            ("comment_only", "true # monthly_sharded submit-shard", None),
+            ("ignored_failure", "false || echo monthly_sharded submit-shard", None),
+            ("wrong_shell", "\n".join(EXPECTED_SHARD_SUBMIT_RUN), "python"),
+        ):
+            with self.subTest(mutant=label):
+                data = yaml.safe_load(self.workflow)
+                submit = next(
+                    step
+                    for step in data["jobs"]["shards"]["steps"]
+                    if step.get("name") == SHARD_SUBMIT_NAME
+                )
+                submit["run"] = replacement
+                if shell is not None:
+                    submit["shell"] = shell
+                mutant = yaml.safe_dump(data, sort_keys=False)
+                with self.assertRaises(AssertionError):
+                    _assert_artifact_policy(mutant)
+
+    def test_early_second_submit_cannot_bypass_receipt(self) -> None:
+        data = yaml.safe_load(self.workflow)
+        steps = data["jobs"]["shards"]["steps"]
+        receipt_at = next(
+            i for i, step in enumerate(steps) if step.get("name") == SHARD_RECEIPT_NAME
+        )
+        steps.insert(
+            receipt_at,
+            {
+                "name": "Early unreceipted submit (mutation only)",
+                "run": "\n".join(EXPECTED_SHARD_SUBMIT_RUN),
+            },
+        )
+        with self.assertRaises(AssertionError):
+            _assert_artifact_policy(yaml.safe_dump(data, sort_keys=False))
+
+    def test_other_shard_steps_cannot_gain_submit_or_extra_egress(self) -> None:
+        for label in ("post_receipt_step", "prepare_step_submit", "extra_action"):
+            with self.subTest(mutant=label):
+                data = yaml.safe_load(self.workflow)
+                steps = data["jobs"]["shards"]["steps"]
+                submit_at = next(
+                    i for i, step in enumerate(steps) if step.get("name") == SHARD_SUBMIT_NAME
+                )
+                if label == "post_receipt_step":
+                    steps.insert(submit_at, {"name": "Hidden second submit", "run": "submit-shard"})
+                elif label == "prepare_step_submit":
+                    prepare = next(
+                        step for step in steps if step.get("name", "").startswith("Produce shard")
+                    )
+                    prepare["run"] += (
+                        "\n" + "uv run python -m ficha_etl.monthly_sharded submit-shard"
+                    )
+                else:
+                    steps.insert(submit_at, {"uses": "malicious/action@v1"})
+                with self.assertRaises(AssertionError):
+                    _assert_artifact_policy(yaml.safe_dump(data, sort_keys=False))
+
+    def test_submit_runner_and_inherited_shell_remain_fail_closed(self) -> None:
+        for label in ("workflow_python", "job_python", "windows", "ignored_shards_failure"):
+            with self.subTest(mutant=label):
+                data = yaml.safe_load(self.workflow)
+                shards = data["jobs"]["shards"]
+                if label == "workflow_python":
+                    data["defaults"] = {"run": {"shell": "python"}}
+                elif label == "job_python":
+                    shards["defaults"]["run"]["shell"] = "python"
+                elif label == "windows":
+                    shards["runs-on"] = "windows-latest"
+                else:
+                    shards["continue-on-error"] = True
+                with self.assertRaises(AssertionError):
+                    _assert_artifact_policy(yaml.safe_dump(data, sort_keys=False))
+
+    def test_shard_submit_stays_after_receipt_upload(self) -> None:
+        start = f"      - name: {SHARD_RECEIPT_NAME}\n"
+        middle = f"      - name: {SHARD_SUBMIT_NAME}\n"
+        end = "      - name: Preserve submit result\n"
+        _require(
+            self.workflow.count(start)
+            == self.workflow.count(middle)
+            == self.workflow.count(end)
+            == 1,
+            "shard-order anchors changed",
+        )
+        left, rest = self.workflow.split(start, 1)
+        persist, rest = rest.split(middle, 1)
+        submit, suffix = rest.split(end, 1)
+        mutant = left + middle + submit + start + persist + end + suffix
+        with self.assertRaises(AssertionError):
+            _assert_artifact_policy(mutant)
 
     def test_required_upload_cannot_turn_into_warning(self) -> None:
         before = (

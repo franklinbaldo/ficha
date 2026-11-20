@@ -3,6 +3,8 @@
 **Status:** Accepted
 **Data:** 2026-04-27
 
+**Nota de vigência (20/11/2026):** esta ADR preserva a decisão histórica de manter `web/` e `etl/` no mesmo repositório, mas **não** descreve todos os consumidores atuais. O site público passou a usar SSG Rust em [`site/`](../../site/README.md), com leitura atômica Protobuf/`lookups.json` para CNPJ numérico; Parquet/DuckDB-WASM continua a via analítica experimental. Assim, “único contrato” abaixo se refere à arquitetura de abril de 2026, não ao estado atual: consultar as três fronteiras no [README do ETL](../../etl/README.md). A nota não atesta integridade, custódia ou disponibilidade de dados remotos.
+
 ## Contexto
 
 FICHA tem dois subprojetos com linguagens, ciclos de release e targets de deploy distintos:

@@ -16,7 +16,7 @@ const sample = () => ({
 });
 const pwa = {
   background_color: '#ffffff',
-  description: 'Dados públicos de CNPJ por competência, preservados no Internet Archive.',
+  description: 'Dados públicos de CNPJ por competência e arquivos declarados no catálogo FICHA.',
   display: 'standalone', name: 'FICHA', orientation: 'portrait-primary',
   scope: '/', short_name: null, start_url: '.', theme_color: null,
 };
