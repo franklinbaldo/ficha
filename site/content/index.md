@@ -2,7 +2,7 @@
 type: Page
 name: FICHA
 title: FICHA — Consulte empresas e seu histórico cadastral
-description: Consulte dados públicos de CNPJ por competência e os arquivos declarados no catálogo FICHA.
+description: Dados públicos de CNPJ por competência e arquivos declarados no catálogo FICHA.
 language: pt-BR
 permalink: https://franklinbaldo.github.io/ficha/
 layout: index
