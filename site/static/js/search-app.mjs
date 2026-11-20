@@ -35,6 +35,8 @@ export function mountSearch({
   createEngine = createDuckDBEngine,
   attach = attachAnalyticalFiles,
   query = queryCompanies,
+  // Opt-in navigation: an exact numeric CNPJ already has a Protobuf-first page.
+  openNumericFicha,
 } = {}) {
   const form = documentRef.getElementById('busca-form');
   const input = documentRef.getElementById('busca-termo');
@@ -103,10 +105,25 @@ export function mountSearch({
     event.preventDefault();
     if (active) return;
     const term = input.value.trim();
-    if (!planCompanyQuery(term)) {
+    const plan = planCompanyQuery(term);
+    if (!plan) {
       terminalFeedback = true;
       list.replaceChildren();
       setStatus('Informe um CNPJ completo ou ao menos três caracteres da razão social.', 'error');
+      return;
+    }
+    // The homepage's analytical Parquet origin can refuse browser CORS/Range.
+    // Numeric full CNPJs have a separate, bounded Protobuf reader on /empresa/.
+    // Keep alphanumeric CNPJs and name queries on their existing analytical path.
+    if (plan.mode === 'cnpj' && /^\d{14}$/.test(plan.param) &&
+        typeof openNumericFicha === 'function') {
+      list.replaceChildren();
+      terminalFeedback = true;
+      setStatus('Abrindo ficha numérica por Protobuf. A consulta continua sujeita à disponibilidade do acervo.');
+      try { openNumericFicha('/ficha/empresa/?cnpj=' + encodeURIComponent(plan.param)); }
+      catch (error) {
+        setStatus('Não foi possível abrir a ficha: ' + (error?.message || 'erro de navegação'), 'error');
+      }
       return;
     }
     const requestVersion = inputVersion;
