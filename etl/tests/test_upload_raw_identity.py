@@ -20,12 +20,7 @@ def _zip_bytes() -> bytes:
 
 
 def _run_stream(
-    monkeypatch,
-    *,
-    payload: bytes,
-    encoding: str | None,
-    expected_put: bool,
-    seen: dict | None = None,
+    monkeypatch, *, payload: bytes, encoding: str | None, expected_put: bool, seen=None
 ):
     if seen is None:
         seen = {}
@@ -86,8 +81,6 @@ def test_raw_zip_rejects_content_encoding_before_any_put(monkeypatch, header):
     compressed = gzip.compress(_zip_bytes())
     seen = {}
     with pytest.raises(RuntimeError, match="Content-Encoding"):
-        _run_stream(
-            monkeypatch, payload=compressed, encoding=header, expected_put=False, seen=seen
-        )
+        _run_stream(monkeypatch, payload=compressed, encoding=header, expected_put=False, seen=seen)
     assert seen["put_count"] == 0
     assert seen["header"] == "identity"
