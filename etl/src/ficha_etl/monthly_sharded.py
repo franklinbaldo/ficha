@@ -514,6 +514,7 @@ def _require_distinct_finalize_outputs(
     manifest_path: Path,
     descriptor_path: Path,
     receipts_dir: Path,
+    source_receipt: Path | None = None,
 ) -> None:
     """Reject aliasing of outputs with each other or immutable inputs.
 
@@ -533,6 +534,23 @@ def _require_distinct_finalize_outputs(
             if same_path or same_inode:
                 raise ValueError(f"finalize output paths must be distinct: {name} and {other_name}")
 
+    if source_receipt is not None:
+        # Separate immutable input artifact. Do not let a symlink or hardlink
+        # turn any output or the descriptor into this authority.
+        for name, path in paths:
+            if path.resolve() == source_receipt.resolve() or (
+                path.exists() and source_receipt.exists() and path.samefile(source_receipt)
+            ):
+                raise ValueError(f"source receipt aliases finalize {name}")
+        for prefix in PUBLIC_COMPANIES_GEOMETRY.prefixes():
+            shard_receipt = receipts_dir / f"receipt-{prefix}.json"
+            if shard_receipt.resolve() == source_receipt.resolve() or (
+                shard_receipt.exists()
+                and source_receipt.exists()
+                and shard_receipt.samefile(source_receipt)
+            ):
+                raise ValueError(f"source receipt aliases shard receipt-{prefix}")
+
     # A receipt is read-only input. Guard it before _load_all_receipts so that
     # a successful finalize cannot overwrite its own production checkpoint.
     for prefix in PUBLIC_COMPANIES_GEOMETRY.prefixes():
@@ -548,14 +566,28 @@ def _require_distinct_finalize_outputs(
 
 def command_finalize(args: argparse.Namespace) -> None:
     month = _require_month(args.month)
+    source_receipt = getattr(args, "source_receipt", None)
+    if not source_receipt:
+        raise ValueError("finalize requires --source-receipt from the producer artifact")
+    source_receipt_path = Path(source_receipt)
     _require_distinct_finalize_outputs(
         Path(args.snapshot_entry),
         Path(args.verification),
         Path(args.manifest),
         Path(args.descriptor),
         Path(args.receipts_dir),
+        source_receipt_path,
     )
     descriptor = _load_descriptor(Path(args.descriptor), month)
+    # Must be a separately transported producer receipt, validated before GET/HEAD
+    # and before building a candidate. The 100-shard gate still follows.
+    _require_source_attestation(
+        month,
+        Path(args.descriptor).parent / "output",
+        descriptor,
+        receipt_path=source_receipt_path,
+        require_run_id=True,
+    )
     pinned = materialization_inputs_from_descriptor(descriptor)
     receipts = _load_all_receipts(Path(args.receipts_dir), month)
 
@@ -616,6 +648,16 @@ def command_finalize(args: argparse.Namespace) -> None:
             )
         )
 
+    # Detect changes to the external artifact while 100 remote shards were
+    # being verified. This narrows, but does not eliminate, TOCTOU if a local
+    # adversary can replace evidence immediately after the second read.
+    _require_source_attestation(
+        month,
+        Path(args.descriptor).parent / "output",
+        descriptor,
+        receipt_path=source_receipt_path,
+        require_run_id=True,
+    )
     entry = finalize_sharded_snapshot_entry(descriptor, identities)
     snapshot_entry_path = Path(args.snapshot_entry)
     verification_path = Path(args.verification)
@@ -697,6 +739,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("finalize")
     p.add_argument("--month", required=True)
+    p.add_argument("--source-receipt", required=True)
     p.add_argument("--descriptor", required=True)
     p.add_argument("--receipts-dir", required=True)
     p.add_argument("--manifest", required=True)
