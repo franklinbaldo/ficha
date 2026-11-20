@@ -72,6 +72,8 @@ EXPECTED_UPLOADS = {
 GUARD_NAME = "Assert all manifest candidate files exist and are nonempty"
 CANDIDATE_NAME = "Persist exact promoted candidate and evidence"
 PUBLISH_NAME = "Publish verified manifest"
+SHARD_RECEIPT_NAME = "Persist shard production receipt before PUT"
+SHARD_SUBMIT_NAME = "Submit exactly the receipted bytes"
 
 
 def _require(condition: bool, message: str) -> None:
@@ -169,6 +171,26 @@ def _assert_artifact_policy(source: str) -> None:
     _require(isinstance(guard.get("run"), str), "candidate guard needs an executable script")
     _assert_guard_shell(guard["run"], EXPECTED_UPLOADS[("finalize", CANDIDATE_NAME)][1])
 
+    # A failing upload-artifact MUST stop the remote PUT. A conditional
+    # submit (notably if: always()) would bypass GitHub's default success()
+    # gating and allow egress without a durable pre-PUT receipt.
+    shard_steps = jobs["shards"]["steps"]
+    shard_names = [step.get("name") for step in shard_steps]
+    for name in (SHARD_RECEIPT_NAME, SHARD_SUBMIT_NAME):
+        _require(shard_names.count(name) == 1, f"missing or duplicate shard step: {name}")
+    _require(
+        shard_names.index(SHARD_RECEIPT_NAME) < shard_names.index(SHARD_SUBMIT_NAME),
+        "shard receipt must be persisted before remote submission",
+    )
+    submit = shard_steps[shard_names.index(SHARD_SUBMIT_NAME)]
+    _require("if" not in submit, "remote submit must use default success() gating")
+    _require("continue-on-error" not in submit, "remote submit failure must propagate")
+    _require(
+        isinstance(submit.get("run"), str)
+        and "monthly_sharded submit-shard" in submit["run"],
+        "remote submit step changed or lost its CLI invocation",
+    )
+
 
 def _replace_one(original: str, before: str, after: str) -> str:
     _require(original.count(before) == 1, f"mutation anchor changed: {before}")
@@ -206,6 +228,37 @@ class TestMonthlyUploadArtifactPolicy(unittest.TestCase):
                 mutant = _replace_one(self.workflow, before, after)
                 with self.assertRaises(AssertionError):
                     _assert_artifact_policy(mutant)
+
+    def test_remote_submit_cannot_bypass_receipt_failure(self) -> None:
+        header = f"      - name: {SHARD_SUBMIT_NAME}\n        run: |"
+        for label, insertion in (
+            ("always", "if: always()"),
+            ("ignored-submit-failure", "continue-on-error: true"),
+            ("explicit-failure", "if: failure()"),
+        ):
+            with self.subTest(mutant=label):
+                mutant = _replace_one(
+                    self.workflow,
+                    header,
+                    header.replace("        run: |", f"        {insertion}\n        run: |"),
+                )
+                with self.assertRaises(AssertionError):
+                    _assert_artifact_policy(mutant)
+
+    def test_shard_submit_stays_after_receipt_upload(self) -> None:
+        start = f"      - name: {SHARD_RECEIPT_NAME}\n"
+        middle = f"      - name: {SHARD_SUBMIT_NAME}\n"
+        end = "      - name: Preserve submit result\n"
+        _require(
+            self.workflow.count(start) == self.workflow.count(middle) == self.workflow.count(end) == 1,
+            "shard-order anchors changed",
+        )
+        left, rest = self.workflow.split(start, 1)
+        persist, rest = rest.split(middle, 1)
+        submit, suffix = rest.split(end, 1)
+        mutant = left + middle + submit + start + persist + end + suffix
+        with self.assertRaises(AssertionError):
+            _assert_artifact_policy(mutant)
 
     def test_required_upload_cannot_turn_into_warning(self) -> None:
         before = (
