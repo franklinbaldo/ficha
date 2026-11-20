@@ -182,6 +182,6 @@ test('SSG tem páginas novas com formulários e navegação, sem Astro/Svelte', 
     assert.ok(template.includes(marker),marker);
   }
   const home=await read('../content/index.md');
-  assert.ok(home.includes('Cada empresa tem'));
+  assert.ok(home.includes('Consulte empresas e seu'));
   assert.ok(home.includes('id="busca-form"'));
 });
