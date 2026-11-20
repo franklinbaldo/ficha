@@ -229,6 +229,9 @@ footer { border-top:1px solid var(--line); font-size:.82rem; color:var(--muted);
   flex:1; min-width:0; min-height:3.5rem; border:0; background:transparent;
   border-radius:999px; padding:.65rem 1.3rem; font-size:1.12rem; outline:none;
 }
+.hero-search .search-controls input:focus-visible {
+  outline:2px solid var(--focus); outline-offset:-3px;
+}
 .hero-search .search-controls button {
   width:auto; min-height:3.55rem; flex-shrink:0; padding:.7rem 1.65rem;
   border-radius:999px;
