@@ -148,8 +148,17 @@ export async function mountHistory(doc,{loadManifest=fetchManifest,lookup=fetchH
       return;
     }
     const start=from.value, end=to.value;
-    if(start===end){status(state,'Selecione duas competências diferentes.',true);selection.markTerminal();return;}
-    if(start>end){status(state,'A competência inicial deve ser anterior à competência final.',true);selection.markTerminal();return;}
+    if (start === end || start > end) {
+      // An invalid pair must not remain shareable from a preloaded deep link.
+      if (['cnpj', 'de', 'ate'].some(key => params().has(key))) {
+        setParams({cnpj:null,de:null,ate:null});
+      }
+      status(state, start === end
+        ? 'Selecione duas competências diferentes.'
+        : 'A competência inicial deve ser anterior à competência final.', true);
+      selection.markTerminal();
+      return;
+    }
     const version = selection.begin();
     const stillCurrent = () => selection.current(version) &&
       canonicalCnpj(input.value) === cnpj && from.value === start && to.value === end;

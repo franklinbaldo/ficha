@@ -180,3 +180,25 @@ test('resposta sem estado é inconclusiva e não autoriza segunda consulta',asyn
     assert.doesNotMatch(doc.at('historia-estado').textContent,/Comparação concluída/i);
   });
 });
+
+test('deep links com meses iguais ou invertidos são limpos antes de qualquer GET',async()=>{
+  await withLocation(async()=>{
+    for (const [from,to,message] of [
+      ['2026-07','2026-07',/duas competências diferentes/],
+      ['2026-07','2026-06',/inicial.*anterior.*final/],
+    ]) {
+      globalThis.location.search='?origem=teste&cnpj='+cnpj+'&de='+from+'&ate='+to;
+      let lookups=0;
+      const doc=await setup(async()=>{lookups++;throw Error('lookup indevido');});
+      doc.at('historia-inicio').value=from;
+      doc.at('historia-fim').value=to;
+      await submit(doc);
+      assert.equal(lookups,0,'datas inválidas não iniciam leitura remota');
+      assert.equal(doc.at('historia-estado').dataset.kind,'error');
+      assert.match(doc.at('historia-estado').textContent,message);
+      assert.equal(globalThis.location.search,'?origem=teste',
+        'limpar apenas os parâmetros da consulta, preservar parâmetros alheios');
+      assert.equal(doc.at('historia-resultado').children.length,0);
+    }
+  });
+});
