@@ -11,7 +11,7 @@ layout: index
 <section class="hero" aria-labelledby="hero-title">
   <p class="eyebrow">FICHÁRIO PÚBLICO · BRASIL</p>
   <h1 id="hero-title">Cada empresa tem <em>uma história.</em></h1>
-  <p class="lede">Explore o acervo público do CNPJ brasileiro, acompanhe as competências arquivadas e encontre a origem de cada informação. A busca por empresa ainda é experimental.</p>
+  <p class="lede">Encontre uma empresa pelo CNPJ e explore os registros públicos preservados ao longo do tempo.</p>
   <div class="hero-search">
     <form id="busca-form" role="search" aria-labelledby="busca-titulo">
       <label id="busca-titulo" for="busca-termo">Pesquise por CNPJ ou razão social</label>
@@ -20,12 +20,24 @@ layout: index
         <button id="busca-enviar" type="submit" aria-label="Pesquisar">Pesquisar <span aria-hidden="true">↗</span></button>
       </div>
     </form>
+    <div class="example-suggestions" aria-label="CNPJs para experimentar">
+      <span class="example-caption">Experimente um CNPJ</span>
+      <div class="example-pills" id="example-pills">
+        <a class="example-pill" data-cnpj-example href="/ficha/empresa/?cnpj=00000000000191">Banco do Brasil <span class="mono">00.000.000/0001-91</span></a>
+        <a class="example-pill" data-cnpj-example href="/ficha/empresa/?cnpj=33000167000101">Petrobras <span class="mono">33.000.167/0001-01</span></a>
+        <a class="example-pill" data-cnpj-example href="/ficha/empresa/?cnpj=00360305000104">Caixa <span class="mono">00.360.305/0001-04</span></a>
+        <a class="example-pill" data-cnpj-example href="/ficha/empresa/?cnpj=34028316000103">Correios <span class="mono">34.028.316/0001-03</span></a>
+      </div>
+      <p class="example-hint">Exemplos públicos: a ficha abre por Protobuf e depende da disponibilidade do acervo.</p>
+    </div>
     <p id="consulta-estado" role="status" aria-live="polite" class="interface-status">Digite um CNPJ completo ou ao menos três letras de uma razão social.</p>
     <div class="home-results" aria-labelledby="resultados-titulo">
       <h2 id="resultados-titulo">Resultados da consulta</h2>
       <ul class="companies" id="consulta-lista"></ul>
     </div>
-    <p class="fineprint notice"><strong>Busca experimental nesta página.</strong> Um CNPJ numérico completo informado acima abre a ficha por Protobuf, sem iniciar consulta Parquet/DuckDB na home. A ficha ainda depende do acervo remoto e pode ficar indisponível. Buscas por nome e CNPJ alfanumérico continuam no caminho analítico Parquet/DuckDB, cujo acesso remoto falhou por CORS em teste de 19/11/2026; erro de rede não significa ausência cadastral. Para consultar diretamente, <a href="/ficha/empresa/">abra a ficha numérica</a>. Essa rota independente já foi exercitada em navegador com registros reais. A busca por nome e a comparação histórica completa ainda não foram resolvidas. Em competências com Protobuf v1, a página História permite comparação experimental de CNPJs numéricos sem Parquet. CNPJs alfanuméricos e meses sem essa camada não são comparáveis nesta interface; não há fallback automático. <a href="https://github.com/franklinbaldo/ficha/issues/208">Acompanhe as evidências</a> ou <a href="/ficha/acervo/">consulte o acervo</a>.</p>
+    <details class="search-limits"><summary>Entenda a disponibilidade e os limites da busca</summary>
+      <p class="fineprint notice"><strong>Busca experimental nesta página.</strong> Um CNPJ numérico completo informado acima abre a ficha por Protobuf, sem iniciar consulta Parquet/DuckDB na home. A ficha ainda depende do acervo remoto e pode ficar indisponível. Buscas por nome e CNPJ alfanumérico continuam no caminho analítico Parquet/DuckDB, cujo acesso remoto falhou por CORS em teste de 19/11/2026; erro de rede não significa ausência cadastral. Para consultar diretamente, <a href="/ficha/empresa/">abra a ficha numérica</a>. Essa rota independente já foi exercitada em navegador com registros reais. A busca por nome e a comparação histórica completa ainda não foram resolvidas. Em competências com Protobuf v1, a página História permite comparação experimental de CNPJs numéricos sem Parquet. CNPJs alfanuméricos e meses sem essa camada não são comparáveis nesta interface; não há fallback automático. <a href="https://github.com/franklinbaldo/ficha/issues/208">Acompanhe as evidências</a> ou <a href="/ficha/acervo/">consulte o acervo</a>.</p>
+    </details>
   </div>
   <div class="hero-bottom">
     <div class="fact"><span>Competência de referência no manifesto</span><strong id="competencia">__FICHA_CURRENT_COMPETENCE__</strong></div>
