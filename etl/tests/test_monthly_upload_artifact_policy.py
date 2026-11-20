@@ -59,7 +59,7 @@ def test_monthly_uploads_preserve_explicit_hidden_evidence_and_all_candidate_pat
 
 def test_missing_hidden_files_opt_in_is_rejected() -> None:
     original = WORKFLOW.read_text(encoding="utf-8")
-    mutant = original.replace("include-hidden-files: true\n", "", 1)
+    mutant = original.replace("include-hidden-files: true", "include-hidden-files: false", 1)
     assert mutant != original
     with pytest.raises(AssertionError):
         _assert_artifact_policy(mutant)
