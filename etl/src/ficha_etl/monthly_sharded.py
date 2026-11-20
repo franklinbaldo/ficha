@@ -26,6 +26,13 @@ from typing import BinaryIO
 import internetarchive as ia
 
 from . import transform, upload
+from .monthly_source_bag_gate import _write_receipt
+from .monthly_source_authorization import (
+    _SOURCE_SCHEMA,
+    _bind_source_receipt,
+    _require_source_attestation,
+    _source_receipt_path,
+)
 from .cnpj import SHARD_BY as COMPANIES_SHARD_BY
 from .pack import SCHEMA_VERSION as COMPANIES_WIRE_VERSION
 from .manifest import (
@@ -319,6 +326,19 @@ def command_produce(args: argparse.Namespace) -> None:
     cache_dir = Path(args.cache_dir)
     descriptor_path = Path(args.descriptor)
 
+    # Even fetch/extract errors must invalidate a previous successful receipt.
+    _write_receipt(
+        _source_receipt_path(output_dir),
+        {
+            "schema": _SOURCE_SCHEMA,
+            "month": month,
+            "status": "failed",
+            "identity_level": "parsed-duckdb-source-not-zip-custody",
+            "reason": "produce has not completed source validation",
+            "parts": [],
+        },
+    )
+
     transform.transform_snapshot(
         month,
         cache_dir=cache_dir,
@@ -338,16 +358,29 @@ def command_produce(args: argparse.Namespace) -> None:
         output_dir.parent / "monthly-estabelecimento-key-gate",
     )
 
-    # Transform and key validation must both succeed before raw publication.
-    if not args.skip_raw_upload:
-        upload.stream_raw_zips_to_ia(
-            month,
-            access_key=_require_secret("IA_ACCESS_KEY"),
-            secret_key=_require_secret("IA_SECRET_KEY"),
-        )
-
+    # Bind the parsed-source witness to the descriptor before ANY first PUT.
+    # ZIP custody and retry pinning remain separate requirements under #281.
     descriptor = build_production_descriptor(month, output_dir)
+    _bind_source_receipt(month, output_dir, descriptor)
     write_production_descriptor(descriptor_path, descriptor)
+
+    if not args.skip_raw_upload:
+        try:
+            upload.stream_raw_zips_to_ia(
+                month,
+                access_key=_require_secret("IA_ACCESS_KEY"),
+                secret_key=_require_secret("IA_SECRET_KEY"),
+            )
+        except Exception:
+            # The descriptor may survive a partial remote raw upload, but may
+            # never authorize independent derived uploads after that failure.
+            descriptor["source_attestation"]["raw_upload_status"] = "failed"
+            write_production_descriptor(descriptor_path, descriptor)
+            raise
+        descriptor["source_attestation"]["raw_upload_status"] = "complete"
+        write_production_descriptor(descriptor_path, descriptor)
+    # --skip-raw-upload deliberately leaves the descriptor pending. A future
+    # publication requires a separately verified raw completion contract.
     print(f"production descriptor written before output upload: {descriptor_path}")
 
 
@@ -356,6 +389,7 @@ def command_upload_outputs(args: argparse.Namespace) -> None:
     # A separately produced snapshot must not bypass the early guard.
     _require_safe_legacy_shard_upload()
     descriptor = _load_descriptor(Path(args.descriptor), month)
+    _require_source_attestation(month, Path(args.output_dir), descriptor)
     plan = submit_outputs_fail_closed(
         month,
         Path(args.output_dir),
