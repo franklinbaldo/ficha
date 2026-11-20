@@ -36,7 +36,7 @@ async function fixture(mutator = async () => {}) {
   for (const dir of ['web/public', 'site/scripts', 'site/static/css', 'site/static/js', 'site/dist/ficha/sobre', 'site/dist/ficha/empresa']) {
     await mkdir(file(dir), { recursive: true });
   }
-  for (const jsFile of ['boot.mjs', 'search-app.mjs', 'duckdb-runtime.mjs', 'query-core.mjs',
+  for (const jsFile of ['boot.mjs', 'examples.mjs', 'search-app.mjs', 'duckdb-runtime.mjs', 'query-core.mjs',
     'dataset.mjs', 'catalog.mjs', 'record.mjs', 'pages.mjs', 'history.mjs', 'page-helpers.mjs',
     'atomic-record.mjs', 'atomic-browser.mjs']) {
     await writeFile(file('site/static/js/' + jsFile), '// mock: ' + jsFile);
@@ -76,10 +76,10 @@ test('preserva exatamente os bytes da origem no destino e anuncia a competência
   assert.doesNotMatch(html, /__FICHA_CURRENT_/);
 });
 
-test('preserva bytes de todos os doze módulos JS e do CSS SSG', async () => {
+test('preserva bytes de todos os treze módulos JS e do CSS SSG', async () => {
   const f = await fixture();
   assert.equal(run(f).status, 0);
-  for (const name of ['boot.mjs', 'search-app.mjs', 'duckdb-runtime.mjs', 'query-core.mjs',
+  for (const name of ['boot.mjs', 'examples.mjs', 'search-app.mjs', 'duckdb-runtime.mjs', 'query-core.mjs',
     'dataset.mjs', 'catalog.mjs', 'record.mjs', 'pages.mjs', 'history.mjs', 'page-helpers.mjs',
     'atomic-record.mjs', 'atomic-browser.mjs']) {
     assert.deepEqual(await readFile(f.file('site/dist/ficha/js/' + name)),
