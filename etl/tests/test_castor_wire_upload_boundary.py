@@ -266,6 +266,7 @@ def test_monthly_legacy_wire_attests_descriptor_before_raw_upload(
     monkeypatch.setattr(monthly_sharded.upload, "stream_raw_zips_to_ia", upload_after_transform)
     monkeypatch.setattr(monthly_sharded, "build_production_descriptor", build_after_upload)
     monkeypatch.setattr(monthly_sharded, "write_production_descriptor", write_last)
+
     def source_attestation(_month: str, _output: Path, descriptor: dict) -> None:
         calls.append("source-attestation")
         descriptor["source_attestation"] = {"raw_upload_status": "pending"}

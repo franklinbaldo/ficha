@@ -83,10 +83,12 @@ def test_raw_completion_controls_independent_upload_with_real_descriptor(
         verify_sample_size=10,
     )
     seen: list[tuple[str, str]] = []
+
     def receive(request: httpx.Request) -> httpx.Response:
         assert request.method == "PUT"
         seen.append((request.method, request.url.path))
         return httpx.Response(201)
+
     transport = httpx.MockTransport(receive)
 
     def transform_fixture(*_args: object, **_kwargs: object) -> None:
