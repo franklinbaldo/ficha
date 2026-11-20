@@ -57,10 +57,7 @@ def violations(workflow: dict, auditor: str) -> list[str]:
         errors.append("first step must check out source")
         return errors
     checkout = steps[0].get("with") or {}
-    if (
-        checkout.get("ref") != EXPECTED_SHA
-        or checkout.get("persist-credentials") is not False
-    ):
+    if checkout.get("ref") != EXPECTED_SHA or checkout.get("persist-credentials") is not False:
         errors.append("checkout must pin PR head and discard credentials")
     if any(s.get("continue-on-error") or s.get("if") == "${{ false }}" for s in steps):
         errors.append("no failure-masking or disabled steps")
@@ -72,11 +69,9 @@ def violations(workflow: dict, auditor: str) -> list[str]:
         ) != EXPECTED_SHA or sha_command not in sha_step.get("run", ""):
             errors.append("checkout SHA must actually be compared")
         install = _step(steps, "Install pinned SSG Rust and verify SHA-256")
-        if (
-            "f6305109e9bec5895e9c90f97a5c569c74048b3d50823d40175e15ca99c50843"
-            not in install.get("run", "")
-            or "sha256sum --check -" not in install.get("run", "")
-        ):
+        if "f6305109e9bec5895e9c90f97a5c569c74048b3d50823d40175e15ca99c50843" not in install.get(
+            "run", ""
+        ) or "sha256sum --check -" not in install.get("run", ""):
             errors.append("SSG v0.0.75 artifact must be digest pinned")
         build = _step(steps, "Build the published SSG artifact (not Astro)")
         cmd = build.get("run", "")
@@ -90,9 +85,7 @@ def violations(workflow: dict, auditor: str) -> list[str]:
         ):
             errors.append("must build and finalize the real SSG Pages artifact")
         serve = _step(steps, "Serve built Pages artifact locally")
-        if "site/dist/ficha/." not in serve.get("run", "") or "web/dist" in serve.get(
-            "run", ""
-        ):
+        if "site/dist/ficha/." not in serve.get("run", "") or "web/dist" in serve.get("run", ""):
             errors.append("must serve site/dist, not historical Astro")
         browser = _step(steps, "Install Chromium")
         if "playwright install chromium" not in browser.get("run", ""):
@@ -119,9 +112,7 @@ def violations(workflow: dict, auditor: str) -> list[str]:
             greenfield.get("working-directory") != "web"
             or greenfield.get("run", "") != expected_greenfield_run
         ):
-            errors.append(
-                "greenfield Chromium smoke must execute and propagate failure"
-            )
+            errors.append("greenfield Chromium smoke must execute and propagate failure")
         atomic = _step(
             steps,
             "Exercise numeric Protobuf SSG against public IA member endpoints",
@@ -130,10 +121,7 @@ def violations(workflow: dict, auditor: str) -> list[str]:
             "node scripts/check-atomic-ssg.mjs "
             "http://127.0.0.1:4321/ficha/ ../accessibility-evidence"
         )
-        if (
-            atomic.get("working-directory") != "web"
-            or atomic.get("run", "") != expected_atomic_run
-        ):
+        if atomic.get("working-directory") != "web" or atomic.get("run", "") != expected_atomic_run:
             errors.append("numeric Protobuf Chromium gate must propagate failure")
         upload = _step(steps, "Upload browser accessibility evidence")
         if (
@@ -166,9 +154,7 @@ def test_ssg_gate_policy() -> None:
 
 def test_ssg_templates_have_explicit_utf8_charset() -> None:
     for template_name in ("index.html", "page.html"):
-        source = (ROOT / "site" / "templates" / template_name).read_text(
-            encoding="utf-8"
-        )
+        source = (ROOT / "site" / "templates" / template_name).read_text(encoding="utf-8")
         assert '<meta charset="utf-8">' in source
         assert "{{charset}}" not in source
 
@@ -206,9 +192,7 @@ def test_reject_mutations_that_restore_false_green() -> None:
     sha_check["run"] = 'echo "$(git rev-parse HEAD)"'
     variants["fake SHA check"] = w
     w = mutated()
-    build = _step(
-        w["jobs"]["capture"]["steps"], "Build the published SSG artifact (not Astro)"
-    )
+    build = _step(w["jobs"]["capture"]["steps"], "Build the published SSG artifact (not Astro)")
     build["run"] = "echo ssg build"
     variants["fake SSG build"] = w
     w = mutated()
@@ -259,8 +243,7 @@ def test_reject_mutations_that_restore_false_green() -> None:
     w["jobs"]["capture"]["steps"] = [
         step
         for step in w["jobs"]["capture"]["steps"]
-        if step.get("name")
-        != "Exercise numeric Protobuf SSG against public IA member endpoints"
+        if step.get("name") != "Exercise numeric Protobuf SSG against public IA member endpoints"
     ]
     variants["no numeric Protobuf Chromium"] = w
     for suffix in (" || true", " || echo ignored"):
@@ -279,9 +262,7 @@ def test_reject_mutations_that_restore_false_green() -> None:
     assert violations(baseline, broken)
 
     # These two mutants previously escaped a Tab-count-only accessibility gate.
-    static_border = auditor.replace(
-        "focused.border !== unfocused.border", "focused.border !== ''"
-    )
+    static_border = auditor.replace("focused.border !== unfocused.border", "focused.border !== ''")
     assert violations(baseline, static_border)
     missing_skip_enter = auditor.replace(
         "await page.keyboard.press('Enter')", "await page.keyboard.press('Tab')"
