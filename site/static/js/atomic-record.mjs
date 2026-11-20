@@ -120,7 +120,9 @@ export async function fetchAtomicRecord(manifest, date, input, {
   // A 404 can mean a missing ZIP, shard or member; it cannot prove CNPJ absence.
   if (response.status === 404) return {...shared, data:null,
     state:'artifact-unavailable', httpStatus:404};
-  if (!response.ok) throw new Error(`Consulta Protobuf indisponível: HTTP ${response.status}`);
+  // A non-Range GET must receive the complete member, not a successful
+  // partial response (206), which can still contain decodable Protobuf.
+  if (response.status !== 200) throw new Error(`Consulta Protobuf indisponível: HTTP ${response.status}`);
   const bytes = await readBoundedMember(response);
   let company;
   try { company = decodeCompany(bytes); }
