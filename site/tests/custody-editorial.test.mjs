@@ -19,3 +19,25 @@ test('copy pública distingue manifesto de custódia de arquivos', () => {
   assert.match(historia, /competências declaradas no manifesto/);
   assert.match(readme, /custódia de cada objeto exige conferência independente/);
 });
+
+test('descrição PWA gerada, config e sentinelas de build coincidem', () => {
+  const home = read('../content/index.md');
+  const config = read('../config.toml');
+  const description = home.match(/^description: (.+)$/m)?.[1];
+  assert.ok(description, 'a home precisa declarar description no frontmatter');
+  const configured = config.match(/^site_description = "([^"]+)"$/m)?.[1];
+  assert.equal(description, configured, 'PWA SSG usa a descrição da home');
+  for (const path of [
+    '../scripts/finalize.mjs',
+    '../scripts/remove-ssg-manifest.mjs',
+    '../scripts/finalize.test.mjs',
+    './manifest.test.mjs',
+  ]) {
+    const script = read(path);
+    assert.ok(
+      script.includes(`description:'${description}'`) ||
+      script.includes(`description: '${description}'`),
+      path + ': sentinela PWA divergente da descrição gerada',
+    );
+  }
+});
