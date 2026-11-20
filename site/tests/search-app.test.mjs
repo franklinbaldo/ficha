@@ -35,9 +35,10 @@ test('só CNPJs numéricos têm ação acessível para a ficha Protobuf v1', () 
     {cnpj:'11.222.333/0001-81',razao_social:'Empresa repetida',uf:'RO'},
     {cnpj:'33.000.167/0001-01',razao_social:'Empresa repetida',uf:'RJ'},
     {cnpj:'INVALIDO',razao_social:'Sem link'},
+    {cnpj:'12.345.678/0001-99',razao_social:'DV inválido'},
   ]);
   const items = nodes['consulta-lista'].children;
-  assert.equal(items.length, 4);
+  assert.equal(items.length, 5);
   assert.equal(items[0].children[1].textContent, '00.000.000/e08g-12 · RO');
   assert.equal(items[0].children[1].children.length, 0,
     'resultado alfanumérico permanece legível, mas não abre leitor apenas numérico');
@@ -53,6 +54,8 @@ test('só CNPJs numéricos têm ação acessível para a ficha Protobuf v1', () 
   }
   assert.equal(items[3].children[1].children.length, 0,
     'não criar atalho para CNPJ malformado');
+  assert.equal(items[4].children[1].children.length, 0,
+    'CNPJ numérico com dígitos verificadores inválidos não deve oferecer ficha');
   assert.notEqual(items[1].children[1].children[1].attributes['aria-label'],
     items[2].children[1].children[1].attributes['aria-label']);
 });
@@ -262,4 +265,33 @@ test('boot da home ativa explicitamente a rota numérica Protobuf', async () => 
   const {readFile} = await import('node:fs/promises');
   const boot = await readFile(new URL('../static/js/boot.mjs',import.meta.url),'utf8');
   assert.match(boot,/openNumericFicha:\s*url\s*=>\s*globalThis\.location\.assign\(url\)/);
+});
+
+
+test('home bloqueia CNPJ numérico com DV inválido antes da rota ou de qualquer consulta remota', async () => {
+  const {nodes,doc} = mockDOM();
+  const routes = [];
+  let fetched = 0, probed = 0, engines = 0;
+  mountSearch({
+    documentRef: doc,
+    openNumericFicha: url => routes.push(url),
+    fetchDataset: async () => { fetched++; throw Error('nenhuma busca esperada'); },
+    probeRange: async () => { probed++; },
+    createEngine: async () => { engines++; throw Error('WASM inesperado'); },
+  });
+  const submit = () => nodes['busca-form'].submit({preventDefault() {}});
+  nodes['busca-termo'].value = '12.345.678/0001-99';
+  await submit();
+  assert.deepEqual(routes, []);
+  assert.deepEqual([fetched,probed,engines], [0,0,0]);
+  assert.equal(nodes['consulta-estado'].dataset.kind, 'error');
+  assert.match(nodes['consulta-estado'].textContent, /dígitos verificadores/);
+  assert.equal(nodes['consulta-lista'].children.length, 0);
+
+  // A rejection cannot poison the next valid, local Protobuf navigation.
+  nodes['busca-termo'].value = '33.000.167/0001-01';
+  await submit();
+  assert.deepEqual(routes, ['/ficha/empresa/?cnpj=33000167000101']);
+  assert.deepEqual([fetched,probed,engines], [0,0,0]);
+  assert.equal(nodes['consulta-estado'].dataset.kind, 'info');
 });
