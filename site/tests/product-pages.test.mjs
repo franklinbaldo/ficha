@@ -46,7 +46,7 @@ test('só URLs HTTPS e hashes de 64 caracteres entram na apresentação', () => 
 
 test('um HTTP 404 não é interpretado como catálogo vazio', async () => {
   await assert.rejects(fetchManifest({fetchImpl:async()=>({ok:false,status:404})}),/HTTP 404/);
-  await assert.rejects(fetchManifest({fetchImpl:async()=>({ok:true,json:async()=>({current:'2026-07',snapshots:[]})})}),/ausente/);
+  await assert.rejects(fetchManifest({fetchImpl:async()=>({ok:true,status:200,json:async()=>({current:'2026-07',snapshots:[]})})}),/ausente/);
 });
 
 test('CNPJ alfanumérico é textual, com validação antes de qualquer I/O', async () => {

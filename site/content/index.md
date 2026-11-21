@@ -30,8 +30,8 @@ layout: index
         <h2 id="resultados-titulo">Resultados da consulta</h2>
         <ul class="companies" id="consulta-lista"></ul>
       </div>
-      <div class="example-suggestions" aria-label="CNPJs para experimentar">
-        <p class="example-caption">Experimente um CNPJ</p>
+      <div class="example-suggestions" role="group" aria-labelledby="exemplos-titulo">
+        <p class="example-caption" id="exemplos-titulo">Experimente um CNPJ</p>
         <div class="example-pills" id="example-pills">
           <a class="example-pill" data-cnpj-example href="/ficha/empresa/?cnpj=00000000000191">Banco do Brasil <span class="mono">00.000.000/0001-91</span></a>
           <a class="example-pill" data-cnpj-example href="/ficha/empresa/?cnpj=33000167000101">Petrobras <span class="mono">33.000.167/0001-01</span></a>

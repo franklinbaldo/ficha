@@ -126,7 +126,7 @@ test('história preserva ordem anterior → posterior numa comparação válida'
       loadManifest: async () => manifestWithShards(),
       lookup: async (_manifest, date, cnpj) => {
         lookups.push([date, cnpj]);
-        return { date, cnpj, state:'found', data: {razao_social:'Empresa '+date}, source: 'https://archive.org/' + date };
+        return { date, cnpj, state:'found', data: {cnpj,razao_social:'Empresa '+date}, source: 'https://archive.org/' + date };
       },
     });
     doc.at('historia-cnpj').value = '33000167000101';
@@ -240,7 +240,7 @@ test('história descarta segunda resposta tardia após mudança do CNPJ', async 
     await mountHistory(doc, {
       loadManifest: async () => manifestWithShards(),
       lookup: async (_manifest, date, cnpj) => date === '2026-06'
-        ? { date, cnpj, source: 'https://archive.org/old', state:'found', data:{razao_social:'Antiga'} }
+        ? { date, cnpj, source: 'https://archive.org/old', state:'found', data:{cnpj,razao_social:'Antiga'} }
         : new Promise(resolve => { finishNewer = resolve; }),
     });
     doc.at('historia-cnpj').value = '33000167000101';
@@ -327,7 +327,7 @@ test('história: editar competência limpa link antigo mas mantém parâmetros a
       loadManifest:async()=>manifestWithShards(),
       lookup:async (_manifest,date,cnpj)=>{
         calls++;
-        return {date,cnpj,state:'found',data:{razao_social:'Empresa '+date},source:'https://archive.org/'+date};
+        return {date,cnpj,state:'found',data:{cnpj,razao_social:'Empresa '+date},source:'https://archive.org/'+date};
       },
     });
     doc.at('historia-cnpj').value='33000167000101';
@@ -357,7 +357,7 @@ test('história: edição A→B→A enquanto segunda fonte demora descarta compa
     await mountHistory(doc,{
       loadManifest:async()=>manifestWithShards(),
       lookup:async (_manifest,date,cnpj)=>date==='2026-06'
-        ? {date,cnpj,state:'found',data:{razao_social:'Antiga'},source:'https://archive.org/old'}
+        ? {date,cnpj,state:'found',data:{cnpj,razao_social:'Antiga'},source:'https://archive.org/old'}
         : new Promise(resolve=>{finishNewer=resolve;}),
     });
     doc.at('historia-cnpj').value='33000167000101';
