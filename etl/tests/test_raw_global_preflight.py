@@ -64,6 +64,8 @@ def _offline(monkeypatch, *, bad_crc=False, status_37=None, bad_length=False):
         data = b"".join(chunks)
         _equal(identifier, "ficha-2026-07")
         _equal(len(data), int(content_length))
+        # A successful final count alone would not prove temporal ordering.
+        _equal(len(seen["gets"]), 37)
         seen["puts"].append(remote_name)
         seen["received"].append(data)
 
