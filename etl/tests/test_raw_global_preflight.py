@@ -190,9 +190,7 @@ def test_complete_final_zip_at_actual_expansion_limit(monkeypatch, tmp_path, met
 def test_double_underreport_cannot_hide_unclaimed_zip_bytes(
     monkeypatch, tmp_path, method
 ):
-    forged = _oversized_source_37(
-        method, forge_header=True, forge_compressed=True
-    )
+    forged = _oversized_source_37(method, forge_header=True, forge_compressed=True)
     monkeypatch.setattr(raw_preflight, "_MAX_RAW_UNCOMPRESSED_BYTES", 36 * 7 + 1)
     seen, _ = _offline(monkeypatch, source_37=forged)
     with pytest.raises(RuntimeError, match="unclaimed ZIP payload bytes"):
