@@ -300,3 +300,32 @@ def test_no_explicit_spool_denies_get_and_put(monkeypatch):
         upload.stream_raw_zips_to_ia("2026-07", access_key="x", secret_key="x")
     _equal(seen["gets"], [])
     _equal(seen["puts"], [])
+
+def test_optimized_python_replays_zip37_local_guard():
+    """Replay the six local-header negatives and positive controls with -O.
+
+    A normal pytest run must not be mistaken for a test of optimized Python.
+    Run the exact tests from this checkout in a child interpreter with -O,
+    keeping the same fake HTTP transport and fake IA PUT assertions.
+    """
+    import subprocess
+    import sys
+
+    source = str(Path(__file__).resolve())
+    selectors = [
+        f"{source}::test_final_zip_local_header_conflict_cannot_publish",
+        f"{source}::test_valid_zip64_local_sizes_without_descriptor_remain_admissible",
+        f"{source}::test_deflate_data_descriptor_remains_valid",
+    ]
+    replay = subprocess.run(
+        [sys.executable, "-O", "-m", "pytest", "-q", *selectors],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=180,
+    )
+    if replay.returncode != 0:
+        raise AssertionError(
+            f"python -O replay exited {replay.returncode}:\\n"
+            f"{replay.stdout}\\n{replay.stderr}"
+        )
