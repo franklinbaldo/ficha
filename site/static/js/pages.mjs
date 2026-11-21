@@ -82,7 +82,9 @@ export async function mountCompany(doc, {loadManifest = fetchManifest, lookup = 
       canonicalCnpj(input.value) === cnpj && select.value === date;
     const discarded = 'CNPJ ou competência alterados durante a consulta. Pesquise novamente.';
     busy = true;
-    submit.disabled = true;
+    // Preserve keyboard focus while the archival request is pending.
+    // The busy guard still prevents duplicate lookups.
+    submit.setAttribute('aria-disabled', 'true');
     output.replaceChildren();
     status(state,'Consultando o registro na competência '+date+'…');
     try {
@@ -112,7 +114,7 @@ export async function mountCompany(doc, {loadManifest = fetchManifest, lookup = 
         add(doc,output,'p','Não foi possível concluir a leitura remota. Isso não demonstra ausência de CNPJ no acervo.');
         anchor(doc,output,'Consultar o catálogo de arquivos',BASE+'acervo/?competencia='+date);
       }
-    } finally { busy = false; selection.finish(); submit.disabled = false; }
+    } finally { busy = false; selection.finish(); submit.removeAttribute('aria-disabled'); }
   }
   form.addEventListener('submit',lookupSubmit);
   const initial = params().get('cnpj');

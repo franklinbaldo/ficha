@@ -13,6 +13,7 @@ class Element {
   get options() { return this.children; }
   addEventListener(event, fn) { this.listeners.set(event,fn); }
   setAttribute(key,value) { this.attributes[key]=value; }
+  removeAttribute(key) { delete this.attributes[key]; }
 }
 const ids=['historia-competencias','historia-inicio','historia-fim','historia-form',
   'historia-cnpj','historia-enviar','historia-estado','historia-resultado'];

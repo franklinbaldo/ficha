@@ -37,6 +37,8 @@ def _offline(
     bad_length=False,
     redirect_37=None,
     source_37=None,
+    content_range_37=None,
+    length_text_37=None,
 ):
     specs = canonical_inventory()
     _equal(len(specs), 37)
@@ -62,9 +64,15 @@ def _offline(
             return httpx.Response(status_37, request=request)
         source = streams[index]
         length = len(source) + (1 if bad_length and index == 36 else 0)
+        headers = {"Content-Length": str(length)}
+        if index == 36:
+            if content_range_37 is not None:
+                headers["Content-Range"] = content_range_37
+            if length_text_37 is not None:
+                headers["Content-Length"] = length_text_37
         return httpx.Response(
             200,
-            headers={"Content-Length": str(length)},
+            headers=headers,
             stream=httpx.ByteStream(source),
             request=request,
         )
@@ -135,6 +143,26 @@ def test_redirected_final_rfb_zip_is_not_admitted(monkeypatch, tmp_path, origin)
     with pytest.raises(RuntimeError, match="redirected RFB source"):
         _run(tmp_path)
     _equal(len(seen["gets"]), 37)  # The redirect target must not be requested.
+    _equal(seen["puts"], [])
+    _equal(list(tmp_path.iterdir()), [])
+
+
+@pytest.mark.parametrize(
+    "field,value,reason",
+    [
+        ("content_range_37", "bytes 1-10/500", "unexpected RFB Content-Range"),
+        ("length_text_37", "9" * 5000, "invalid RFB length"),
+    ],
+)
+def test_final_zip_ambiguous_http_headers_cannot_publish(
+    monkeypatch, tmp_path, field, value, reason
+):
+    # Mock HTTP 200 with abnormal source headers at ZIP 37.
+    # Neither case should reach an S3 PUT; the length case must be contextual.
+    seen, _ = _offline(monkeypatch, **{field: value})
+    with pytest.raises(RuntimeError, match=reason):
+        _run(tmp_path)
+    _equal(len(seen["gets"]), 37)
     _equal(seen["puts"], [])
     _equal(list(tmp_path.iterdir()), [])
 
@@ -317,6 +345,7 @@ def test_optimized_python_replays_zip37_local_guard():
         f"{source}::test_final_zip_local_header_conflict_cannot_publish",
         f"{source}::test_valid_zip64_local_sizes_without_descriptor_remain_admissible",
         f"{source}::test_deflate_data_descriptor_remains_valid",
+        f"{source}::test_final_zip_ambiguous_http_headers_cannot_publish",
     ]
     replay = subprocess.run(
         [sys.executable, "-O", "-m", "pytest", "-q", *selectors],
