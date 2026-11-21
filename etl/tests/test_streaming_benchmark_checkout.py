@@ -16,7 +16,11 @@ HEAD = "${{ github.event.pull_request.head.sha || github.sha }}"
 
 
 def require_exact_streaming_checkout(config: dict) -> None:
-    steps = config["jobs"]["streaming-benchmark"]["steps"]
+    # Shell overrides may ignore the generated script file and silently pass.
+    assert "shell" not in config.get("defaults", {}).get("run", {})
+    job = config["jobs"]["streaming-benchmark"]
+    assert "shell" not in job.get("defaults", {}).get("run", {})
+    steps = job["steps"]
     assert steps[0]["uses"] == "actions/checkout@v4"
     assert steps[0]["with"] == {"persist-credentials": False, "ref": HEAD}
     guard = steps[1]
@@ -24,6 +28,7 @@ def require_exact_streaming_checkout(config: dict) -> None:
     assert guard["env"] == {"EXPECTED_SHA": HEAD}
     assert guard["run"] == 'test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"'
     assert "if" not in guard
+    assert "shell" not in guard
     assert guard.get("continue-on-error") in (None, False)
 
 
@@ -42,6 +47,9 @@ def test_streaming_workflow_checkout_is_sha_exact_and_fail_closed() -> None:
         "ignore-failure",
         "no-assert",
         "echo-instead-of-test",
+        "guard-shell-noop",
+        "job-default-shell-noop",
+        "workflow-default-shell-noop",
     ),
 )
 def test_checkout_policy_rejects_regressions(mutation: str) -> None:
@@ -59,6 +67,14 @@ def test_checkout_policy_rejects_regressions(mutation: str) -> None:
         guard["continue-on-error"] = True
     elif mutation == "no-assert":
         guard["run"] += " || true"
+    elif mutation == "guard-shell-noop":
+        guard["shell"] = "bash -c 'true' {0}"
+    elif mutation == "job-default-shell-noop":
+        workflow["jobs"]["streaming-benchmark"]["defaults"]["run"]["shell"] = (
+            "bash -c 'true' {0}"
+        )
+    elif mutation == "workflow-default-shell-noop":
+        workflow["defaults"] = {"run": {"shell": "bash -c 'true' {0}"}}
     else:
         guard["run"] = 'echo "$(git rev-parse HEAD)" = "$EXPECTED_SHA"'
     with pytest.raises((AssertionError, KeyError)):
