@@ -56,9 +56,19 @@ def _check_member_exact(
     header = handle.read(30)
     if len(header) != 30:
         raise RuntimeError("raw preflight: truncated ZIP local header")
-    signature, _, flags, method, _, _, local_crc, local_compressed, local_uncompressed, name_len, extra_len = struct.unpack(
-        "<IHHHHHIIIHH", header
-    )
+    (
+        signature,
+        _,
+        flags,
+        method,
+        _,
+        _,
+        local_crc,
+        local_compressed,
+        local_uncompressed,
+        name_len,
+        extra_len,
+    ) = struct.unpack("<IHHHHHIIIHH", header)
     if signature != 0x04034B50 or method != entry.compress_type or flags != entry.flag_bits:
         raise RuntimeError("raw preflight: ZIP local header mismatch")
     name = handle.read(name_len)
