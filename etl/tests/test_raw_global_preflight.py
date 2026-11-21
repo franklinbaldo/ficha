@@ -30,8 +30,13 @@ def _source_zip(number: int) -> bytes:
 
 
 def _offline(
-    monkeypatch, *, bad_crc=False, status_37=None, bad_length=False,
-    redirect_37=None, source_37=None,
+    monkeypatch,
+    *,
+    bad_crc=False,
+    status_37=None,
+    bad_length=False,
+    redirect_37=None,
+    source_37=None,
 ):
     specs = canonical_inventory()
     _equal(len(specs), 37)
@@ -134,7 +139,9 @@ def test_redirected_final_rfb_zip_is_not_admitted(monkeypatch, tmp_path, origin)
     _equal(list(tmp_path.iterdir()), [])
 
 
-def _oversized_source_37(compression: int, *, forge_header: bool) -> bytes:
+def _oversized_source_37(
+    compression: int, *, forge_header: bool, forge_compressed: bool = False
+) -> bytes:
     """Synthetic malicious ZIP: 65536 expanded bytes but claims one byte."""
     memory = io.BytesIO()
     with zipfile.ZipFile(memory, "w", compression=compression) as archive:
@@ -149,6 +156,9 @@ def _oversized_source_37(compression: int, *, forge_header: bool) -> bytes:
     struct.pack_into("<I", raw, local + 22, 1)
     struct.pack_into("<I", raw, central + 16, prefix_crc)
     struct.pack_into("<I", raw, central + 24, 1)
+    if forge_compressed:
+        struct.pack_into("<I", raw, local + 18, 1)
+        struct.pack_into("<I", raw, central + 20, 1)
     return bytes(raw)
 
 
@@ -170,6 +180,39 @@ def test_complete_final_zip_at_actual_expansion_limit(monkeypatch, tmp_path, met
     valid = _oversized_source_37(method, forge_header=False)
     monkeypatch.setattr(raw_preflight, "_MAX_RAW_UNCOMPRESSED_BYTES", 36 * 7 + 65536)
     seen, sources = _offline(monkeypatch, source_37=valid)
+    _run(tmp_path)
+    _equal(len(seen["gets"]), 37)
+    _equal(len(seen["puts"]), 37)
+    _equal(seen["received"], sources)
+
+
+@pytest.mark.parametrize("method", [zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED])
+def test_double_underreport_cannot_hide_unclaimed_zip_bytes(monkeypatch, tmp_path, method):
+    forged = _oversized_source_37(
+        method, forge_header=True, forge_compressed=True
+    )
+    monkeypatch.setattr(raw_preflight, "_MAX_RAW_UNCOMPRESSED_BYTES", 36 * 7 + 1)
+    seen, _ = _offline(monkeypatch, source_37=forged)
+    with pytest.raises(RuntimeError, match="unclaimed ZIP payload bytes"):
+        _run(tmp_path)
+    _equal(len(seen["gets"]), 37)
+    _equal(seen["puts"], [])
+    _equal(list(tmp_path.iterdir()), [])
+
+
+def test_deflate_data_descriptor_remains_valid(monkeypatch, tmp_path):
+    # ZIP writers on unseekable streams use a signed data descriptor.
+    class NonSeekable(io.BytesIO):
+        def seekable(self):
+            return False
+
+        def seek(self, *args):
+            raise OSError("unseekable")
+
+    sink = NonSeekable()
+    with zipfile.ZipFile(sink, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("source-36.csv", b"DATA-36")
+    seen, sources = _offline(monkeypatch, source_37=sink.getvalue())
     _run(tmp_path)
     _equal(len(seen["gets"]), 37)
     _equal(len(seen["puts"]), 37)
