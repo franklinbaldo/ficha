@@ -34,10 +34,10 @@ def require(condition: bool, message: str) -> None:
 def _valid_zip(name: str, generation: str) -> bytes:
     """Same-size A/B archives with valid central directory and CRC."""
     buffer = io.BytesIO()
+    member = name.removesuffix(".zip") + ".csv"
+    payload = f"{generation}-{name}".encode()
     with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_STORED) as archive:
-        archive.writestr(
-            name.removesuffix(".zip") + ".csv", f"{generation}-{name}".encode()
-        )
+        archive.writestr(member, payload)
     data = buffer.getvalue()
     with zipfile.ZipFile(io.BytesIO(data)) as check:
         require(check.testzip() is None, "synthetic ZIP CRC is invalid")
@@ -78,21 +78,17 @@ def test_partial_catalog_cannot_mix_remote_a_with_source_b(
 
     def stage_all(inventory, month, token, dest):
         require(month == MONTH and token == "synthetic-token", "wrong source")
-        require(
-            [spec.name for spec in inventory] == [spec.name for spec in specs],
-            "not 37",
-        )
+        observed_names = [spec.name for spec in inventory]
+        expected_names = [spec.name for spec in specs]
+        require(observed_names == expected_names, "not 37")
         staged_calls.append(1)
         staged = {}
         for spec in inventory:
             path = dest / spec.name
             payload = b[spec.name]
             path.write_bytes(payload)
-            staged[spec.name] = (
-                path,
-                len(payload),
-                hashlib.sha256(payload).hexdigest(),
-            )
+            digest = hashlib.sha256(payload).hexdigest()
+            staged[spec.name] = (path, len(payload), digest)
         return staged
 
     def put(identifier, key, chunks, *, content_length, **kwargs):
@@ -134,13 +130,9 @@ def test_partial_catalog_cannot_mix_remote_a_with_source_b(
         all(remote[key] == payload for key, payload in original_remote.items()),
         "the pre-existing old bytes changed unexpectedly",
     )
-    require(
-        all(
-            remote[f"raw/{spec.name}"] == b[spec.name]
-            for spec in specs[remote_count:]
-        ),
-        "some new-generation bytes were not PUT",
-    )
+    for spec in specs[remote_count:]:
+        key = f"raw/{spec.name}"
+        require(remote[key] == b[spec.name], f"wrong new-generation bytes: {key}")
     raise RemoteDigestMismatch(
         f"partial catalog yielded {remote_count} old A "
         f"and {37 - remote_count} new B ZIPs"
