@@ -159,3 +159,21 @@ test('404 de lookup, competência trocada e tamanho divergente são erro, não a
     fetchImpl:async()=>new Response(equalSize),cacheMap:new Map(),
   }),/incompatível/);
 });
+
+test('lookup exige HTTP 200 mesmo quando 201/206 trazem bytes e SHA-256 corretos',async()=>{
+  for (const httpStatus of [201,206]) {
+    const cacheMap=new Map();
+    let calls=0;
+    await assert.rejects(fetchSnapshotLookups(manifest,date,{
+      fetchImpl:async()=>{calls++;return new Response(bytes,{status:httpStatus});},
+      cacheMap,
+    }),new RegExp('Lookup indisponível: HTTP '+httpStatus));
+    // A failed HTTP response must not poison the cache for a valid retry.
+    const retry=await fetchSnapshotLookups(manifest,date,{
+      fetchImpl:async()=>{calls++;return new Response(bytes,{status:200});},
+      cacheMap,
+    });
+    assert.equal(retry.snapshot_date,date);
+    assert.equal(calls,2);
+  }
+});
