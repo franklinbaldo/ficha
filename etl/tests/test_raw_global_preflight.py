@@ -243,9 +243,7 @@ def test_final_zip_local_header_conflict_cannot_publish(
     _equal(list(tmp_path.iterdir()), [])
 
 
-def test_valid_zip64_local_sizes_without_descriptor_remain_admissible(
-    monkeypatch, tmp_path
-):
+def test_valid_zip64_local_sizes_without_descriptor_remain_admissible(monkeypatch, tmp_path):
     # force_zip64 sets the local 32-bit sizes to 0xffffffff even for 7 bytes.
     memory = io.BytesIO()
     with zipfile.ZipFile(memory, "w", compression=zipfile.ZIP_DEFLATED) as archive:
