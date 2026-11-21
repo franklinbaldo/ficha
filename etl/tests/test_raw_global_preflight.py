@@ -217,6 +217,50 @@ def test_deflate_data_descriptor_remains_valid(monkeypatch, tmp_path):
     _equal(seen["received"], sources)
 
 
+@pytest.mark.parametrize("method", [zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED])
+@pytest.mark.parametrize(
+    "local_offset",
+    [14, 18, 22],
+    ids=["local-crc", "local-compressed-size", "local-uncompressed-size"],
+)
+def test_final_zip_local_header_conflict_cannot_publish(
+    monkeypatch, tmp_path, method, local_offset
+):
+    # Keep the central directory and payload intact. Only one local field
+    # contradicts the authority used by zipfile.ZipInfo (Castor R133).
+    memory = io.BytesIO()
+    with zipfile.ZipFile(memory, "w", compression=method) as archive:
+        archive.writestr("source-36.csv", b"DATA-36")
+    forged = bytearray(memory.getvalue())
+    _equal(forged[:4], b"PK\x03\x04")
+    _equal(struct.unpack_from("<H", forged, 6)[0] & 8, 0)
+    struct.pack_into("<I", forged, local_offset, 0)
+    seen, _ = _offline(monkeypatch, source_37=bytes(forged))
+    with pytest.raises(RuntimeError, match="ZIP local CRC/size mismatch"):
+        _run(tmp_path)
+    _equal(len(seen["gets"]), 37)
+    _equal(seen["puts"], [])
+    _equal(list(tmp_path.iterdir()), [])
+
+
+def test_valid_zip64_local_sizes_without_descriptor_remain_admissible(
+    monkeypatch, tmp_path
+):
+    # force_zip64 sets the local 32-bit sizes to 0xffffffff even for 7 bytes.
+    memory = io.BytesIO()
+    with zipfile.ZipFile(memory, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        with archive.open("source-36.csv", "w", force_zip64=True) as writer:
+            writer.write(b"DATA-36")
+    source = memory.getvalue()
+    _equal(struct.unpack_from("<I", source, 18)[0], 0xFFFFFFFF)
+    _equal(struct.unpack_from("<I", source, 22)[0], 0xFFFFFFFF)
+    seen, sources = _offline(monkeypatch, source_37=source)
+    _run(tmp_path)
+    _equal(len(seen["gets"]), 37)
+    _equal(len(seen["puts"]), 37)
+    _equal(seen["received"], sources)
+
+
 def test_duplicate_zip_bytes_under_two_source_names_cannot_publish(monkeypatch, tmp_path):
     seen, _ = _offline(monkeypatch, source_37=_source_zip(0))
     with pytest.raises(RuntimeError, match="duplicate source SHA-256"):
