@@ -70,9 +70,8 @@ def test_checkout_policy_rejects_regressions(mutation: str) -> None:
     elif mutation == "guard-shell-noop":
         guard["shell"] = "bash -c 'true' {0}"
     elif mutation == "job-default-shell-noop":
-        workflow["jobs"]["streaming-benchmark"]["defaults"]["run"]["shell"] = (
-            "bash -c 'true' {0}"
-        )
+        job_run_defaults = workflow["jobs"]["streaming-benchmark"]["defaults"]["run"]
+        job_run_defaults["shell"] = "bash -c 'true' {0}"
     elif mutation == "workflow-default-shell-noop":
         workflow["defaults"] = {"run": {"shell": "bash -c 'true' {0}"}}
     else:
