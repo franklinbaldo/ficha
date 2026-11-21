@@ -73,7 +73,7 @@ def stage_all(
     expanded = 0
     members = 0
     with httpx.Client(
-        timeout=httpx.Timeout(connect=30, read=600, write=600, pool=30), follow_redirects=True
+        timeout=httpx.Timeout(connect=30, read=600, write=600, pool=30), follow_redirects=False
     ) as client:
         for spec in specs:
             url = upstream.file_url(token, month, spec.name)
@@ -81,6 +81,10 @@ def stage_all(
             with client.stream(
                 "GET", url, auth=(token, ""), headers={"Accept-Encoding": "identity"}
             ) as response:
+                # No implicit HTTP redirects: only the requested RFB source is admitted.
+                # Even a valid ZIP on another host (or downgraded to HTTP) is untrusted.
+                if response.is_redirect:
+                    raise RuntimeError(f"raw preflight: redirected RFB source {spec.name}")
                 response.raise_for_status()
                 if response.status_code != 200:
                     raise RuntimeError(f"raw preflight: non-200 RFB source {spec.name}")
