@@ -10,7 +10,9 @@ from pathlib import Path
 import pytest
 import yaml
 
-WORKFLOW = Path(__file__).resolve().parents[2] / ".github/workflows/etl-streaming-benchmark.yml"
+WORKFLOW = (
+    Path(__file__).resolve().parents[2] / ".github/workflows/etl-streaming-benchmark.yml"
+)
 HEAD = "${{ github.event.pull_request.head.sha || github.sha }}"
 
 
@@ -27,7 +29,8 @@ def require_exact_streaming_checkout(config: dict) -> None:
 
 
 def test_streaming_workflow_checkout_is_sha_exact_and_fail_closed() -> None:
-    require_exact_streaming_checkout(yaml.safe_load(WORKFLOW.read_text(encoding="utf-8")))
+    workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
+    require_exact_streaming_checkout(workflow)
 
 
 @pytest.mark.parametrize(
