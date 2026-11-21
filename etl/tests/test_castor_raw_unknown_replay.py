@@ -44,7 +44,9 @@ def test_ambiguous_put_must_fence_changed_same_key_after_restart(monkeypatch, tm
     def fake_stage_all(all_specs, month, token, dest):
         _require(month == _MONTH, "wrong month")
         _require(token == "offline-token", "wrong upstream token")
-        _require([s.name for s in all_specs] == [s.name for s in specs], "wrong inventory")
+        _require(
+            [s.name for s in all_specs] == [s.name for s in specs], "wrong inventory"
+        )
         version = b"A" if not stage_calls else b"B"
         stage_calls.append(version)
         staged = {}
@@ -114,6 +116,7 @@ def test_catalog_only_37_of_37_must_not_complete_as_verified(monkeypatch):
     # observation.  A correct fail-closed implementation must refuse.
     with pytest.raises(RuntimeError):
         upload.stream_raw_zips_to_ia(_MONTH, access_key="fake", secret_key="fake")
+
 
 def test_optimized_python_replays_raw_unknown_contract_probes():
     """Run the two strict-XFAIL tests under -O and demand real XFAIL results."""
