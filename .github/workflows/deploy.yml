@@ -73,7 +73,7 @@ jobs:
           node scripts/bundle-protobuf.mjs
           node scripts/check-protobuf-bundle.mjs
           # Published unbundled JavaScript modules must survive SSG byte-for-byte.
-          for module in boot search-app duckdb-runtime query-core dataset catalog record pages atomic-record atomic-browser; do
+          for module in boot search-app duckdb-runtime query-core dataset catalog record pages history page-helpers atomic-record atomic-browser; do
             cmp "static/js/$module.mjs" "dist/ficha/js/$module.mjs"
           done
           cmp static/css/site.css dist/ficha/css/site.css
@@ -127,6 +127,8 @@ jobs:
           curl -fsSL --retry 3 "$BASE/explorar/" -o explorar.html
           curl -fsSL --retry 3 "$BASE/acervo/" -o acervo.html
           curl -fsSL --retry 3 "$BASE/js/pages.mjs" -o pages.mjs
+          curl -fsSL --retry 3 "$BASE/js/history.mjs" -o history.mjs
+          curl -fsSL --retry 3 "$BASE/js/page-helpers.mjs" -o page-helpers.mjs
           curl -fsSL --retry 3 "$BASE/js/atomic-record.mjs" -o atomic-record.mjs
           curl -fsSL --retry 3 "$BASE/js/atomic-browser.mjs" -o atomic-browser.mjs
           curl -fsSL --retry 3 "$BASE/js/company-decoder.mjs" -o company-decoder.mjs
@@ -159,6 +161,8 @@ jobs:
           cmp site/static/js/catalog.mjs catalog.mjs
           cmp site/static/js/record.mjs record.mjs
           cmp site/static/js/pages.mjs pages.mjs
+          cmp site/static/js/history.mjs history.mjs
+          cmp site/static/js/page-helpers.mjs page-helpers.mjs
           cmp site/static/js/atomic-record.mjs atomic-record.mjs
           cmp site/static/js/atomic-browser.mjs atomic-browser.mjs
           test "$(wc -c < company-decoder.mjs)" -gt 1000
