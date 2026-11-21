@@ -1,0 +1,22 @@
+name: R136 Ruff format inspection (temporary)
+on:
+  push:
+    branches: [feat/ficha433-raw-global-preflight]
+permissions:
+  contents: read
+jobs:
+  ruff-diff:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v3
+      - name: Print exact Ruff edits for two files
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd etl
+          uv sync --extra dev
+          uv run ruff format src/ficha_etl/raw_preflight.py tests/test_raw_global_preflight.py
+          git diff -- src/ficha_etl/raw_preflight.py tests/test_raw_global_preflight.py
