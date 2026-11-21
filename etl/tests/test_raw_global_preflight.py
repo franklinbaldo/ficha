@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import io
+import struct
 import zipfile
+import zlib
 from pathlib import Path
 
 import httpx
@@ -27,10 +29,15 @@ def _source_zip(number: int) -> bytes:
     return memory.getvalue()
 
 
-def _offline(monkeypatch, *, bad_crc=False, status_37=None, bad_length=False, redirect_37=None):
+def _offline(
+    monkeypatch, *, bad_crc=False, status_37=None, bad_length=False,
+    redirect_37=None, source_37=None,
+):
     specs = canonical_inventory()
     _equal(len(specs), 37)
     streams = [_source_zip(i) for i in range(37)]
+    if source_37 is not None:
+        streams[-1] = source_37
     if bad_crc:
         source = bytearray(streams[-1])
         offset = source.index(b"DATA-36")
@@ -123,6 +130,57 @@ def test_redirected_final_rfb_zip_is_not_admitted(monkeypatch, tmp_path, origin)
     with pytest.raises(RuntimeError, match="redirected RFB source"):
         _run(tmp_path)
     _equal(len(seen["gets"]), 37)  # The redirect target must not be requested.
+    _equal(seen["puts"], [])
+    _equal(list(tmp_path.iterdir()), [])
+
+
+def _oversized_source_37(compression: int, *, forge_header: bool) -> bytes:
+    """Synthetic malicious ZIP: 65536 expanded bytes but claims one byte."""
+    memory = io.BytesIO()
+    with zipfile.ZipFile(memory, "w", compression=compression) as archive:
+        archive.writestr("source-36.csv", b"A" * 65536)
+    if not forge_header:
+        return memory.getvalue()
+    raw = bytearray(memory.getvalue())
+    local = raw.index(b"PK\x03\x04")
+    central = raw.index(b"PK\x01\x02")
+    prefix_crc = zlib.crc32(b"A")
+    struct.pack_into("<I", raw, local + 14, prefix_crc)
+    struct.pack_into("<I", raw, local + 22, 1)
+    struct.pack_into("<I", raw, central + 16, prefix_crc)
+    struct.pack_into("<I", raw, central + 24, 1)
+    return bytes(raw)
+
+
+@pytest.mark.parametrize("method", [zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED])
+def test_underreported_final_zip_cannot_partial_publish(monkeypatch, tmp_path, method):
+    forged = _oversized_source_37(method, forge_header=True)
+    # The first 36 members are seven bytes each; allow just one more.
+    monkeypatch.setattr(raw_preflight, "_MAX_RAW_UNCOMPRESSED_BYTES", 36 * 7 + 1)
+    seen, _ = _offline(monkeypatch, source_37=forged)
+    with pytest.raises(RuntimeError, match="global uncompressed limit"):
+        _run(tmp_path)
+    _equal(len(seen["gets"]), 37)
+    _equal(seen["puts"], [])
+    _equal(list(tmp_path.iterdir()), [])
+
+
+@pytest.mark.parametrize("method", [zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED])
+def test_complete_final_zip_at_actual_expansion_limit(monkeypatch, tmp_path, method):
+    valid = _oversized_source_37(method, forge_header=False)
+    monkeypatch.setattr(raw_preflight, "_MAX_RAW_UNCOMPRESSED_BYTES", 36 * 7 + 65536)
+    seen, sources = _offline(monkeypatch, source_37=valid)
+    _run(tmp_path)
+    _equal(len(seen["gets"]), 37)
+    _equal(len(seen["puts"]), 37)
+    _equal(seen["received"], sources)
+
+
+def test_duplicate_zip_bytes_under_two_source_names_cannot_publish(monkeypatch, tmp_path):
+    seen, _ = _offline(monkeypatch, source_37=_source_zip(0))
+    with pytest.raises(RuntimeError, match="duplicate source SHA-256"):
+        _run(tmp_path)
+    _equal(len(seen["gets"]), 37)
     _equal(seen["puts"], [])
     _equal(list(tmp_path.iterdir()), [])
 
