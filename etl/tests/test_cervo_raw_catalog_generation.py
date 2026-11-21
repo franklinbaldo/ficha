@@ -115,7 +115,7 @@ def test_partial_catalog_cannot_mix_remote_a_with_source_b(
         # a contextual, pre-PUT refusal rather than accepting any fixture error.
         message = str(exc).lower()
         require(
-            any(term in message for term in ("remote", "catalog", "digest", "raw")),
+            any(term in message for term in ("remote", "catalog", "digest", "source version")),
             f"unrelated runtime error: {exc}",
         )
         require(not puts, "some objects were PUT before refusal")
@@ -134,8 +134,7 @@ def test_partial_catalog_cannot_mix_remote_a_with_source_b(
         key = f"raw/{spec.name}"
         require(remote[key] == b[spec.name], f"wrong new-generation bytes: {key}")
     raise RemoteDigestMismatch(
-        f"partial catalog yielded {remote_count} old A "
-        f"and {37 - remote_count} new B ZIPs"
+        f"partial catalog yielded {remote_count} old A and {37 - remote_count} new B ZIPs"
     )
 
 
@@ -153,16 +152,3 @@ def test_optimized_python_replays_partial_catalog_negatives() -> None:
     report = completed.stdout + "\n" + completed.stderr
     require(completed.returncode == 0, report)
     require("2 xfailed" in completed.stdout, report)
-
-
-def test_formatter_diagnostic() -> None:
-    """TEMPORARY: display Ruff diff on the Windows test runner."""
-    source = str(Path(__file__).resolve())
-    result = subprocess.run(
-        ["ruff", "format", "--diff", source],
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=30,
-    )
-    require(result.returncode == 0, result.stdout + "\n" + result.stderr)
