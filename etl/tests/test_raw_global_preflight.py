@@ -326,7 +326,4 @@ def test_optimized_python_replays_zip37_local_guard():
         timeout=180,
     )
     if replay.returncode != 0:
-        raise AssertionError(
-            f"python -O replay exited {replay.returncode}:\n"
-            f"{replay.stdout}\n{replay.stderr}"
-        )
+        raise AssertionError(replay.stdout + "\n" + replay.stderr)
