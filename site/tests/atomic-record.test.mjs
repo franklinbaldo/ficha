@@ -179,6 +179,24 @@ test('GET Protobuf exige HTTP 200 integral, não 201/206 decodificável',async()
     'um 2xx não integral não pode ser decodificado nem declarar presença');
 });
 
+test('HTTP 200 com Content-Range recusa membro parcial antes de ler ou decodificar',async()=>{
+  let decoded=0, pulled=0, cancelled=0;
+  const response=new Response(new ReadableStream({
+    pull(controller){ pulled++; controller.enqueue(Uint8Array.of(23,42)); controller.close(); },
+    cancel(){ cancelled++; },
+  },{highWaterMark:0}),{
+    status:200,
+    headers:{'Content-Range':'bytes 0-1/100','Content-Length':'2'},
+  });
+  await assert.rejects(lookup(manifest,DATE,CNPJ,{
+    fetchImpl:async()=>response,
+    decodeCompany:()=>{decoded++;return structuredClone(company);},
+  }),/Content-Range inesperado/);
+  assert.equal(pulled,0,'o 200 parcial deve falhar antes de ler o corpo');
+  assert.equal(cancelled,1,'a rejeição descarta o corpo de forma best-effort');
+  assert.equal(decoded,0,'bytes parciais não podem declarar CNPJ presente ou ausente');
+});
+
 test('contagem de filiais incompatível ou não declarada nunca prova ausência',async()=>{
   for (const mutate of [
     c=>{c.qtd_estabelecimentos=3;c.estabelecimentos=[];},

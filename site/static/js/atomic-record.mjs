@@ -134,6 +134,13 @@ export async function fetchAtomicRecord(manifest, date, input, {
   // A non-Range GET must receive the complete member, not a successful
   // partial response (206), which can still contain decodable Protobuf.
   if (response.status !== 200) throw new Error(`Consulta Protobuf indisponível: HTTP ${response.status}`);
+  // HTTP 200 from a non-Range GET cannot have partial-content semantics.
+  // Reject an unexpected Content-Range even if the body is decodable and
+  // its Content-Length matches, before interpreting any CNPJ as found/absent.
+  if (response.headers?.get?.('content-range') != null) {
+    try { void response.body?.cancel?.().catch(() => {}); } catch { /* Best-effort teardown. */ }
+    throw new Error('Resposta Protobuf HTTP 200 com Content-Range inesperado');
+  }
   const bytes = await readBoundedMember(response);
   let company;
   try { company = decodeCompany(bytes); }
