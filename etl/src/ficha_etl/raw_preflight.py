@@ -136,7 +136,9 @@ def _check_member_exact(
     return expanded
 
 
-def _raw_zip_crc_and_budget(path: Path, *, expanded: int, members: int) -> tuple[int, int]:
+def _raw_zip_crc_and_budget(
+    path: Path, *, expanded: int, members: int
+) -> tuple[int, int]:
     """Check all compressed bytes and actual expansion before any IA PUT."""
     try:
         with zipfile.ZipFile(path) as archive:
@@ -164,7 +166,9 @@ def _raw_zip_crc_and_budget(path: Path, *, expanded: int, members: int) -> tuple
                 ):
                     raise RuntimeError("raw preflight: global uncompressed limit")
                 expanded += _check_member_exact(
-                    archive, entry, _MAX_RAW_UNCOMPRESSED_BYTES - expanded,
+                    archive,
+                    entry,
+                    _MAX_RAW_UNCOMPRESSED_BYTES - expanded,
                     next_offsets[entry.header_offset],
                 )
             return expanded, members + len(entries)
@@ -178,6 +182,7 @@ def _raw_zip_crc_and_budget(path: Path, *, expanded: int, members: int) -> tuple
         struct.error,
     ) as exc:
         raise RuntimeError(f"raw preflight: invalid ZIP {path.name}") from exc
+
 
 def stage_all(
     specs: list, month: str, token: str, target: Path
