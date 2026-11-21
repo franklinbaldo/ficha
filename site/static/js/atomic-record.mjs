@@ -60,6 +60,7 @@ export function planAtomicRecord(manifest, date, value) {
 export async function readBoundedMember(response, limit = MAX_COMPANY_BYTES) {
   if (!Number.isSafeInteger(limit) || limit <= 0) throw new Error('Orçamento de leitura inválido');
   const header = response.headers?.get?.('content-length');
+  const encoding = response.headers?.get?.('content-encoding');
   if (header != null && /^\d+$/.test(header) && Number(header) > limit) {
     // Early rejection must also stop a pending response body (no chunk is read).
     // Do not await transport teardown before returning the size error.
@@ -86,6 +87,14 @@ export async function readBoundedMember(response, limit = MAX_COMPANY_BYTES) {
     throw error;
   } finally {
     reader.releaseLock();
+  }
+  // Fetch normally decodes Content-Encoding before exposing the body stream;
+  // Content-Length then measures encoded bytes and cannot certify its length.
+  // For identity responses, detect a short or overlong body before decoding PB.
+  if (header != null && /^\d+$/.test(header) &&
+      (!encoding || encoding.trim().toLowerCase() === 'identity') &&
+      total !== Number(header)) {
+    throw new Error('Content-Length incompatível com o membro Protobuf recebido');
   }
   const bytes = new Uint8Array(total);
   let offset = 0;
