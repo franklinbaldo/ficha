@@ -17,7 +17,6 @@ from . import upstream
 from .sources import canonical_inventory
 
 _CHUNK = 1024 * 1024
-_STREAM_TIMEOUT = httpx.Timeout(connect=30, read=600, write=600, pool=30)
 _MAX_RAW_COMPRESSED_BYTES = 12 * 1024**3
 _MAX_RAW_UNCOMPRESSED_BYTES = 160 * 1024**3
 _MAX_RAW_MEMBERS = 2048
@@ -73,7 +72,9 @@ def stage_all(
     total_compressed = 0
     expanded = 0
     members = 0
-    with httpx.Client(timeout=_STREAM_TIMEOUT, follow_redirects=True) as client:
+    with httpx.Client(
+        timeout=httpx.Timeout(connect=30, read=600, write=600, pool=30), follow_redirects=True
+    ) as client:
         for spec in specs:
             url = upstream.file_url(token, month, spec.name)
             target_file = target / spec.name
@@ -123,5 +124,3 @@ def file_chunks(path: Path):
     with path.open("rb") as handle:
         while chunk := handle.read(_CHUNK):
             yield chunk
-
-
