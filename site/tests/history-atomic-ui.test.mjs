@@ -294,3 +294,48 @@ test('edição A→B→A descarta primeira leitura sem anunciar progresso final 
     assert.equal(doc.at('historia-resultado').children.length,0);
   });
 });
+
+test('identidade de CNPJ divergente na primeira observação é inconclusiva e interrompe o segundo GET',async()=>{
+  await withLocation(async()=>{
+    const calls=[];
+    const doc=await setup(async(_m,date)=>{
+      calls.push(date);
+      return {...outcome(date,'found'),cnpj:'00360305000104'};
+    });
+    await submit(doc);
+    assert.deepEqual(calls,['2026-06']);
+    assert.match(doc.at('historia-estado').textContent,/identidade.*inconclusiva/i);
+    assert.doesNotMatch(doc.at('historia-estado').textContent,/Comparação concluída/);
+    assert.doesNotMatch(textOf(doc.at('historia-resultado')),/EMPRESA 2026-06/);
+  });
+});
+
+test('história recusa competência divergente da segunda observação sem concluir comparação',async()=>{
+  await withLocation(async()=>{
+    const calls=[];
+    const doc=await setup(async(_m,date)=>{
+      calls.push(date);
+      return date==='2026-07'
+        ? {...outcome(date,'found'),date:'2026-06'}
+        : outcome(date,'found');
+    });
+    await submit(doc);
+    assert.deepEqual(calls,['2026-06','2026-07']);
+    assert.match(doc.at('historia-estado').textContent,/identidade.*inconclusiva/i);
+    assert.doesNotMatch(doc.at('historia-estado').textContent,/Comparação concluída/);
+    assert.doesNotMatch(textOf(doc.at('historia-resultado')),/EMPRESA 2026-07/);
+  });
+});
+
+test('payload de outro CNPJ não é exibido na tabela histórica',async()=>{
+  await withLocation(async()=>{
+    const doc=await setup(async(_m,date)=>
+      date==='2026-07'
+        ? {...outcome(date,'found'),data:{cnpj:'00360305000104',razao_social:'OUTRA EMPRESA'}}
+        : outcome(date,'found'));
+    await submit(doc);
+    assert.match(doc.at('historia-estado').textContent,/identidade.*inconclusiva/i);
+    assert.doesNotMatch(doc.at('historia-estado').textContent,/Comparação concluída/);
+    assert.doesNotMatch(textOf(doc.at('historia-resultado')),/OUTRA EMPRESA/);
+  });
+});
