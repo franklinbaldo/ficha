@@ -61,7 +61,10 @@ export async function fetchHistoryRecordAt(manifest, date, cnpj, {
   return atomic(manifest, date, cnpj);
 }
 
-function requireHistoryObservation(result) {
+function requireHistoryObservation(result, date, cnpj) {
+  if (!result || result.date !== date || result.cnpj !== cnpj) {
+    throw new Error('Identidade da observação divergente; comparação inconclusiva');
+  }
   if (result?.state === 'artifact-unavailable') {
     throw new Error('Consulta inconclusiva em ' + result.date +
       ': arquivo Protobuf não respondeu (HTTP 404); ausência não comprovada');
@@ -71,6 +74,9 @@ function requireHistoryObservation(result) {
   }
   if (result.state === 'found' && (!result.data || typeof result.data !== 'object')) {
     throw new Error('Registro encontrado sem dados; comparação inconclusiva');
+  }
+  if (result.state === 'found' && result.data.cnpj !== cnpj) {
+    throw new Error('Identidade do CNPJ no registro divergente; comparação inconclusiva');
   }
   if (result.state === 'absent-in-snapshot' && result.data != null) {
     throw new Error('Resposta de ausência contraditória; comparação inconclusiva');
@@ -169,13 +175,13 @@ export async function mountHistory(doc,{loadManifest=fetchManifest,lookup=fetchH
     button.setAttribute('aria-disabled','true');
     status(state,'Consultando competência inicial ('+start+')…');
     try {
-      const older=requireHistoryObservation(await lookup(manifest,start,cnpj));
+      const older=requireHistoryObservation(await lookup(manifest,start,cnpj), start, cnpj);
       // Avoid a second archival GET if the user changed the requested comparison.
       if (!stillCurrent()) { status(state,discarded); return; }
       status(state,older.state === 'absent-in-snapshot'
         ? 'CNPJ não localizado no registro Protobuf de '+start+'. Consultando competência final ('+end+')…'
         : 'Observação de '+start+' recebida. Consultando competência final ('+end+')…');
-      const newer=requireHistoryObservation(await lookup(manifest,end,cnpj));
+      const newer=requireHistoryObservation(await lookup(manifest,end,cnpj), end, cnpj);
       if (!stillCurrent()) { status(state,discarded); return; }
       setParams({cnpj,de:start,ate:end});
       renderHistoryComparison(doc,output,older,newer);
