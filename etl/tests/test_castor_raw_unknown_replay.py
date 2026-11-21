@@ -20,13 +20,21 @@ from ficha_etl.sources import canonical_inventory
 MONTH = "2026-07"
 
 
+class RawContractDefect(AssertionError):
+    """Only a specifically observed safety gap is an expected failure."""
+
+
 def require(condition: bool, message: str) -> None:
     """Retain negative assertions under optimized Python."""
     if not condition:
         raise AssertionError(message)
 
 
-@pytest.mark.xfail(strict=True, reason="#433: UNKNOWN replay not fenced")
+@pytest.mark.xfail(
+    strict=True,
+    raises=RawContractDefect,
+    reason="#433: UNKNOWN replay not fenced",
+)
 def test_ambiguous_put_replay_changes_bytes(monkeypatch, tmp_path):
     """A/503 followed by B under the same key must not issue a second PUT."""
     specs = list(canonical_inventory())
@@ -80,10 +88,15 @@ def test_ambiguous_put_replay_changes_bytes(monkeypatch, tmp_path):
     if len(matching) > 1:
         require(len(matching[0]) == len(matching[1]), "size not held equal")
         require(matching[0] != matching[1], "bytes did not change")
-    require(len(matching) == 1, "unknown key was replayed")
+    if len(matching) != 1:
+        raise RawContractDefect("unknown key was replayed")
 
 
-@pytest.mark.xfail(strict=True, reason="#433: catalog alone is not byte proof")
+@pytest.mark.xfail(
+    strict=True,
+    raises=RawContractDefect,
+    reason="#433: catalog alone is not byte proof",
+)
 def test_catalog_only_37_names_must_fail_closed(monkeypatch):
     """A metadata-only no-op is not a verified remote completion."""
     names = {f"raw/{spec.name}" for spec in canonical_inventory()}
@@ -96,8 +109,11 @@ def test_catalog_only_37_names_must_fail_closed(monkeypatch):
     monkeypatch.setattr(upload.upstream, "discover_token", forbidden)
     monkeypatch.setattr(upload.raw_preflight, "stage_all", forbidden)
     monkeypatch.setattr(upload, "_ia_s3_put", forbidden)
-    with pytest.raises(RuntimeError):
+    try:
         upload.stream_raw_zips_to_ia(MONTH, access_key="fake", secret_key="fake")
+    except RuntimeError:
+        return
+    raise RawContractDefect("catalog-only no-op was reported as completion")
 
 
 def test_optimized_python_executes_both_negative_contract_probes():
