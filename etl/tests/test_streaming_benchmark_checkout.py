@@ -10,10 +10,8 @@ from pathlib import Path
 import pytest
 import yaml
 
-WORKFLOW = (
-    Path(__file__).resolve().parents[2]
-    / ".github/workflows/etl-streaming-benchmark.yml"
-)
+ROOT = Path(__file__).resolve().parents[2]
+WORKFLOW = ROOT / ".github/workflows/etl-streaming-benchmark.yml"
 HEAD = "${{ github.event.pull_request.head.sha || github.sha }}"
 
 
