@@ -153,3 +153,16 @@ def test_optimized_python_replays_partial_catalog_negatives() -> None:
     report = completed.stdout + "\n" + completed.stderr
     require(completed.returncode == 0, report)
     require("2 xfailed" in completed.stdout, report)
+
+
+def test_formatter_diagnostic() -> None:
+    """TEMPORARY: display Ruff diff on the Windows test runner."""
+    source = str(Path(__file__).resolve())
+    result = subprocess.run(
+        ["ruff", "format", "--diff", source],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+    )
+    require(result.returncode == 0, result.stdout + "\n" + result.stderr)
