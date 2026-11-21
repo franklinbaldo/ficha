@@ -15,6 +15,7 @@ class Element {
   get options(){return this.children;}
   addEventListener(type,handler){this.listeners.set(type,handler);}
   setAttribute(name,value){this.attributes[name]=value;}
+  removeAttribute(name){delete this.attributes[name];}
 }
 function documentFor() {
   const ids=['historia-competencias','historia-inicio','historia-fim',

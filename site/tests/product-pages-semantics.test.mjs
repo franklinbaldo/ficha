@@ -23,6 +23,7 @@ class FakeElement {
   get options() { return this.children; }
   addEventListener(name, listener) { this.listeners.set(name, listener); }
   setAttribute(name, value) { this.attributes[name] = value; }
+  removeAttribute(name) { delete this.attributes[name]; }
 }
 
 function fakeDocument(ids = []) {
@@ -153,7 +154,9 @@ test('ficha descarta resposta tardia após mudança de CNPJ sem publicar URL ant
     doc.at('empresa-cnpj').value = '00000000E08G12';
     const submit = () => doc.at('empresa-form').listeners.get('submit')({ preventDefault() {} });
     const pending = submit();
-    assert.equal(doc.at('empresa-enviar').disabled, true);
+    assert.equal(doc.at('empresa-enviar').disabled, false,
+      'ficha mantém botão focável durante lookup');
+    assert.equal(doc.at('empresa-enviar').attributes['aria-disabled'], 'true');
     await submit(); // a synthetic repeated submit must not start another remote query
     assert.equal(lookups, 1);
     doc.at('empresa-cnpj').value = '00000000E08G13';
@@ -164,6 +167,8 @@ test('ficha descarta resposta tardia após mudança de CNPJ sem publicar URL ant
     assert.equal(doc.at('empresa-resultado').children.length, 0);
     assert.equal(globalThis.location.search, '', 'deep link must not record the stale request');
     assert.equal(doc.at('empresa-enviar').disabled, false);
+    assert.equal(doc.at('empresa-enviar').attributes['aria-disabled'], undefined,
+      'aria-disabled removido ao final do lookup obsoleto');
   });
 });
 
@@ -208,6 +213,9 @@ test('história interrompe segundo lookup quando a seleção muda após o primei
     doc.at('historia-fim').value = '2026-07';
     const submit = () => doc.at('historia-form').listeners.get('submit')({ preventDefault() {} });
     const pending = submit();
+    assert.equal(doc.at('historia-enviar').disabled,false,
+      'comparador mantém foco durante leitura remota');
+    assert.equal(doc.at('historia-enviar').attributes['aria-disabled'],'true');
     await submit(); // reject reentrant comparisons during the first lookup
     assert.equal(lookups.length, 1);
     doc.at('historia-fim').value = '2026-06';
@@ -218,6 +226,8 @@ test('história interrompe segundo lookup quando a seleção muda após o primei
     assert.match(doc.at('historia-estado').textContent, /alterados durante a comparação/i);
     assert.equal(globalThis.location.search, '');
     assert.equal(doc.at('historia-enviar').disabled, false);
+    assert.equal(doc.at('historia-enviar').attributes['aria-disabled'], undefined,
+      'aria-disabled removido ao final de comparação obsoleta');
   });
 });
 

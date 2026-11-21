@@ -14,6 +14,7 @@ class Element {
   get options(){return this.children;}
   addEventListener(type,fn){this.listeners.set(type,fn);}
   setAttribute(name,value){this.attributes[name]=value;}
+  removeAttribute(name){delete this.attributes[name];}
 }
 function documentFor(ids=[]) {
   const items=new Map(ids.map(id=>[id,new Element(id==='empresa-competencia'?'select':'div')]));
