@@ -19,6 +19,12 @@ def require_exact_streaming_checkout(config: dict) -> None:
     # Shell overrides may ignore the generated script file and silently pass.
     assert "shell" not in config.get("defaults", {}).get("run", {})
     job = config["jobs"]["streaming-benchmark"]
+    # Bash sources BASH_ENV for noninteractive scripts before running the guard.
+    # An inherited variable could shadow `git` and spoof the SHA comparison.
+    for scope in (config, job):
+        inherited_env = scope.get("env") or {}
+        assert isinstance(inherited_env, dict)
+        assert "BASH_ENV" not in inherited_env
     assert "shell" not in job.get("defaults", {}).get("run", {})
     # A skipped or allowed-to-fail job can be green without proving its checkout.
     assert "if" not in job
@@ -69,6 +75,8 @@ def test_streaming_workflow_checkout_is_sha_exact_and_fail_closed() -> None:
         "missing-etl-path",
         "missing-workflow-path",
         "dual-target-event",
+        "workflow-bash-env",
+        "job-bash-env",
     ),
 )
 def test_checkout_policy_rejects_regressions(mutation: str) -> None:
@@ -110,6 +118,10 @@ def test_checkout_policy_rejects_regressions(mutation: str) -> None:
         paths.remove(".github/workflows/etl-streaming-benchmark.yml")
     elif mutation == "dual-target-event":
         workflow.get("on", workflow.get(True))["pull_request_target"] = {}
+    elif mutation == "workflow-bash-env":
+        workflow["env"] = {"BASH_ENV": "ci/shadow-git.sh"}
+    elif mutation == "job-bash-env":
+        workflow["jobs"]["streaming-benchmark"]["env"] = {"BASH_ENV": "ci/shadow-git.sh"}
     else:
         guard["run"] = 'echo "$(git rev-parse HEAD)" = "$EXPECTED_SHA"'
     with pytest.raises((AssertionError, KeyError)):
