@@ -23,6 +23,17 @@ def require_exact_streaming_checkout(config: dict) -> None:
     # A skipped or allowed-to-fail job can be green without proving its checkout.
     assert "if" not in job
     assert job.get("continue-on-error") in (None, False)
+    # PyYAML 1.1 interprets the unquoted YAML key "on" as boolean True.
+    events = config.get("on", config.get(True))
+    assert isinstance(events, dict)
+    assert "workflow_dispatch" in events
+    assert "pull_request_target" not in events
+    pull_request = events["pull_request"]
+    assert isinstance(pull_request, dict)
+    assert pull_request.get("paths") == [
+        "etl/**",
+        ".github/workflows/etl-streaming-benchmark.yml",
+    ]
     steps = job["steps"]
     assert steps[0]["uses"] == "actions/checkout@v4"
     assert steps[0]["with"] == {"persist-credentials": False, "ref": HEAD}
@@ -55,6 +66,11 @@ def test_streaming_workflow_checkout_is_sha_exact_and_fail_closed() -> None:
         "guard-shell-noop",
         "job-default-shell-noop",
         "workflow-default-shell-noop",
+        "missing-pr-event",
+        "missing-dispatch-event",
+        "missing-etl-path",
+        "missing-workflow-path",
+        "dual-target-event",
     ),
 )
 def test_checkout_policy_rejects_regressions(mutation: str) -> None:
@@ -83,6 +99,26 @@ def test_checkout_policy_rejects_regressions(mutation: str) -> None:
         job_run_defaults["shell"] = "bash -c 'true' {0}"
     elif mutation == "workflow-default-shell-noop":
         workflow["defaults"] = {"run": {"shell": "bash -c 'true' {0}"}}
+    elif mutation in (
+        "missing-pr-event",
+        "missing-dispatch-event",
+        "missing-etl-path",
+        "missing-workflow-path",
+        "dual-target-event",
+    ):
+        events = workflow.get("on", workflow.get(True))
+        if mutation == "missing-pr-event":
+            del events["pull_request"]
+        elif mutation == "missing-dispatch-event":
+            del events["workflow_dispatch"]
+        elif mutation == "missing-etl-path":
+            events["pull_request"]["paths"].remove("etl/**")
+        elif mutation == "missing-workflow-path":
+            events["pull_request"]["paths"].remove(
+                ".github/workflows/etl-streaming-benchmark.yml"
+            )
+        else:
+            events["pull_request_target"] = {}
     else:
         guard["run"] = 'echo "$(git rev-parse HEAD)" = "$EXPECTED_SHA"'
     with pytest.raises((AssertionError, KeyError)):
