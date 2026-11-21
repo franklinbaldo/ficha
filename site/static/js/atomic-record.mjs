@@ -78,7 +78,9 @@ export async function readBoundedMember(response, limit = MAX_COMPANY_BYTES) {
       if (!(part.value instanceof Uint8Array)) throw new Error('Chunk Protobuf não binário');
       total += part.value.byteLength;
       if (total > limit) throw new Error('Membro Protobuf excede orçamento de leitura');
-      chunks.push(part.value);
+      // Readers may reuse and mutate a Uint8Array on the next pull. Preserve
+      // the chunk bytes immediately, before awaiting the following read.
+      chunks.push(new Uint8Array(part.value));
     }
   } catch (error) {
     // A transport may never settle its cancellation promise. Keep the original
