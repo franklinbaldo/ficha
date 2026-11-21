@@ -187,7 +187,9 @@ def test_complete_final_zip_at_actual_expansion_limit(monkeypatch, tmp_path, met
 
 
 @pytest.mark.parametrize("method", [zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED])
-def test_double_underreport_cannot_hide_unclaimed_zip_bytes(monkeypatch, tmp_path, method):
+def test_double_underreport_cannot_hide_unclaimed_zip_bytes(
+    monkeypatch, tmp_path, method
+):
     forged = _oversized_source_37(
         method, forge_header=True, forge_compressed=True
     )
@@ -219,7 +221,9 @@ def test_deflate_data_descriptor_remains_valid(monkeypatch, tmp_path):
     _equal(seen["received"], sources)
 
 
-def test_duplicate_zip_bytes_under_two_source_names_cannot_publish(monkeypatch, tmp_path):
+def test_duplicate_zip_bytes_under_two_source_names_cannot_publish(
+    monkeypatch, tmp_path
+):
     seen, _ = _offline(monkeypatch, source_37=_source_zip(0))
     with pytest.raises(RuntimeError, match="duplicate source SHA-256"):
         _run(tmp_path)
