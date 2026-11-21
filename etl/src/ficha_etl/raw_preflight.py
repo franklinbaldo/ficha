@@ -56,7 +56,7 @@ def _check_member_exact(
     header = handle.read(30)
     if len(header) != 30:
         raise RuntimeError("raw preflight: truncated ZIP local header")
-    signature, _, flags, method, _, _, _, _, _, name_len, extra_len = struct.unpack(
+    signature, _, flags, method, _, _, local_crc, local_compressed, local_uncompressed, name_len, extra_len = struct.unpack(
         "<IHHHHHIIIHH", header
     )
     if signature != 0x04034B50 or method != entry.compress_type or flags != entry.flag_bits:
@@ -64,7 +64,45 @@ def _check_member_exact(
     name = handle.read(name_len)
     if name.decode("utf-8" if flags & 0x800 else "cp437") != entry.filename:
         raise RuntimeError("raw preflight: ZIP member name mismatch")
-    handle.seek(extra_len, 1)
+    local_extra = handle.read(extra_len)
+    if len(local_extra) != extra_len:
+        raise RuntimeError("raw preflight: truncated ZIP local extra")
+    if not flags & 8:
+        # Without a data descriptor, local CRC and sizes must agree with
+        # the central directory. ZIP64 may encode sizes in local extra 0x0001.
+        if 0xFFFFFFFF in (local_compressed, local_uncompressed):
+            cursor = 0
+            zip64_extra = None
+            while cursor < len(local_extra):
+                if cursor + 4 > len(local_extra):
+                    raise RuntimeError("raw preflight: malformed ZIP local extra")
+                kind, width = struct.unpack_from("<HH", local_extra, cursor)
+                cursor += 4
+                if cursor + width > len(local_extra):
+                    raise RuntimeError("raw preflight: malformed ZIP local extra")
+                if kind == 1:
+                    if zip64_extra is not None:
+                        raise RuntimeError("raw preflight: duplicate ZIP64 local extra")
+                    zip64_extra = local_extra[cursor : cursor + width]
+                cursor += width
+            needed = 8 * (
+                (local_compressed == 0xFFFFFFFF)
+                + (local_uncompressed == 0xFFFFFFFF)
+            )
+            if zip64_extra is None or len(zip64_extra) < needed:
+                raise RuntimeError("raw preflight: missing ZIP64 local sizes")
+            cursor = 0
+            if local_uncompressed == 0xFFFFFFFF:
+                local_uncompressed = struct.unpack_from("<Q", zip64_extra, cursor)[0]
+                cursor += 8
+            if local_compressed == 0xFFFFFFFF:
+                local_compressed = struct.unpack_from("<Q", zip64_extra, cursor)[0]
+        if (local_crc, local_compressed, local_uncompressed) != (
+            entry.CRC,
+            entry.compress_size,
+            entry.file_size,
+        ):
+            raise RuntimeError("raw preflight: ZIP local CRC/size mismatch")
     data_end = handle.tell() + entry.compress_size
     if data_end > next_offset:
         raise RuntimeError("raw preflight: ZIP payload overlaps next entry")
