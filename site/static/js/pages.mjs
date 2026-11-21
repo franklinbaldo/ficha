@@ -35,6 +35,9 @@ function requireCompanyObservation(result) {
   if (result.state !== 'found' && result.data != null) {
     throw new Error('Estado do registro contradiz os dados retornados; consulta inconclusiva');
   }
+  if (result.state === 'found' && result.data.cnpj !== result.cnpj) {
+    throw new Error('CNPJ do registro divergente da consulta; consulta inconclusiva');
+  }
   return result;
 }
 
@@ -107,6 +110,9 @@ export async function mountCompany(doc, {loadManifest = fetchManifest, lookup = 
       const result = await lookup(manifest,date,cnpj);
       // A delayed archival response must not be presented as the new selection.
       if (!stillCurrent()) { status(state,discarded); return; }
+      if (!result || result.cnpj !== cnpj || result.date !== date) {
+        throw new Error('Identidade ou competência divergente na resposta; consulta inconclusiva');
+      }
       setParams({cnpj,competencia:date});
       renderCompanyRecord(doc,output,result);
       if (result.state === 'artifact-unavailable') {

@@ -155,3 +155,44 @@ test('CNPJ rejeitado não vira indisponibilidade nem deep link consultável',asy
     if(oldHistory===undefined)delete globalThis.history;else globalThis.history=oldHistory;
   }
 });
+
+test('registro encontrado com CNPJ interno divergente não vira ficha de outra empresa',()=>{
+  const doc=documentFor(), output=new Element();
+  const incompatible={...base,state:'found',
+    data:{cnpj:'60701190000104',razao_social:'REGISTRO DE OUTRA EMPRESA'}};
+  assert.throws(()=>renderCompanyRecord(doc,output,incompatible),/CNPJ.*inconclusiva/i);
+  assert.doesNotMatch(treeText(output),/REGISTRO DE OUTRA EMPRESA|FICHA CADASTRAL/);
+});
+
+test('resposta de outra consulta não vira resultado positivo ou ausência para a seleção atual',async()=>{
+  const oldLocation=globalThis.location,oldHistory=globalThis.history;
+  globalThis.location=new URL('https://franklinbaldo.github.io/ficha/empresa/');
+  globalThis.history={replaceState(_s,_t,url){globalThis.location=new URL(String(url));}};
+  try{
+    const ids=['empresa-cnpj','empresa-competencia','empresa-form',
+      'empresa-estado','empresa-resultado','empresa-enviar'];
+    const doc=documentFor(ids);
+    let requests=0;
+    const wrongResponses=[
+      {...base,date:'2026-06',state:'absent-in-snapshot',data:null},
+      {...base,cnpj:'60701190000104',state:'found',
+        data:{cnpj:'60701190000104',razao_social:'REGISTRO ALHEIO'}},
+    ];
+    await mountCompany(doc,{loadManifest:async()=>manifest,
+      lookup:async()=>wrongResponses[requests++]});
+    doc.at('empresa-cnpj').value=cnpj;
+    const submit=()=>doc.at('empresa-form').listeners.get('submit')({preventDefault(){}});
+    for (const expectedCount of [1,2]) {
+      await submit();
+      assert.equal(requests,expectedCount);
+      assert.match(doc.at('empresa-estado').textContent,/Consulta indisponível.*inconclusiva/i);
+      assert.doesNotMatch(doc.at('empresa-estado').textContent,/Consulta concluída/i);
+      assert.doesNotMatch(treeText(doc.at('empresa-resultado')),
+        /CNPJ não localizado|FICHA CADASTRAL|REGISTRO ALHEIO/);
+      assert.match(treeText(doc.at('empresa-resultado')),/Consultar o catálogo de arquivos/);
+    }
+  }finally{
+    if(oldLocation===undefined)delete globalThis.location;else globalThis.location=oldLocation;
+    if(oldHistory===undefined)delete globalThis.history;else globalThis.history=oldHistory;
+  }
+});
