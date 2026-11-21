@@ -20,8 +20,9 @@ export function validateManifest(manifest) {
 }
 
 export async function fetchManifest({fetchImpl = fetch, url = '/ficha/manifest.json'} = {}) {
+  // This is a full GET, never a byte-range probe: 201/206 cannot certify the catalogue.
   const response = await fetchImpl(url, {cache:'no-store'});
-  if (!response.ok) throw new Error('Catálogo indisponível: HTTP ' + response.status);
+  if (response.status !== 200) throw new Error('Catálogo indisponível: HTTP ' + response.status);
   return validateManifest(await response.json());
 }
 
