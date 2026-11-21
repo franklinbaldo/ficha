@@ -301,6 +301,7 @@ def test_no_explicit_spool_denies_get_and_put(monkeypatch):
     _equal(seen["gets"], [])
     _equal(seen["puts"], [])
 
+
 def test_optimized_python_replays_zip37_local_guard():
     """Replay the six local-header negatives and positive controls with -O.
 
@@ -326,6 +327,6 @@ def test_optimized_python_replays_zip37_local_guard():
     )
     if replay.returncode != 0:
         raise AssertionError(
-            f"python -O replay exited {replay.returncode}:\\n"
-            f"{replay.stdout}\\n{replay.stderr}"
+            f"python -O replay exited {replay.returncode}:\n"
+            f"{replay.stdout}\n{replay.stderr}"
         )
