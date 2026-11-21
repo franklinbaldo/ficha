@@ -164,7 +164,9 @@ export async function mountHistory(doc,{loadManifest=fetchManifest,lookup=fetchH
       canonicalCnpj(input.value) === cnpj && from.value === start && to.value === end;
     const discarded = 'CNPJ ou competências alterados durante a comparação. Pesquise novamente.';
     busy = true;
-    button.disabled=true;
+    // Keep the button in the keyboard tab order during slow archival lookups.
+    // The busy guard rejects repeated submits without disabling focus.
+    button.setAttribute('aria-disabled','true');
     status(state,'Consultando competência inicial ('+start+')…');
     try {
       const older=requireHistoryObservation(await lookup(manifest,start,cnpj));
@@ -193,7 +195,7 @@ export async function mountHistory(doc,{loadManifest=fetchManifest,lookup=fetchH
         status(state,'Comparação indisponível: '+error.message,true);
         anchor(doc,output,'Ver competências disponíveis',BASE+'acervo/');
       }
-    }finally{busy=false;selection.finish();button.disabled=false;}
+    }finally{busy=false;selection.finish();button.removeAttribute('aria-disabled');}
   });
 }
 
