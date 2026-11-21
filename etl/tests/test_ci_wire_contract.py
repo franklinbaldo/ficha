@@ -124,7 +124,8 @@ def test_jobs_checkout_and_assert_same_literal_source_sha() -> None:
         assert steps[0]["uses"] == "actions/checkout@v4"
         assert steps[0]["with"] == {"ref": EXACT_SHA, "persist-credentials": False}
         assert steps[1]["name"] == "Verify exact CI checkout SHA"
-        assert steps[1]["run"] == f'test "$(git rev-parse HEAD)" = "{EXACT_SHA}"'
+        assert steps[1]["env"] == {"EXPECTED_SHA": EXACT_SHA}
+        assert steps[1]["run"] == 'test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"'
         assert "if" not in steps[1]
         assert steps[1].get("continue-on-error") in (None, False)
 

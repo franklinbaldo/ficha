@@ -13,6 +13,7 @@ import collections
 import json
 import logging
 import os
+import re
 import shutil
 import tempfile
 import time
@@ -81,8 +82,9 @@ def extract_all(
     extract_dir: Path,
     *,
     progress: Progress | None = None,
+    reject_empty_estabelecimentos: bool = False,
 ) -> list[ExtractedFile]:
-    """Resolve cada ZIP via chain, extrai pra `extract_dir/{kind}/`.
+    """Resolve cada ZIP via chain, extrai pra `extract_dir/{kind}/{spec.name}/`.
 
     RFB publica exatamente 1 CSV por ZIP. A invariante é checada explicitamente
     aqui — se RFB mudar e empacotar arquivos extras (ex.: checksum), falhamos
@@ -90,6 +92,10 @@ def extract_all(
 
     `progress`: barra de progresso já iniciada (rich) pra reusar entre
     chamadas dentro do mesmo `run`; se omitido, cria (e fecha) a sua própria.
+
+    `reject_empty_estabelecimentos`: exige bytes não vazios em cada uma das dez
+    partes RFB na execução mensal; permanece opcional porque fixtures históricas
+    do ETL usam partes vazias para exercitar cenários sintéticos reduzidos.
     """
     if not is_valid_month(month):
         raise ValueError(f"month must be YYYY-MM, got {month!r}")
@@ -116,7 +122,11 @@ def extract_all(
         for i, spec in enumerate(inventory, 1):
             t0 = time.monotonic()
             zip_path = zip_paths[spec.name]
-            kind_dir = extract_dir / spec.kind
+            # Give each canonical ZIP its own extraction root: different RFB
+            # parts may contain a member with the same internal filename.
+            # A shared kind directory would overwrite the earlier part before
+            # DuckDB reads it, silently duplicating the later part instead.
+            kind_dir = extract_dir / spec.kind / spec.name
             extracted = extract_zip(zip_path, kind_dir)
             files = [p for p in extracted if p.is_file()]
             if not files:
@@ -127,6 +137,12 @@ def extract_all(
                     f"{[p.name for p in files]}"
                 )
             csv_path = files[0]
+            if (
+                reject_empty_estabelecimentos
+                and spec.kind == "estabelecimentos"
+                and csv_path.stat().st_size == 0
+            ):
+                raise RuntimeError(f"zip {spec.name!r} has an empty estabelecimento CSV")
             size_mb = csv_path.stat().st_size / 1024 / 1024
             log.info(
                 "[%d/%d] extracted %s → %.1f MB CSV (%.1fs)",
@@ -238,6 +254,8 @@ def _create_table_from_csvs(
     table: str,
     csv_paths: Iterable[Path],
     spec: registry.CsvSpec,
+    *,
+    per_file_counts: dict[Path, int] | None = None,
 ) -> None:
     """Cria/recria ``table`` como união lossless de leituras por arquivo.
 
@@ -252,6 +270,11 @@ def _create_table_from_csvs(
     campo `correio_eletronico`) como U+008F em vez de rejeitar ou apagar a
     linha, e mantém arquivos UTF-8 verdadeiros sem mojibake.
     """
+    # Reuse each already-materialized DuckDB table to record logical row counts.
+    # These counts are tied to the exact parser used by the writer, not to
+    # physical newlines (CSV fields can contain quoted newlines).
+    if per_file_counts is not None:
+        per_file_counts.clear()
     paths = [p for p in csv_paths if p.exists() and p.stat().st_size > 0]
     if not paths:
         col_defs = ", ".join(f"{c} VARCHAR" for c in spec.columns)
@@ -259,10 +282,18 @@ def _create_table_from_csvs(
         return
 
     _create_table_from_single_csv(con, table, paths[0], spec)
+    if per_file_counts is not None:
+        per_file_counts[paths[0].resolve()] = int(
+            con.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+        )
     staging = f"__ficha_{table}_csv_part"
     try:
         for csv_path in paths[1:]:
             _create_table_from_single_csv(con, staging, csv_path, spec)
+            if per_file_counts is not None:
+                per_file_counts[csv_path.resolve()] = int(
+                    con.execute(f"SELECT COUNT(*) FROM {staging}").fetchone()[0]
+                )
             con.execute(f"INSERT INTO {table} SELECT * FROM {staging}")
     finally:
         con.execute(f"DROP TABLE IF EXISTS {staging}")
@@ -573,10 +604,39 @@ def load_lookup_into_duckdb(
     kind: FileKind,
     csv_path: Path,
 ) -> None:
-    """Carrega lookup RFB pelo mesmo caminho lossless das tabelas principais."""
+    """Carrega lookup RFB sem permitir fan-out em joins por codigo.
+
+    Duplicatas identicas e conflitantes sao rejeitadas antes de qualquer writer:
+    reduzir por dict ou ANY_VALUE ocultaria divergencias e nao protegeria joins
+    de cnpjs, cnpj_cnaes, enderecos, raizes ou socios.
+    """
     table = f"lookup_{kind}"
     spec = registry.CsvSpec(columns=("codigo", "descricao"))
     _create_table_from_csvs(con, table, [csv_path], spec)
+
+    duplicate_keys, excess_rows, conflicting_keys, sample_codes = con.execute(
+        f"""
+        WITH duplicates AS (
+            SELECT codigo, COUNT(*) AS rows_per_code,
+                   COUNT(DISTINCT struct_pack(descricao := descricao)) AS variants
+            FROM {table}
+            GROUP BY codigo
+            HAVING COUNT(*) > 1
+        )
+        SELECT COUNT(*), COALESCE(SUM(rows_per_code - 1), 0),
+               COALESCE(SUM(CASE WHEN variants > 1 THEN 1 ELSE 0 END), 0),
+               list(codigo ORDER BY codigo)[1:5]
+        FROM duplicates
+        """
+    ).fetchone()
+    if duplicate_keys:
+        # Do not expose a rejected lookup table to a caller catching the error.
+        con.execute(f"DROP TABLE {table}")
+        raise ValueError(
+            f"{table}: duplicate codigo; keys={duplicate_keys}, "
+            f"excess_rows={excess_rows}, conflicting_keys={conflicting_keys}, "
+            f"sample_codes={sample_codes!r}"
+        )
 
 
 def lookups_dict(con: duckdb.DuckDBPyConnection, kind: FileKind) -> dict[str, str]:
@@ -1565,14 +1625,25 @@ def write_enderecos_parquet(
     auxiliar e nunca é necessário só para interpretar uma linha de endereço.
     Ver docs/perf-plan-2026-05.md §7 e ADR 0023.
 
-    Normalização vetorizada: CTE computa a base normalizada uma vez por linha
-    (UPPER + strip_accents + TRIM + whitespace collapse); depois uma única
-    extração de prefixo + MAP lookup substitui as 10 chamadas regexp_replace
-    anteriores, passando de 11 para 4 operações regex/map por linha.
+    Quando o logradouro não começa com um tipo conhecido, acrescenta tipo_logradouro
+    separado (origem RFB) antes de normalizar. Um prefixo já explícito no
+    logradouro prevalece, evitando duplicação e preservando conflitos para
+    diagnóstico separado.
+
+    Normalização vetorizada em DuckDB (UPPER, strip_accents e espaços).
+    Os prefixos conhecidos vêm da mesma tabela de abreviações usada pelo MAP.
+    A verificação do prefixo adiciona trabalho ao writer; medir o custo
+    sobre um volume representativo antes de publicar novo snapshot.
     """
     output_path.parent.mkdir(parents=True, exist_ok=True)
     log.info("    writing enderecos.parquet...")
     abbrev_map = "MAP {" + ", ".join(f"'{k}': '{v} '" for k, v in _LOGRADOURO_ABBREVS.items()) + "}"
+    prefixos = set(_LOGRADOURO_ABBREVS) | set(_LOGRADOURO_ABBREVS.values())
+    tipo_prefix_pattern = (
+        r"^(?:"
+        + "|".join(re.escape(p) for p in sorted(prefixos, key=lambda p: (-len(p), p)))
+        + r")\.?\s+"
+    )
     has_lookup = _has_lookup_table(con, "lookup_municipios")
     municipio_name_sql = "mun.descricao" if has_lookup else "NULL::VARCHAR"
     municipio_join_sql = (
@@ -1587,7 +1658,19 @@ def write_enderecos_parquet(
                     est.municipio AS municipio_codigo,
                     {municipio_name_sql} AS municipio_nome,
                     UPPER(strip_accents(TRIM(
-                        regexp_replace(est.logradouro, '\s+', ' ', 'g')
+                        regexp_replace(
+                            CASE
+                                WHEN est.tipo_logradouro IS NULL
+                                  OR TRIM(est.tipo_logradouro) = ''
+                                  OR regexp_matches(
+                                      UPPER(strip_accents(TRIM(est.logradouro))),
+                                      '{tipo_prefix_pattern}'
+                                  )
+                                THEN est.logradouro
+                                ELSE TRIM(est.tipo_logradouro) || ' ' || est.logradouro
+                            END,
+                            '\s+', ' ', 'g'
+                        )
                     ))) AS _logr,
                     est.numero,
                     est.cep,
@@ -1996,6 +2079,7 @@ def transform_snapshot(
     skip_unimplemented: bool = True,
     verify: bool = False,
     verify_sample_size: int = 100,
+    reject_empty_estabelecimentos: bool = False,
     progress: Progress | None = None,
 ) -> None:
     """Orquestrador: resolve → extract → load → write outputs.
@@ -2037,7 +2121,13 @@ def transform_snapshot(
         log.info("=== PHASE 1/4: extract 37 ZIPs for %s ===", month)
         t0 = time.monotonic()
         with recorder.stage("extract", workdir=extract_dir) as _mh_extract:
-            extracted = extract_all(month, chain, extract_dir, progress=progress)
+            extracted = extract_all(
+                month,
+                chain,
+                extract_dir,
+                progress=progress,
+                reject_empty_estabelecimentos=reject_empty_estabelecimentos,
+            )
             _mh_extract.bytes_read = sum(
                 ef.csv_path.stat().st_size for ef in extracted if ef.csv_path.exists()
             )
@@ -2262,7 +2352,7 @@ def transform_snapshot(
 
         # --- Step 3b: Roundtrip-equivalence verify (ADR 0009) ---
         # Must happen BEFORE deleting estabelecimento CSVs (step 4).
-        if verify:
+        if verify or reject_empty_estabelecimentos:
             cnpjs_parquet = output_dir / "cnpjs.parquet"
             if cnpjs_parquet.exists():
                 log.info(
@@ -2283,18 +2373,52 @@ def transform_snapshot(
                     # Re-load estabelecimento from all CSVs so assert_roundtrip can
                     # compare against the original source rows. After write_cnpjs_parquet_chunked
                     # each chunk's table was dropped; we reload the full set here.
+                    parsed_part_counts: dict[Path, int] = {}
                     if estabelecimento_csv_paths:
-                        _create_table_from_csvs(
-                            con,
-                            "estabelecimento",
-                            estabelecimento_csv_paths,
-                            registry.main_table("estabelecimento").source,
-                        )
+                        # Preserve the legacy reader signature for non-monthly
+                        # paths, including instrumentation that wraps this call.
+                        if reject_empty_estabelecimentos:
+                            _create_table_from_csvs(
+                                con,
+                                "estabelecimento",
+                                estabelecimento_csv_paths,
+                                registry.main_table("estabelecimento").source,
+                                per_file_counts=parsed_part_counts,
+                            )
+                        else:
+                            _create_table_from_csvs(
+                                con,
+                                "estabelecimento",
+                                estabelecimento_csv_paths,
+                                registry.main_table("estabelecimento").source,
+                            )
                     _mh_verify.bytes_read = sum(
                         p.stat().st_size for p in estabelecimento_csv_paths if p.exists()
                     )
                     _mh_verify.files_read = len(estabelecimento_csv_paths)
-                    assert_roundtrip(con, cnpjs_parquet, sample_size=verify_sample_size)
+                    if verify:
+                        assert_roundtrip(con, cnpjs_parquet, sample_size=verify_sample_size)
+                    if reject_empty_estabelecimentos:
+                        # Monthly-only exact multiset witness from the ten CSVs
+                        # reloaded through the SAME DuckDB reader as the writer.
+                        # This must run before source deletion and first raw PUT.
+                        from .monthly_source_bag_gate import reconcile_loaded_source_keys
+
+                        source_parts = [
+                            (ef.zip_name, ef.csv_path)
+                            for ef in extracted
+                            if ef.kind == "estabelecimentos"
+                        ]
+                        reconcile_loaded_source_keys(
+                            con,
+                            month,
+                            source_parts,
+                            cnpjs_parquet,
+                            output_dir.parent
+                            / "evidence"
+                            / "monthly-estabelecimento-source-bag.json",
+                            parsed_part_counts,
+                        )
                     _mh_verify.rows_read = min(
                         verify_sample_size,
                         con.execute("SELECT COUNT(*) FROM estabelecimento").fetchone()[0],

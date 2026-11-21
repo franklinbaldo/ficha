@@ -25,10 +25,10 @@ Ver ADR 0012 e mirror.py (URLs de leitura).
 
 from __future__ import annotations
 
+import hashlib
 import logging
-import threading
+import tempfile
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import httpx
@@ -37,7 +37,7 @@ import internetarchive as ia
 from .mirror import item_id
 from .sources import canonical_inventory, is_valid_month
 from .transform import _LOOKUP_KINDS
-from . import upstream
+from . import raw_preflight, upstream
 
 log = logging.getLogger(__name__)
 
@@ -143,13 +143,40 @@ def _stream_one_zip(
     remote_name = f"raw/{spec.name}"
 
     with httpx.Client(timeout=_STREAM_TIMEOUT, follow_redirects=True) as dl:
-        with dl.stream("GET", rfb_url, auth=(rfb_token, "")) as rfb_resp:
+        with dl.stream(
+            "GET", rfb_url, auth=(rfb_token, ""), headers={"Accept-Encoding": "identity"}
+        ) as rfb_resp:
             rfb_resp.raise_for_status()
+            # raise_for_status() accepts 2xx including 206 Partial Content. No
+            # byte range was requested: uploading a partial ZIP would silently
+            # publish a truncated object with a matching Content-Length.
+            if rfb_resp.status_code != 200:
+                raise RuntimeError(
+                    f"RFB unexpected HTTP status for {spec.name}: {rfb_resp.status_code}"
+                )
+            # httpx.iter_bytes() transparently decompresses encoded HTTP bodies.
+            # A ZIP mirror must upload the identical octets whose length RFB reports.
+            content_encoding = rfb_resp.headers.get("content-encoding", "identity").strip().lower()
+            if content_encoding != "identity":
+                raise RuntimeError(
+                    f"RFB unexpected Content-Encoding for {spec.name}: {content_encoding!r}"
+                )
             content_length = rfb_resp.headers.get("content-length", "")
             if not content_length:
                 raise RuntimeError(
                     f"RFB não retornou Content-Length para {spec.name} "
                     "— streaming sem tamanho não é suportado"
+                )
+            # An empty HTTP 200 body is not an RFB ZIP, even with a valid
+            # Content-Length header. Require a positive ASCII decimal size
+            # before opening the first IA PUT.
+            if (
+                not content_length.isascii()
+                or not content_length.isdecimal()
+                or int(content_length) == 0
+            ):
+                raise RuntimeError(
+                    f"RFB invalid Content-Length for {spec.name}: {content_length!r}"
                 )
             log.info(
                 "streaming %s → IA (%.1f MB)",
@@ -159,7 +186,7 @@ def _stream_one_zip(
             _ia_s3_put(
                 identifier,
                 remote_name,
-                rfb_resp.iter_bytes(_CHUNK),
+                rfb_resp.iter_raw(_CHUNK),
                 content_length=content_length,
                 access_key=access_key,
                 secret_key=secret_key,
@@ -231,35 +258,71 @@ def _stream_one_zip_with_retry(
 _IA_METADATA_URL = "https://archive.org/metadata/{identifier}"
 
 
-def _existing_raw_files_on_ia(identifier: str) -> set[str]:
-    """Returns the set of `raw/*` file names already on ia:{identifier}.
+def _catalog_raw_size(value: object, name: str) -> int:
+    """Parse IA catalog byte sizes without bool/float/Unicode coercion.
 
-    Empty set when the item doesn't exist yet, or when the metadata API
-    fails (502/timeout) -- in that case we fall back to streaming
-    everything, which is correct (PUTs are idempotent overwrites at IA).
+    This is a catalog observation, NOT an authentication of the RFB bytes.
+    """
+    if type(value) is int:
+        size = value
+    elif isinstance(value, str) and value.isascii() and value.isdecimal():
+        try:
+            size = int(value)
+        except ValueError as exc:
+            raise RuntimeError(f"IA raw metadata: invalid size for {name}") from exc
+    else:
+        raise RuntimeError(f"IA raw metadata: invalid size for {name}")
+    if size < 0:
+        raise RuntimeError(f"IA raw metadata: negative size for {name}")
+    return size
+
+
+def _existing_raw_files_on_ia(identifier: str) -> set[str]:
+    """Return raw names with unambiguous positive sizes in the IA catalog.
+
+    Name and size are NOT proof that the ZIP equals the RFB source. Reject
+    malformed or duplicate entries before starting any upstream GET / IA PUT.
+    Only a confirmed 404 permits treating the IA item as absent.
     """
     url = _IA_METADATA_URL.format(identifier=identifier)
     try:
         with httpx.Client(timeout=30.0) as client:
             resp = client.get(url)
-        if resp.status_code != 200:
-            log.info(
-                "ia:%s metadata returned HTTP %d -- assuming new item", identifier, resp.status_code
+        if resp.status_code in (401, 403):
+            raise RuntimeError(
+                f"IA raw metadata: access denied HTTP {resp.status_code} for {identifier}"
             )
+        if resp.status_code == 429:
+            raise RuntimeError(f"IA raw metadata: rate limited HTTP 429 for {identifier}")
+        if resp.status_code == 404:
             return set()
-        data = resp.json()
-    except (httpx.HTTPError, ValueError) as exc:
-        log.warning("ia:%s metadata fetch failed (%s) -- will stream all", identifier, exc)
-        return set()
+        if resp.status_code != 200:
+            raise RuntimeError(
+                f"IA raw metadata: unavailable HTTP {resp.status_code} for {identifier}"
+            )
+    except httpx.HTTPError as exc:
+        raise RuntimeError(f"IA raw metadata: fetch failed for {identifier}") from exc
 
-    files = data.get("files") or []
-    raw = {
-        f["name"]
-        for f in files
-        if isinstance(f, dict)
-        and f.get("name", "").startswith("raw/")
-        and int(f.get("size", 0) or 0) > 0
-    }
+    try:
+        data = resp.json()
+    except ValueError as exc:
+        raise RuntimeError(f"IA raw metadata: invalid JSON for {identifier}") from exc
+
+    if not isinstance(data, dict) or not isinstance(data.get("files"), list):
+        raise RuntimeError(f"IA raw metadata: invalid file catalog for {identifier}")
+    raw: set[str] = set()
+    seen: set[str] = set()
+    for entry in data["files"]:
+        if not isinstance(entry, dict) or not isinstance(entry.get("name"), str):
+            raise RuntimeError(f"IA raw metadata: malformed file entry for {identifier}")
+        name = entry["name"]
+        if not name.startswith("raw/"):
+            continue
+        if name in seen:
+            raise RuntimeError(f"IA raw metadata: duplicate file entry {name}")
+        seen.add(name)
+        if _catalog_raw_size(entry.get("size"), name) > 0:
+            raw.add(name)
     return raw
 
 
@@ -269,18 +332,14 @@ def stream_raw_zips_to_ia(
     access_key: str,
     secret_key: str,
     workers: int = 4,
+    spool_dir: Path | None = None,
 ) -> None:
-    """Espelha os 37 ZIPs da RFB para ficha-YYYY-MM/raw/ SEM tocar disco.
+    """Admite todos os 37 ZIPs antes de qualquer IA PUT neste caminho.
 
-    Abre GET streaming para cada ZIP no WebDAV da RFB e faz PUT direto ao
-    endpoint S3 do Internet Archive. A memória usada por worker é de apenas
-    1 MiB (tamanho do chunk) — ideal para runners com disco limitado.
-
-    Args:
-        month: snapshot no formato YYYY-MM.
-        access_key: IA S3-like access key.
-        secret_key: IA S3-like secret key.
-        workers: downloads/uploads simultâneos (default: 4).
+    Exige scratch explícito e disponível; sem ele a rotina recusa publicação.
+    O lote é preparado sequencialmente em disco e validado por ZIP/CRC e
+    limites globais. O estágio temporário não é spool imutável nem journal.
+    Retentativas ambíguas permanecem desabilitadas neste caminho.
     """
     if not is_valid_month(month):
         raise ValueError(f"month must be YYYY-MM, got {month!r}")
@@ -288,13 +347,7 @@ def stream_raw_zips_to_ia(
     identifier = item_id(month)
     all_specs = list(canonical_inventory())
 
-    # Skip ZIPs already present on IA. Idempotent re-runs (e.g. retry after
-    # transform failure, or backfill resuming a partial month) avoid
-    # ~30 min and ~7 GB of pointless re-streaming. RFB historical files
-    # are immutable per ADR 0015, so name-based existence is sufficient.
-    # IMPORTANT: this runs BEFORE upstream.discover_token() so a recovery
-    # run with all files already on IA succeeds even if RFB is down or
-    # has rotated its share token.
+    # Check existing raw objects before contacting RFB (ADR 0015).
     existing = _existing_raw_files_on_ia(identifier)
     specs = [s for s in all_specs if f"raw/{s.name}" not in existing]
     skipped = len(all_specs) - len(specs)
@@ -309,62 +362,50 @@ def stream_raw_zips_to_ia(
         log.info("all %d ZIPs already on ia:%s — stream is a no-op", len(all_specs), identifier)
         return
 
-    # Only contact RFB if we actually need to stream from it.
+    # Without an operator-selected disk there is no safe capacity assumption.
+    # The old zero-disk producer cannot guarantee 37/37 before the first PUT.
+    if spool_dir is None or not spool_dir.is_dir():
+        raise RuntimeError("raw preflight requires an existing explicit spool_dir")
+    if workers < 1:
+        raise ValueError("workers must be positive")
+
     try:
-        rfb_token = upstream.discover_token()
+        token = upstream.discover_token()
     except upstream.NoTokenError as exc:
-        raise RuntimeError(f"sem token RFB para streaming: {exc}") from exc
+        raise RuntimeError(f"sem token RFB para preflight: {exc}") from exc
 
-    total = len(specs)
-    done = 0
-    lock = threading.Lock()
-    first_lock = threading.Lock()
-    # `is_first` carries item metadata (title, subject, license, etc.).
-    # We always send it on the first task of every run -- if a prior
-    # run created the item but its `is_first` worker died (e.g. em-dash
-    # crash, see PR #24), the item could exist with files but no
-    # metadata. Re-sending the metadata headers on a PUT is idempotent
-    # at IA's end (overwrite with same values). Cost: 5 extra header
-    # keys on exactly one PUT per run.
-    first_sent = False
+    # No IA PUT can occur until stage_all validates *every* canonical
+    # source, including the last one, against global compressed/expanded caps.
+    # This first slice deliberately does not retry ambiguous PUTs or certify
+    # the scratch inode as immutable; those require journal/readback follow-ups.
+    with tempfile.TemporaryDirectory(prefix="ficha-raw-preflight-", dir=spool_dir) as temp:
+        staged = raw_preflight.stage_all(all_specs, month, token, Path(temp))
+        for index, spec in enumerate(specs):
+            path, size, pinned_sha = staged[spec.name]
+            # A second digest check catches ordinary pathname changes between
+            # preflight and PUT, but is NOT inode sealing against held writers.
+            with path.open("rb") as handle:
+                current_sha = hashlib.file_digest(handle, "sha256").hexdigest()
+            if current_sha != pinned_sha:
+                raise RuntimeError(f"raw preflight: staged bytes changed: {spec.name}")
+            _ia_s3_put(
+                identifier,
+                f"raw/{spec.name}",
+                raw_preflight.file_chunks(path),
+                content_length=str(size),
+                access_key=access_key,
+                secret_key=secret_key,
+                is_first=index == 0,
+            )
+    log.info("raw preflight admitted %d sources; sent %d missing names", len(staged), len(specs))
 
-    log.info(
-        "streaming %d ZIPs RFB → ia:%s/raw/ (%d workers, zero disk)",
-        total,
-        identifier,
-        workers,
-    )
 
-    def _task(spec) -> str:
-        nonlocal done, first_sent
-        with first_lock:
-            is_first = not first_sent
-            if is_first:
-                first_sent = True
-        name = _stream_one_zip_with_retry(
-            spec,
-            rfb_token=rfb_token,
-            month=month,
-            identifier=identifier,
-            access_key=access_key,
-            secret_key=secret_key,
-            is_first=is_first,
+def _check_responses(responses: list, label: str, expected: int | None = None) -> None:
+    """A quantidade de respostas também integra o recibo de upload."""
+    if not responses or (expected is not None and len(responses) != expected):
+        raise RuntimeError(
+            f"IA upload incomplete [{label}]: expected {expected}, got {len(responses) if responses else 0}"
         )
-        with lock:
-            done += 1
-            log.info("[%d/%d] streamed %s → IA", done, total, name)
-        return name
-
-    with ThreadPoolExecutor(max_workers=workers) as executor:
-        futures = {executor.submit(_task, spec): spec for spec in specs}
-        for future in as_completed(futures):
-            future.result()  # propaga exceção se houver
-
-    log.info("all %d ZIPs streamed to ia:%s OK", total, identifier)
-
-
-def _check_responses(responses: list, label: str) -> None:
-    """Levanta RuntimeError se algum response indicar falha."""
     for r in responses:
         if r.status_code not in (200, 201):
             raise RuntimeError(f"IA upload failed [{label}]: HTTP {r.status_code} — {r.url}")
@@ -376,6 +417,7 @@ def upload_outputs(
     *,
     access_key: str,
     secret_key: str,
+    frozen: dict | None = None,
 ) -> None:
     """Faz upload de todos os parquets + lookups.json para o item IA do mês.
 
@@ -402,9 +444,12 @@ def upload_outputs(
     for kind in _LOOKUP_KINDS:
         outputs[f"lookups/{kind}.parquet"] = output_dir / "lookups" / f"{kind}.parquet"
 
-    missing = [name for name, path in outputs.items() if not path.exists()]
-    if missing:
-        raise FileNotFoundError(f"outputs missing before upload: {missing}")
+    if frozen is None:
+        missing = [name for name, path in outputs.items() if not path.exists()]
+        if missing:
+            raise FileNotFoundError(f"outputs missing before upload: {missing}")
+    elif set(frozen) != set(outputs):
+        raise ValueError("frozen output set differs from expected upload files")
 
     identifier = item_id(month)
     metadata = {
@@ -420,7 +465,7 @@ def upload_outputs(
     log.info("uploading %d output files to ia:%s", len(outputs), identifier)
     responses = ia.upload(
         identifier,
-        files={name: str(path) for name, path in outputs.items()},
+        files=frozen if frozen is not None else {name: str(path) for name, path in outputs.items()},
         metadata=metadata,
         access_key=access_key,
         secret_key=secret_key,
@@ -428,7 +473,7 @@ def upload_outputs(
         retries_sleep=_RETRY_SLEEP,
         verbose=True,
     )
-    _check_responses(responses, "outputs")
+    _check_responses(responses, "outputs", len(outputs) if frozen is not None else None)
     log.info("uploaded outputs to ia:%s OK", identifier)
 
 
@@ -439,6 +484,7 @@ def upload_companies_zip(
     access_key: str,
     secret_key: str,
     identifier_override: str | None = None,
+    frozen=None,
 ) -> None:
     """Faz upload de companies.zip para o item IA do mês.
 
@@ -452,21 +498,21 @@ def upload_companies_zip(
     """
     if not is_valid_month(month):
         raise ValueError(f"month must be YYYY-MM, got {month!r}")
-    if not companies_zip_path.exists():
+    if frozen is None and not companies_zip_path.exists():
         raise FileNotFoundError(f"companies.zip not found: {companies_zip_path}")
 
     identifier = identifier_override or item_id(month)
     log.info("uploading companies.zip to ia:%s", identifier)
     responses = ia.upload(
         identifier,
-        files={"companies.zip": str(companies_zip_path)},
+        files={"companies.zip": frozen if frozen is not None else str(companies_zip_path)},
         access_key=access_key,
         secret_key=secret_key,
         retries=_RETRIES,
         retries_sleep=_RETRY_SLEEP,
         verbose=True,
     )
-    _check_responses(responses, "companies.zip")
+    _check_responses(responses, "companies.zip", 1 if frozen is not None else None)
     log.info("uploaded ia:%s/companies.zip OK", identifier)
 
 

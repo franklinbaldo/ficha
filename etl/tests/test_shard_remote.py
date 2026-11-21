@@ -75,6 +75,17 @@ def test_materialization_inputs_fail_closed(metadata):
         materialization_input_sha1s(metadata)
 
 
+def test_duplicate_input_name_fails_closed_even_with_comparable_hashes():
+    entries = [
+        _entry(name, size=str(index), sha1=f"{index:040x}")
+        for index, name in enumerate(SHARD_INPUT_NAMES, start=1)
+    ]
+    entries.append(_entry(SHARD_INPUT_NAMES[0], size="999", sha1="f" * 40))
+
+    with pytest.raises(MaterializationInputsUnavailable, match="duplicado"):
+        materialization_input_sha1s(_metadata(*entries))
+
+
 def test_absence_requires_a_valid_files_observation():
     expected = _spec()
     unknown = classify_remote_shard("07", expected, None, fetch_meta=lambda _: None)
@@ -95,6 +106,20 @@ def test_present_shard_needs_comparable_file_identity_before_meta():
         fetch_meta=lambda _: pytest.fail("não deve ler membro sem identidade do objeto"),
     )
     assert verdict.state is ShardReuseState.UNKNOWN
+
+
+@pytest.mark.parametrize("duplicate_sha1", ["a" * 40, "b" * 40])
+def test_duplicate_shard_entries_are_unknown_before_fetch_meta(duplicate_sha1):
+    name = "companies-07.zip"
+    verdict = classify_remote_shard(
+        "07",
+        _spec(),
+        _metadata(_entry(name), _entry(name, sha1=duplicate_sha1)),
+        fetch_meta=lambda _: pytest.fail("metadata duplicado não autoriza ler _meta.json"),
+    )
+
+    assert verdict.state is ShardReuseState.UNKNOWN
+    assert not verdict.may_skip
 
 
 def test_exact_materialization_is_reusable_even_with_pending_tasks_true():
@@ -145,6 +170,45 @@ def test_unreadable_or_incomplete_meta_is_unknown(payload):
         fetch_meta=lambda _: payload,
     )
     assert verdict.state is ShardReuseState.UNKNOWN
+
+
+@pytest.mark.parametrize(
+    "bad_size",
+    [5.9, True, "+1", " 1", "-1", "1.5", "١", None, 0, -1],
+)
+def test_materialization_input_rejects_non_integral_byte_size(bad_size):
+    """Metadado malformado não pode compor MaterializationSpec para reuse."""
+    entries = [
+        _entry(name, size=bad_size if index == 0 else str(index + 1))
+        for index, name in enumerate(SHARD_INPUT_NAMES)
+    ]
+    with pytest.raises(MaterializationInputsUnavailable, match="sem identidade comparável"):
+        materialization_input_sha1s(_metadata(*entries))
+
+
+@pytest.mark.parametrize(
+    "bad_size",
+    [5.9, True, "+1", " 1", "-1", "1.5", "١", None, 0, -1],
+)
+def test_shard_rejects_non_integral_byte_size_before_fetch_meta(bad_size):
+    """Nem _meta.json correto autoriza REUSABLE se size remoto é ambíguo."""
+    verdict = classify_remote_shard(
+        "07",
+        _spec(),
+        _metadata(_entry("companies-07.zip", size=bad_size)),
+        fetch_meta=lambda _: pytest.fail("não ler _meta.json sem tamanho comparável"),
+    )
+    assert verdict.state is ShardReuseState.UNKNOWN
+    assert not verdict.may_skip
+
+
+def test_positive_integer_size_variants_remain_comparable():
+    entries = [
+        _entry(name, size=1 if index == 0 else f"{index + 1:03d}")
+        for index, name in enumerate(SHARD_INPUT_NAMES)
+    ]
+    result = materialization_input_sha1s(_metadata(*entries))
+    assert set(result) == set(SHARD_INPUT_NAMES)
 
 
 @dataclass

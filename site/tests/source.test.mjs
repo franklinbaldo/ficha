@@ -1,0 +1,178 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
+
+const read = path => readFile(new URL(path, import.meta.url), 'utf8');
+test('prefixo, rotas e versão explícitos', async () => {
+  const config = await read('../config.toml');
+  assert.match(config, /base_url = "https:\/\/franklinbaldo\.github\.io\/ficha\/"/);
+  assert.match(config, /output_dir = "dist\/ficha"/);
+  assert.match(await read('../content/sobre.md'), /\/ficha\/sobre\//);
+});
+test('home com formulário, módulo real e limites da busca legada', async () => {
+  const home = await read('../content/index.md');
+  for (const fragment of ['id="busca-form"', 'id="busca-termo"', 'id="consulta-lista"',
+    'id="busca-ajuda"']) assert.ok(home.includes(fragment), fragment);
+  const template = await read('../templates/index.html');
+  assert.match(template, /type="module" src="\/ficha\/js\/boot\.mjs"/);
+  assert.match(template, /\{\{!content\}\}/);
+  for (const p of ['../templates/template.html', '../templates/page.html', '../templates/post.html']) {
+    const html = await read(p);
+    assert.match(html, /\{\{!content\}\}/);
+    assert.doesNotMatch(html, /<form|<script|astro-island|svelte|\/views\//i);
+  }
+});
+test('home só importa dataset no caminho analítico, não em CNPJ numérico', async () => {
+  const source = await read('../static/js/search-app.mjs');
+  assert.doesNotMatch(source, /^import[^\n]+from ['"]\.\/dataset\.mjs['"];?$/m);
+  assert.match(source, /fetchDataset = async \(\) => \(await import\('\.\/dataset\.mjs'\)\)\.fetchCurrentDataset\(\)/);
+  assert.match(source, /probeRange = async args => \(await import\('\.\/dataset\.mjs'\)\)\.probeParquetRange\(args\)/);
+});
+
+test('sobre informa camadas sem prometer disponibilidade live', async () => {
+  const about = await read('../content/sobre.md');
+  assert.match(about, /DuckDB-WASM/);
+  assert.match(about, /Protobuf\/ZIP/);
+  assert.match(about, /não é prova de acesso remoto/);
+});
+
+test('Sobre não confunde metadados declarados com arquivos comprovadamente custodiados', async () => {
+  const sobre = await read('../content/sobre.md');
+  assert.match(sobre, /tamanhos e as contagens de linhas declarados por competência/);
+  assert.match(sobre, /não verificam a presença nem a integridade dos arquivos/);
+  assert.match(sobre, /destino de guarda indicado/);
+  assert.match(sobre, /busca experimental por Parquet e DuckDB-WASM/);
+  assert.doesNotMatch(sobre, /conjuntos realmente publicados/);
+  assert.doesNotMatch(sobre, /O projeto preserva arquivos no Internet Archive/);
+});
+
+test('aviso público distingue falha de transporte de ausência cadastral', async () => {
+  const home = await read('../content/index.md');
+  const sobre = await read('../content/sobre.md');
+  assert.match(home, /A busca por nome é experimental/);
+  assert.match(home, /Um CNPJ numérico completo abre a ficha por Protobuf/);
+  assert.match(home, /A busca por nome e por CNPJ alfanumérico usa Parquet e pode falhar por CORS/);
+  assert.match(home, /Em caso de erro de rede, a presença do registro continua indeterminada/);
+  assert.match(home, /\/ficha\/acervo\//);
+  assert.match(sobre, /Chromium 152/);
+  assert.match(sobre, /não.*a integridade do arquivo inteiro/);
+});
+
+
+test('botão Pesquisar tem nome acessível português explícito na fonte SSG', async () => {
+  const home = await read('../content/index.md');
+  assert.match(home, /<button\b[^>]*\bid="busca-enviar"[^>]*\baria-label="Pesquisar"[^>]*>Pesquisar<\/button>/);
+  assert.doesNotMatch(home, /aria-label="north-east-arrow"/);
+});
+
+
+test('botão Abrir ficha tem nome acessível explícito na fonte SSG', async () => {
+  const empresa = await read('../content/empresa.md');
+  assert.match(empresa, /<button\b[^>]*\bid="empresa-enviar"[^>]*\baria-label="Abrir ficha"[^>]*>Abrir ficha<\/button>/);
+  assert.doesNotMatch(empresa, /aria-label="abrir-ficha"/);
+});
+
+test('páginas de ficha e história não prometem pesquisa remota já funcional', async () => {
+  const empresa = await read('../content/empresa.md');
+  const historia = await read('../content/historia.md');
+  assert.match(empresa, /consulta remota ainda é experimental/i);
+  assert.match(empresa, /^description: .*experimental\./m);
+  assert.match(empresa, /erro de leitura não significa que a empresa esteja ausente/i);
+  assert.match(empresa, /Parquet sujeito a CORS/);
+  assert.match(historia, /comparação de CNPJ numérico.*Protobuf v1/i);
+  assert.match(historia, /CNPJs alfanuméricos e meses sem essa camada/i);
+  assert.match(historia, /a comparação legada por Parquet não é acionada nesta página/i);
+  assert.match(historia, /não há fallback para Parquet/i);
+  assert.match(historia, /^description: .*experimental\./m);
+  assert.match(historia, /Isso não demonstra ausência de registros/);
+  assert.match(historia, /diferenças entre arquivos não determinam a data exata/i);
+  for (const page of [empresa, historia]) {
+    assert.match(page, /href="\/ficha\/acervo\/"/);
+    assert.match(page, /https:\/\/github\.com\/franklinbaldo\/ficha\/issues\/208/);
+  }
+});
+
+
+test('História Protobuf publicada: aviso da ficha e teclado móvel não induzem a rota Parquet', async () => {
+  const empresa = await read('../content/empresa.md');
+  const historia = await read('../content/historia.md');
+  assert.match(empresa, /comparação de CNPJ numérico nas competências Protobuf v1 usa registros menores/);
+  assert.match(empresa, /A busca por nome ainda usa Parquet sujeito a CORS/);
+  assert.doesNotMatch(empresa, /a comparação histórica ainda dependem do Parquet/i);
+  assert.match(historia, /<label for="historia-cnpj">CNPJ numérico completo \(14 dígitos\)<\/label>/);
+  assert.match(historia, /<input\b[^>]*id="historia-cnpj"[^>]*\binputmode="numeric"[^>]*>/);
+});
+
+test('avisos públicos não insinuam fallback alfanumérico após a História numérica #379', async () => {
+  const [home, empresa, historia] = await Promise.all([
+    read('../content/index.md'),
+    read('../content/empresa.md'),
+    read('../content/historia.md'),
+  ]);
+  assert.match(home, /História compara CNPJs numéricos entre competências com Protobuf v1/);
+  assert.match(home, /CNPJs alfanuméricos e competências sem Protobuf v1 compatível não podem ser comparados/);
+  assert.match(home, /não há fallback automático para Parquet/);
+  assert.match(empresa, /CNPJs alfanuméricos e competências sem essa camada não são comparáveis pela página História/);
+  assert.match(empresa, /Não há fallback para Parquet/);
+  assert.match(empresa, /a comparação alfanumérica ainda não está disponível/);
+  assert.match(historia, /CNPJs alfanuméricos e meses sem essa camada não são comparáveis por esta interface/);
+  assert.match(historia, /não há fallback para Parquet/);
+});
+
+test('ficha e Sobre distinguem prova pública pontual de CORS da busca legada', async () => {
+  const [empresa, sobre] = await Promise.all([
+    read('../content/empresa.md'), read('../content/sobre.md'),
+  ]);
+  assert.match(empresa, /issuecomment-7032628482/);
+  assert.match(empresa, /quatro fichas por CNPJ numérico/);
+  assert.match(empresa, /Banco do Brasil, Petrobras, Caixa e Correios/);
+  assert.match(empresa, /competência 2026-07, sem requisições Parquet\/WASM/);
+  assert.match(sobre, /issuecomment-7030287292/);
+  assert.match(sobre, /busca por nome e CNPJ alfanumérico continua experimental via Parquet\/DuckDB/);
+  assert.match(sobre, /CNPJ numérico completo.*Protobuf v1, sem Parquet/);
+  assert.match(empresa, /não garante acesso contínuo/);
+  assert.doesNotMatch(sobre, /O formulário continua experimental/);
+});
+
+test('links em parágrafos HTML das páginas SSG não vazam sintaxe Markdown', async () => {
+  for (const name of ['index', 'empresa', 'historia', 'explorar', 'acervo', 'sobre']) {
+    const source = await read('../content/' + name + '.md');
+    const paragraphs = source.match(/<p\b[^>]*>[\s\S]*?<\/p>/gi) ?? [];
+    for (const paragraph of paragraphs) {
+      assert.doesNotMatch(paragraph, /\[[^\]\n]+\]\(https?:\/\/[^)\n]+\)/,
+        name + ': parágrafo HTML cru imprime links Markdown literalmente');
+    }
+  }
+});
+
+
+test('README SSG explicita lookup adicional e limite de versão do wire', async () => {
+  const readme = await read('../README.md');
+  assert.match(readme, /`lookups\.json` da mesma competência/);
+  assert.match(readme, /SHA-256 declarados desse lookup/);
+  assert.match(readme, /schema_version` ausente no manifesto/);
+  assert.match(readme, /issuecomment-7032628482/);
+  assert.doesNotMatch(readme, /somente um membro Protobuf v1/);
+});
+
+test('História documenta amostra pública independente sem prometer completude', async () => {
+  const historia = await read('../content/historia.md');
+  assert.match(historia, /issuecomment-7033212714/);
+  assert.match(historia, /quatro comparações numéricas concluídas/);
+  assert.match(historia, /2026-06 e 2026-07/);
+  assert.match(historia, /cada uma com 13 campos/);
+  assert.match(historia, /sem requisições a Parquet ou WASM/);
+  assert.match(historia, /não um teste de todas as competências/);
+  assert.match(historia, /não há fallback para Parquet/);
+});
+
+
+test('Acervo não confunde manifesto com prova de custódia ou versão Protobuf', async () => {
+  const acervo = await read('../content/acervo.md');
+  assert.match(acervo, /destino de guarda indicado/);
+  assert.match(acervo, /não certifica os bytes de cada ZIP/);
+  assert.match(acervo, /versão de todos os registros Protobuf/);
+  assert.match(acervo, /wire ainda não é atestada pelo catálogo/);
+  assert.match(acervo, /https:\/\/github\.com\/franklinbaldo\/ficha\/issues\/383/);
+  assert.doesNotMatch(acervo, /O Internet Archive preserva os artefatos/);
+});

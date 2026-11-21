@@ -80,6 +80,56 @@ KNOWN_UNRESTRICTED_ENUM_GAPS = {
     table: set(domains) for table, domains in EXPECTED_PUBLIC_ENUM_DOMAINS.items()
 }
 
+# A joint change to both Zod schemas can leave the mismatch inventory
+# unchanged while silently changing which public-v1 fields accept null.
+# Pin the public contract itself, not just the generated-versus-public gap.
+# Public-v1 baseline is deliberately independent of KNOWN_NULLABILITY_GAPS.
+# Updating the debt inventory must never silently redefine the public API.
+EXPECTED_PUBLIC_NULLABLE_FIELDS = {
+    "Cnpj": {
+        "bairro",
+        "cep",
+        "complemento",
+        "correio_eletronico",
+        "data_exclusao_mei",
+        "data_exclusao_simples",
+        "data_opcao_mei",
+        "data_opcao_simples",
+        "data_situacao_especial",
+        "ddd_1",
+        "ddd_2",
+        "ddd_fax",
+        "ente_federativo_responsavel",
+        "fax",
+        "logradouro",
+        "nome_cidade_exterior",
+        "nome_fantasia",
+        "numero",
+        "opcao_mei",
+        "opcao_simples",
+        "pais_codigo",
+        "pais_nome",
+        "situacao_especial",
+        "telefone_1",
+        "telefone_2",
+        "tipo_logradouro",
+    },
+    "Raiz": {
+        "ente_federativo_responsavel",
+    },
+    "Socio": {
+        "cnpj_socio",
+        "cpf_mascarado",
+        "faixa_etaria",
+        "pais_codigo",
+        "pais_nome",
+        "representante_legal_cpf",
+        "representante_legal_nome",
+        "representante_legal_qualificacao_codigo",
+        "representante_legal_qualificacao_descricao",
+    },
+}
+
 
 def _sql_fields(table: str, slug: str) -> dict[str, str]:
     source = (ROOT / f"knowledge/types/{slug}.schema.sql").read_text(encoding="utf-8")
@@ -112,35 +162,98 @@ def _zod_fields(source: str, *, quoted: bool) -> dict[str, str]:
         else r"^\s*(\w+):\s*(z\..+),$"
     )
     for line in source.splitlines():
-        parsed = re.match(pattern, line)
-        if parsed is not None:
-            name, value = parsed.groups()
-            if name in fields:
-                raise AssertionError(f"Duplicate Zod field: {name}")
-            fields[name] = value.removesuffix(",")
+        if not line.strip() or line.lstrip().startswith("//"):
+            continue
+        parsed = re.fullmatch(pattern, line)
+        if parsed is None:
+            raise AssertionError(
+                f"Unrecognized Zod object member; review static guard: {line}"
+            )
+        name, value = parsed.groups()
+        if name in fields:
+            raise AssertionError(f"Duplicate Zod field: {name}")
+        fields[name] = value.removesuffix(",")
+    return fields
+
+
+def _without_block_comments(source: str) -> str:
+    """Strip commented-out Zod declarations; reject unbalanced comments."""
+    if source.count("/*") != source.count("*/"):
+        raise AssertionError("Unbalanced TypeScript block comment")
+    return re.sub(
+        r"/\*.*?\*/",
+        # A comment *inside* z.object remains an invalid member (fail closed).
+        lambda match: "\n__TS_BLOCK_COMMENT__\n" + "\n" * match.group(0).count("\n"),
+        source,
+        flags=re.DOTALL,
+    )
+
+
+def _parse_generated_fields(source: str, table: str) -> dict[str, str]:
+    source = _without_block_comments(source)
+    declarations = list(
+        re.finditer(
+            rf"^export const {table}Schema = z\.object\(\{{(.*?)\}}\);[ \t]*$",
+            source,
+            flags=re.DOTALL | re.MULTILINE,
+        )
+    )
+    if len(declarations) != 1:
+        raise AssertionError(
+            f"Expected exactly one live generated Zod schema: {table}; "
+            f"found {len(declarations)}"
+        )
+    fields = _zod_fields(declarations[0].group(1), quoted=True)
+    # Metadata is outside the public SQL row, but remains part of the
+    # generated OKF contract. Do not silently discard a wrong discriminator.
+    expected = {
+        "type": f'z.literal("{table}")',
+        "title": "z.string().optional()",
+        "description": "z.string().optional()",
+    }
+    actual = {name: fields.pop(name, None) for name in expected}
+    if actual != expected:
+        raise AssertionError(
+            f"{table}: generated OKF metadata changed: {actual!r}"
+        )
     return fields
 
 
 def _generated_fields(table: str) -> dict[str, str]:
     source = (ROOT / "web/src/generated/ficha-okf.zod.ts").read_text(encoding="utf-8")
-    match = re.search(
-        rf"export const {table}Schema = z\.object\(\{{(.*?)\}}\);",
-        source,
-        flags=re.DOTALL,
+    return _parse_generated_fields(source, table)
+
+
+def _parse_published_v1_object(source: str, type_name: str) -> dict[str, str]:
+    """Pin the exported object itself, not just its field declarations.
+
+    A schema-level .partial() makes every field optional without adding
+    .optional() to any field expression. Likewise .passthrough() changes
+    acceptance of extra fields while the field-by-field guard still passes.
+    """
+    schema_name = f"{type_name.capitalize()}Schema"
+    source = _without_block_comments(source)
+    declarations = list(
+        re.finditer(
+            rf"^export const {re.escape(schema_name)}\s*=\s*z\.object\(\{{"
+            r"(?P<body>.*?)^[ \t]*\}\)(?P<tail>[^\r\n]*)$",
+            source,
+            flags=re.DOTALL | re.MULTILINE,
+        )
     )
-    if match is None:
-        raise AssertionError(f"Missing generated Zod schema: {table}")
-    fields = _zod_fields(match.group(1), quoted=True)
-    for metadata in ("type", "title", "description"):
-        fields.pop(metadata, None)
-    return fields
+    if len(declarations) != 1 or declarations[0].group("tail").strip() != ";":
+        raise AssertionError(
+            f"{schema_name}: public v1 must export a direct z.object(...); "
+            "review schema-level modifiers/aliases before changing the contract"
+        )
+    return _zod_fields(declarations[0].group("body"), quoted=False)
 
 
 def _published_v1_fields(type_name: str) -> dict[str, str]:
     source = (
         ROOT / f"web/src/schemas/v1/{type_name}.ts"
     ).read_text(encoding="utf-8")
-    return _zod_fields(source, quoted=False)
+    return _parse_published_v1_object(source, type_name)
 
 
 def _kind(expr: str) -> str:
@@ -178,6 +291,12 @@ def _public_enum_domains(fields: dict[str, str]) -> dict[str, tuple[str, ...]]:
         name: values
         for name, expr in fields.items()
         if (values := _enum_domain(expr)) is not None
+    }
+
+
+def _nullable_fields(fields: dict[str, str]) -> set[str]:
+    return {
+        name for name, expr in fields.items() if expr.endswith(".nullable()")
     }
 
 
@@ -242,6 +361,79 @@ class OkfContractCompatibilityTest(unittest.TestCase):
                     f"{table}: generated schema unexpectedly widened nullability",
                 )
 
+
+    def test_public_v1_nullable_set_is_frozen(self) -> None:
+        for table, (_, public_name) in SOURCES.items():
+            with self.subTest(table=table):
+                published = _published_v1_fields(public_name)
+                self.assertEqual(
+                    _nullable_fields(published),
+                    EXPECTED_PUBLIC_NULLABLE_FIELDS[table],
+                    f"{table}: public v1 null acceptance changed; review versioning",
+                )
+
+    def test_negative_joint_nullable_widening_is_detected(self) -> None:
+        published = _published_v1_fields("estabelecimento")
+        generated = _generated_fields("Cnpj")
+        published["cnpj"] = "z.string().nullable()"
+        generated["cnpj"] = "z.string().nullable()"
+        # The old gap-only check would pass because both sides agree.
+        self.assertEqual(
+            _nullability_gap(published, generated),
+            KNOWN_NULLABILITY_GAPS["Cnpj"],
+        )
+        self.assertNotEqual(
+            _nullable_fields(published),
+            EXPECTED_PUBLIC_NULLABLE_FIELDS["Cnpj"],
+        )
+
+    def test_negative_joint_nullable_narrowing_is_detected(self) -> None:
+        published = _published_v1_fields("socio")
+        generated = _generated_fields("Socio")
+        published["cpf_mascarado"] = "z.string()"
+        generated["cpf_mascarado"] = "z.string()"
+        # Removing null support from both versions is also breaking.
+        self.assertEqual(
+            _nullability_gap(published, generated),
+            KNOWN_NULLABILITY_GAPS["Socio"],
+        )
+        self.assertNotEqual(
+            _nullable_fields(published),
+            EXPECTED_PUBLIC_NULLABLE_FIELDS["Socio"],
+        )
+
+    def test_negative_rebaselined_debt_cannot_change_public_v1(self) -> None:
+        published = _published_v1_fields("estabelecimento")
+        generated = _generated_fields("Cnpj")
+        # Updating the debt baseline could hide a public-only narrowing if
+        # the public baseline were derived from that same debt inventory.
+        published["nome_fantasia"] = "z.string()"
+        revised_debt = KNOWN_NULLABILITY_GAPS["Cnpj"] - {"nome_fantasia"}
+        self.assertEqual(_nullability_gap(published, generated), revised_debt)
+        self.assertNotEqual(
+            _nullable_fields(published),
+            EXPECTED_PUBLIC_NULLABLE_FIELDS["Cnpj"],
+        )
+
+    def test_negative_schema_level_widening_is_rejected(self) -> None:
+        source = (
+            ROOT / "web/src/schemas/v1/estabelecimento.ts"
+        ).read_text(encoding="utf-8")
+        closing = "});\n\nexport type Estabelecimento"
+        self.assertIn(closing, source)
+        self.assertEqual(
+            _parse_published_v1_object(source, "estabelecimento"),
+            _published_v1_fields("estabelecimento"),
+        )
+        for modifier in (".partial()", ".passthrough()"):
+            with self.subTest(modifier=modifier):
+                mutated = source.replace(
+                    closing,
+                    "})" + modifier + ";\n\nexport type Estabelecimento",
+                    1,
+                )
+                with self.assertRaisesRegex(AssertionError, "direct z.object"):
+                    _parse_published_v1_object(mutated, "estabelecimento")
 
     def test_required_field_presence_matches_public_v1(self) -> None:
         # Generated Zod metadata (title/description) is intentionally excluded.

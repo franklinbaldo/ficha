@@ -17,11 +17,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
-
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - name: Verify exact CI checkout SHA
-        run: test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha || github.sha }}"
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
 
       - name: Detect changes in web/
         id: changes
@@ -31,8 +32,7 @@ jobs:
             web:
               - 'web/**'
               - '.github/workflows/ci.yml'
-              # Contrato wire compartilhado com Python (P0 #246/#252/#264).
-              # Reexecutar Vitest com o mesmo membro real de 45 B.
+              # Reexecutar Vitest quando o wire Python compartilhado mudar.
               - 'etl/tests/fixtures/company-v11-ca000001.hex'
               - 'etl/tests/fixtures/company_pb2_*.txt'
               - 'etl/tests/test_lontra_historical_v1_decoder.py'
@@ -79,11 +79,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
-
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - name: Verify exact CI checkout SHA
-        run: test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha || github.sha }}"
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
 
       - name: Detect changes in etl/
         id: changes
@@ -101,7 +102,7 @@ jobs:
               # workflows aqui, alterar um deles não roda o teste que o
               # guarda — que é exatamente quando ele precisa rodar.
               - '.github/workflows/**'
-              # Reexecutar Python quando o leitor TS do mesmo wire mudar.
+              # Reexecutar Python quando o wire TS compartilhado mudar.
               - 'web/src/generated/company.pb.*'
               - 'web/src/lib/companies*.ts'
               - 'web/src/schemas/v1/manifest*.ts'
@@ -180,11 +181,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
-
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - name: Verify exact CI checkout SHA
-        run: test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha || github.sha }}"
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
 
       - name: Detect changes in etl/
         id: changes
@@ -200,7 +202,7 @@ jobs:
               # workflows aqui, alterar um deles não roda o teste que o
               # guarda — que é exatamente quando ele precisa rodar.
               - '.github/workflows/**'
-              # Reexecutar Python quando o leitor TS do mesmo wire mudar.
+              # Reexecutar Python quando o wire TS compartilhado mudar.
               - 'web/src/generated/company.pb.*'
               - 'web/src/lib/companies*.ts'
               - 'web/src/schemas/v1/manifest*.ts'
@@ -267,11 +269,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
-
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - name: Verify exact CI checkout SHA
-        run: test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha || github.sha }}"
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
 
       - name: Detect changes in ficha-py/
         id: changes

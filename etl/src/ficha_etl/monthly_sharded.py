@@ -21,10 +21,18 @@ import os
 import sys
 import time
 from pathlib import Path
+from typing import BinaryIO
 
 import internetarchive as ia
 
 from . import transform, upload
+from .monthly_source_bag_gate import _write_receipt
+from .monthly_source_authorization import (
+    _SOURCE_SCHEMA,
+    _bind_source_receipt,
+    _require_source_attestation,
+    _source_receipt_path,
+)
 from .cnpj import SHARD_BY as COMPANIES_SHARD_BY
 from .pack import SCHEMA_VERSION as COMPANIES_WIRE_VERSION
 from .manifest import (
@@ -34,6 +42,7 @@ from .manifest import (
     update_manifest,
     write_production_descriptor,
 )
+from .monthly_estabelecimento_gate import run_monthly_gate
 from .publication_upload import submit_outputs_fail_closed
 from .remote_reuse import fetch_item_metadata
 from .shard_publish import ShardPublishError
@@ -106,11 +115,10 @@ def _load_descriptor(path: Path, month: str) -> dict:
 def _validate_identity(label: str, entry: object) -> None:
     if not isinstance(entry, dict):
         raise ValueError(f"{label}: identity entry missing")
-    try:
-        size = int(entry.get("size"))
-    except (TypeError, ValueError):
-        size = 0
-    if size <= 0:
+    # A local production descriptor must obey the same strict byte-size
+    # contract as the remote IA catalog; int(11.9) and int(True) are unsafe.
+    size = _remote_positive_size(entry.get("size"))
+    if size is None:
         raise ValueError(f"{label}: invalid size")
     if not _valid_hex(entry.get("sha1"), 40):
         raise ValueError(f"{label}: invalid sha1")
@@ -149,6 +157,19 @@ def materialization_inputs_from_descriptor(descriptor: dict) -> dict[str, str]:
     return result
 
 
+def _remote_positive_size(value: object) -> int | None:
+    """Parse IA byte sizes without accepting fractional or boolean coercion."""
+    if type(value) is int:
+        return value if value > 0 else None
+    if isinstance(value, str) and value.isascii() and value.isdecimal():
+        try:
+            parsed = int(value)
+        except ValueError:  # Python's integer-string digit limit
+            return None
+        return parsed if parsed > 0 else None
+    return None
+
+
 def _remote_descriptor_state(
     descriptor: dict,
     metadata: dict | None,
@@ -156,24 +177,33 @@ def _remote_descriptor_state(
     """Retorna (pending, mismatches) para os outputs-base no catálogo IA."""
     if metadata is None or not isinstance(metadata.get("files"), list):
         return ["<metadata>"], []
-    by_name = {
-        entry.get("name"): entry
-        for entry in metadata["files"]
-        if isinstance(entry, dict) and isinstance(entry.get("name"), str)
-    }
+    expected = _expected_remote_files(descriptor)
+    by_name: dict[str, dict] = {}
+    duplicates: set[str] = set()
+    for entry in metadata["files"]:
+        if not isinstance(entry, dict):
+            continue
+        name = entry.get("name")
+        if not isinstance(name, str) or name not in expected:
+            continue
+        if name in by_name:
+            duplicates.add(name)
+        else:
+            by_name[name] = entry
+
     pending: list[str] = []
     mismatches: list[str] = []
-    for name, (expected_size, expected_sha1) in _expected_remote_files(descriptor).items():
+    for name, (expected_size, expected_sha1) in expected.items():
+        if name in duplicates:
+            pending.append(f"{name} (duplicado)")
+            continue
         entry = by_name.get(name)
         if entry is None:
             pending.append(name)
             continue
-        try:
-            actual_size = int(entry.get("size"))
-        except (TypeError, ValueError):
-            actual_size = 0
+        actual_size = _remote_positive_size(entry.get("size"))
         actual_sha1 = entry.get("sha1")
-        if actual_size <= 0 or not _valid_hex(actual_sha1, 40):
+        if actual_size is None or not _valid_hex(actual_sha1, 40):
             pending.append(name)
             continue
         if actual_size != expected_size or actual_sha1 != expected_sha1:
@@ -223,10 +253,13 @@ def _shard_uploader(month: str):
     secret_key = _require_secret("IA_SECRET_KEY")
     identifier = f"ficha-{month}"
 
-    def upload_one(name: str, path: Path) -> None:
+    def upload_one(name: str, source: Path | BinaryIO) -> None:
+        # Prepared shards supply an already verified, anonymous open handle.
+        # The legacy one-step publisher still passes a pathname.
+        file_source = str(source) if isinstance(source, Path) else source
         responses = ia.upload(
             identifier,
-            files={name: str(path)},
+            files={name: file_source},
             access_key=access_key,
             secret_key=secret_key,
             retries=5,
@@ -275,7 +308,8 @@ def _load_receipt(path: Path, month: str, prefix: str) -> dict:
         or payload.get("name") != expected_name
     ):
         raise ValueError(f"invalid receipt for {month}/{prefix}: {path}")
-    if int(payload.get("size", 0)) <= 0 or not _valid_hex(payload.get("sha1"), 40):
+    size = _remote_positive_size(payload.get("size"))
+    if size is None or not _valid_hex(payload.get("sha1"), 40):
         raise ValueError(f"invalid byte identity in receipt: {path}")
     if not _valid_hex(payload.get("materialization_id"), 64):
         raise ValueError(f"invalid materialization_id in receipt: {path}")
@@ -284,16 +318,26 @@ def _load_receipt(path: Path, month: str, prefix: str) -> dict:
 
 def command_produce(args: argparse.Namespace) -> None:
     month = _require_month(args.month)
+    # Reject an incompatible wire contract before the first remote write.
+    # The strict local transform must also finish before any raw ZIP PUT.
+    if not args.skip_raw_upload:
+        _require_safe_legacy_shard_upload()
     output_dir = Path(args.output_dir)
     cache_dir = Path(args.cache_dir)
     descriptor_path = Path(args.descriptor)
 
-    if not args.skip_raw_upload:
-        upload.stream_raw_zips_to_ia(
-            month,
-            access_key=_require_secret("IA_ACCESS_KEY"),
-            secret_key=_require_secret("IA_SECRET_KEY"),
-        )
+    # Even fetch/extract errors must invalidate a previous successful receipt.
+    _write_receipt(
+        _source_receipt_path(output_dir),
+        {
+            "schema": _SOURCE_SCHEMA,
+            "month": month,
+            "status": "failed",
+            "identity_level": "parsed-duckdb-source-not-zip-custody",
+            "reason": "produce has not completed source validation",
+            "parts": [],
+        },
+    )
 
     transform.transform_snapshot(
         month,
@@ -302,15 +346,50 @@ def command_produce(args: argparse.Namespace) -> None:
         skip_unimplemented=False,
         verify=not args.no_verify,
         verify_sample_size=args.verify_sample_size,
+        reject_empty_estabelecimentos=True,
     )
+
+    # Fail closed on duplicate keys and invalid CNPJ check digits before
+    # *any* raw ZIP PUT. Evidence survives gate failures as a job artifact.
+    run_monthly_gate(
+        month,
+        output_dir / "cnpjs.parquet",
+        output_dir.parent / "evidence" / "monthly-estabelecimento-key-gate.json",
+        output_dir.parent / "monthly-estabelecimento-key-gate",
+    )
+
+    # Bind the parsed-source witness to the descriptor before ANY first PUT.
+    # ZIP custody and retry pinning remain separate requirements under #281.
     descriptor = build_production_descriptor(month, output_dir)
+    _bind_source_receipt(month, output_dir, descriptor)
     write_production_descriptor(descriptor_path, descriptor)
+
+    if not args.skip_raw_upload:
+        try:
+            upload.stream_raw_zips_to_ia(
+                month,
+                access_key=_require_secret("IA_ACCESS_KEY"),
+                secret_key=_require_secret("IA_SECRET_KEY"),
+            )
+        except Exception:
+            # The descriptor may survive a partial remote raw upload, but may
+            # never authorize independent derived uploads after that failure.
+            descriptor["source_attestation"]["raw_upload_status"] = "failed"
+            write_production_descriptor(descriptor_path, descriptor)
+            raise
+        descriptor["source_attestation"]["raw_upload_status"] = "complete"
+        write_production_descriptor(descriptor_path, descriptor)
+    # --skip-raw-upload deliberately leaves the descriptor pending. A future
+    # publication requires a separately verified raw completion contract.
     print(f"production descriptor written before output upload: {descriptor_path}")
 
 
 def command_upload_outputs(args: argparse.Namespace) -> None:
     month = _require_month(args.month)
+    # A separately produced snapshot must not bypass the early guard.
+    _require_safe_legacy_shard_upload()
     descriptor = _load_descriptor(Path(args.descriptor), month)
+    _require_source_attestation(month, Path(args.output_dir), descriptor)
     plan = submit_outputs_fail_closed(
         month,
         Path(args.output_dir),
@@ -435,6 +514,7 @@ def _require_distinct_finalize_outputs(
     manifest_path: Path,
     descriptor_path: Path,
     receipts_dir: Path,
+    source_receipt: Path | None = None,
 ) -> None:
     """Reject aliasing of outputs with each other or immutable inputs.
 
@@ -454,6 +534,23 @@ def _require_distinct_finalize_outputs(
             if same_path or same_inode:
                 raise ValueError(f"finalize output paths must be distinct: {name} and {other_name}")
 
+    if source_receipt is not None:
+        # Separate immutable input artifact. Do not let a symlink or hardlink
+        # turn any output or the descriptor into this authority.
+        for name, path in paths:
+            if path.resolve() == source_receipt.resolve() or (
+                path.exists() and source_receipt.exists() and path.samefile(source_receipt)
+            ):
+                raise ValueError(f"source receipt aliases finalize {name}")
+        for prefix in PUBLIC_COMPANIES_GEOMETRY.prefixes():
+            shard_receipt = receipts_dir / f"receipt-{prefix}.json"
+            if shard_receipt.resolve() == source_receipt.resolve() or (
+                shard_receipt.exists()
+                and source_receipt.exists()
+                and shard_receipt.samefile(source_receipt)
+            ):
+                raise ValueError(f"source receipt aliases shard receipt-{prefix}")
+
     # A receipt is read-only input. Guard it before _load_all_receipts so that
     # a successful finalize cannot overwrite its own production checkpoint.
     for prefix in PUBLIC_COMPANIES_GEOMETRY.prefixes():
@@ -469,14 +566,28 @@ def _require_distinct_finalize_outputs(
 
 def command_finalize(args: argparse.Namespace) -> None:
     month = _require_month(args.month)
+    source_receipt = getattr(args, "source_receipt", None)
+    if not source_receipt:
+        raise ValueError("finalize requires --source-receipt from the producer artifact")
+    source_receipt_path = Path(source_receipt)
     _require_distinct_finalize_outputs(
         Path(args.snapshot_entry),
         Path(args.verification),
         Path(args.manifest),
         Path(args.descriptor),
         Path(args.receipts_dir),
+        source_receipt_path,
     )
     descriptor = _load_descriptor(Path(args.descriptor), month)
+    # Must be a separately transported producer receipt, validated before GET/HEAD
+    # and before building a candidate. The 100-shard gate still follows.
+    _require_source_attestation(
+        month,
+        Path(args.descriptor).parent / "output",
+        descriptor,
+        receipt_path=source_receipt_path,
+        require_run_id=True,
+    )
     pinned = materialization_inputs_from_descriptor(descriptor)
     receipts = _load_all_receipts(Path(args.receipts_dir), month)
 
@@ -537,6 +648,16 @@ def command_finalize(args: argparse.Namespace) -> None:
             )
         )
 
+    # Detect changes to the external artifact while 100 remote shards were
+    # being verified. This narrows, but does not eliminate, TOCTOU if a local
+    # adversary can replace evidence immediately after the second read.
+    _require_source_attestation(
+        month,
+        Path(args.descriptor).parent / "output",
+        descriptor,
+        receipt_path=source_receipt_path,
+        require_run_id=True,
+    )
     entry = finalize_sharded_snapshot_entry(descriptor, identities)
     snapshot_entry_path = Path(args.snapshot_entry)
     verification_path = Path(args.verification)
@@ -618,6 +739,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("finalize")
     p.add_argument("--month", required=True)
+    p.add_argument("--source-receipt", required=True)
     p.add_argument("--descriptor", required=True)
     p.add_argument("--receipts-dir", required=True)
     p.add_argument("--manifest", required=True)

@@ -43,6 +43,18 @@ jobs:
       run:
         working-directory: etl
     steps:
+      # Until immutable producer/receipt recovery exists, fail before any RFB/IA access.
+      # Re-running failed jobs is NOT equivalent to a fresh, attested publication.
+      - name: Refuse unproven monthly workflow attempt
+        shell: bash
+        env:
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          if [ "$RUN_ATTEMPT" != "1" ]; then
+            echo "::error::Monthly attempt $RUN_ATTEMPT refused; recovery needs independent producer attestation"
+            exit 1
+          fi
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v3
         with:
@@ -112,6 +124,18 @@ jobs:
       PYTHONUTF8: '1'
       FICHA_DROP_ZIPS_AFTER_LOAD: '1'
     steps:
+      # Until immutable producer/receipt recovery exists, fail before any RFB/IA access.
+      # Re-running failed jobs is NOT equivalent to a fresh, attested publication.
+      - name: Refuse unproven monthly workflow attempt
+        shell: bash
+        env:
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          if [ "$RUN_ATTEMPT" != "1" ]; then
+            echo "::error::Monthly attempt $RUN_ATTEMPT refused; recovery needs independent producer attestation"
+            exit 1
+          fi
       - uses: actions/checkout@v4
 
       # Limpeza acontece ANTES de setup-uv. Nunca apagar AGENT_TOOLSDIRECTORY
@@ -147,24 +171,30 @@ jobs:
             --descriptor ".cache/$MONTH/production-descriptor.json" \
             $EXTRA_ARGS
 
-      # #242: use the exact produced CNPJ bytes, not a second RFB download.
-      # The adapter delegates duplicate semantics to estabelecimento_key_audit.
-      # Any violation stops this job before descriptor persistence or output upload.
-      - name: Revalidate estabelecimento full-key uniqueness on produced bytes
-        run: |
-          uv run python -m ficha_etl.monthly_estabelecimento_gate \
-            --month "$MONTH" \
-            --cnpjs ".cache/$MONTH/output/cnpjs.parquet" \
-            --evidence ".cache/$MONTH/evidence/monthly-estabelecimento-key-gate.json" \
-            --work-dir ".cache/$MONTH/monthly-estabelecimento-key-gate"
-
+      # #242/#281: `monthly_sharded produce` runs the produced-CNPJ DV and
+      # uniqueness gate before its first raw PUT and descriptor persistence.
+      # Preserve evidence even if that earlier produce step fails.
       - name: Preserve estabelecimento key-gate evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: estabelecimento-key-gate-${{ needs.resolve.outputs.month }}
-          path: etl/.cache/${{ needs.resolve.outputs.month }}/evidence/monthly-estabelecimento-key-gate.json
+          include-hidden-files: true
+          name: estabelecimento-key-gate-${{ needs.resolve.outputs.month }}-attempt-${{ github.run_attempt }}
+          path: |
+            etl/.cache/${{ needs.resolve.outputs.month }}/evidence/monthly-estabelecimento-key-gate.json
+            etl/.cache/${{ needs.resolve.outputs.month }}/evidence/monthly-estabelecimento-source-bag.json
           if-no-files-found: warn
+          retention-days: 90
+
+      # Unlike the diagnostic two-path artifact, this single-path artifact
+      # fails if the source-bag is absent. Only successful produce can supply it.
+      - name: Persist mandatory source-bag attestation
+        uses: actions/upload-artifact@v4
+        with:
+          include-hidden-files: true
+          name: estabelecimento-source-bag-${{ needs.resolve.outputs.month }}-attempt-${{ github.run_attempt }}
+          path: etl/.cache/${{ needs.resolve.outputs.month }}/evidence/monthly-estabelecimento-source-bag.json
+          if-no-files-found: error
           retention-days: 90
 
       # CRITICAL: o recibo nasce e fica durável ANTES de qualquer upload dos
@@ -172,7 +202,8 @@ jobs:
       - name: Persist production descriptor before upload
         uses: actions/upload-artifact@v4
         with:
-          name: production-descriptor-${{ needs.resolve.outputs.month }}
+          include-hidden-files: true
+          name: production-descriptor-${{ needs.resolve.outputs.month }}-attempt-${{ github.run_attempt }}
           path: etl/.cache/${{ needs.resolve.outputs.month }}/production-descriptor.json
           if-no-files-found: error
           retention-days: 90
@@ -181,7 +212,8 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: transform-metrics-${{ needs.resolve.outputs.month }}
+          include-hidden-files: true
+          name: transform-metrics-${{ needs.resolve.outputs.month }}-attempt-${{ github.run_attempt }}
           path: etl/.cache/${{ needs.resolve.outputs.month }}/metrics/transform_metrics.json
           if-no-files-found: warn
 
@@ -210,6 +242,18 @@ jobs:
       PYTHONIOENCODING: utf-8
       PYTHONUTF8: '1'
     steps:
+      # Until immutable producer/receipt recovery exists, fail before any RFB/IA access.
+      # Re-running failed jobs is NOT equivalent to a fresh, attested publication.
+      - name: Refuse unproven monthly workflow attempt
+        shell: bash
+        env:
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          if [ "$RUN_ATTEMPT" != "1" ]; then
+            echo "::error::Monthly attempt $RUN_ATTEMPT refused; recovery needs independent producer attestation"
+            exit 1
+          fi
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v3
         with:
@@ -218,7 +262,7 @@ jobs:
       - run: uv sync --frozen
       - uses: actions/download-artifact@v4
         with:
-          name: production-descriptor-${{ needs.resolve.outputs.month }}
+          name: production-descriptor-${{ needs.resolve.outputs.month }}-attempt-${{ github.run_attempt }}
           path: etl/.publication/${{ needs.resolve.outputs.month }}
       - name: Verify IA serves the exact production inputs
         run: |
@@ -349,6 +393,18 @@ jobs:
       PYTHONIOENCODING: utf-8
       PYTHONUTF8: '1'
     steps:
+      # Until immutable producer/receipt recovery exists, fail before any RFB/IA access.
+      # Re-running failed jobs is NOT equivalent to a fresh, attested publication.
+      - name: Refuse unproven monthly workflow attempt
+        shell: bash
+        env:
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          if [ "$RUN_ATTEMPT" != "1" ]; then
+            echo "::error::Monthly attempt $RUN_ATTEMPT refused; recovery needs independent producer attestation"
+            exit 1
+          fi
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v3
         with:
@@ -357,16 +413,8 @@ jobs:
       - run: uv sync --frozen
       - uses: actions/download-artifact@v4
         with:
-          name: production-descriptor-${{ needs.resolve.outputs.month }}
+          name: production-descriptor-${{ needs.resolve.outputs.month }}-attempt-${{ github.run_attempt }}
           path: etl/.publication/${{ needs.resolve.outputs.month }}
-
-      - name: Restore previous receipt on job rerun
-        if: github.run_attempt > 1
-        continue-on-error: true
-        uses: actions/download-artifact@v4
-        with:
-          name: shard-receipt-${{ matrix.prefix }}-${{ needs.resolve.outputs.month }}
-          path: etl/.publication/${{ needs.resolve.outputs.month }}/previous-receipt
 
       - name: Produce shard bytes and receipt — no remote write
         run: |
@@ -378,29 +426,16 @@ jobs:
             --output-dir ".publication/$MONTH/shards" \
             --receipt ".publication/$MONTH/receipt-$PREFIX.json"
 
-      - name: Require receipt stability across attempts
-        run: |
-          previous=".publication/$MONTH/previous-receipt/receipt-$PREFIX.json"
-          current=".publication/$MONTH/receipt-$PREFIX.json"
-          if [ -f "$previous" ]; then
-            if ! cmp -s "$previous" "$current"; then
-              echo "::error::shard receipt changed across workflow attempts"
-              diff -u "$previous" "$current" || true
-              exit 1
-            fi
-            echo "receipt is byte-identical to previous attempt"
-          fi
-
       # Este artifact existe antes do PUT. Mesmo que upload/verificação falhem,
       # a identidade produzida não desaparece junto com o runner.
       - name: Persist shard production receipt before PUT
         uses: actions/upload-artifact@v4
         with:
-          name: shard-receipt-${{ matrix.prefix }}-${{ needs.resolve.outputs.month }}
+          include-hidden-files: true
+          name: shard-receipt-${{ matrix.prefix }}-${{ needs.resolve.outputs.month }}-attempt-${{ github.run_attempt }}
           path: etl/.publication/${{ needs.resolve.outputs.month }}/receipt-${{ matrix.prefix }}.json
           if-no-files-found: error
           retention-days: 90
-          overwrite: true
 
       - name: Submit exactly the receipted bytes
         run: |
@@ -416,7 +451,8 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: shard-submit-${{ matrix.prefix }}-${{ needs.resolve.outputs.month }}
+          include-hidden-files: true
+          name: shard-submit-${{ matrix.prefix }}-${{ needs.resolve.outputs.month }}-attempt-${{ github.run_attempt }}
           path: etl/.publication/${{ needs.resolve.outputs.month }}/submit-${{ matrix.prefix }}.json
           if-no-files-found: warn
           retention-days: 30
@@ -434,6 +470,18 @@ jobs:
       PYTHONIOENCODING: utf-8
       PYTHONUTF8: '1'
     steps:
+      # Until immutable producer/receipt recovery exists, fail before any RFB/IA access.
+      # Re-running failed jobs is NOT equivalent to a fresh, attested publication.
+      - name: Refuse unproven monthly workflow attempt
+        shell: bash
+        env:
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          if [ "$RUN_ATTEMPT" != "1" ]; then
+            echo "::error::Monthly attempt $RUN_ATTEMPT refused; recovery needs independent producer attestation"
+            exit 1
+          fi
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v3
         with:
@@ -442,33 +490,64 @@ jobs:
       - run: uv sync --frozen
       - uses: actions/download-artifact@v4
         with:
-          name: production-descriptor-${{ needs.resolve.outputs.month }}
+          name: production-descriptor-${{ needs.resolve.outputs.month }}-attempt-${{ github.run_attempt }}
           path: etl/.publication/${{ needs.resolve.outputs.month }}
       - uses: actions/download-artifact@v4
         with:
-          pattern: shard-receipt-*-${{ needs.resolve.outputs.month }}
+          pattern: shard-receipt-*-${{ needs.resolve.outputs.month }}-attempt-${{ github.run_attempt }}
           path: etl/.publication/${{ needs.resolve.outputs.month }}/receipts
           merge-multiple: true
 
+      # Default download action resolves artifacts from this workflow run.
+      # CLI verifies attempt identity, so failed-job reruns cannot replay old bag.
+      - uses: actions/download-artifact@v4
+        with:
+          name: estabelecimento-source-bag-${{ needs.resolve.outputs.month }}-attempt-${{ github.run_attempt }}
+          path: etl/.publication/${{ needs.resolve.outputs.month }}/source
+
       - name: Verify remote bytes against production receipts and build candidate
+        shell: bash
         run: |
+          set -euo pipefail
           uv run python -m ficha_etl.monthly_sharded finalize \
             --month "$MONTH" \
             --descriptor ".publication/$MONTH/production-descriptor.json" \
             --receipts-dir ".publication/$MONTH/receipts" \
+            --source-receipt ".publication/$MONTH/source/monthly-estabelecimento-source-bag.json" \
             --manifest ../web/public/manifest.json \
             --snapshot-entry ".publication/$MONTH/snapshot-entry.json" \
             --verification ".publication/$MONTH/verification.json" \
             --attempts 30 \
             --interval-seconds 30
 
+      # upload-artifact's if-no-files-found checks only whether ANY path exists.
+      # Require every independent evidence file before candidate upload/promotion.
+      - name: Assert all manifest candidate files exist and are nonempty
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd ..
+          for file in \
+            "web/public/manifest.json" \
+            "etl/.publication/${MONTH}/production-descriptor.json" \
+            "etl/.publication/${MONTH}/source/monthly-estabelecimento-source-bag.json" \
+            "etl/.publication/${MONTH}/snapshot-entry.json" \
+            "etl/.publication/${MONTH}/verification.json"; do
+            if [ ! -s "$file" ]; then
+              echo "::error file=$file::Missing or empty required promotion evidence"
+              exit 1
+            fi
+          done
+
       - name: Persist exact promoted candidate and evidence
         uses: actions/upload-artifact@v4
         with:
-          name: manifest-candidate-${{ needs.resolve.outputs.month }}
+          include-hidden-files: true
+          name: manifest-candidate-${{ needs.resolve.outputs.month }}-attempt-${{ github.run_attempt }}
           path: |
             web/public/manifest.json
             etl/.publication/${{ needs.resolve.outputs.month }}/production-descriptor.json
+            etl/.publication/${{ needs.resolve.outputs.month }}/source/monthly-estabelecimento-source-bag.json
             etl/.publication/${{ needs.resolve.outputs.month }}/snapshot-entry.json
             etl/.publication/${{ needs.resolve.outputs.month }}/verification.json
           if-no-files-found: error

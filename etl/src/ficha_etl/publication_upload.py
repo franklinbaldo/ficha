@@ -15,8 +15,10 @@ Isso é o equivalente para Parquets/lookups do preflight já usado nos shards.
 from __future__ import annotations
 
 import hashlib
+import tempfile
 import time
 from collections.abc import Callable
+from contextlib import ExitStack
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -98,14 +100,14 @@ def local_output_paths(output_dir: Path, descriptor: dict) -> dict[str, Path]:
         path = output_dir / name
         if not path.exists():
             raise FileNotFoundError(f"output missing before publication: {path}")
-        expected_size = int(entries[name].get("size", 0) or 0)
+        expected_size = _positive_size(entries[name].get("size"))
         expected_sha1 = _valid_sha1(entries[name].get("sha1"))
         actual_size = path.stat().st_size
         actual_sha1 = (
-            _sha1_file(path) if actual_size == expected_size and expected_size > 0 else None
+            _sha1_file(path) if expected_size is not None and actual_size == expected_size else None
         )
         if (
-            expected_size <= 0
+            expected_size is None
             or expected_sha1 is None
             or actual_size != expected_size
             or actual_sha1 != expected_sha1
@@ -116,6 +118,19 @@ def local_output_paths(output_dir: Path, descriptor: dict) -> dict[str, Path]:
             )
         paths[name] = path
     return paths
+
+
+def _positive_size(value: object) -> int | None:
+    """Bytes inteiros positivos, sem coerção de bool/float ou dígitos Unicode."""
+    if type(value) is int:
+        return value if value > 0 else None
+    if isinstance(value, str) and value.isascii() and value.isdecimal():
+        try:
+            parsed = int(value)
+        except ValueError:  # limite de dígitos do interpretador
+            return None
+        return parsed if parsed > 0 else None
+    return None
 
 
 def _valid_sha1(value: object) -> str | None:
@@ -143,14 +158,19 @@ def classify_output_upload(
 ) -> OutputUploadPlan:
     """Classifica uma fotografia remota sem fazer escrita."""
     entries = descriptor_file_entries(descriptor)
-    if metadata is None or not isinstance(metadata.get("files"), list):
+    if not isinstance(metadata, dict) or not isinstance(metadata.get("files"), list):
         return OutputUploadPlan((), (), tuple(entries), ())
 
-    by_name = {
-        entry.get("name"): entry
-        for entry in metadata["files"]
-        if isinstance(entry, dict) and isinstance(entry.get("name"), str)
-    }
+    by_name: dict[str, list[dict]] = {}
+    for entry in metadata["files"]:
+        if not isinstance(entry, dict):
+            return OutputUploadPlan((), (), tuple(entries), ())
+        name = entry.get("name")
+        if not isinstance(name, str) or not name:
+            # Uma linha sem identidade não é um catálogo confiável.
+            return OutputUploadPlan((), (), tuple(entries), ())
+        if name in entries:
+            by_name.setdefault(name, []).append(entry)
 
     upload: list[str] = []
     reuse: list[str] = []
@@ -158,19 +178,21 @@ def classify_output_upload(
     mismatches: list[str] = []
 
     for name, expected in entries.items():
-        remote = by_name.get(name)
-        expected_size = int(expected.get("size", 0) or 0)
+        expected_size = _positive_size(expected.get("size"))
         expected_sha1 = _valid_sha1(expected.get("sha1"))
-        if expected_size <= 0 or expected_sha1 is None:
+        if expected_size is None or expected_sha1 is None:
             raise ValueError(f"{name}: invalid identity in production descriptor")
 
-        if remote is not None:
-            try:
-                remote_size = int(remote.get("size", 0) or 0)
-            except (TypeError, ValueError):
-                remote_size = 0
+        matches = by_name.get(name, [])
+        if len(matches) > 1:
+            pending.append(f"{name} (duplicate catalog entries: {len(matches)})")
+            continue
+
+        if matches:
+            remote = matches[0]
+            remote_size = _positive_size(remote.get("size"))
             remote_sha1 = _valid_sha1(remote.get("sha1"))
-            if remote_size <= 0 or remote_sha1 is None:
+            if remote_size is None or remote_sha1 is None:
                 pending.append(name)
                 continue
             if remote_size == expected_size and remote_sha1 == expected_sha1:
@@ -266,20 +288,72 @@ def submit_outputs_fail_closed(
     if not plan.upload:
         return plan
 
-    responses = ia.upload(
-        item_id(month),
-        files={name: str(paths[name]) for name in plan.upload},
-        access_key=access_key,
-        secret_key=secret_key,
-        retries=5,
-        retries_sleep=30,
-        verbose=True,
-    )
-    bad: list[str] = []
-    for response in responses:
-        status = getattr(response, "status_code", None)
-        if status not in (200, 201):
-            bad.append(f"HTTP {status}: {getattr(response, 'url', '<unknown>')}")
-    if bad:
-        raise OutputPublishError("IA rejected derived outputs: " + "; ".join(bad))
-    return plan
+    # O preflight inicial reduz cópias aos arquivos realmente ausentes.
+    # O segundo preflight, APÓS congelar bytes, fecha a janela de cópia
+    # frente a outro escritor remoto. Não é operação atômica no IA.
+    entries = descriptor_file_entries(descriptor)
+    with ExitStack() as stack:
+        frozen = {}
+        for name in plan.upload:
+            expected = entries[name]
+            expected_size = _positive_size(expected.get("size"))
+            expected_sha1 = _valid_sha1(expected.get("sha1"))
+            snapshot = stack.enter_context(tempfile.TemporaryFile(mode="w+b"))
+            with paths[name].open("rb") as source:
+                for chunk in iter(lambda: source.read(1024 * 1024), b""):
+                    snapshot.write(chunk)
+
+            # Hash the staged bytes, not the source read buffers: the uploader
+            # consumes the TemporaryFile, so that is the payload to attest.
+            snapshot.flush()
+            snapshot.seek(0)
+            digest = hashlib.sha1(usedforsecurity=False)
+            copied = 0
+            for chunk in iter(lambda: snapshot.read(1024 * 1024), b""):
+                digest.update(chunk)
+                copied += len(chunk)
+            if copied != expected_size or digest.hexdigest() != expected_sha1:
+                raise OutputPublishError(
+                    f"{name}: local bytes changed during upload snapshot: "
+                    f"size={copied}/{expected_size} sha1={digest.hexdigest()}/{expected_sha1}"
+                )
+            snapshot.seek(0)
+            frozen[name] = snapshot
+
+        plan = wait_for_safe_output_plan(
+            descriptor,
+            fetch_metadata=fetch_metadata,
+            head_status=head_status,
+            attempts=attempts,
+            interval_s=interval_s,
+        )
+        extra = set(plan.upload) - set(frozen)
+        if extra:
+            raise OutputPublishError(
+                f"remote plan changed after snapshot; retry required: {sorted(extra)}"
+            )
+        if not plan.upload:
+            return plan
+
+        # O uploader lê os handles congelados, não os caminhos mutáveis.
+        responses = ia.upload(
+            item_id(month),
+            files={name: frozen[name] for name in plan.upload},
+            access_key=access_key,
+            secret_key=secret_key,
+            retries=5,
+            retries_sleep=30,
+            verbose=True,
+        )
+        bad: list[str] = []
+        # O cliente IA retorna uma resposta por nome enviado. Um retorno
+        # vazio/parcial nao pode ser tratado como comprovacao de todos os PUTs.
+        if len(responses) != len(plan.upload):
+            bad.append(f"response count {len(responses)}/{len(plan.upload)}")
+        for response in responses:
+            status = getattr(response, "status_code", None)
+            if status not in (200, 201):
+                bad.append(f"HTTP {status}: {getattr(response, 'url', '<unknown>')}")
+        if bad:
+            raise OutputPublishError("IA rejected derived outputs: " + "; ".join(bad))
+        return plan
