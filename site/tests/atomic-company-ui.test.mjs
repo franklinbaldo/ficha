@@ -41,6 +41,44 @@ test('renderizador distingue 404 de ausência no PB sem alegar integridade de to
   assert.doesNotMatch(treeText(output),/registro íntegro|integridade (?:completa|verificada)/i);
 });
 
+test('estados desconhecidos e dados contraditórios não viram ausência nem ficha válida',()=>{
+  const doc=documentFor(),output=new Element();
+  for(const response of [
+    {...base,state:'pending',data:null},
+    {...base,state:'found',data:null},
+    {...base,state:'absent-in-snapshot',data:{cnpj}},
+    {...base,state:'artifact-unavailable',data:{cnpj}},
+    null,
+  ]){
+    assert.throws(()=>renderCompanyRecord(doc,output,response),/inconclusiva/);
+    assert.doesNotMatch(treeText(output),/Nenhum registro encontrado|FICHA CADASTRAL/);
+  }
+});
+
+test('estado inesperado do leitor é consulta inconclusiva, com alternativa ao acervo',async()=>{
+  const oldLocation=globalThis.location,oldHistory=globalThis.history;
+  globalThis.location=new URL('https://franklinbaldo.github.io/ficha/empresa/');
+  globalThis.history={replaceState(_s,_t,url){globalThis.location=new URL(String(url));}};
+  try{
+    const ids=['empresa-cnpj','empresa-competencia','empresa-form',
+      'empresa-estado','empresa-resultado','empresa-enviar'];
+    const doc=documentFor(ids);
+    await mountCompany(doc,{loadManifest:async()=>manifest,
+      lookup:async()=>({...base,state:'unrecognised-wire',data:null})});
+    doc.at('empresa-cnpj').value=cnpj;
+    await doc.at('empresa-form').listeners.get('submit')({preventDefault(){}});
+    assert.match(doc.at('empresa-estado').textContent,/Consulta indisponível.*consulta inconclusiva/);
+    assert.equal(doc.at('empresa-estado').dataset.kind,'error');
+    const content=treeText(doc.at('empresa-resultado'));
+    assert.match(content,/Não foi possível concluir a leitura remota/);
+    assert.match(content,/Consultar o catálogo de arquivos/);
+    assert.doesNotMatch(content,/Nenhum registro encontrado|FICHA CADASTRAL/);
+  }finally{
+    if(oldLocation===undefined)delete globalThis.location;else globalThis.location=oldLocation;
+    if(oldHistory===undefined)delete globalThis.history;else globalThis.history=oldHistory;
+  }
+});
+
 test('registro encontrado não atribui porte desconhecido ao enum Protobuf',()=>{
   const doc=documentFor(),output=new Element();
   renderCompanyRecord(doc,output,{...base,state:'found',
