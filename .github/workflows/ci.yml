@@ -32,6 +32,15 @@ jobs:
             web:
               - 'web/**'
               - '.github/workflows/ci.yml'
+              # Reexecutar Vitest quando o wire Python compartilhado mudar.
+              - 'etl/tests/fixtures/company-v11-ca000001.hex'
+              - 'etl/tests/fixtures/company_pb2_*.txt'
+              - 'etl/tests/test_lontra_historical_v1_decoder.py'
+              - 'etl/tests/test_castor_shared_wire_boundary.py'
+              - 'etl/tests/test_castor_v11_real_zip.py'
+              - 'etl/src/ficha_etl/proto/**'
+              - 'etl/src/ficha_etl/pack.py'
+              - 'etl/src/ficha_etl/sharded_pack.py'
 
       - uses: actions/setup-node@v4
         if: steps.changes.outputs.web == 'true'
@@ -93,6 +102,10 @@ jobs:
               # workflows aqui, alterar um deles não roda o teste que o
               # guarda — que é exatamente quando ele precisa rodar.
               - '.github/workflows/**'
+              # Reexecutar Python quando o wire TS compartilhado mudar.
+              - 'web/src/generated/company.pb.*'
+              - 'web/src/lib/companies*.ts'
+              - 'web/src/schemas/v1/manifest*.ts'
 
       - name: Install uv
         if: steps.changes.outputs.etl == 'true'
@@ -189,6 +202,10 @@ jobs:
               # workflows aqui, alterar um deles não roda o teste que o
               # guarda — que é exatamente quando ele precisa rodar.
               - '.github/workflows/**'
+              # Reexecutar Python quando o wire TS compartilhado mudar.
+              - 'web/src/generated/company.pb.*'
+              - 'web/src/lib/companies*.ts'
+              - 'web/src/schemas/v1/manifest*.ts'
 
       - name: Install uv
         if: steps.changes.outputs.etl == 'true'
