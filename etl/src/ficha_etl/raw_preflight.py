@@ -65,8 +65,31 @@ def _check_member_exact(
     if name.decode("utf-8" if flags & 0x800 else "cp437") != entry.filename:
         raise RuntimeError("raw preflight: ZIP member name mismatch")
     handle.seek(extra_len, 1)
-    if handle.tell() + entry.compress_size > next_offset:
+    data_end = handle.tell() + entry.compress_size
+    if data_end > next_offset:
         raise RuntimeError("raw preflight: ZIP payload overlaps next entry")
+    # Size understatements can hide a tail even if both compressed AND
+    # uncompressed sizes in the ZIP headers are forged consistently.
+    gap = next_offset - data_end
+    if flags & 8:
+        # Data descriptors may be signed/unsigned and 32/64-bit.
+        if gap not in (12, 16, 20, 24):
+            raise RuntimeError("raw preflight: invalid ZIP data descriptor")
+        handle.seek(data_end)
+        descriptor = handle.read(gap)
+        if descriptor.startswith(b"PK\x07\x08"):
+            descriptor = descriptor[4:]
+        if len(descriptor) == 12:
+            descriptor_values = struct.unpack("<III", descriptor)
+        elif len(descriptor) == 20:
+            descriptor_values = struct.unpack("<IQQ", descriptor)
+        else:
+            raise RuntimeError("raw preflight: invalid ZIP data descriptor")
+        if descriptor_values != (entry.CRC, entry.compress_size, entry.file_size):
+            raise RuntimeError("raw preflight: ZIP descriptor mismatch")
+    elif gap:
+        raise RuntimeError("raw preflight: unclaimed ZIP payload bytes")
+    handle.seek(data_end - entry.compress_size)
 
     remaining = entry.compress_size
     expanded = 0
@@ -136,7 +159,15 @@ def _raw_zip_crc_and_budget(path: Path, *, expanded: int, members: int) -> tuple
                     next_offsets[entry.header_offset],
                 )
             return expanded, members + len(entries)
-    except (zipfile.BadZipFile, zipfile.LargeZipFile, OSError, EOFError, UnicodeError, zlib.error, struct.error) as exc:
+    except (
+        zipfile.BadZipFile,
+        zipfile.LargeZipFile,
+        OSError,
+        EOFError,
+        UnicodeError,
+        zlib.error,
+        struct.error,
+    ) as exc:
         raise RuntimeError(f"raw preflight: invalid ZIP {path.name}") from exc
 
 def stage_all(
