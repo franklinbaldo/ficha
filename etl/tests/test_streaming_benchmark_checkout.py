@@ -11,7 +11,8 @@ import pytest
 import yaml
 
 WORKFLOW = (
-    Path(__file__).resolve().parents[2] / ".github/workflows/etl-streaming-benchmark.yml"
+    Path(__file__).resolve().parents[2]
+    / ".github/workflows/etl-streaming-benchmark.yml"
 )
 HEAD = "${{ github.event.pull_request.head.sha || github.sha }}"
 
