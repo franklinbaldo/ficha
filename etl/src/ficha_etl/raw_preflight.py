@@ -95,10 +95,7 @@ def _check_member_exact(
                         raise RuntimeError("raw preflight: duplicate ZIP64 local extra")
                     zip64_extra = local_extra[cursor : cursor + width]
                 cursor += width
-            needed = 8 * (
-                (local_compressed == 0xFFFFFFFF)
-                + (local_uncompressed == 0xFFFFFFFF)
-            )
+            needed = 8 * ((local_compressed == 0xFFFFFFFF) + (local_uncompressed == 0xFFFFFFFF))
             if zip64_extra is None or len(zip64_extra) < needed:
                 raise RuntimeError("raw preflight: missing ZIP64 local sizes")
             cursor = 0
