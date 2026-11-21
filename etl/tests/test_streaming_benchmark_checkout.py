@@ -30,10 +30,8 @@ def require_exact_streaming_checkout(config: dict) -> None:
     assert "pull_request_target" not in events
     pull_request = events["pull_request"]
     assert isinstance(pull_request, dict)
-    assert pull_request.get("paths") == [
-        "etl/**",
-        ".github/workflows/etl-streaming-benchmark.yml",
-    ]
+    expected_paths = ["etl/**", ".github/workflows/etl-streaming-benchmark.yml"]
+    assert pull_request.get("paths") == expected_paths
     steps = job["steps"]
     assert steps[0]["uses"] == "actions/checkout@v4"
     assert steps[0]["with"] == {"persist-credentials": False, "ref": HEAD}
@@ -99,26 +97,19 @@ def test_checkout_policy_rejects_regressions(mutation: str) -> None:
         job_run_defaults["shell"] = "bash -c 'true' {0}"
     elif mutation == "workflow-default-shell-noop":
         workflow["defaults"] = {"run": {"shell": "bash -c 'true' {0}"}}
-    elif mutation in (
-        "missing-pr-event",
-        "missing-dispatch-event",
-        "missing-etl-path",
-        "missing-workflow-path",
-        "dual-target-event",
-    ):
+    elif mutation == "missing-pr-event":
+        del workflow.get("on", workflow.get(True))["pull_request"]
+    elif mutation == "missing-dispatch-event":
+        del workflow.get("on", workflow.get(True))["workflow_dispatch"]
+    elif mutation == "missing-etl-path":
         events = workflow.get("on", workflow.get(True))
-        if mutation == "missing-pr-event":
-            del events["pull_request"]
-        elif mutation == "missing-dispatch-event":
-            del events["workflow_dispatch"]
-        elif mutation == "missing-etl-path":
-            events["pull_request"]["paths"].remove("etl/**")
-        elif mutation == "missing-workflow-path":
-            events["pull_request"]["paths"].remove(
-                ".github/workflows/etl-streaming-benchmark.yml"
-            )
-        else:
-            events["pull_request_target"] = {}
+        events["pull_request"]["paths"].remove("etl/**")
+    elif mutation == "missing-workflow-path":
+        events = workflow.get("on", workflow.get(True))
+        paths = events["pull_request"]["paths"]
+        paths.remove(".github/workflows/etl-streaming-benchmark.yml")
+    elif mutation == "dual-target-event":
+        workflow.get("on", workflow.get(True))["pull_request_target"] = {}
     else:
         guard["run"] = 'echo "$(git rev-parse HEAD)" = "$EXPECTED_SHA"'
     with pytest.raises((AssertionError, KeyError)):
