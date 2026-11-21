@@ -248,17 +248,22 @@ def stage_all(
                 response.raise_for_status()
                 if response.status_code != 200:
                     raise RuntimeError(f"raw preflight: non-200 RFB source {spec.name}")
+                # A full-object HTTP 200 cannot carry partial-content semantics.
+                # A matching ZIP CRC only authenticates received bytes, not remote completeness.
+                if "content-range" in response.headers:
+                    raise RuntimeError(f"raw preflight: unexpected RFB Content-Range {spec.name}")
                 encoding = response.headers.get("content-encoding", "identity").strip().lower()
                 if encoding != "identity":
                     raise RuntimeError(f"raw preflight: encoded RFB source {spec.name}")
                 length_text = response.headers.get("content-length", "")
-                if (
-                    not length_text.isascii()
-                    or not length_text.isdecimal()
-                    or int(length_text) == 0
-                ):
+                if not length_text.isascii() or not length_text.isdecimal():
+                    raise RuntimeError(f"raw preflight: invalid RFB length {spec.name}")
+                # Bound digit count before int(): Python rejects enormous decimals.
+                if len(length_text) > len(str(_MAX_RAW_COMPRESSED_BYTES)):
                     raise RuntimeError(f"raw preflight: invalid RFB length {spec.name}")
                 expected = int(length_text)
+                if expected == 0:
+                    raise RuntimeError(f"raw preflight: invalid RFB length {spec.name}")
                 if total_compressed + expected > _MAX_RAW_COMPRESSED_BYTES:
                     raise RuntimeError("raw preflight: global compressed limit")
                 digest = hashlib.sha256()
