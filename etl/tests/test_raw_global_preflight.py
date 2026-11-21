@@ -1,4 +1,5 @@
 """Pre-PUT 37/37 RFB raw admission: HTTP and S3 are strictly offline."""
+
 from __future__ import annotations
 
 import io
