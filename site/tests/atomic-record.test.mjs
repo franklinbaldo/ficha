@@ -94,6 +94,20 @@ test('Content-Length de identidade deve corresponder ao corpo antes do decoder',
   assert.deepEqual([...decodedStream],[23,42]);
 });
 
+test('stream que reutiliza Uint8Array não corrompe chunks já recebidos',async()=>{
+  const reused=Uint8Array.of(1,2);
+  let pulls=0;
+  const response=new Response(new ReadableStream({
+    pull(controller){
+      if(pulls++===0) controller.enqueue(reused);
+      else if(pulls===2){ reused.set([3,4]); controller.enqueue(reused); }
+      else controller.close();
+    },
+  },{highWaterMark:0}),{headers:{'content-length':'4'}});
+  assert.deepEqual([...await readBoundedMember(response,8)],[1,2,3,4],
+    'cada leitura precisa preservar os bytes antes de novo pull');
+});
+
 test('erro de excesso não aguarda cancelamento de stream que nunca resolve',async()=>{
   let cancelCount=0,releaseCount=0;
   const pending=new Promise(()=>{});
