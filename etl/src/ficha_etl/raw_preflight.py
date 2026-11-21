@@ -59,11 +59,7 @@ def _check_member_exact(
     signature, _, flags, method, _, _, _, _, _, name_len, extra_len = struct.unpack(
         "<IHHHHHIIIHH", header
     )
-    if (
-        signature != 0x04034B50
-        or method != entry.compress_type
-        or flags != entry.flag_bits
-    ):
+    if signature != 0x04034B50 or method != entry.compress_type or flags != entry.flag_bits:
         raise RuntimeError("raw preflight: ZIP local header mismatch")
     name = handle.read(name_len)
     if name.decode("utf-8" if flags & 0x800 else "cp437") != entry.filename:
@@ -136,9 +132,7 @@ def _check_member_exact(
     return expanded
 
 
-def _raw_zip_crc_and_budget(
-    path: Path, *, expanded: int, members: int
-) -> tuple[int, int]:
+def _raw_zip_crc_and_budget(path: Path, *, expanded: int, members: int) -> tuple[int, int]:
     """Check all compressed bytes and actual expansion before any IA PUT."""
     try:
         with zipfile.ZipFile(path) as archive:
@@ -152,18 +146,13 @@ def _raw_zip_crc_and_budget(
             if len(positions) != len(set(positions)):
                 raise RuntimeError("raw preflight: duplicate ZIP local header")
             next_offsets = {
-                position: (
-                    positions[i + 1] if i + 1 < len(positions) else archive.start_dir
-                )
+                position: (positions[i + 1] if i + 1 < len(positions) else archive.start_dir)
                 for i, position in enumerate(positions)
             }
             for entry in entries:
                 if entry.flag_bits & 1:
                     raise RuntimeError("raw preflight: encrypted ZIP member")
-                if (
-                    entry.file_size < 0
-                    or expanded + entry.file_size > _MAX_RAW_UNCOMPRESSED_BYTES
-                ):
+                if entry.file_size < 0 or expanded + entry.file_size > _MAX_RAW_UNCOMPRESSED_BYTES:
                     raise RuntimeError("raw preflight: global uncompressed limit")
                 expanded += _check_member_exact(
                     archive,
@@ -246,9 +235,7 @@ def stage_all(
             )
             pinned_sha = digest.hexdigest()
             if pinned_sha in seen_hashes:
-                raise RuntimeError(
-                    f"raw preflight: duplicate source SHA-256: {spec.name}"
-                )
+                raise RuntimeError(f"raw preflight: duplicate source SHA-256: {spec.name}")
             seen_hashes.add(pinned_sha)
             admitted[spec.name] = (target_file, size, pinned_sha)
     if set(admitted) != {spec.name for spec in specs} or len(admitted) != 37:
