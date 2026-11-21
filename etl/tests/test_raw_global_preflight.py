@@ -27,7 +27,7 @@ def _source_zip(number: int) -> bytes:
     return memory.getvalue()
 
 
-def _offline(monkeypatch, *, bad_crc=False, status_37=None, bad_length=False):
+def _offline(monkeypatch, *, bad_crc=False, status_37=None, bad_length=False, redirect_37=None):
     specs = canonical_inventory()
     _equal(len(specs), 37)
     streams = [_source_zip(i) for i in range(37)]
@@ -44,6 +44,8 @@ def _offline(monkeypatch, *, bad_crc=False, status_37=None, bad_length=False):
         name = request.url.path.rsplit("/", 1)[-1]
         index = names[name]
         seen["gets"].append(name)
+        if index == 36 and redirect_37 is not None and len(seen["gets"]) == 37:
+            return httpx.Response(302, headers={"Location": redirect_37}, request=request)
         if index == 36 and status_37 is not None:
             return httpx.Response(status_37, request=request)
         source = streams[index]
@@ -101,6 +103,26 @@ def test_final_zip_failure_cannot_partial_publish(monkeypatch, tmp_path, case, r
     with pytest.raises((RuntimeError, httpx.HTTPStatusError), match=reason):
         _run(tmp_path)
     _equal(len(seen["gets"]), 37)
+    _equal(seen["puts"], [])
+    _equal(list(tmp_path.iterdir()), [])
+
+
+@pytest.mark.parametrize(
+    "origin",
+    [
+        "https://other.example",
+        "http://arquivos.receitafederal.gov.br",
+        "https://arquivos.receitafederal.gov.br",
+    ],
+)
+def test_redirected_final_rfb_zip_is_not_admitted(monkeypatch, tmp_path, origin):
+    # Last case covers even a same-origin HTTPS redirect. Every 3xx is denied.
+    last_name = canonical_inventory()[-1].name
+    target = f"{origin}/public.php/webdav/2026-07/{last_name}"
+    seen, _ = _offline(monkeypatch, redirect_37=target)
+    with pytest.raises(RuntimeError, match="redirected RFB source"):
+        _run(tmp_path)
+    _equal(len(seen["gets"]), 37)  # The redirect target must not be requested.
     _equal(seen["puts"], [])
     _equal(list(tmp_path.iterdir()), [])
 
