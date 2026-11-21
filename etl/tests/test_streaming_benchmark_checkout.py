@@ -20,6 +20,9 @@ def require_exact_streaming_checkout(config: dict) -> None:
     assert "shell" not in config.get("defaults", {}).get("run", {})
     job = config["jobs"]["streaming-benchmark"]
     assert "shell" not in job.get("defaults", {}).get("run", {})
+    # A skipped or allowed-to-fail job can be green without proving its checkout.
+    assert "if" not in job
+    assert job.get("continue-on-error") in (None, False)
     steps = job["steps"]
     assert steps[0]["uses"] == "actions/checkout@v4"
     assert steps[0]["with"] == {"persist-credentials": False, "ref": HEAD}
@@ -44,6 +47,8 @@ def test_streaming_workflow_checkout_is_sha_exact_and_fail_closed() -> None:
         "merge-ref",
         "persist-credentials",
         "skip-guard",
+        "skip-job",
+        "ignore-job-failure",
         "ignore-failure",
         "no-assert",
         "echo-instead-of-test",
@@ -63,6 +68,10 @@ def test_checkout_policy_rejects_regressions(mutation: str) -> None:
         checkout["with"]["persist-credentials"] = True
     elif mutation == "skip-guard":
         guard["if"] = "github.event_name == 'push'"
+    elif mutation == "skip-job":
+        workflow["jobs"]["streaming-benchmark"]["if"] = "false"
+    elif mutation == "ignore-job-failure":
+        workflow["jobs"]["streaming-benchmark"]["continue-on-error"] = True
     elif mutation == "ignore-failure":
         guard["continue-on-error"] = True
     elif mutation == "no-assert":
