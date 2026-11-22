@@ -70,11 +70,11 @@ def test_duckdb_executes_generated_views_over_parquet(parquet_views):
     assert parquet_views.execute(sql["empresas_ativas"]).fetchall() == [("A", "02")]
     rows = parquet_views.execute(sql["socios_de_raizes_ativas"]).fetchall()
     expected = [
-            ("11111111", "one-active-parent"),
-            ("44444444", "first-duplicate-parent"),
-            ("44444444", "first-duplicate-parent"),
-            ("44444444", "second-duplicate-parent"),
-            ("44444444", "second-duplicate-parent"),
+        ("11111111", "one-active-parent"),
+        ("44444444", "first-duplicate-parent"),
+        ("44444444", "first-duplicate-parent"),
+        ("44444444", "second-duplicate-parent"),
+        ("44444444", "second-duplicate-parent"),
     ]
     assert Counter(rows) == Counter(expected)
 
@@ -93,9 +93,9 @@ def test_independent_exists_oracle_exposes_join_cardinality(parquet_views):
     expected = parquet_views.execute(oracle).fetchall()
     actual = parquet_views.execute(generated_sql()["socios_de_raizes_ativas"]).fetchall()
     expected_rows = [
-            ("11111111", "one-active-parent"),
-            ("44444444", "first-duplicate-parent"),
-            ("44444444", "second-duplicate-parent"),
+        ("11111111", "one-active-parent"),
+        ("44444444", "first-duplicate-parent"),
+        ("44444444", "second-duplicate-parent"),
     ]
     assert Counter(expected) == Counter(expected_rows)
     assert len(actual) == 5
@@ -140,8 +140,8 @@ def test_explicit_primary_and_foreign_keys_restore_semijoin_parity():
 
         actual = connection.execute(generated_sql()["socios_de_raizes_ativas"]).fetchall()
         expected = [
-                ("11111111", "one-active-parent"),
-                ("44444444", "first-duplicate-parent"),
-                ("44444444", "second-duplicate-parent"),
+            ("11111111", "one-active-parent"),
+            ("44444444", "first-duplicate-parent"),
+            ("44444444", "second-duplicate-parent"),
         ]
         assert Counter(actual) == Counter(expected)
