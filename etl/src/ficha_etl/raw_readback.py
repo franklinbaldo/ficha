@@ -157,12 +157,13 @@ def _check_client(client: httpx.Client) -> None:
         )
     else:
         direct_transport = False
+    # Refuse explicit proxy=, mounts= and custom route transports.
+    # HTTPX 0.28 keeps trust_env private; fail closed on upgrades.
+    # No ambient proxy/netrc/SSL overrides are admissible here.
     if (
         type(mounts) is not dict
-        or bool(mounts)  # explicit proxy=, mounts= and custom route transports
+        or bool(mounts)
         or not direct_transport
-        # HTTPX 0.28 keeps trust_env private; fail closed on upgrades.
-        # No ambient proxy/netrc/SSL overrides are admissible here.
         or getattr(client, "_trust_env", True) is not False
         or client.auth is not None
         or bool(client.cookies)
