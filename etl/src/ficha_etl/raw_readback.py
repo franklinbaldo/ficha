@@ -167,9 +167,8 @@ def _read_one(client: httpx.Client, identifier: str, pin: RawPin) -> RawObjectOb
                 headers={"Accept-Encoding": "identity", "Cache-Control": "no-cache"},
             )
             _validate_archive_url(request.url, identifier, pin.name)
-            with closing(
-                client.send(request, stream=True, follow_redirects=False)
-            ) as response:
+            response = client.send(request, stream=True, follow_redirects=False)
+            with closing(response):
                 if response.status_code in (301, 302, 303, 307, 308):
                     locations = response.headers.get_list("location")
                     if redirects >= _MAX_REDIRECTS or len(locations) != 1 or not locations[0]:
