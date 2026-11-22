@@ -342,6 +342,15 @@ def _cmd_pack(
         _eprint(f"error: month must be YYYY-MM, got {month!r}")
         return 2
 
+    # Standalone pack is another public derived-upload entrypoint. Its local
+    # construction is allowed; publication awaits independent raw S/R/F proof.
+    if not skip_upload:
+        try:
+            _require_legacy_publication_custody()
+        except ValueError as exc:
+            _eprint(f"error: {exc}")
+            return 1
+
     parquets_base = str(local_parquets) if local_parquets else None
     log.info("[pack] building companies.zip for %s", month)
     try:
@@ -394,7 +403,7 @@ def _cmd_pack(
     return 0
 
 
-def _require_legacy_run_custody() -> None:
+def _require_legacy_publication_custody() -> None:
     """No legacy S/R/F authority exists; prohibit real publishing (#433).
 
     This guard is deliberately not controlled by an environment flag. A later
@@ -432,7 +441,7 @@ def _cmd_run(
     # manifest publication. Block before credentials, I/O and the first PUT.
     if not skip_upload:
         try:
-            _require_legacy_run_custody()
+            _require_legacy_publication_custody()
         except ValueError as exc:
             _eprint(f"error: {exc}")
             return 1
