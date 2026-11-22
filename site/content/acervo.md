@@ -11,7 +11,7 @@ layout: product
 <section class="page-lead">
   <p class="eyebrow">04 / DADOS ABERTOS</p>
   <h1>Os dados são de todos.</h1>
-  <p class="lede">Explore competências e arquivos declarados no manifesto, com tamanho, identidade informada e ligação para a fonte. O manifesto é um contrato aberto para pessoas e máquinas.</p>
+  <p class="lede">Explore competências e arquivos declarados no manifesto, com tamanho, identidade informada e links para endereços indicados no catálogo. O manifesto é um contrato aberto para pessoas e máquinas.</p>
   <div class="inline-actions"><a class="button-secondary" href="/ficha/manifest.json">Abrir manifesto JSON</a><a class="quiet-link" href="https://github.com/franklinbaldo/ficha">Código-fonte</a></div>
 </section>
 <section class="workspace">
