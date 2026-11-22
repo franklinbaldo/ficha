@@ -145,3 +145,118 @@ def test_explicit_primary_and_foreign_keys_restore_semijoin_parity():
             ("44444444", "second-duplicate-parent"),
         ]
         assert Counter(actual) == Counter(expected)
+
+
+# These competence labels are fixture identifiers, not real RFB snapshot metadata.
+# Different active parents in each fixture make a cross-snapshot JOIN observable.
+COMPETENCIA_INPUTS = {
+    "2026-07": {
+        "cnpjs": [("A", "02"), ("B", "08")],
+        "socios": [("11111111", "partner-one"), ("22222222", "partner-two")],
+        "raizes": [("11111111", 1), ("22222222", 0)],
+    },
+    "2026-08": {
+        "cnpjs": [("A", "08"), ("B", "02")],
+        "socios": [("11111111", "partner-one"), ("22222222", "partner-two")],
+        "raizes": [("11111111", 0), ("22222222", 1)],
+    },
+}
+
+
+@pytest.fixture
+def competencia_parquets(tmp_path: Path):
+    schemas = {
+        "cnpjs": "cnpj VARCHAR, situacao_cadastral VARCHAR",
+        "socios": "cnpj_base VARCHAR, nome_socio_razao_social VARCHAR",
+        "raizes": "cnpj_base VARCHAR, qtd_estabelecimentos_ativos INTEGER",
+    }
+    connection = duckdb.connect(":memory:")
+    paths = {}
+    try:
+        for competencia, relations in COMPETENCIA_INPUTS.items():
+            for relation, rows in relations.items():
+                connection.execute(f"CREATE TABLE source_{relation} ({schemas[relation]})")
+                connection.executemany(
+                    f"INSERT INTO source_{relation} VALUES (?, ?)", rows
+                )
+                target = tmp_path / f"{competencia}-{relation}.parquet"
+                escaped = target.as_posix().replace("'", "''")
+                connection.execute(
+                    f"COPY source_{relation} TO '{escaped}' (FORMAT PARQUET)"
+                )
+                connection.execute(f"DROP TABLE source_{relation}")
+                paths[competencia, relation] = escaped
+        yield connection, paths
+    finally:
+        connection.close()
+
+
+def bind_competencia(connection, paths, competencia, raiz_competencia=None):
+    for relation in ("cnpjs", "socios", "raizes"):
+        origin = (
+            raiz_competencia
+            if relation == "raizes" and raiz_competencia is not None
+            else competencia
+        )
+        connection.execute(
+            f"CREATE OR REPLACE VIEW {relation} AS "
+            f"SELECT * FROM read_parquet('{paths[origin, relation]}')"
+        )
+
+
+def raw_competencia_oracle(competencia):
+    """Independent Python selection, not generated SQL or a Zod acceptance test."""
+    source = COMPETENCIA_INPUTS[competencia]
+    active_roots = {
+        base for base, count in source["raizes"]
+        if count is not None and count > 0
+    }
+    return {
+        "empresas_ativas": [
+            row for row in source["cnpjs"] if row[1] == "02"
+        ],
+        "socios_de_raizes_ativas": [
+            row for row in source["socios"] if row[0] in active_roots
+        ],
+    }
+
+
+def test_competencia_scoped_generated_sql_matches_raw_oracle(competencia_parquets):
+    connection, paths = competencia_parquets
+    sql = generated_sql()
+    for competencia in COMPETENCIA_INPUTS:
+        bind_competencia(connection, paths, competencia)
+        expected = raw_competencia_oracle(competencia)
+
+        # This audit is scoped to the loaded fixture, not a property of Parquet.
+        duplicate_roots = connection.execute("""
+            SELECT cnpj_base FROM raizes
+            GROUP BY cnpj_base HAVING COUNT(*) > 1
+        """).fetchall()
+        orphan_socios = connection.execute("""
+            SELECT s.cnpj_base FROM socios AS s
+            WHERE NOT EXISTS (
+                SELECT 1 FROM raizes AS r WHERE r.cnpj_base = s.cnpj_base
+            )
+        """).fetchall()
+        assert duplicate_roots == []
+        assert orphan_socios == []
+
+        for name in ("empresas_ativas", "socios_de_raizes_ativas"):
+            actual = connection.execute(sql[name]).fetchall()
+            assert Counter(actual) == Counter(expected[name]), (competencia, name)
+
+
+def test_cross_competencia_root_swap_fails_raw_oracle(competencia_parquets):
+    connection, paths = competencia_parquets
+    sql = generated_sql()["socios_de_raizes_ativas"]
+    for competencia, other in (("2026-07", "2026-08"), ("2026-08", "2026-07")):
+        bind_competencia(connection, paths, competencia)
+        expected = raw_competencia_oracle(competencia)["socios_de_raizes_ativas"]
+        assert Counter(connection.execute(sql).fetchall()) == Counter(expected)
+
+        # A physically valid root Parquet from another competence still has
+        # unique keys and no orphans, but changes this snapshot's result.
+        bind_competencia(connection, paths, competencia, raiz_competencia=other)
+        swapped = connection.execute(sql).fetchall()
+        assert Counter(swapped) != Counter(expected)
