@@ -26,6 +26,12 @@ class _Progress:
         pass
 
 
+@pytest.fixture(autouse=True)
+def _isolate_historical_preput_contract(monkeypatch: pytest.MonkeyPatch) -> None:
+    """These tests isolate prior stage ordering, not publication authorization."""
+    monkeypatch.setattr(cli, "_require_legacy_run_custody", lambda: None)
+
+
 def _run(tmp_path: Path, *, skip_upload: bool) -> int:
     return cli._cmd_run(
         "2026-08",
