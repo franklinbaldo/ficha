@@ -12,9 +12,7 @@ import duckdb
 import pytest
 
 
-GENERATED_VIEWS = (
-    Path(__file__).resolve().parents[2] / "web/src/generated/ficha-okf.views.ts"
-)
+GENERATED_VIEWS = Path(__file__).resolve().parents[2] / "web/src/generated/ficha-okf.views.ts"
 
 
 def generated_sql():
@@ -33,7 +31,7 @@ def generated_sql():
 def parquet_views(tmp_path: Path):
     connection = duckdb.connect(":memory:")
     try:
-        connection.execute("""
+        fixture_sql = """
             CREATE TABLE source_cnpjs (cnpj VARCHAR, situacao_cadastral VARCHAR);
             INSERT INTO source_cnpjs VALUES
                 ('A', '02'), ('B', '08'), ('C', NULL);
@@ -53,13 +51,12 @@ def parquet_views(tmp_path: Path):
             INSERT INTO source_raizes VALUES
                 ('11111111', 1), ('22222222', 0),
                 ('44444444', 1), ('44444444', 2), ('55555555', NULL);
-        """)
+        """
+        connection.execute(fixture_sql)
         for relation in ("cnpjs", "socios", "raizes"):
             path = tmp_path / f"{relation}.parquet"
             parquet_path = str(path).replace("\\", "/").replace("'", "''")
-            connection.execute(
-                f"COPY source_{relation} TO '{parquet_path}' (FORMAT PARQUET)"
-            )
+            connection.execute(f"COPY source_{relation} TO '{parquet_path}' (FORMAT PARQUET)")
             connection.execute(
                 f"CREATE VIEW {relation} AS SELECT * FROM read_parquet('{parquet_path}')"
             )
@@ -72,15 +69,14 @@ def test_duckdb_executes_generated_views_over_parquet(parquet_views):
     sql = generated_sql()
     assert parquet_views.execute(sql["empresas_ativas"]).fetchall() == [("A", "02")]
     rows = parquet_views.execute(sql["socios_de_raizes_ativas"]).fetchall()
-    assert Counter(rows) == Counter(
-        [
+    expected = [
             ("11111111", "one-active-parent"),
             ("44444444", "first-duplicate-parent"),
             ("44444444", "first-duplicate-parent"),
             ("44444444", "second-duplicate-parent"),
             ("44444444", "second-duplicate-parent"),
-        ]
-    )
+    ]
+    assert Counter(rows) == Counter(expected)
 
 
 def test_independent_exists_oracle_exposes_join_cardinality(parquet_views):
@@ -96,32 +92,32 @@ def test_independent_exists_oracle_exposes_join_cardinality(parquet_views):
     """
     expected = parquet_views.execute(oracle).fetchall()
     actual = parquet_views.execute(generated_sql()["socios_de_raizes_ativas"]).fetchall()
-    assert Counter(expected) == Counter(
-        [
+    expected_rows = [
             ("11111111", "one-active-parent"),
             ("44444444", "first-duplicate-parent"),
             ("44444444", "second-duplicate-parent"),
-        ]
-    )
+    ]
+    assert Counter(expected) == Counter(expected_rows)
     assert len(actual) == 5
     assert Counter(actual) != Counter(expected)
 
 
 def test_parquet_duplicate_root_fails_explicit_primary_key(parquet_views):
     # Reading Parquet as a relation does not confer a primary-key constraint.
-    parquet_views.execute("""
+    guarded_schema = """
         CREATE TABLE guarded_raizes (
             cnpj_base VARCHAR PRIMARY KEY,
             qtd_estabelecimentos_ativos INTEGER
         )
-    """)
+    """
+    parquet_views.execute(guarded_schema)
     with pytest.raises(duckdb.ConstraintException):
         parquet_views.execute("INSERT INTO guarded_raizes SELECT * FROM raizes")
 
 
 def test_explicit_primary_and_foreign_keys_restore_semijoin_parity():
     with duckdb.connect(":memory:") as connection:
-        connection.execute("""
+        guarded_schema = """
             CREATE TABLE raizes (
                 cnpj_base VARCHAR PRIMARY KEY,
                 qtd_estabelecimentos_ativos INTEGER
@@ -135,21 +131,17 @@ def test_explicit_primary_and_foreign_keys_restore_semijoin_parity():
                 ('11111111', 'one-active-parent'),
                 ('44444444', 'first-duplicate-parent'),
                 ('44444444', 'second-duplicate-parent');
-        """)
+        """
+        connection.execute(guarded_schema)
         with pytest.raises(duckdb.ConstraintException):
             connection.execute("INSERT INTO raizes VALUES ('44444444', 1)")
         with pytest.raises(duckdb.ConstraintException):
-            connection.execute(
-                "INSERT INTO socios VALUES ('99999999', 'orphan-partner')"
-            )
+            connection.execute("INSERT INTO socios VALUES ('99999999', 'orphan-partner')")
 
-        actual = connection.execute(
-            generated_sql()["socios_de_raizes_ativas"]
-        ).fetchall()
-        assert Counter(actual) == Counter(
-            [
+        actual = connection.execute(generated_sql()["socios_de_raizes_ativas"]).fetchall()
+        expected = [
                 ("11111111", "one-active-parent"),
                 ("44444444", "first-duplicate-parent"),
                 ("44444444", "second-duplicate-parent"),
-            ]
-        )
+        ]
+        assert Counter(actual) == Counter(expected)
