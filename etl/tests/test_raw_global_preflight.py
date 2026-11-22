@@ -399,3 +399,113 @@ def test_optimized_python_replays_zip37_local_guard():
     )
     if replay.returncode != 0:
         raise AssertionError(replay.stdout + "\n" + replay.stderr)
+
+
+# R158: Real stage_all/CRC and egress; only HTTP, rename, PUT are synthetic.
+class SplitStageExposure(AssertionError):
+    """Partial PUT before discovering split ZIP 37 SHA/CRC identity."""
+
+
+def _replace_at_crc_boundary(monkeypatch, position):
+    import hashlib
+
+    seen, sources = _offline(monkeypatch)
+    name = canonical_inventory()[position].name
+    alternate = _source_zip(66)  # Valid same-size ZIP, different digest.
+    _equal(len(alternate), len(sources[position]))
+    if hashlib.sha256(alternate).digest() == hashlib.sha256(sources[position]).digest():
+        raise AssertionError("replacement unexpectedly identical")
+
+    original_crc = raw_preflight._raw_zip_crc_and_budget
+    original_stage = raw_preflight.stage_all
+    original_put = upload._ia_s3_put
+    state = {"swap": 0, "attempts": [], "pin": None, "crc_sha": None, "old_sha": None}
+
+    def replace_before_crc(path, *, expanded, members):
+        if path.name == name:
+            old = path.stat()
+            state["old_sha"] = hashlib.sha256(path.read_bytes()).hexdigest()
+            substitute = path.with_name(path.name + ".alternate")
+            substitute.write_bytes(alternate)
+            os.replace(substitute, path)
+            new = path.stat()
+            if (old.st_dev, old.st_ino) == (new.st_dev, new.st_ino):
+                raise AssertionError("ZIP replacement did not change inode")
+            state["crc_sha"] = hashlib.sha256(path.read_bytes()).hexdigest()
+            state["swap"] += 1
+        return original_crc(path, expanded=expanded, members=members)
+
+    def record_stage(*args, **kwargs):
+        staged = original_stage(*args, **kwargs)
+        state["pin"] = staged[name][2]
+        return staged
+
+    def count_attempt(identifier, remote_name, chunks, **kwargs):
+        state["attempts"].append(remote_name)
+        return original_put(identifier, remote_name, chunks, **kwargs)
+
+    monkeypatch.setattr(raw_preflight, "_raw_zip_crc_and_budget", replace_before_crc)
+    monkeypatch.setattr(raw_preflight, "stage_all", record_stage)
+    monkeypatch.setattr(upload, "_ia_s3_put", count_attempt)
+    return seen, sources, state
+
+
+def test_first_raw_sha_crc_inode_split_refuses_before_put(monkeypatch, tmp_path):
+    seen, _, state = _replace_at_crc_boundary(monkeypatch, 0)
+    with pytest.raises(RuntimeError, match="staged bytes changed"):
+        _run(tmp_path)
+    _equal(len(seen["gets"]), 37)
+    _equal(state["swap"], 1)
+    _equal(state["pin"], state["old_sha"])
+    if state["crc_sha"] == state["old_sha"]:
+        raise AssertionError("SHA(A)/CRC(B) split not reproduced")
+    _equal(state["attempts"], [])
+    _equal(seen["puts"], [])
+
+
+@pytest.mark.xfail(
+    strict=True,
+    raises=SplitStageExposure,
+    reason="#433: ZIP 37 SHA(A)/CRC(B) split discovered after 36 fake PUTs",
+)
+def test_last_raw_sha_crc_inode_split_cannot_follow_put(monkeypatch, tmp_path):
+    seen, sources, state = _replace_at_crc_boundary(monkeypatch, 36)
+    try:
+        _run(tmp_path)
+    except (RuntimeError, OSError):
+        pass
+    else:
+        _equal(seen["received"], sources)
+    _equal(len(seen["gets"]), 37)
+    _equal(state["swap"], 1)
+    if state["old_sha"] == state["crc_sha"]:
+        raise AssertionError("no split identity at CRC boundary")
+    if state["pin"] is not None:
+        _equal(state["pin"], state["old_sha"])
+    if state["attempts"]:
+        _equal(state["attempts"], [f"raw/{s.name}" for s in canonical_inventory()[:-1]])
+        _equal(len(seen["received"]), 36)
+        raise SplitStageExposure("36 fake PUTs before SHA(A)/CRC(B) ZIP37 refusal")
+    _equal(seen["received"], [])
+
+
+def test_python_optimized_replays_stage_inode_split():
+    import subprocess
+    import sys
+
+    source = str(Path(__file__).resolve())
+    selectors = [
+        f"{source}::test_first_raw_sha_crc_inode_split_refuses_before_put",
+        f"{source}::test_last_raw_sha_crc_inode_split_cannot_follow_put",
+    ]
+    child = subprocess.run(
+        [sys.executable, "-O", "-m", "pytest", "-q", *selectors],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=180,
+    )
+    report = child.stdout + "\n" + child.stderr
+    _equal(child.returncode, 0)
+    if "1 passed" not in child.stdout or "1 xfailed" not in child.stdout:
+        raise AssertionError(report)
