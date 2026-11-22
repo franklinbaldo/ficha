@@ -58,9 +58,7 @@ def _require_raw_custody_authorization(
     ):
         raise ValueError("raw custody v2 lacks canonical source pin-set digest")
     if any(
-        not isinstance(raw.get(key), str)
-        or not raw[key].strip()
-        or len(raw[key]) > 512
+        not isinstance(raw.get(key), str) or not raw[key].strip() or len(raw[key]) > 512
         for key in _REQUIRED_REFERENCES
     ):
         raise ValueError("raw custody v2 lacks external S/R/F/authority references")
