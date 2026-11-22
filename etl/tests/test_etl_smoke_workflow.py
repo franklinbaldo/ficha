@@ -342,10 +342,8 @@ def test_freshness_threshold_stays_at_three_calendar_months(tmp_path: Path) -> N
     script = wrapper.split("python3 - <<'EOF'\n", 1)[1].rsplit("\nEOF", 1)[0]
     now = datetime.date.today()
 
-    for months_ago, expected_rc, annotation in (
-        (2, 0, "::warning::"),
-        (3, 1, "::error::"),
-    ):
+    cases = [(2, 0, "::warning::"), (3, 1, "::error::")]
+    for months_ago, expected_rc, annotation in cases:
         month_index = now.year * 12 + now.month - 1 - months_ago
         current = f"{month_index // 12:04d}-{month_index % 12 + 1:02d}"
         (public / "manifest.json").write_text(
