@@ -20,8 +20,15 @@ export function validateManifest(manifest) {
 }
 
 export async function fetchManifest({fetchImpl = fetch, url = '/ficha/manifest.json'} = {}) {
+  // This is a full GET, never a byte-range probe: 201/206 cannot certify the catalogue.
   const response = await fetchImpl(url, {cache:'no-store'});
-  if (!response.ok) throw new Error('Catálogo indisponível: HTTP ' + response.status);
+  if (response.status !== 200) throw new Error('Catálogo indisponível: HTTP ' + response.status);
+  // Full-object HTTP 200 cannot simultaneously claim partial-content semantics.
+  // Fail before JSON parsing even when a response contains a valid catalogue.
+  if (response.headers?.get?.('content-range') != null) {
+    try { void response.body?.cancel?.().catch(() => {}); } catch { /* Best effort. */ }
+    throw new Error('Catálogo HTTP 200 com Content-Range inesperado');
+  }
   return validateManifest(await response.json());
 }
 

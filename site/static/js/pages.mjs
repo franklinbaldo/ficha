@@ -23,7 +23,26 @@ function renderFieldList(doc, parent, record) {
     add(doc,cell,'dd',displayValue(record[field]));
   }
 }
+/** An unrecognised or contradictory reader state is not a negative CNPJ search. */
+function requireCompanyObservation(result) {
+  if (!result || !['found', 'absent-in-snapshot', 'artifact-unavailable'].includes(result.state)) {
+    throw new Error('Estado do registro Protobuf desconhecido; consulta inconclusiva');
+  }
+  if (result.state === 'found' &&
+      (!result.data || typeof result.data !== 'object' || Array.isArray(result.data))) {
+    throw new Error('Registro marcado como encontrado sem dados; consulta inconclusiva');
+  }
+  if (result.state !== 'found' && result.data != null) {
+    throw new Error('Estado do registro contradiz os dados retornados; consulta inconclusiva');
+  }
+  if (result.state === 'found' && result.data.cnpj !== result.cnpj) {
+    throw new Error('CNPJ do registro divergente da consulta; consulta inconclusiva');
+  }
+  return result;
+}
+
 export function renderCompanyRecord(doc, parent, result) {
+  requireCompanyObservation(result);
   parent.replaceChildren();
   if (result.state === 'artifact-unavailable') {
     add(doc,parent,'h2','Arquivo indisponível nesta competência');
@@ -82,13 +101,18 @@ export async function mountCompany(doc, {loadManifest = fetchManifest, lookup = 
       canonicalCnpj(input.value) === cnpj && select.value === date;
     const discarded = 'CNPJ ou competência alterados durante a consulta. Pesquise novamente.';
     busy = true;
-    submit.disabled = true;
+    // Preserve keyboard focus while the archival request is pending.
+    // The busy guard still prevents duplicate lookups.
+    submit.setAttribute('aria-disabled', 'true');
     output.replaceChildren();
     status(state,'Consultando o registro na competência '+date+'…');
     try {
       const result = await lookup(manifest,date,cnpj);
       // A delayed archival response must not be presented as the new selection.
       if (!stillCurrent()) { status(state,discarded); return; }
+      if (!result || result.cnpj !== cnpj || result.date !== date) {
+        throw new Error('Identidade ou competência divergente na resposta; consulta inconclusiva');
+      }
       setParams({cnpj,competencia:date});
       renderCompanyRecord(doc,output,result);
       if (result.state === 'artifact-unavailable') {
@@ -112,7 +136,7 @@ export async function mountCompany(doc, {loadManifest = fetchManifest, lookup = 
         add(doc,output,'p','Não foi possível concluir a leitura remota. Isso não demonstra ausência de CNPJ no acervo.');
         anchor(doc,output,'Consultar o catálogo de arquivos',BASE+'acervo/?competencia='+date);
       }
-    } finally { busy = false; selection.finish(); submit.disabled = false; }
+    } finally { busy = false; selection.finish(); submit.removeAttribute('aria-disabled'); }
   }
   form.addEventListener('submit',lookupSubmit);
   const initial = params().get('cnpj');
@@ -193,6 +217,7 @@ export function renderExploreAssets(doc,parent,manifest,date,filter='') {
     track.setAttribute('aria-label',file.key+': '+formatBytes(file.size));
   }
   if(!entries.length) add(doc,parent,'p','Nenhum conjunto corresponde ao filtro.');
+  return entries.length;
 }
 
 export function renderCountSeries(doc,parent,manifest,kind) {
@@ -233,13 +258,13 @@ export async function mountExplore(doc,{loadManifest=fetchManifest}={}) {
       const snap=snaps.find(s=>s.date===select.value);
       const totals=catalogueTotals(snap);
       counter.textContent=totals.fileCount+' arquivos · '+formatBytes(totals.bytes)+' declarados';
-      renderExploreAssets(doc,output,manifest,select.value,filter.value);
+      const visible=renderExploreAssets(doc,output,manifest,select.value,filter.value);
       setParams({competencia:select.value});
+      status(state,'Exibindo '+visible+' de '+totals.fileCount+' arquivos declarados em '+select.value+'. Tamanhos do manifesto, não quantidade de empresas nem indicadores por UF.');
     };
     select.addEventListener('change',paint);
     filter.addEventListener('input',paint);
     paint();
-    status(state,'Visualização dos tamanhos dos arquivos no catálogo. Não representa quantidade de empresas, nem indicadores por UF.');
   }catch(error){status(state,'Exploração indisponível: '+error.message,true);}
 }
 

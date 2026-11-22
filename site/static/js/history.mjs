@@ -61,7 +61,10 @@ export async function fetchHistoryRecordAt(manifest, date, cnpj, {
   return atomic(manifest, date, cnpj);
 }
 
-function requireHistoryObservation(result) {
+function requireHistoryObservation(result, date, cnpj) {
+  if (!result || result.date !== date || result.cnpj !== cnpj) {
+    throw new Error('Identidade da observação divergente; comparação inconclusiva');
+  }
   if (result?.state === 'artifact-unavailable') {
     throw new Error('Consulta inconclusiva em ' + result.date +
       ': arquivo Protobuf não respondeu (HTTP 404); ausência não comprovada');
@@ -71,6 +74,9 @@ function requireHistoryObservation(result) {
   }
   if (result.state === 'found' && (!result.data || typeof result.data !== 'object')) {
     throw new Error('Registro encontrado sem dados; comparação inconclusiva');
+  }
+  if (result.state === 'found' && result.data.cnpj !== cnpj) {
+    throw new Error('Identidade do CNPJ no registro divergente; comparação inconclusiva');
   }
   if (result.state === 'absent-in-snapshot' && result.data != null) {
     throw new Error('Resposta de ausência contraditória; comparação inconclusiva');
@@ -164,16 +170,18 @@ export async function mountHistory(doc,{loadManifest=fetchManifest,lookup=fetchH
       canonicalCnpj(input.value) === cnpj && from.value === start && to.value === end;
     const discarded = 'CNPJ ou competências alterados durante a comparação. Pesquise novamente.';
     busy = true;
-    button.disabled=true;
+    // Keep the button in the keyboard tab order during slow archival lookups.
+    // The busy guard rejects repeated submits without disabling focus.
+    button.setAttribute('aria-disabled','true');
     status(state,'Consultando competência inicial ('+start+')…');
     try {
-      const older=requireHistoryObservation(await lookup(manifest,start,cnpj));
+      const older=requireHistoryObservation(await lookup(manifest,start,cnpj), start, cnpj);
       // Avoid a second archival GET if the user changed the requested comparison.
       if (!stillCurrent()) { status(state,discarded); return; }
       status(state,older.state === 'absent-in-snapshot'
         ? 'CNPJ não localizado no registro Protobuf de '+start+'. Consultando competência final ('+end+')…'
         : 'Observação de '+start+' recebida. Consultando competência final ('+end+')…');
-      const newer=requireHistoryObservation(await lookup(manifest,end,cnpj));
+      const newer=requireHistoryObservation(await lookup(manifest,end,cnpj), end, cnpj);
       if (!stillCurrent()) { status(state,discarded); return; }
       setParams({cnpj,de:start,ate:end});
       renderHistoryComparison(doc,output,older,newer);
@@ -193,7 +201,7 @@ export async function mountHistory(doc,{loadManifest=fetchManifest,lookup=fetchH
         status(state,'Comparação indisponível: '+error.message,true);
         anchor(doc,output,'Ver competências disponíveis',BASE+'acervo/');
       }
-    }finally{busy=false;selection.finish();button.disabled=false;}
+    }finally{busy=false;selection.finish();button.removeAttribute('aria-disabled');}
   });
 }
 

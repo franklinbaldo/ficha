@@ -69,6 +69,45 @@ test('guarda 32 MiB configurada, Content-Length e corpo fragmentado',async()=>{
   assert.deepEqual([...await readBoundedMember(new Response(Uint8Array.of(1,2,3)),3)],[1,2,3]);
   await assert.rejects(readBoundedMember(new Response(Uint8Array.of(1)),0),/inválido/);
 });
+test('Content-Length de identidade deve corresponder ao corpo antes do decoder',async()=>{
+  // Os dois corpos são decodificáveis no mock, mas nenhum certifica seu tamanho.
+  for (const length of [1,3]) {
+    let decoded=0;
+    await assert.rejects(lookup(manifest,DATE,CNPJ,{
+      fetchImpl:async()=>new Response(Uint8Array.of(23,42),{
+        status:200,headers:{'content-length':String(length)},
+      }),
+      decodeCompany:()=>{decoded++;return structuredClone(company);},
+    }),/Content-Length incompatível/);
+    assert.equal(decoded,0,'não interpretar corpo parcial ou maior que o declarado');
+  }
+  const complete=await readBoundedMember(new Response(Uint8Array.of(23,42),{
+    headers:{'content-length':'2','content-encoding':'identity'},
+  }),16);
+  assert.deepEqual([...complete],[23,42]);
+
+  // Fetch entrega bytes já descomprimidos; Content-Length codificado não é
+  // comparável ao tamanho do stream quando há Content-Encoding real.
+  const decodedStream=await readBoundedMember(new Response(Uint8Array.of(23,42),{
+    headers:{'content-length':'1','content-encoding':'gzip'},
+  }),16);
+  assert.deepEqual([...decodedStream],[23,42]);
+});
+
+test('stream que reutiliza Uint8Array não corrompe chunks já recebidos',async()=>{
+  const reused=Uint8Array.of(1,2);
+  let pulls=0;
+  const response=new Response(new ReadableStream({
+    pull(controller){
+      if(pulls++===0) controller.enqueue(reused);
+      else if(pulls===2){ reused.set([3,4]); controller.enqueue(reused); }
+      else controller.close();
+    },
+  },{highWaterMark:0}),{headers:{'content-length':'4'}});
+  assert.deepEqual([...await readBoundedMember(response,8)],[1,2,3,4],
+    'cada leitura precisa preservar os bytes antes de novo pull');
+});
+
 test('erro de excesso não aguarda cancelamento de stream que nunca resolve',async()=>{
   let cancelCount=0,releaseCount=0;
   const pending=new Promise(()=>{});
@@ -138,6 +177,24 @@ test('GET Protobuf exige HTTP 200 integral, não 201/206 decodificável',async()
   }
   assert.equal(decoded,0,
     'um 2xx não integral não pode ser decodificado nem declarar presença');
+});
+
+test('HTTP 200 com Content-Range recusa membro parcial antes de ler ou decodificar',async()=>{
+  let decoded=0, pulled=0, cancelled=0;
+  const response=new Response(new ReadableStream({
+    pull(controller){ pulled++; controller.enqueue(Uint8Array.of(23,42)); controller.close(); },
+    cancel(){ cancelled++; },
+  },{highWaterMark:0}),{
+    status:200,
+    headers:{'Content-Range':'bytes 0-1/100','Content-Length':'2'},
+  });
+  await assert.rejects(lookup(manifest,DATE,CNPJ,{
+    fetchImpl:async()=>response,
+    decodeCompany:()=>{decoded++;return structuredClone(company);},
+  }),/Content-Range inesperado/);
+  assert.equal(pulled,0,'o 200 parcial deve falhar antes de ler o corpo');
+  assert.equal(cancelled,1,'a rejeição descarta o corpo de forma best-effort');
+  assert.equal(decoded,0,'bytes parciais não podem declarar CNPJ presente ou ausente');
 });
 
 test('contagem de filiais incompatível ou não declarada nunca prova ausência',async()=>{
