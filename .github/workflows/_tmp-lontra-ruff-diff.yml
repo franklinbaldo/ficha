@@ -1,0 +1,14 @@
+name: "Temporary Lontra Ruff formatting diff"
+on:
+  push:
+    branches: ["lontra/raw-readback-observation-433"]
+permissions:
+  contents: read
+jobs:
+  diff:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - name: Show required Ruff formatting changes (read-only)
+        run: uvx --from ruff==0.15.12 ruff format --diff etl/src/ficha_etl/raw_readback.py etl/tests/test_raw_readback.py
