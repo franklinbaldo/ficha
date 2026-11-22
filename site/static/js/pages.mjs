@@ -200,8 +200,11 @@ export function renderExploreAssets(doc,parent,manifest,date,filter='') {
   const snapshot=snapshotsDescending(manifest).find(s=>s.date===date);
   if(!snapshot) {add(doc,parent,'p','Competência não publicada.');return;}
   const term=filter.trim().toLowerCase();
-  const entries=archivalFileEntries(snapshot).filter(e=>e.key.toLowerCase().includes(term));
-  const max=Math.max(1,...entries.map(e=>e.size ?? 0));
+  const allEntries=archivalFileEntries(snapshot);
+  const entries=allEntries.filter(e=>e.key.toLowerCase().includes(term));
+  // Keep the within-competence scale stable when a filter hides the largest file.
+  // Otherwise the same file appears to grow merely because the list was filtered.
+  const max=Math.max(1,...allEntries.map(e=>e.size ?? 0));
   const title=add(doc,parent,'p',entries.length+' arquivos correspondentes · '+date,'fineprint');
   title.className='fineprint';
   for(const file of entries) {
