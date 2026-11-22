@@ -215,6 +215,20 @@ describe('OKF convenience views', () => {
     expect(okfParquetRowSchemas.Raiz.safeParse(raizWholeRow).success).toBe(true);
   });
 
+  it('records Cnpj view consumer acceptance divergence, not a published-row verdict', () => {
+    const nullName = { ...cnpjWholeRow, nome_fantasia: null };
+    expect(PublicV1CnpjSchema.safeParse(nullName).success).toBe(true);
+    expect(() => validateOkfConvenienceViewRows('empresas_ativas', [nullName])).toThrow(
+      /nome_fantasia/
+    );
+
+    const invalidPorte = { ...cnpjWholeRow, porte_empresa: '99' };
+    expect(PublicV1CnpjSchema.safeParse(invalidPorte).success).toBe(false);
+    expect(validateOkfConvenienceViewRows('empresas_ativas', [invalidPorte])).toEqual([
+      invalidPorte,
+    ]);
+  });
+
   it('demonstrates the Cnpj/Raiz null mismatch on complete rows', () => {
     const cnpjWithNull = { ...cnpjWholeRow, nome_fantasia: null };
     expect(PublicV1CnpjSchema.safeParse(cnpjWithNull).success).toBe(true);
