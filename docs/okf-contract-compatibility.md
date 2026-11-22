@@ -189,6 +189,22 @@ a view relacional declara `Raiz` como **input**, mas
 seu sucesso não atesta a nulabilidade, integridade referencial ou versão
 da relação `Raiz` consumida pelo JOIN.
 
+A regressão seguinte distingue explicitamente **formato da saída** de
+**correção semântica da consulta**. Uma linha Cnpj sintética com
+`situacao_cadastral: '08'` é válida no Zod v1 e passa pelo validador
+OKF de saída de `empresas_ativas`, embora a SQL da view filtre
+`situacao_cadastral = '02'`. Analogamente, um Socio sintético com
+`cnpj_base: '99999999'` passa pelo validador de saída de
+`socios_de_raizes_ativas` sem que uma relação Raiz correspondente tenha
+sido apresentada ao validador. **Isso não demonstra defeito no SELECT/JOIN**:
+o teste deliberadamente não executa SQL. Demonstra apenas que
+`validateOkfConvenienceViewRows`, quando invocado isoladamente, não
+atesta a seleção ativa, a existência da Raiz, a cardinalidade do JOIN,
+a competência dos inputs ou a integridade referencial. A página Astro
+legada efetua a consulta separadamente antes de chamar o validador;
+nem essa composição nem o teste provam a versão/proveniência dos Parquets
+consumidos. O site público SSG permanece fora do escopo.
+
 Essa diferença é **dívida já conhecida**, não um incidente novo na
 home pública SSG (`site/`), que é separada do módulo Astro `web/`.
 O teste não consulta Parquet remoto nem prova que determinada linha
