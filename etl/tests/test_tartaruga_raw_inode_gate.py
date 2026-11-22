@@ -316,3 +316,90 @@ def test_fifo_failure_replayed_under_python_optimized():
     )
     require(child.returncode == 0, child.stdout + "\n" + child.stderr)
     require("1 xfailed" in child.stdout, child.stdout + "\n" + child.stderr)
+
+
+# R160: reproduce the kernel's real EMFILE during entrypoint ZIP 37 open.
+# The wrapper observes the syscall error and releases borrowed FDs; it never
+# invents EMFILE. This lets TemporaryDirectory clean up on error.
+@pytest.mark.skipif(sys.platform != "linux", reason="requires Linux RLIMIT_NOFILE")
+@pytest.mark.xfail(
+    strict=True,
+    raises=PartialBatchExposure,
+    reason="#433: real ZIP37 EMFILE after 36 fake PUT callbacks",
+)
+def test_real_kernel_emfile_after_fake_put36(monkeypatch, tmp_path):
+    import resource
+
+    original_limit = resource.getrlimit(resource.RLIMIT_NOFILE)
+    if original_limit[0] < 80:
+        pytest.skip("insufficient descriptors for 37-ZIP control")
+    invoke, state, _ = arrange(monkeypatch, tmp_path, scenario="control")
+    names = [spec.name for spec in canonical_inventory()]
+    real_open = Path.open
+    original_put = upload._ia_s3_put
+    held = []
+    observed = []
+
+    def release():
+        while held:
+            os.close(held.pop())
+
+    def trace_kernel_open(path, mode="r", *args, **kwargs):
+        try:
+            return real_open(path, mode, *args, **kwargs)
+        except OSError as exc:
+            if path.name == names[-1] and mode == "rb" and exc.errno == errno.EMFILE:
+                observed.append(exc.errno)
+                release()
+            raise
+
+    def saturate_after_fake_put(*args, **kwargs):
+        result = original_put(*args, **kwargs)
+        if len(state["attempts"]) == 36:
+            while True:
+                try:
+                    held.append(os.open(os.devnull, os.O_RDONLY))
+                except OSError as exc:
+                    require(exc.errno == errno.EMFILE, "unexpected FD failure")
+                    break
+        elif len(state["attempts"]) == 37:
+            release()
+        return result
+
+    monkeypatch.setattr(Path, "open", trace_kernel_open)
+    monkeypatch.setattr(upload, "_ia_s3_put", saturate_after_fake_put)
+    caught = None
+    try:
+        resource.setrlimit(resource.RLIMIT_NOFILE, (min(128, original_limit[0]), original_limit[1]))
+        try:
+            invoke()
+        except OSError as exc:
+            caught = exc
+    finally:
+        release()
+        resource.setrlimit(resource.RLIMIT_NOFILE, original_limit)
+
+    require(state["staged"] == 37, "did not stage all ZIPs")
+    if observed:
+        require(observed == [errno.EMFILE], "ZIP37 EMFILE not unique")
+        require(caught is not None and caught.errno == errno.EMFILE, "wrong error")
+        require(state["attempts"] == names[:-1], "unexpected fake PUT order")
+        require(len(state["received"]) == len(state["receipts"]) == 36, "wrong fake body count")
+        raise PartialBatchExposure("36 fake PUTs preceded real ZIP37 EMFILE")
+    if caught is not None:
+        require(not state["attempts"], "unexpected egress after local error")
+        require(state["received"] == state["receipts"] == [], "partial egress")
+    else:
+        require(state["attempts"] == names, "successful call must cover all 37")
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="requires Linux RLIMIT_NOFILE")
+def test_real_kernel_emfile_replay_python_optimized():
+    source = str(Path(__file__).resolve())
+    target = f"{source}::test_real_kernel_emfile_after_fake_put36"
+    child = subprocess.run(
+        [sys.executable, "-O", "-m", "pytest", "-q", target],
+        capture_output=True, text=True, check=False, timeout=45,
+    )
+    require(child.returncode == 0, child.stdout + "\n" + child.stderr)
+    require("1 xfailed" in child.stdout, child.stdout + "\n" + child.stderr)
