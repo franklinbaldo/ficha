@@ -39,9 +39,7 @@ def _require_raw_custody_authorization(
     parsed = descriptor.get("source_attestation")
     raw = descriptor.get("raw_custody")
     if not isinstance(parsed, dict) or not isinstance(raw, dict):
-        raise ValueError(
-            "raw custody v2 required; legacy v1 descriptor is historical/read-only"
-        )
+        raise ValueError("raw custody v2 required; legacy v1 descriptor is historical/read-only")
     if (
         raw.get("schema") != RAW_CUSTODY_SCHEMA
         or raw.get("status") != RAW_CONFIRMED
@@ -50,9 +48,7 @@ def _require_raw_custody_authorization(
         or type(raw.get("inventory_count")) is not int
         or raw["inventory_count"] != 37
     ):
-        raise ValueError(
-            "raw custody v2 lacks confirmed 37/37 source/remote/fence state"
-        )
+        raise ValueError("raw custody v2 lacks confirmed 37/37 source/remote/fence state")
     pin = raw.get("pin_set_sha256")
     if not (
         isinstance(pin, str)
@@ -69,10 +65,6 @@ def _require_raw_custody_authorization(
     ):
         raise ValueError("raw custody v2 lacks external S/R/F/authority references")
     if authority is None:
-        raise ValueError(
-            "raw custody v2 HOLD: independent monotonic authority unavailable"
-        )
+        raise ValueError("raw custody v2 HOLD: independent monotonic authority unavailable")
     if authority.confirm(month=month, run_id=raw["run_id"], claims=raw) is not True:
-        raise ValueError(
-            "raw custody v2 HOLD: independent S/R/F authority did not confirm"
-        )
+        raise ValueError("raw custody v2 HOLD: independent S/R/F authority did not confirm")
