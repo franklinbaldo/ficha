@@ -133,7 +133,10 @@ def _validate_archive_url(url: httpx.URL, identifier: str, name: str) -> None:
 
 def _check_client(client: httpx.Client) -> None:
     if (
-        client.auth is not None
+        # HTTPX 0.28 keeps trust_env private; fail closed on upgrades.
+        # No ambient proxy/netrc/SSL overrides are admissible here.
+        getattr(client, "_trust_env", True) is not False
+        or client.auth is not None
         or bool(client.cookies)
         or "authorization" in client.headers
         or "cookie" in client.headers
