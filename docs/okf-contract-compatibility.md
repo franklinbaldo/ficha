@@ -266,3 +266,34 @@ Parquet remoto ou dados RFB. Não comprova duplicatas reais nem erro no
 produto. A próxima validação precisa de DuckDB com PK/FK e um oráculo
 raw→consulta→produto sob versão fixada. Nenhuma política foi aprovada
 pela ADR 0027; esta PR continua DRAFT/HOLD.
+
+### DuckDB e Parquet sintético: teste de cardinalidade e chaves (R165)
+
+A regressão `etl/tests/test_okf_view_duckdb_parquet.py` executa as
+**declarações SQL geradas existentes**, sem reescrevê-las, sobre três
+relações criadas como arquivos Parquet locais pelo DuckDB. O caso ativo
+`'02'` continua separado de `'08'`/NULL. Duas linhas Raiz ativas com a
+mesma chave e dois sócios distintos dessa chave produzem **quatro**
+linhas no JOIN gerado, enquanto um oráculo independente `EXISTS`
+preserva **duas**: a divergência decorre da multiplicidade física de
+Raiz, não do `safeParse` de Socio. Esse oráculo representa a regra
+hipotética «ao menos uma Raiz ativa», que ainda precisa de aprovação
+semântica.
+
+O teste também tenta carregar o mesmo Parquet duplicado numa tabela
+DuckDB com `PRIMARY KEY(cnpj_base)` e exige erro de restrição;
+outro controle, com `PRIMARY KEY` e `FOREIGN KEY` **declaradas**
+em tabelas DuckDB independentes, rejeita tanto uma segunda Raiz quanto
+um sócio órfão e faz JOIN e `EXISTS` coincidirem preservando os dois
+sócios válidos. **Uma tabela DuckDB restrita não torna automaticamente
+os arquivos Parquet publicados restritos.** Nenhuma política de
+deduplicação, abortar publicação ou substituir JOIN por `EXISTS`
+é decidida por esta regressão.
+
+São dados locais, sintéticos e com apenas as colunas consumidas pelas
+views. Não são os 52/18/16 campos inteiros, não exercitam DuckDB-WASM
+no navegador nem autenticam Parquet publicado, snapshot por competência,
+PK/FK reais, integridade do JOIN em produção ou o site SSG. O teste
+deve ser exercido no job ETL Linux/Windows com DuckDB instalado;
+o gate OKF Python stdlib continua separadamente. A ADR #253 e a
+decisão de contrato/versão permanecem em HOLD.
