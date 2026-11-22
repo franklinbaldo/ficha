@@ -482,7 +482,6 @@ def test_unrecognised_transport_rejected_before_mock_transport_io():
             readback_raw_batch(client, month="2026-07", pins=pins)
 
 
-
 @pytest.mark.parametrize("tls_setting", ["verify_false", "cert_none", "hostname_off"])
 def test_unverified_tls_rejected_before_any_socket_io(tls_setting, monkeypatch):
     """A canonical HTTPS URL cannot compensate for TLS peer checks being off."""
@@ -511,6 +510,7 @@ def test_stock_direct_verified_tls_client_preflight_has_no_socket_io(monkeypatch
     with httpx.Client(trust_env=False, verify=True) as client:
         monkeypatch.setattr(socket.socket, "connect", forbid_connect)
         _check_client(client)
+
 
 def test_optimized_contract_subprocess():
     """Run this exact checked-out module and test file under Python -O in CI."""
