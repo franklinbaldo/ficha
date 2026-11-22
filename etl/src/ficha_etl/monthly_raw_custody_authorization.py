@@ -50,7 +50,9 @@ def _require_raw_custody_authorization(
         or type(raw.get("inventory_count")) is not int
         or raw["inventory_count"] != 37
     ):
-        raise ValueError("raw custody v2 lacks confirmed 37/37 source/remote/fence state")
+        raise ValueError(
+            "raw custody v2 lacks confirmed 37/37 source/remote/fence state"
+        )
     pin = raw.get("pin_set_sha256")
     if not (
         isinstance(pin, str)
@@ -71,4 +73,6 @@ def _require_raw_custody_authorization(
             "raw custody v2 HOLD: independent monotonic authority unavailable"
         )
     if authority.confirm(month=month, run_id=raw["run_id"], claims=raw) is not True:
-        raise ValueError("raw custody v2 HOLD: independent S/R/F authority did not confirm")
+        raise ValueError(
+            "raw custody v2 HOLD: independent S/R/F authority did not confirm"
+        )
