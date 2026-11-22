@@ -12,7 +12,7 @@ import zipfile
 import duckdb
 import pytest
 
-from ficha_etl.streaming import create_table_from_zip_streaming
+from ficha_etl.streaming import create_table_from_zip_streaming, load_zips_parallel
 
 
 def require_equal(actual: object, expected: object) -> None:
@@ -84,5 +84,26 @@ def test_single_nonempty_csv_still_loads_data(tmp_path):
             con, "source_rows", source, ("a", "b"), work_dir=tmp_path / "work"
         )
         require_equal(con.execute("SELECT a, b FROM source_rows").fetchall(), [("123", "ABC")])
+    finally:
+        con.close()
+
+
+def test_parallel_loader_rejects_empty_first_multi_member(tmp_path):
+    """The parallel public API must enforce the same one-CSV contract."""
+    source = tmp_path / "parallel.zip"
+    make_zip(source, [("empty.CSV", b""), ("data.CSV", b"1;2\n")])
+    con = duckdb.connect()
+    try:
+        with pytest.raises(RuntimeError, match=r"1 ZIP\\(s\\) failed to decompress"):
+            load_zips_parallel(
+                con,
+                [("source_rows", source, ("a", "b"))],
+                work_dir=tmp_path / "work",
+                decompress_workers=1,
+            )
+        count = con.execute(
+            "SELECT COUNT(*) FROM duckdb_tables() WHERE table_name='source_rows'"
+        ).fetchone()[0]
+        require_equal(count, 0)
     finally:
         con.close()
