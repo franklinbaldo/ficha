@@ -125,7 +125,6 @@ jobs:
         if: steps.changes.outputs.etl == 'true'
         run: |
           uv run ruff check src tests bench
-          uv run ruff format --diff tests/test_claude_diagnostics_comment.py || true
           uv run ruff format --check src tests bench
 
       - name: Test
