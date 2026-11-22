@@ -29,10 +29,16 @@ try {
       // Check the actual SSG/Chromium accessible link, not only the fake-DOM unit test.
       // Opening a <details> element is local; never follow/download archive URLs.
       const archiveLinks=page.locator('#acervo-resultado .archive-detail a');
-      const archiveLabels=await archiveLinks.allTextContents();
+      const archiveLabels=await archiveLinks.evaluateAll(links=>links.map(link=>({
+        label:link.textContent?.trim(),
+        key:link.closest('details')?.querySelector('summary strong')?.textContent?.trim(),
+      })));
       assert.ok(archiveLabels.length>0,'o catálogo deve renderizar links HTTPS');
-      assert.ok(archiveLabels.every(label=>label==='Abrir arquivo indicado no catálogo'),
-        'nenhuma URL de destino deve ser apresentada como repositório de origem');
+      assert.ok(archiveLabels.every(({label,key})=>key &&
+        label===`Abrir arquivo indicado no catálogo: ${key}`),
+        'nome de cada link precisa identificar seu arquivo sem alegar origem institucional');
+      assert.equal(new Set(archiveLabels.map(({label})=>label)).size,archiveLabels.length,
+        'links do Acervo não devem ser indistinguíveis numa lista assistiva');
       const firstLinkedDetail=page.locator('#acervo-resultado details.archive-file')
         .filter({has:page.locator('.archive-detail a')}).first();
       const summary=firstLinkedDetail.locator('summary');
