@@ -319,6 +319,20 @@ def test_wrong_bytes_same_size_not_confirmed_and_late_write_not_fenced():
         harness(later_handler, pins=pins)
 
 
+def test_ambient_httpx_configuration_refused_without_transport_access():
+    pins, _ = fixture_pins()
+    requests = []
+
+    def handler(request):
+        requests.append(request)
+        return httpx.Response(200, content=b"unexpected")
+
+    with httpx.Client(transport=httpx.MockTransport(handler), trust_env=True) as client:
+        with pytest.raises(RawReadbackError, match="unauthenticated"):
+            readback_raw_batch(client, month="2026-07", pins=pins)
+    require(requests == [], "ambient HTTPX configuration must never touch transport")
+
+
 def test_credentials_refused_without_transport_access():
     def fail_handler(_request):
         pytest.fail("authenticated client triggered HTTP GET")
