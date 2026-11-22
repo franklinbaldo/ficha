@@ -218,6 +218,8 @@ def test_positive_all_100_shards_and_failed_remote_still_protected(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
     args = _prepare(tmp_path, monkeypatch)
+    # Isolate the older parsed/100-shard contract: raw v2 remains HOLD in production.
+    monkeypatch.setattr(cli, "_require_raw_custody_authorization", lambda *a, **kw: None)
     events: list[str] = []
     monkeypatch.setattr(cli, "wait_for_descriptor_remote", lambda *a, **kw: events.append("wait"))
     monkeypatch.setattr(cli, "ShardPackSession", lambda *a: object())
@@ -269,6 +271,8 @@ def test_receipt_change_during_remote_check_never_reaches_manifest(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
     args = _prepare(tmp_path, monkeypatch)
+    # Only parsed receipt mutation is exercised here, not independent raw custody.
+    monkeypatch.setattr(cli, "_require_raw_custody_authorization", lambda *a, **kw: None)
     events: list[str] = []
 
     def mutate(*_args, **_kwargs):
