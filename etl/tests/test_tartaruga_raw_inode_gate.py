@@ -179,7 +179,6 @@ def test_preopened_writer_cannot_change_transmitted_bytes(monkeypatch, tmp_path)
     require(not state["write_ok"], "unblocked writer but no mutation detected")
 
 
-
 class PartialBatchExposure(AssertionError):
     """A late local read failure cannot undo earlier fake IA PUT attempts."""
 
@@ -206,12 +205,14 @@ def test_zip37_open_failure_cannot_follow_any_put_attempt(monkeypatch, tmp_path)
     with pytest.raises(OSError, match="injected ZIP 37 FD exhaustion"):
         invoke()
     require(state["staged"] == 37, "failure preceded full staging")
-    require(state["attempts"] == [spec.name for spec in specs[:-1]], "wrong attempt order")
-    require(len(state["received"]) == len(state["receipts"]) == 36, "wrong body/receipt counts")
     if state["attempts"]:
+        require(state["attempts"] == [spec.name for spec in specs[:-1]], "wrong attempt order")
+        require(
+            len(state["received"]) == len(state["receipts"]) == 36,
+            "wrong body/receipt counts",
+        )
         raise PartialBatchExposure("36 fake PUT attempts preceded ZIP 37 EMFILE")
-
-
+    require(state["received"] == state["receipts"] == [], "unexpected body or receipt")
 
 def test_replay_boundary_probes_under_python_optimized():
     source = str(Path(__file__).resolve())
