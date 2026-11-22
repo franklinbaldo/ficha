@@ -172,6 +172,14 @@ def test_malicious_headers_fail_closed(headers):
 @pytest.mark.parametrize(
     "location",
     [
+        "http://archive.org/download/ficha-2026-07/raw/Cnaes.zip",
+        "https://evil.example/download/ficha-2026-07/raw/Cnaes.zip",
+        "https://archive.org.evil.example/download/a",
+        "https://user:secret@archive.org/download/a",
+        "https://archive.org:444/download/a",
+        "https://archive.org/download/a?token=secret",
+    ],
+)
 def test_reject_redirects_before_following(location):
     count = 0
 
