@@ -346,9 +346,7 @@ def test_freshness_threshold_stays_at_three_calendar_months(tmp_path: Path) -> N
     for months_ago, expected_rc, annotation in cases:
         month_index = now.year * 12 + now.month - 1 - months_ago
         current = f"{month_index // 12:04d}-{month_index % 12 + 1:02d}"
-        (public / "manifest.json").write_text(
-            json.dumps({"current": current}), encoding="utf-8"
-        )
+        (public / "manifest.json").write_text(json.dumps({"current": current}), encoding="utf-8")
         proc = subprocess.run(
             [sys.executable, "-c", script],
             cwd=tmp_path,
