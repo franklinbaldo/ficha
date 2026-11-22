@@ -1,0 +1,19 @@
+name: Castor Ruff format diagnostic (temporary)
+on:
+  push:
+    branches:
+      - castor/ficha-433-raw-custody-hold-v2
+permissions:
+  contents: read
+jobs:
+  ruff-diff:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v3
+      - name: Print exact Ruff formatting diff
+        working-directory: etl
+        run: |
+          uvx --from ruff==0.15.12 ruff format --diff src/ficha_etl/monthly_raw_custody_authorization.py tests/test_castor_raw_custody_authorization.py
