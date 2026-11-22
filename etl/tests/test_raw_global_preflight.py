@@ -113,6 +113,46 @@ def test_preflight_admits_exact_37_before_any_put(monkeypatch, tmp_path):
     _equal(list(tmp_path.iterdir()), [])
 
 
+@pytest.mark.parametrize("position", [0, 36], ids=["first-zip", "last-zip"])
+def test_raw_put_uses_verified_fd_after_pathname_swap(monkeypatch, tmp_path, position):
+    """Replacing a validated pathname just before the PUT must not change bytes.
+
+    Only the fake IA PUT performs os.replace; no network calls are made.
+    It does not simulate in-place writes via a pre-existing writable FD.
+    """
+    seen, sources = _offline(monkeypatch)
+    names = [spec.name for spec in canonical_inventory()]
+    pinned_paths = {}
+    actual_stage_all = raw_preflight.stage_all
+
+    def capture_stage(*args, **kwargs):
+        result = actual_stage_all(*args, **kwargs)
+        pinned_paths.update(result)
+        return result
+
+    monkeypatch.setattr(raw_preflight, "stage_all", capture_stage)
+    original_put = upload._ia_s3_put
+    swapped = []
+
+    def swap_before_read(identifier, remote_name, chunks, **kwargs):
+        name = names[position]
+        if remote_name == f"raw/{name}":
+            path = pinned_paths[name][0]
+            candidate = path.with_name(path.name + ".replacement")
+            different = bytearray(sources[position])
+            different[0] ^= 1
+            candidate.write_bytes(different)
+            candidate.replace(path)
+            swapped.append(name)
+        return original_put(identifier, remote_name, chunks, **kwargs)
+
+    monkeypatch.setattr(upload, "_ia_s3_put", swap_before_read)
+    _run(tmp_path)
+    _equal(swapped, [names[position]])
+    _equal(seen["received"], sources)
+    _equal(list(tmp_path.iterdir()), [])
+
+
 @pytest.mark.parametrize(
     "case,reason",
     [("bad_crc", "CRC"), ("status_37", "404"), ("bad_length", "length mismatch")],
@@ -346,6 +386,7 @@ def test_optimized_python_replays_zip37_local_guard():
         f"{source}::test_valid_zip64_local_sizes_without_descriptor_remain_admissible",
         f"{source}::test_deflate_data_descriptor_remains_valid",
         f"{source}::test_final_zip_ambiguous_http_headers_cannot_publish",
+        f"{source}::test_raw_put_uses_verified_fd_after_pathname_swap",
     ]
     replay = subprocess.run(
         [sys.executable, "-O", "-m", "pytest", "-q", *selectors],
