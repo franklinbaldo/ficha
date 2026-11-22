@@ -24,6 +24,18 @@ test('copy pública distingue manifesto de custódia de arquivos', () => {
   assert.match(readme, /custódia de cada objeto exige conferência independente/);
 });
 
+test('README e guia ETL não anunciam publicação legada durante HOLD #433', () => {
+  const root = read('../../README.md');
+  const etl = read('../../etl/README.md');
+  assert.match(root, /HOLD #433/);
+  assert.match(root, /ficha-etl pack/);
+  assert.match(root, /antes de iniciar o processamento ou acessar credenciais/);
+  assert.match(etl, /HOLD #433/);
+  assert.match(etl, /_cmd_run.*_cmd_pack/);
+  assert.match(etl, /independente da presença de credenciais/);
+  assert.match(etl, /não.*verificador remoto de custódia/i);
+});
+
 test('descrição PWA gerada, config e sentinelas de build coincidem', () => {
   const home = read('../content/index.md');
   const config = read('../config.toml');
