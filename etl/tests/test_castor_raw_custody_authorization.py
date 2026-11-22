@@ -171,14 +171,12 @@ def test_raw_transport_state_never_becomes_authorization(
     path.write_text(json.dumps(descriptor), encoding="utf-8")
     observed = _no_external_effects(monkeypatch)
     with pytest.raises(ValueError, match="raw source upload did not complete"):
-        cli.command_upload_outputs(
-            argparse.Namespace(month=MONTH, descriptor=path, output_dir=out)
-        )
+        cli.command_upload_outputs(argparse.Namespace(month=MONTH, descriptor=path, output_dir=out))
     assert observed == []
 
 
 def test_raw_catalog_complete_returns_unproven_not_verified(
-    monkeypatch: pytest.MonkeyPatch
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     names = {f"raw/{spec.name}" for spec in canonical_inventory()}
     assert len(names) == 37
