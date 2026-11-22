@@ -7,7 +7,9 @@ All ZIPs in this file are synthetic. No RFB/IA or uploads.
 
 from __future__ import annotations
 
+import struct
 import zipfile
+import zlib
 
 import duckdb
 import pytest
@@ -100,6 +102,40 @@ def test_parallel_loader_rejects_empty_first_multi_member(tmp_path):
                 [("source_rows", source, ("a", "b"))],
                 work_dir=tmp_path / "work",
                 decompress_workers=1,
+            )
+        count = con.execute(
+            "SELECT COUNT(*) FROM duckdb_tables() WHERE table_name='source_rows'"
+        ).fetchone()[0]
+        require_equal(count, 0)
+    finally:
+        con.close()
+
+
+def test_corrupted_deflate_empty_csv_cannot_be_accepted_as_empty_table(tmp_path):
+    """A zero-size central entry may still have a corrupt compressed payload."""
+    source = tmp_path / "corrupt-empty.zip"
+    with zipfile.ZipFile(source, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("empty.CSV", b"")
+    raw = bytearray(source.read_bytes())
+    with zipfile.ZipFile(source) as archive:
+        member = archive.infolist()[0]
+    require_equal(member.file_size, 0)
+    if member.compress_size == 0:
+        raise AssertionError("expected compressed bytes for empty DEFLATE stream")
+    local = struct.unpack_from("<IHHHHHIIIHH", raw, member.header_offset)
+    require_equal(local[0], 0x04034B50)
+    offset = member.header_offset + 30 + local[-2] + local[-1]
+    raw[offset : offset + member.compress_size] = b"\xff" * member.compress_size
+    source.write_bytes(raw)
+
+    with zipfile.ZipFile(source) as archive:
+        with pytest.raises((zipfile.BadZipFile, zlib.error)):
+            archive.read(member)
+    con = duckdb.connect()
+    try:
+        with pytest.raises((zipfile.BadZipFile, zlib.error)):
+            create_table_from_zip_streaming(
+                con, "source_rows", source, ("a", "b"), work_dir=tmp_path / "work"
             )
         count = con.execute(
             "SELECT COUNT(*) FROM duckdb_tables() WHERE table_name='source_rows'"
