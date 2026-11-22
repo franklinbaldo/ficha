@@ -78,6 +78,42 @@ def test_public_cli_run_without_skip_upload_is_not_an_escape(
     assert not (tmp_path / "manifest.json").exists()
 
 
+
+@pytest.mark.parametrize("credentials", ["missing", "present"])
+def test_standalone_pack_holds_before_build_or_upload(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str],
+    credentials: str,
+) -> None:
+    if credentials == "present":
+        monkeypatch.setenv("IA_ACCESS_KEY", "synthetic")
+        monkeypatch.setenv("IA_SECRET_KEY", "synthetic")
+    else:
+        monkeypatch.delenv("IA_ACCESS_KEY", raising=False)
+        monkeypatch.delenv("IA_SECRET_KEY", raising=False)
+    effects = _forbid_egress(monkeypatch)
+    output = tmp_path / "companies.zip"
+    rc = cli._cmd_pack(
+        "2026-07", output=output, local_parquets=None,
+        memory_limit_gb=None, skip_upload=False,
+    )
+    assert rc == 1
+    assert "HOLD #433" in capsys.readouterr().err
+    assert effects == []
+    assert not output.exists()
+
+
+def test_public_pack_command_is_not_an_escape(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str],
+) -> None:
+    effects = _forbid_egress(monkeypatch)
+    rc = cli.main(["pack", "--month", "2026-07", "--output", str(tmp_path / "pack.zip")])
+    assert rc == 1
+    assert "HOLD #433" in capsys.readouterr().err
+    assert effects == []
+    assert not (tmp_path / "pack.zip").exists()
+
+
+
 def test_legacy_run_guard_survives_python_optimized_mode(tmp_path: Path) -> None:
     script = (
         "from pathlib import Path\n"
