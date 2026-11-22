@@ -23,6 +23,7 @@ class FakeElement {
   get options() { return this.children; }
   addEventListener(name, listener) { this.listeners.set(name, listener); }
   setAttribute(name, value) { this.attributes[name] = value; }
+  removeAttribute(name) { delete this.attributes[name]; }
 }
 
 function fakeDocument(ids = []) {
@@ -86,6 +87,21 @@ test('acervo e exploração contam arquivos expandidos, não conjuntos com shard
     ]);
     await mountExplore(exploreDoc, { loadManifest: async () => data });
     assert.equal(exploreDoc.at('explorar-contador').textContent, '3 arquivos · 60 B declarados');
+    // This count must be announced in the existing live status when filtering,
+    // not merely inserted into a newly rebuilt (non-live) chart subtree.
+    const state = exploreDoc.at('explorar-estado');
+    const filter = exploreDoc.at('explorar-filtro');
+    assert.match(state.textContent, /Exibindo 3 de 3 arquivos declarados em 2026-07/);
+    filter.value = 'inexistente';
+    filter.listeners.get('input')();
+    assert.match(state.textContent, /Exibindo 0 de 3 arquivos declarados em 2026-07/);
+    assert.equal(exploreDoc.at('explorar-grafico').children.at(-1).textContent,
+      'Nenhum conjunto corresponde ao filtro.');
+    filter.value = 'companies';
+    filter.listeners.get('input')();
+    assert.match(state.textContent, /Exibindo 2 de 3 arquivos declarados em 2026-07/);
+    assert.match(state.textContent, /não quantidade de empresas/);
+    assert.equal(exploreDoc.at('explorar-contador').textContent, '3 arquivos · 60 B declarados');
   });
 });
 
@@ -125,7 +141,7 @@ test('história preserva ordem anterior → posterior numa comparação válida'
       loadManifest: async () => manifestWithShards(),
       lookup: async (_manifest, date, cnpj) => {
         lookups.push([date, cnpj]);
-        return { date, cnpj, state:'found', data: {razao_social:'Empresa '+date}, source: 'https://archive.org/' + date };
+        return { date, cnpj, state:'found', data: {cnpj,razao_social:'Empresa '+date}, source: 'https://archive.org/' + date };
       },
     });
     doc.at('historia-cnpj').value = '33000167000101';
@@ -153,7 +169,9 @@ test('ficha descarta resposta tardia após mudança de CNPJ sem publicar URL ant
     doc.at('empresa-cnpj').value = '00000000E08G12';
     const submit = () => doc.at('empresa-form').listeners.get('submit')({ preventDefault() {} });
     const pending = submit();
-    assert.equal(doc.at('empresa-enviar').disabled, true);
+    assert.equal(doc.at('empresa-enviar').disabled, false,
+      'ficha mantém botão focável durante lookup');
+    assert.equal(doc.at('empresa-enviar').attributes['aria-disabled'], 'true');
     await submit(); // a synthetic repeated submit must not start another remote query
     assert.equal(lookups, 1);
     doc.at('empresa-cnpj').value = '00000000E08G13';
@@ -164,6 +182,8 @@ test('ficha descarta resposta tardia após mudança de CNPJ sem publicar URL ant
     assert.equal(doc.at('empresa-resultado').children.length, 0);
     assert.equal(globalThis.location.search, '', 'deep link must not record the stale request');
     assert.equal(doc.at('empresa-enviar').disabled, false);
+    assert.equal(doc.at('empresa-enviar').attributes['aria-disabled'], undefined,
+      'aria-disabled removido ao final do lookup obsoleto');
   });
 });
 
@@ -208,6 +228,9 @@ test('história interrompe segundo lookup quando a seleção muda após o primei
     doc.at('historia-fim').value = '2026-07';
     const submit = () => doc.at('historia-form').listeners.get('submit')({ preventDefault() {} });
     const pending = submit();
+    assert.equal(doc.at('historia-enviar').disabled,false,
+      'comparador mantém foco durante leitura remota');
+    assert.equal(doc.at('historia-enviar').attributes['aria-disabled'],'true');
     await submit(); // reject reentrant comparisons during the first lookup
     assert.equal(lookups.length, 1);
     doc.at('historia-fim').value = '2026-06';
@@ -218,6 +241,8 @@ test('história interrompe segundo lookup quando a seleção muda após o primei
     assert.match(doc.at('historia-estado').textContent, /alterados durante a comparação/i);
     assert.equal(globalThis.location.search, '');
     assert.equal(doc.at('historia-enviar').disabled, false);
+    assert.equal(doc.at('historia-enviar').attributes['aria-disabled'], undefined,
+      'aria-disabled removido ao final de comparação obsoleta');
   });
 });
 
@@ -230,7 +255,7 @@ test('história descarta segunda resposta tardia após mudança do CNPJ', async 
     await mountHistory(doc, {
       loadManifest: async () => manifestWithShards(),
       lookup: async (_manifest, date, cnpj) => date === '2026-06'
-        ? { date, cnpj, source: 'https://archive.org/old', state:'found', data:{razao_social:'Antiga'} }
+        ? { date, cnpj, source: 'https://archive.org/old', state:'found', data:{cnpj,razao_social:'Antiga'} }
         : new Promise(resolve => { finishNewer = resolve; }),
     });
     doc.at('historia-cnpj').value = '33000167000101';
@@ -317,7 +342,7 @@ test('história: editar competência limpa link antigo mas mantém parâmetros a
       loadManifest:async()=>manifestWithShards(),
       lookup:async (_manifest,date,cnpj)=>{
         calls++;
-        return {date,cnpj,state:'found',data:{razao_social:'Empresa '+date},source:'https://archive.org/'+date};
+        return {date,cnpj,state:'found',data:{cnpj,razao_social:'Empresa '+date},source:'https://archive.org/'+date};
       },
     });
     doc.at('historia-cnpj').value='33000167000101';
@@ -347,7 +372,7 @@ test('história: edição A→B→A enquanto segunda fonte demora descarta compa
     await mountHistory(doc,{
       loadManifest:async()=>manifestWithShards(),
       lookup:async (_manifest,date,cnpj)=>date==='2026-06'
-        ? {date,cnpj,state:'found',data:{razao_social:'Antiga'},source:'https://archive.org/old'}
+        ? {date,cnpj,state:'found',data:{cnpj,razao_social:'Antiga'},source:'https://archive.org/old'}
         : new Promise(resolve=>{finishNewer=resolve;}),
     });
     doc.at('historia-cnpj').value='33000167000101';

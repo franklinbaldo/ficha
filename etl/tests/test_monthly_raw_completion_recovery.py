@@ -143,8 +143,8 @@ def test_raw_completion_controls_independent_upload_with_real_descriptor(
 
     descriptor = cli._load_descriptor(args.descriptor, args.month)
     expected_state = {
-        "failed": "failed",
-        "complete": "complete",
+        "failed": "unknown",
+        "complete": "unknown",
         "skipped": "pending",
     }[raw_outcome]
     assert descriptor["source_attestation"]["raw_upload_status"] == expected_state
@@ -158,13 +158,7 @@ def test_raw_completion_controls_independent_upload_with_real_descriptor(
         descriptor=args.descriptor,
         output_dir=args.output_dir,
     )
-    if raw_outcome == "complete":
+    # A mocked raw PUT plus normal return is NOT a remotely authenticated batch.
+    with pytest.raises(ValueError, match="raw source upload did not complete"):
         cli.command_upload_outputs(output_args)
-        derived_requests = [url for _, url in seen if "/raw/" not in url]
-        expected_outputs = len(cli._STANDARD_FILE_NAMES) + len(_LOOKUP_KINDS)
-        assert len(derived_requests) == expected_outputs
-    else:
-        with pytest.raises(ValueError, match="raw source upload did not complete"):
-            cli.command_upload_outputs(output_args)
-        # A valid source receipt and real descriptor must not bypass raw status.
-        assert [url for _, url in seen if "/raw/" not in url] == []
+    assert [url for _, url in seen if "/raw/" not in url] == []

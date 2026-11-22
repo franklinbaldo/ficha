@@ -25,10 +25,11 @@ Ver ADR 0012 e mirror.py (URLs de leitura).
 
 from __future__ import annotations
 
+import hashlib
 import logging
-import threading
+import tempfile
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from enum import Enum
 from pathlib import Path
 
 import httpx
@@ -37,9 +38,17 @@ import internetarchive as ia
 from .mirror import item_id
 from .sources import canonical_inventory, is_valid_month
 from .transform import _LOOKUP_KINDS
-from . import upstream
+from . import raw_preflight, upstream
 
 log = logging.getLogger(__name__)
+
+
+class RawStreamOutcome(str, Enum):
+    """Transport activity, never authenticated remote custody."""
+
+    ALL_NAMES_PRESENT_UNPROVEN = "all_names_present_unproven"
+    SENT_UNVERIFIED = "sent_unverified"
+
 
 # Timeout generoso: ZIPs grandes podem levar minutos pra transferir
 _STREAM_TIMEOUT = httpx.Timeout(connect=30.0, read=600.0, write=600.0, pool=30.0)
@@ -350,18 +359,14 @@ def stream_raw_zips_to_ia(
     access_key: str,
     secret_key: str,
     workers: int = 4,
-) -> None:
-    """Espelha os 37 ZIPs da RFB para ficha-YYYY-MM/raw/ SEM tocar disco.
+    spool_dir: Path | None = None,
+) -> RawStreamOutcome:
+    """Admite todos os 37 ZIPs antes de qualquer IA PUT neste caminho.
 
-    Abre GET streaming para cada ZIP no WebDAV da RFB e faz PUT direto ao
-    endpoint S3 do Internet Archive. A memória usada por worker é de apenas
-    1 MiB (tamanho do chunk) — ideal para runners com disco limitado.
-
-    Args:
-        month: snapshot no formato YYYY-MM.
-        access_key: IA S3-like access key.
-        secret_key: IA S3-like secret key.
-        workers: downloads/uploads simultâneos (default: 4).
+    Exige scratch explícito e disponível; sem ele a rotina recusa publicação.
+    O lote é preparado sequencialmente em disco e validado por ZIP/CRC e
+    limites globais. O estágio temporário não é spool imutável nem journal.
+    Retentativas ambíguas permanecem desabilitadas neste caminho.
     """
     if not is_valid_month(month):
         raise ValueError(f"month must be YYYY-MM, got {month!r}")
@@ -382,60 +387,45 @@ def stream_raw_zips_to_ia(
         )
     if not specs:
         log.info("all %d ZIPs already on ia:%s — stream is a no-op", len(all_specs), identifier)
-        return
+        return RawStreamOutcome.ALL_NAMES_PRESENT_UNPROVEN
 
-    # Only contact RFB if we actually need to stream from it.
+    # Without an operator-selected disk there is no safe capacity assumption.
+    # The old zero-disk producer cannot guarantee 37/37 before the first PUT.
+    if spool_dir is None or not spool_dir.is_dir():
+        raise RuntimeError("raw preflight requires an existing explicit spool_dir")
+    if workers < 1:
+        raise ValueError("workers must be positive")
+
     try:
-        rfb_token = upstream.discover_token()
+        token = upstream.discover_token()
     except upstream.NoTokenError as exc:
-        raise RuntimeError(f"sem token RFB para streaming: {exc}") from exc
+        raise RuntimeError(f"sem token RFB para preflight: {exc}") from exc
 
-    total = len(specs)
-    done = 0
-    lock = threading.Lock()
-    first_lock = threading.Lock()
-    # `is_first` carries item metadata (title, subject, license, etc.).
-    # We always send it on the first task of every run -- if a prior
-    # run created the item but its `is_first` worker died (e.g. em-dash
-    # crash, see PR #24), the item could exist with files but no
-    # metadata. Re-sending the metadata headers on a PUT is idempotent
-    # at IA's end (overwrite with same values). Cost: 5 extra header
-    # keys on exactly one PUT per run.
-    first_sent = False
-
-    log.info(
-        "streaming %d ZIPs RFB → ia:%s/raw/ (%d workers, zero disk)",
-        total,
-        identifier,
-        workers,
-    )
-
-    def _task(spec) -> str:
-        nonlocal done, first_sent
-        with first_lock:
-            is_first = not first_sent
-            if is_first:
-                first_sent = True
-        name = _stream_one_zip_with_retry(
-            spec,
-            rfb_token=rfb_token,
-            month=month,
-            identifier=identifier,
-            access_key=access_key,
-            secret_key=secret_key,
-            is_first=is_first,
-        )
-        with lock:
-            done += 1
-            log.info("[%d/%d] streamed %s → IA", done, total, name)
-        return name
-
-    with ThreadPoolExecutor(max_workers=workers) as executor:
-        futures = {executor.submit(_task, spec): spec for spec in specs}
-        for future in as_completed(futures):
-            future.result()  # propaga exceção se houver
-
-    log.info("all %d ZIPs streamed to ia:%s OK", total, identifier)
+    # No IA PUT can occur until stage_all validates *every* canonical
+    # source, including the last one, against global compressed/expanded caps.
+    # This first slice deliberately does not retry ambiguous PUTs or certify
+    # the scratch inode as immutable; those require journal/readback follow-ups.
+    with tempfile.TemporaryDirectory(prefix="ficha-raw-preflight-", dir=spool_dir) as temp:
+        staged = raw_preflight.stage_all(all_specs, month, token, Path(temp))
+        for index, spec in enumerate(specs):
+            path, size, pinned_sha = staged[spec.name]
+            # A second digest check catches ordinary pathname changes between
+            # preflight and PUT, but is NOT inode sealing against held writers.
+            with path.open("rb") as handle:
+                current_sha = hashlib.file_digest(handle, "sha256").hexdigest()
+            if current_sha != pinned_sha:
+                raise RuntimeError(f"raw preflight: staged bytes changed: {spec.name}")
+            _ia_s3_put(
+                identifier,
+                f"raw/{spec.name}",
+                raw_preflight.file_chunks(path),
+                content_length=str(size),
+                access_key=access_key,
+                secret_key=secret_key,
+                is_first=index == 0,
+            )
+    log.info("raw preflight admitted %d sources; sent %d missing names", len(staged), len(specs))
+    return RawStreamOutcome.SENT_UNVERIFIED
 
 
 def _check_responses(responses: list, label: str, expected: int | None = None) -> None:

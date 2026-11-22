@@ -14,6 +14,7 @@ class Element {
   get options(){return this.children;}
   addEventListener(type,fn){this.listeners.set(type,fn);}
   setAttribute(name,value){this.attributes[name]=value;}
+  removeAttribute(name){delete this.attributes[name];}
 }
 function documentFor(ids=[]) {
   const items=new Map(ids.map(id=>[id,new Element(id==='empresa-competencia'?'select':'div')]));
@@ -38,6 +39,44 @@ test('renderizador distingue 404 de ausência no PB sem alegar integridade de to
   renderCompanyRecord(doc,output,{...base,state:'absent-in-snapshot',data:null});
   assert.match(treeText(output),/não localizado no registro Protobuf/);
   assert.doesNotMatch(treeText(output),/registro íntegro|integridade (?:completa|verificada)/i);
+});
+
+test('estados desconhecidos e dados contraditórios não viram ausência nem ficha válida',()=>{
+  const doc=documentFor(),output=new Element();
+  for(const response of [
+    {...base,state:'pending',data:null},
+    {...base,state:'found',data:null},
+    {...base,state:'absent-in-snapshot',data:{cnpj}},
+    {...base,state:'artifact-unavailable',data:{cnpj}},
+    null,
+  ]){
+    assert.throws(()=>renderCompanyRecord(doc,output,response),/inconclusiva/);
+    assert.doesNotMatch(treeText(output),/Nenhum registro encontrado|FICHA CADASTRAL/);
+  }
+});
+
+test('estado inesperado do leitor é consulta inconclusiva, com alternativa ao acervo',async()=>{
+  const oldLocation=globalThis.location,oldHistory=globalThis.history;
+  globalThis.location=new URL('https://franklinbaldo.github.io/ficha/empresa/');
+  globalThis.history={replaceState(_s,_t,url){globalThis.location=new URL(String(url));}};
+  try{
+    const ids=['empresa-cnpj','empresa-competencia','empresa-form',
+      'empresa-estado','empresa-resultado','empresa-enviar'];
+    const doc=documentFor(ids);
+    await mountCompany(doc,{loadManifest:async()=>manifest,
+      lookup:async()=>({...base,state:'unrecognised-wire',data:null})});
+    doc.at('empresa-cnpj').value=cnpj;
+    await doc.at('empresa-form').listeners.get('submit')({preventDefault(){}});
+    assert.match(doc.at('empresa-estado').textContent,/Consulta indisponível.*consulta inconclusiva/);
+    assert.equal(doc.at('empresa-estado').dataset.kind,'error');
+    const content=treeText(doc.at('empresa-resultado'));
+    assert.match(content,/Não foi possível concluir a leitura remota/);
+    assert.match(content,/Consultar o catálogo de arquivos/);
+    assert.doesNotMatch(content,/Nenhum registro encontrado|FICHA CADASTRAL/);
+  }finally{
+    if(oldLocation===undefined)delete globalThis.location;else globalThis.location=oldLocation;
+    if(oldHistory===undefined)delete globalThis.history;else globalThis.history=oldHistory;
+  }
 });
 
 test('registro encontrado não atribui porte desconhecido ao enum Protobuf',()=>{
@@ -110,6 +149,47 @@ test('CNPJ rejeitado não vira indisponibilidade nem deep link consultável',asy
       assert.equal(new URL(globalThis.location.href).searchParams.has('cnpj'),false);
       assert.equal(network,0);
       assert.equal(decoder,0);
+    }
+  }finally{
+    if(oldLocation===undefined)delete globalThis.location;else globalThis.location=oldLocation;
+    if(oldHistory===undefined)delete globalThis.history;else globalThis.history=oldHistory;
+  }
+});
+
+test('registro encontrado com CNPJ interno divergente não vira ficha de outra empresa',()=>{
+  const doc=documentFor(), output=new Element();
+  const incompatible={...base,state:'found',
+    data:{cnpj:'60701190000104',razao_social:'REGISTRO DE OUTRA EMPRESA'}};
+  assert.throws(()=>renderCompanyRecord(doc,output,incompatible),/CNPJ.*inconclusiva/i);
+  assert.doesNotMatch(treeText(output),/REGISTRO DE OUTRA EMPRESA|FICHA CADASTRAL/);
+});
+
+test('resposta de outra consulta não vira resultado positivo ou ausência para a seleção atual',async()=>{
+  const oldLocation=globalThis.location,oldHistory=globalThis.history;
+  globalThis.location=new URL('https://franklinbaldo.github.io/ficha/empresa/');
+  globalThis.history={replaceState(_s,_t,url){globalThis.location=new URL(String(url));}};
+  try{
+    const ids=['empresa-cnpj','empresa-competencia','empresa-form',
+      'empresa-estado','empresa-resultado','empresa-enviar'];
+    const doc=documentFor(ids);
+    let requests=0;
+    const wrongResponses=[
+      {...base,date:'2026-06',state:'absent-in-snapshot',data:null},
+      {...base,cnpj:'60701190000104',state:'found',
+        data:{cnpj:'60701190000104',razao_social:'REGISTRO ALHEIO'}},
+    ];
+    await mountCompany(doc,{loadManifest:async()=>manifest,
+      lookup:async()=>wrongResponses[requests++]});
+    doc.at('empresa-cnpj').value=cnpj;
+    const submit=()=>doc.at('empresa-form').listeners.get('submit')({preventDefault(){}});
+    for (const expectedCount of [1,2]) {
+      await submit();
+      assert.equal(requests,expectedCount);
+      assert.match(doc.at('empresa-estado').textContent,/Consulta indisponível.*inconclusiva/i);
+      assert.doesNotMatch(doc.at('empresa-estado').textContent,/Consulta concluída/i);
+      assert.doesNotMatch(treeText(doc.at('empresa-resultado')),
+        /CNPJ não localizado|FICHA CADASTRAL|REGISTRO ALHEIO/);
+      assert.match(treeText(doc.at('empresa-resultado')),/Consultar o catálogo de arquivos/);
     }
   }finally{
     if(oldLocation===undefined)delete globalThis.location;else globalThis.location=oldLocation;

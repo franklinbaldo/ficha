@@ -53,3 +53,11 @@ test('montagem só rearranja links locais e mantém href de ficha', () => {
   assert.equal(new Set(container.items).size, 3);
   assert.doesNotThrow(() => mountExamplePills({ getElementById: () => null }));
 });
+
+test('sugestões de CNPJ formam um grupo com nome acessível vinculado ao texto visível', async () => {
+  const home = await readFile(new URL('../content/index.md', import.meta.url), 'utf8');
+  assert.match(home, /<div class="example-suggestions" role="group" aria-labelledby="exemplos-titulo">/);
+  assert.ok(home.includes('<p class="example-caption" id="exemplos-titulo">Experimente um CNPJ</p>'));
+  assert.doesNotMatch(home, /class="example-suggestions" aria-label=/,
+    'um rótulo isolado em div genérica não estabelece grupo acessível');
+});

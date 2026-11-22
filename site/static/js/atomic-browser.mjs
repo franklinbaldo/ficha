@@ -27,7 +27,14 @@ export async function fetchSnapshotLookups(manifest, date, {
   if (!promise) {
     promise = (async () => {
       const response = await fetchImpl(url, {mode:'cors'});
-      if (!response.ok) throw new Error('Lookup indisponível: HTTP ' + response.status);
+      // A full-file GET is valid only with 200. A 201 or 206 may carry
+      // identical bytes in a test but must not attest an archival lookup.
+      if (response.status !== 200) throw new Error('Lookup indisponível: HTTP ' + response.status);
+      // A full-file response cannot declare byte ranges, even if SHA matches.
+      if (response.headers?.get?.('content-range') != null) {
+        try { void response.body?.cancel?.().catch(() => {}); } catch { /* Best effort. */ }
+        throw new Error('Lookup HTTP 200 com Content-Range inesperado');
+      }
       const bytes = await readBoundedMember(response, LOOKUP_LIMIT);
       if (bytes.byteLength !== snapshot.files.lookups.size) {
         throw new Error('Lookup com tamanho divergente do manifesto');
