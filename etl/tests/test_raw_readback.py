@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import os
 import socket
+import ssl
 import subprocess
 import sys
 from dataclasses import replace
@@ -13,7 +14,7 @@ from pathlib import Path
 import httpx
 import pytest
 
-from ficha_etl.raw_readback import RawPin, RawReadbackError, readback_raw_batch
+from ficha_etl.raw_readback import RawPin, RawReadbackError, _check_client, readback_raw_batch
 from ficha_etl.sources import canonical_inventory
 
 
@@ -480,6 +481,36 @@ def test_unrecognised_transport_rejected_before_mock_transport_io():
         with pytest.raises(RawReadbackError, match="unauthenticated"):
             readback_raw_batch(client, month="2026-07", pins=pins)
 
+
+
+@pytest.mark.parametrize("tls_setting", ["verify_false", "cert_none", "hostname_off"])
+def test_unverified_tls_rejected_before_any_socket_io(tls_setting, monkeypatch):
+    """A canonical HTTPS URL cannot compensate for TLS peer checks being off."""
+    if tls_setting == "verify_false":
+        verify = False
+    else:
+        verify = ssl.create_default_context()
+        verify.check_hostname = False
+        if tls_setting == "cert_none":
+            verify.verify_mode = ssl.CERT_NONE
+
+    def forbid_connect(*_args, **_kwargs):
+        raise AssertionError("raw readback attempted socket I/O without TLS verification")
+
+    pins, _ = fixture_pins()
+    with httpx.Client(trust_env=False, verify=verify) as client:
+        monkeypatch.setattr(socket.socket, "connect", forbid_connect)
+        with pytest.raises(RawReadbackError, match="unauthenticated"):
+            readback_raw_batch(client, month="2026-07", pins=pins)
+
+
+def test_stock_direct_verified_tls_client_preflight_has_no_socket_io(monkeypatch):
+    def forbid_connect(*_args, **_kwargs):
+        raise AssertionError("client preflight attempted socket I/O")
+
+    with httpx.Client(trust_env=False, verify=True) as client:
+        monkeypatch.setattr(socket.socket, "connect", forbid_connect)
+        _check_client(client)
 
 def test_optimized_contract_subprocess():
     """Run this exact checked-out module and test file under Python -O in CI."""
