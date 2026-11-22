@@ -8,18 +8,12 @@ from pathlib import Path
 import pytest
 import yaml
 
-WORKFLOW = (
-    Path(__file__).parents[2] / ".github" / "workflows" / "claude-diagnostics.yml"
-)
+WORKFLOW = Path(__file__).parents[2] / ".github" / "workflows" / "claude-diagnostics.yml"
 
 
 def _steps() -> dict:
     workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
-    return {
-        step["name"]: step
-        for step in workflow["jobs"]["diagnose"]["steps"]
-        if "name" in step
-    }
+    return {step["name"]: step for step in workflow["jobs"]["diagnose"]["steps"] if "name" in step}
 
 
 def _resolve(
@@ -67,27 +61,20 @@ def test_dispatch_strings_never_enter_shell_source() -> None:
         == "${{ steps.cfg.outputs.script }}"
     )
     assert (
-        steps["Build PR comment"]["env"]["DIAGNOSTIC_SCRIPT"]
-        == "${{ steps.cfg.outputs.script }}"
+        steps["Build PR comment"]["env"]["DIAGNOSTIC_SCRIPT"] == "${{ steps.cfg.outputs.script }}"
     )
     for name in ("Build PR comment", "Post comment on PR"):
         assert "steps.cfg.outcome == 'success'" in steps[name]["if"]
 
 
-@pytest.mark.skipif(
-    sys.platform == "win32", reason="Bash fixture uses POSIX temp paths"
-)
+@pytest.mark.skipif(sys.platform == "win32", reason="Bash fixture uses POSIX temp paths")
 def test_valid_push_and_manual_inputs_are_preserved(tmp_path: Path) -> None:
-    push, push_output = _resolve(
-        tmp_path, event="push", branch="claude/plan-next-steps-l7Dt6"
-    )
+    push, push_output = _resolve(tmp_path, event="push", branch="claude/plan-next-steps-l7Dt6")
     assert push.returncode == 0, (push.stdout, push.stderr)
     assert "script=zip_layout_poc\n" in push_output.read_text(encoding="utf-8")
     assert "target_pr=41\n" in push_output.read_text(encoding="utf-8")
 
-    manual, manual_output = _resolve(
-        tmp_path, script="phase1", target_pr="123", month="2026-11"
-    )
+    manual, manual_output = _resolve(tmp_path, script="phase1", target_pr="123", month="2026-11")
     assert manual.returncode == 0, (manual.stdout, manual.stderr)
     assert manual_output.read_text(encoding="utf-8").splitlines()[:3] == [
         "script=phase1",
@@ -96,9 +83,7 @@ def test_valid_push_and_manual_inputs_are_preserved(tmp_path: Path) -> None:
     ]
 
 
-@pytest.mark.skipif(
-    sys.platform == "win32", reason="Bash fixture uses POSIX temp paths"
-)
+@pytest.mark.skipif(sys.platform == "win32", reason="Bash fixture uses POSIX temp paths")
 def test_dispatch_injection_is_refused_before_outputs(tmp_path: Path) -> None:
     marker = tmp_path / "unexpected-command"
     shell_payload = f"$(touch {marker})"
