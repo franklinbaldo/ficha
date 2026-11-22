@@ -169,6 +169,12 @@ Astro; não provam Parquet físico nem o SSG público. Os testes documentam
 estas fronteiras, **sem corrigir nem aprovar** mudança de validador,
 contrato ou versão.
 
+O consumidor `validateOkfConvenienceViewRows('empresas_ativas', ...)` também
+recebe `Cnpj` e apresenta, em linha sintética completa, as duas direções:
+rejeita `nome_fantasia: null` que o v1 aceita e admite `porte_empresa: '99'`
+que o v1 recusa. A regressão chama o consumidor real, sem consultar Parquet,
+IA ou a home SSG; não autoriza substituir contratos nem publicar dados.
+
 Essa diferença é **dívida já conhecida**, não um incidente novo na
 home pública SSG (`site/`), que é separada do módulo Astro `web/`.
 O teste não consulta Parquet remoto nem prova que determinada linha
