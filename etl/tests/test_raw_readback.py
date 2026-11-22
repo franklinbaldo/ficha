@@ -28,7 +28,7 @@ def fixture_pins(letter: bytes = b"A") -> tuple[tuple[RawPin, ...], dict[str, by
 
 def harness(handler, *, pins=None, month="2026-07", **client_options):
     pins = fixture_pins()[0] if pins is None else pins
-    with httpx.Client(transport=httpx.MockTransport(handler), **client_options) as client:
+    with httpx.Client(transport=httpx.MockTransport(handler), trust_env=False, **client_options) as client:
         return readback_raw_batch(client, pins=pins, month=month)
 
 
@@ -75,17 +75,91 @@ def test_redirect_to_trusted_archive_cdn_and_relative_location():
             return httpx.Response(
                 302,
                 headers={
-                    "Location": f"https://dn1.us.archive.org/0/items/ficha-2026-07/raw/{name}"
+                    "Location": f"https://ia600107.us.archive.org/34/items/ficha-2026-07/raw/{name}"
                 },
             )
-        if request.url.host == "dn1.us.archive.org" and request.url.path.startswith("/0/items/"):
+        if request.url.host == "ia600107.us.archive.org" and request.url.path.startswith("/34/items/"):
             return httpx.Response(307, headers={"Location": f"/download/ficha-2026-07/raw/{name}"})
         return httpx.Response(200, stream=httpx.ByteStream(bodies[name]))
 
     receipt = harness(handler, pins=pins)
     require(len(seen) == 111)
     require(all(obj.redirects == 2 for obj in receipt.objects))
-    require(all(obj.final_url.startswith("https://dn1.us.archive.org/") for obj in receipt.objects))
+    require(all(obj.final_url.startswith("https://ia600107.us.archive.org/") for obj in receipt.objects))
+
+
+
+@pytest.mark.parametrize(
+    "cdn_path",
+    [
+        "/34/items/ficha-unrelated/raw/{name}",
+        "/34/items/ficha-2026-06/raw/{name}",
+        "/34/items/ficha-2026-07/raw/Other-{name}",
+        "/34/items/ficha-2026-07/raw/%43{name_tail}",
+        "/34/items/ficha-2026-07/raw/{name}%2Fextra",
+        "/34/items/ficha-2026-07/raw/%252e%252e/{name}",
+        "/34/items/ficha-2026-07/raw/{name}/extra",
+        "/34/items/ficha-2026-07/raw/{name}?query=changed",
+        "/download/ficha-2026-07/raw/Other-{name}",
+    ],
+)
+def test_cross_key_redirect_is_refused_before_second_get(cdn_path):
+    pins, _bodies = fixture_pins()
+    first = min(pin.name for pin in pins)
+    location = "https://ia600107.us.archive.org" + cdn_path.format(
+        name=first, name_tail=first[1:]
+    )
+    seen = []
+
+    def handler(request):
+        seen.append(str(request.url))
+        return httpx.Response(302, headers={"Location": location})
+
+    with pytest.raises(RawReadbackError):
+        harness(handler, pins=pins)
+    require(len(seen) == 1, "cross-key redirect must not reach a storage node")
+
+
+@pytest.mark.parametrize("hook_kind", ["request", "response"])
+def test_client_hooks_refused_before_any_get(hook_kind):
+    seen = []
+
+    def handler(request):
+        seen.append(request)
+        return httpx.Response(200, content=b"unexpected")
+
+    def inject_authorization(request):
+        request.headers["Authorization"] = "Bearer dummy"
+
+    # Request hooks can add secrets *after* an ordinary client header preflight.
+    # Response hooks are likewise disallowed to keep the readback surface fixed.
+    with pytest.raises(RawReadbackError, match="unauthenticated"):
+        harness(handler, event_hooks={hook_kind: [inject_authorization]})
+    require(len(seen) == 0, "unsafe event hook must be rejected without transport IO")
+
+
+@pytest.mark.parametrize(
+    "bad_host",
+    ["dn1.us.archive.org", "foo.archive.org", "ia600107.us.archive.org.evil.example"],
+)
+def test_unrecognised_cdn_host_is_refused_before_following(bad_host):
+    seen = []
+
+    def handler(request):
+        seen.append(str(request.url))
+        return httpx.Response(
+            302,
+            headers={
+                "Location": (
+                    f"https://{bad_host}/34/items/ficha-2026-07/raw/"
+                    f"{min(pin.name for pin in fixture_pins()[0])}"
+                )
+            },
+        )
+
+    with pytest.raises(RawReadbackError):
+        harness(handler)
+    require(len(seen) == 1)
 
 
 def test_37th_bad_body_yields_no_success_receipt():
