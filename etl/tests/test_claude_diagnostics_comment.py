@@ -24,8 +24,7 @@ def _run_diagnostic(
     bin_dir.mkdir()
     uv = bin_dir / "uv"
     uv.write_text(
-        '#!/bin/sh\nprintf "%s\\n" "$CANARY"\nprintf "%s\\n" "$CANARY" >&2\n'
-        'exit "$FAKE_EXIT"\n',
+        '#!/bin/sh\nprintf "%s\\n" "$CANARY"\nprintf "%s\\n" "$CANARY" >&2\nexit "$FAKE_EXIT"\n',
         encoding="utf-8",
     )
     uv.chmod(0o755)
