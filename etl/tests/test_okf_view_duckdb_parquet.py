@@ -175,7 +175,9 @@ def competencia_parquets(tmp_path: Path):
     try:
         for competencia, relations in COMPETENCIA_INPUTS.items():
             for relation, rows in relations.items():
-                connection.execute(f"CREATE TABLE source_{relation} ({schemas[relation]})")
+                connection.execute(
+                    f"CREATE TABLE source_{relation} ({schemas[relation]})"
+                )
                 connection.executemany(
                     f"INSERT INTO source_{relation} VALUES (?, ?)", rows
                 )
@@ -208,13 +210,12 @@ def raw_competencia_oracle(competencia):
     """Independent Python selection, not generated SQL or a Zod acceptance test."""
     source = COMPETENCIA_INPUTS[competencia]
     active_roots = {
-        base for base, count in source["raizes"]
+        base
+        for base, count in source["raizes"]
         if count is not None and count > 0
     }
     return {
-        "empresas_ativas": [
-            row for row in source["cnpjs"] if row[1] == "02"
-        ],
+        "empresas_ativas": [row for row in source["cnpjs"] if row[1] == "02"],
         "socios_de_raizes_ativas": [
             row for row in source["socios"] if row[0] in active_roots
         ],
@@ -229,16 +230,15 @@ def test_competencia_scoped_generated_sql_matches_raw_oracle(competencia_parquet
         expected = raw_competencia_oracle(competencia)
 
         # This audit is scoped to the loaded fixture, not a property of Parquet.
-        duplicate_roots = connection.execute("""
-            SELECT cnpj_base FROM raizes
-            GROUP BY cnpj_base HAVING COUNT(*) > 1
-        """).fetchall()
-        orphan_socios = connection.execute("""
-            SELECT s.cnpj_base FROM socios AS s
-            WHERE NOT EXISTS (
-                SELECT 1 FROM raizes AS r WHERE r.cnpj_base = s.cnpj_base
-            )
-        """).fetchall()
+        duplicate_roots = connection.execute(
+            "SELECT cnpj_base FROM raizes "
+            "GROUP BY cnpj_base HAVING COUNT(*) > 1"
+        ).fetchall()
+        orphan_socios = connection.execute(
+            "SELECT s.cnpj_base FROM socios AS s "
+            "WHERE NOT EXISTS (SELECT 1 FROM raizes AS r "
+            "WHERE r.cnpj_base = s.cnpj_base)"
+        ).fetchall()
         assert duplicate_roots == []
         assert orphan_socios == []
 
