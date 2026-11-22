@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import os
 import struct
 import zipfile
 import zlib
@@ -113,6 +114,7 @@ def test_preflight_admits_exact_37_before_any_put(monkeypatch, tmp_path):
     _equal(list(tmp_path.iterdir()), [])
 
 
+@pytest.mark.skipif(os.name == "nt", reason="replacing an open file is POSIX-specific")
 @pytest.mark.parametrize("position", [0, 36], ids=["first-zip", "last-zip"])
 def test_raw_put_uses_verified_fd_after_pathname_swap(monkeypatch, tmp_path, position):
     """Replacing a validated pathname just before the PUT must not change bytes.
