@@ -4,8 +4,9 @@ This is a *read-only primitive*, not a publication gate. A matching response
 establishes R at the time of the GET only. In particular it does not prove the
 source cohort (S), durable intent resolution, or exclusion of later writes (F).
 
-The caller supplies a deliberately configured, unauthenticated httpx.Client
-and pins computed from the *sealed* source, never from IA metadata. This module
+The caller supplies an unauthenticated httpx.Client with trust_env=False,
+without event hooks, and pins from the *sealed* source, never IA metadata.
+The client is not accepted as proof of transport or version identity. This module
 is intentionally not wired to any upload/manifest/cron path (Ficha #433).
 """
 
@@ -24,6 +25,8 @@ from .sources import canonical_inventory, is_valid_month
 _CHUNK = 64 * 1024
 _MAX_REDIRECTS = 5
 _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
+
+_CDN_HOST = re.compile(r"ia[0-9]+\.us\.archive\.org\Z")
 
 
 class RawReadbackError(RuntimeError):
@@ -91,19 +94,41 @@ def _validated_pins(pins: tuple[RawPin, ...]) -> tuple[RawPin, ...]:
     return tuple(sorted(pins, key=lambda p: p.name))
 
 
-def _validate_archive_url(url: httpx.URL) -> None:
+def _validate_archive_url(url: httpx.URL, identifier: str, name: str) -> None:
+    """Accept only the canonical item/file URL, including a narrow CDN spelling.
+
+    For IA storage nodes, the mapping /<drive>/items/<item>/<filename>
+    is a URL-shape constraint, NOT proof that IA has served that object.
+    Any unrecognised host/path, including a percent-encoded alias, fails closed.
+    """
     host = url.host
     if (
         url.scheme != "https"
         or not host
-        or (host != "archive.org" and not host.endswith(".archive.org"))
         or url.port not in (None, 443)
         or url.username
         or url.password
         or url.query
         or url.fragment
     ):
-        raise RawReadbackError("raw readback refuses unsafe or credential-bearing redirect")
+        raise RawReadbackError("raw readback refuses unsafe redirect")
+
+    encoded_name = quote(name, safe="").encode("ascii")
+    encoded_id = identifier.encode("ascii")
+    if host == "archive.org":
+        expected = b"/download/" + encoded_id + b"/raw/" + encoded_name
+        matched = url.raw_path == expected
+    elif _CDN_HOST.fullmatch(host):
+        # The drive number varies across IA storage nodes. Match *every*
+        # remaining byte to the independently requested item and filename.
+        expected = rb"/[0-9]+/items/" + re.escape(encoded_id) + rb"/raw/" + re.escape(
+            encoded_name
+        )
+        matched = re.fullmatch(expected, url.raw_path) is not None
+    else:
+        matched = False
+    if not matched:
+        raise RawReadbackError("raw readback redirect changes item or file key")
 
 
 def _check_client(client: httpx.Client) -> None:
@@ -113,6 +138,8 @@ def _check_client(client: httpx.Client) -> None:
         or "authorization" in client.headers
         or "cookie" in client.headers
         or "proxy-authorization" in client.headers
+        or bool(client.event_hooks.get("request"))
+        or bool(client.event_hooks.get("response"))
     ):
         raise RawReadbackError("raw readback requires an unauthenticated client")
 
@@ -124,7 +151,7 @@ def _read_one(client: httpx.Client, identifier: str, pin: RawPin) -> RawObjectOb
     seen: set[str] = set()
     redirects = 0
     while True:
-        _validate_archive_url(current)
+        _validate_archive_url(current, identifier, pin.name)
         if str(current) in seen:
             raise RawReadbackError("raw readback redirect loop")
         seen.add(str(current))
