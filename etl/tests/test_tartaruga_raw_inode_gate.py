@@ -2,7 +2,7 @@
 
 Imports the real entrypoint; only catalog, source staging, and IA PUT are fake.
 A synthetic 37th-source seal failure tests call order, NOT fs-verity support.
-The strict XFAIL documents a remaining same-inode mutation vulnerability.
+Strict XFAILs document same-inode mutation and post-staging ZIP 37 open failure.
 """
 
 from __future__ import annotations
@@ -179,6 +179,40 @@ def test_preopened_writer_cannot_change_transmitted_bytes(monkeypatch, tmp_path)
     require(not state["write_ok"], "unblocked writer but no mutation detected")
 
 
+
+class PartialBatchExposure(AssertionError):
+    """A late local read failure cannot undo earlier fake IA PUT attempts."""
+
+
+@pytest.mark.xfail(
+    strict=True,
+    raises=PartialBatchExposure,
+    reason="#433: sequential reopening can send 36 ZIPs before last FD fails",
+)
+def test_zip37_open_failure_cannot_follow_any_put_attempt(monkeypatch, tmp_path):
+    # Uses the REAL stream_raw_zips_to_ia entrypoint; only its boundaries
+    # are synthetic, including this deterministic EMFILE fault injection.
+    invoke, state, _ = arrange(monkeypatch, tmp_path, scenario="control")
+    specs = list(canonical_inventory())
+    last = specs[-1].name
+    native_open = Path.open
+
+    def deny_last_source(path, mode="r", *args, **kwargs):
+        if path.name == last and mode == "rb":
+            raise OSError(errno.EMFILE, "injected ZIP 37 FD exhaustion")
+        return native_open(path, mode, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", deny_last_source)
+    with pytest.raises(OSError, match="injected ZIP 37 FD exhaustion"):
+        invoke()
+    require(state["staged"] == 37, "failure preceded full staging")
+    require(state["attempts"] == [spec.name for spec in specs[:-1]], "wrong attempt order")
+    require(len(state["received"]) == len(state["receipts"]) == 36, "wrong body/receipt counts")
+    if state["attempts"]:
+        raise PartialBatchExposure("36 fake PUT attempts preceded ZIP 37 EMFILE")
+
+
+
 def test_replay_boundary_probes_under_python_optimized():
     source = str(Path(__file__).resolve())
     cases = [
@@ -186,6 +220,7 @@ def test_replay_boundary_probes_under_python_optimized():
         "test_synthetic_37th_gate_failure_causes_zero_put_attempts",
         "test_http_503_after_body_is_not_pre_call_refusal",
         "test_preopened_writer_cannot_change_transmitted_bytes",
+        "test_zip37_open_failure_cannot_follow_any_put_attempt",
     ]
     completed = subprocess.run(
         [sys.executable, "-O", "-m", "pytest", "-q", *(f"{source}::{case}" for case in cases)],
@@ -196,4 +231,4 @@ def test_replay_boundary_probes_under_python_optimized():
     )
     report = completed.stdout + "\n" + completed.stderr
     require(completed.returncode == 0, report)
-    require("3 passed" in completed.stdout and "1 xfailed" in completed.stdout, report)
+    require("3 passed" in completed.stdout and "2 xfailed" in completed.stdout, report)
