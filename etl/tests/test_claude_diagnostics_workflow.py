@@ -8,7 +8,9 @@ from pathlib import Path
 import pytest
 import yaml
 
-WORKFLOW = Path(__file__).parents[2] / ".github" / "workflows" / "claude-diagnostics.yml"
+WORKFLOW = (
+    Path(__file__).parents[2] / ".github" / "workflows" / "claude-diagnostics.yml"
+)
 
 
 def _steps() -> dict:
@@ -72,7 +74,9 @@ def test_dispatch_strings_never_enter_shell_source() -> None:
         assert "steps.cfg.outcome == 'success'" in steps[name]["if"]
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="Bash fixture uses POSIX temp paths")
+@pytest.mark.skipif(
+    sys.platform == "win32", reason="Bash fixture uses POSIX temp paths"
+)
 def test_valid_push_and_manual_inputs_are_preserved(tmp_path: Path) -> None:
     push, push_output = _resolve(
         tmp_path, event="push", branch="claude/plan-next-steps-l7Dt6"
@@ -92,7 +96,9 @@ def test_valid_push_and_manual_inputs_are_preserved(tmp_path: Path) -> None:
     ]
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="Bash fixture uses POSIX temp paths")
+@pytest.mark.skipif(
+    sys.platform == "win32", reason="Bash fixture uses POSIX temp paths"
+)
 def test_dispatch_injection_is_refused_before_outputs(tmp_path: Path) -> None:
     marker = tmp_path / "unexpected-command"
     shell_payload = f"$(touch {marker})"
