@@ -391,21 +391,24 @@ def stream_raw_zips_to_ia(
         staged = raw_preflight.stage_all(all_specs, month, token, Path(temp))
         for index, spec in enumerate(specs):
             path, size, pinned_sha = staged[spec.name]
-            # A second digest check catches ordinary pathname changes between
-            # preflight and PUT, but is NOT inode sealing against held writers.
+            # Verify and transmit via the SAME still-open descriptor. The
+            # pathname may be replaced after this check: reopening it would
+            # silently send different bytes. This does not seal against an
+            # existing writable FD or provide durable UNKNOWN recovery.
             with path.open("rb") as handle:
                 current_sha = hashlib.file_digest(handle, "sha256").hexdigest()
-            if current_sha != pinned_sha:
-                raise RuntimeError(f"raw preflight: staged bytes changed: {spec.name}")
-            _ia_s3_put(
-                identifier,
-                f"raw/{spec.name}",
-                raw_preflight.file_chunks(path),
-                content_length=str(size),
-                access_key=access_key,
-                secret_key=secret_key,
-                is_first=index == 0,
-            )
+                if current_sha != pinned_sha:
+                    raise RuntimeError(f"raw preflight: staged bytes changed: {spec.name}")
+                handle.seek(0)
+                _ia_s3_put(
+                    identifier,
+                    f"raw/{spec.name}",
+                    raw_preflight.file_chunks(handle),
+                    content_length=str(size),
+                    access_key=access_key,
+                    secret_key=secret_key,
+                    is_first=index == 0,
+                )
     log.info("raw preflight admitted %d sources; sent %d missing names", len(staged), len(specs))
     return RawStreamOutcome.SENT_UNVERIFIED
 

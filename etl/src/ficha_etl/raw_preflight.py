@@ -293,7 +293,12 @@ def stage_all(
     return admitted
 
 
-def file_chunks(path: Path):
-    with path.open("rb") as handle:
-        while chunk := handle.read(_CHUNK):
-            yield chunk
+def file_chunks(handle):
+    """Read a previously verified, still-open descriptor without reopening its path.
+
+    The caller owns the handle's lifetime. This prevents namespace replacement
+    between the final digest check and a synchronous PUT; it does NOT seal the
+    inode against a writer that already holds a writable descriptor.
+    """
+    while chunk := handle.read(_CHUNK):
+        yield chunk
