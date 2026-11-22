@@ -49,6 +49,7 @@ class RawStreamOutcome(str, Enum):
     ALL_NAMES_PRESENT_UNPROVEN = "all_names_present_unproven"
     SENT_UNVERIFIED = "sent_unverified"
 
+
 # Timeout generoso: ZIPs grandes podem levar minutos pra transferir
 _STREAM_TIMEOUT = httpx.Timeout(connect=30.0, read=600.0, write=600.0, pool=30.0)
 _IA_S3_BASE = "https://s3.us.archive.org"
