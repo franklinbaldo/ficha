@@ -479,9 +479,7 @@ def test_explicit_authenticated_proxy_rejected_with_zero_socket_io(
         pytest.param({"retries": 2}, id="hidden-connection-retry"),
     ],
 )
-def test_direct_transport_requires_tcp_route_and_zero_retries(
-    transport_options, monkeypatch
-):
+def test_direct_transport_requires_tcp_route_and_zero_retries(transport_options, monkeypatch):
     """Neither an alternate UNIX route nor an implicit retry may start I/O."""
     attempts = []
 
