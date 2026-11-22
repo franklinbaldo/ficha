@@ -326,3 +326,37 @@ def test_stale_manifest_alert_is_nonzero_without_manual_dispatch_advice(
     assert "não distingue falha de suspensão deliberada" in proc.stdout
     assert "Não execute o ETL manualmente sem autorização." in proc.stdout
     assert "rode com inputs.month" not in proc.stdout
+
+def test_freshness_threshold_stays_at_three_calendar_months(tmp_path: Path) -> None:
+    """Two months warns; three months still fails without manual ETL advice."""
+    import datetime
+    import json
+    import subprocess
+    import sys
+
+    public = tmp_path / "web" / "public"
+    public.mkdir(parents=True)
+    wrapper = _steps(_load())["Check manifest freshness"]["run"]
+    assert wrapper.startswith("python3 - <<'EOF'\n")
+    script = wrapper.split("python3 - <<'EOF'\n", 1)[1].rsplit("\nEOF", 1)[0]
+    now = datetime.date.today()
+
+    for months_ago, expected_rc, annotation in (
+        (2, 0, "::warning::"),
+        (3, 1, "::error::"),
+    ):
+        month_index = now.year * 12 + now.month - 1 - months_ago
+        current = f"{month_index // 12:04d}-{month_index % 12 + 1:02d}"
+        (public / "manifest.json").write_text(
+            json.dumps({"current": current}), encoding="utf-8"
+        )
+        proc = subprocess.run(
+            [sys.executable, "-c", script],
+            cwd=tmp_path,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        assert proc.returncode == expected_rc, (current, proc.stdout, proc.stderr)
+        assert annotation in proc.stdout
+        assert "rode com inputs.month" not in proc.stdout
