@@ -23,6 +23,21 @@ from ficha_etl.shard_transfer import ShardTransferAction
 
 MONTH = "2026-08"
 
+
+@pytest.fixture(autouse=True)
+def _isolate_legacy_manifest_writer_from_raw_custody(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """These tests exercise *downstream* compensation on synthetic v1 artifacts.
+
+    Production still enforces its independent raw v2 guard. The real guard is
+    covered without patching in test_castor_raw_custody_authorization.py.
+    """
+    monkeypatch.setattr(
+        monthly_sharded, "_require_raw_custody_authorization", lambda *a, **kw: None
+    )
+
+
 # Single producer-owned fixture, read by both Python and TS P0-D tests.
 PACKER_CA_MEMBER_HEX = (
     (Path(__file__).parent / "fixtures" / "company-v11-ca000001.hex")

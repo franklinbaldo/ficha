@@ -342,6 +342,15 @@ def _cmd_pack(
         _eprint(f"error: month must be YYYY-MM, got {month!r}")
         return 2
 
+    # Standalone pack is another public derived-upload entrypoint. Its local
+    # construction is allowed; publication awaits independent raw S/R/F proof.
+    if not skip_upload:
+        try:
+            _require_legacy_publication_custody()
+        except ValueError as exc:
+            _eprint(f"error: {exc}")
+            return 1
+
     parquets_base = str(local_parquets) if local_parquets else None
     log.info("[pack] building companies.zip for %s", month)
     try:
@@ -394,6 +403,19 @@ def _cmd_pack(
     return 0
 
 
+def _require_legacy_publication_custody() -> None:
+    """No legacy S/R/F authority exists; prohibit real publishing (#433).
+
+    This guard is deliberately not controlled by an environment flag. A later
+    implementation needs an independently verified, attempt-bound raw receipt
+    before any legacy upload path may be re-enabled.
+    """
+    raise ValueError(
+        "HOLD #433: legacy run has no independent raw ZIP custody S/R/F authority; "
+        "use --skip-upload for offline processing"
+    )
+
+
 def _cmd_run(
     month: str,
     *,
@@ -414,6 +436,15 @@ def _cmd_run(
     if not sources.is_valid_month(month):
         _eprint(f"error: month must be YYYY-MM, got {month!r}")
         return 2
+
+    # The old public run route has no receipt gate before raw, derived or
+    # manifest publication. Block before credentials, I/O and the first PUT.
+    if not skip_upload:
+        try:
+            _require_legacy_publication_custody()
+        except ValueError as exc:
+            _eprint(f"error: {exc}")
+            return 1
 
     if output_dir is None:
         output_dir = cache_dir / month / "output"

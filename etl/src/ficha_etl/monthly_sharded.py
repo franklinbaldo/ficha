@@ -26,6 +26,7 @@ from typing import BinaryIO
 import internetarchive as ia
 
 from . import transform, upload
+from .monthly_raw_custody_authorization import _require_raw_custody_authorization
 from .monthly_source_bag_gate import _write_receipt
 from .monthly_source_authorization import (
     _SOURCE_SCHEMA,
@@ -366,7 +367,7 @@ def command_produce(args: argparse.Namespace) -> None:
 
     if not args.skip_raw_upload:
         try:
-            upload.stream_raw_zips_to_ia(
+            raw_outcome = upload.stream_raw_zips_to_ia(
                 month,
                 access_key=_require_secret("IA_ACCESS_KEY"),
                 secret_key=_require_secret("IA_SECRET_KEY"),
@@ -374,10 +375,15 @@ def command_produce(args: argparse.Namespace) -> None:
         except Exception:
             # The descriptor may survive a partial remote raw upload, but may
             # never authorize independent derived uploads after that failure.
-            descriptor["source_attestation"]["raw_upload_status"] = "failed"
+            descriptor["source_attestation"]["raw_upload_status"] = "unknown"
             write_production_descriptor(descriptor_path, descriptor)
             raise
-        descriptor["source_attestation"]["raw_upload_status"] = "complete"
+        # No current transport outcome certifies remote bytes, S coorte or F fence.
+        # A legacy mock returning None is also not evidence of success.
+        descriptor["source_attestation"]["raw_upload_status"] = {
+            upload.RawStreamOutcome.ALL_NAMES_PRESENT_UNPROVEN: "skipped_existing",
+            upload.RawStreamOutcome.SENT_UNVERIFIED: "sent_unverified",
+        }.get(raw_outcome, "unknown")
         write_production_descriptor(descriptor_path, descriptor)
     # --skip-raw-upload deliberately leaves the descriptor pending. A future
     # publication requires a separately verified raw completion contract.
@@ -390,6 +396,7 @@ def command_upload_outputs(args: argparse.Namespace) -> None:
     _require_safe_legacy_shard_upload()
     descriptor = _load_descriptor(Path(args.descriptor), month)
     _require_source_attestation(month, Path(args.output_dir), descriptor)
+    _require_raw_custody_authorization(month, descriptor)
     plan = submit_outputs_fail_closed(
         month,
         Path(args.output_dir),
@@ -588,6 +595,7 @@ def command_finalize(args: argparse.Namespace) -> None:
         receipt_path=source_receipt_path,
         require_run_id=True,
     )
+    _require_raw_custody_authorization(month, descriptor)
     pinned = materialization_inputs_from_descriptor(descriptor)
     receipts = _load_all_receipts(Path(args.receipts_dir), month)
 
@@ -658,6 +666,7 @@ def command_finalize(args: argparse.Namespace) -> None:
         receipt_path=source_receipt_path,
         require_run_id=True,
     )
+    _require_raw_custody_authorization(month, descriptor)
     entry = finalize_sharded_snapshot_entry(descriptor, identities)
     snapshot_entry_path = Path(args.snapshot_entry)
     verification_path = Path(args.verification)

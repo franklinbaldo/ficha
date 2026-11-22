@@ -13,6 +13,12 @@ import pytest
 from ficha_etl import cli, pack, pack_upload_snapshot
 
 
+@pytest.fixture(autouse=True)
+def _isolate_legacy_packer_bytes_tests(monkeypatch: pytest.MonkeyPatch) -> None:
+    """These tests isolate historical ZIP snapshot behavior, not raw custody."""
+    monkeypatch.setattr(cli, "_require_legacy_publication_custody", lambda: None)
+
+
 def _sha(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
