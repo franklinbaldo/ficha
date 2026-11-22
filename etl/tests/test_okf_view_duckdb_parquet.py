@@ -210,9 +210,7 @@ def raw_competencia_oracle(competencia):
     """Independent Python selection, not generated SQL or a Zod acceptance test."""
     source = COMPETENCIA_INPUTS[competencia]
     active_roots = {
-        base
-        for base, count in source["raizes"]
-        if count is not None and count > 0
+        base for base, count in source["raizes"] if count is not None and count > 0
     }
     return {
         "empresas_ativas": [row for row in source["cnpjs"] if row[1] == "02"],
