@@ -32,6 +32,6 @@ test('Acervo chama URL do Internet Archive de arquivo indicado no catálogo, nã
   assert.equal(links[0].href, url);
   assert.equal(links[0].target, '_blank');
   assert.equal(links[0].rel, 'noopener noreferrer');
-  assert.ok(nodes.some(node => node.tag === 'span' && node.textContent === 'Link não declarado'));
+  assert.ok(nodes.some(node => node.tag === 'p' && node.textContent === 'URL HTTPS não declarada.'));
   assert.ok(nodes.every(node => !/repositório de origem/i.test(node.textContent)));
 });
