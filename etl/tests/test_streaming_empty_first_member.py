@@ -94,7 +94,7 @@ def test_parallel_loader_rejects_empty_first_multi_member(tmp_path):
     make_zip(source, [("empty.CSV", b""), ("data.CSV", b"1;2\n")])
     con = duckdb.connect()
     try:
-        with pytest.raises(RuntimeError, match=r"1 ZIP\\(s\\) failed to decompress"):
+        with pytest.raises(RuntimeError, match=r"1 ZIP\(s\) failed to decompress"):
             load_zips_parallel(
                 con,
                 [("source_rows", source, ("a", "b"))],
