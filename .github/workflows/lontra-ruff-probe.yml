@@ -1,0 +1,17 @@
+name: Lontra temporary Ruff format diagnostic
+on:
+  pull_request:
+    paths:
+      - etl/src/ficha_etl/raw_readback.py
+      - etl/tests/test_raw_readback.py
+      - .github/workflows/lontra-ruff-probe.yml
+permissions:
+  contents: read
+jobs:
+  diff:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+      - name: Print formatter diff
+        run: uvx --from ruff==0.15.12 ruff format --diff etl/src/ficha_etl/raw_readback.py etl/tests/test_raw_readback.py
