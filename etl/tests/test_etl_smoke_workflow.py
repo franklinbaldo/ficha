@@ -327,6 +327,7 @@ def test_stale_manifest_alert_is_nonzero_without_manual_dispatch_advice(
     assert "Não execute o ETL manualmente sem autorização." in proc.stdout
     assert "rode com inputs.month" not in proc.stdout
 
+
 def test_freshness_threshold_stays_at_three_calendar_months(tmp_path: Path) -> None:
     """Two months warns; three months still fails without manual ETL advice."""
     import datetime
