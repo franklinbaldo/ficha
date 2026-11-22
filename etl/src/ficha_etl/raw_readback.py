@@ -152,8 +152,7 @@ def _check_client(client: httpx.Client) -> None:
     elif type(transport) is httpx.HTTPTransport:
         pool = getattr(transport, "_pool", None)
         direct_transport = (
-            type(pool) is httpcore.ConnectionPool
-            and getattr(pool, "_proxy", object()) is None
+            type(pool) is httpcore.ConnectionPool and getattr(pool, "_proxy", object()) is None
         )
     else:
         direct_transport = False
