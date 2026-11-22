@@ -80,13 +80,10 @@ def test_redirect_to_trusted_archive_cdn_and_relative_location():
                     "Location": f"https://ia600107.us.archive.org/34/items/ficha-2026-07/raw/{name}"
                 },
             )
-        if (
-            request.url.host == "ia600107.us.archive.org"
-            and request.url.path.startswith("/34/items/")
+        if request.url.host == "ia600107.us.archive.org" and request.url.path.startswith(
+            "/34/items/"
         ):
-            return httpx.Response(
-                307, headers={"Location": f"/35/items/ficha-2026-07/raw/{name}"}
-            )
+            return httpx.Response(307, headers={"Location": f"/35/items/ficha-2026-07/raw/{name}"})
         return httpx.Response(200, stream=httpx.ByteStream(bodies[name]))
 
     receipt = harness(handler, pins=pins)
@@ -117,9 +114,7 @@ def test_redirect_to_trusted_archive_cdn_and_relative_location():
 def test_cross_key_redirect_is_refused_before_second_get(cdn_path):
     pins, _bodies = fixture_pins()
     first = min(pin.name for pin in pins)
-    location = "https://ia600107.us.archive.org" + cdn_path.format(
-        name=first, name_tail=first[1:]
-    )
+    location = "https://ia600107.us.archive.org" + cdn_path.format(name=first, name_tail=first[1:])
     seen = []
 
     def handler(request):
