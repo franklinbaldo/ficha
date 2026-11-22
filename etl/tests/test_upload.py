@@ -4,6 +4,7 @@ import zipfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
 
 from ficha_etl import upload as upload_mod
@@ -327,12 +328,6 @@ def test_existing_raw_files_on_ia_parses_metadata(monkeypatch):
         ]
     }
 
-    class _FakeResp:
-        status_code = 200
-
-        def json(self):
-            return payload
-
     class _FakeClient:
         def __init__(self, *a, **kw):
             pass
@@ -344,7 +339,7 @@ def test_existing_raw_files_on_ia_parses_metadata(monkeypatch):
             return False
 
         def get(self, url):
-            return _FakeResp()
+            return httpx.Response(200, json=payload)
 
     monkeypatch.setattr(upload_mod.httpx, "Client", _FakeClient)
     out = upload_mod._existing_raw_files_on_ia("ficha-2026-04")
@@ -369,12 +364,6 @@ def test_existing_raw_files_on_ia_parses_metadata(monkeypatch):
 def test_stream_raw_rejects_ambiguous_catalog_before_get_or_put(monkeypatch, files):
     """A malformed IA inventory cannot authorize skipping or any remote write."""
 
-    class _FakeResp:
-        status_code = 200
-
-        def json(self):
-            return {"files": files}
-
     class _FakeClient:
         def __init__(self, *args, **kwargs):
             pass
@@ -386,7 +375,7 @@ def test_stream_raw_rejects_ambiguous_catalog_before_get_or_put(monkeypatch, fil
             return False
 
         def get(self, url):
-            return _FakeResp()
+            return httpx.Response(200, json={"files": files})
 
     monkeypatch.setattr(upload_mod.httpx, "Client", _FakeClient)
 
@@ -403,12 +392,6 @@ def test_stream_raw_rejects_ambiguous_catalog_before_get_or_put(monkeypatch, fil
 def test_stream_raw_rejects_non_list_catalog_before_get_or_put(monkeypatch):
     """A 200 with a malformed catalog is not equivalent to a new IA item."""
 
-    class _FakeResp:
-        status_code = 200
-
-        def json(self):
-            return {"files": {"raw/Empresas0.zip": {"size": "1"}}}
-
     class _FakeClient:
         def __init__(self, *args, **kwargs):
             pass
@@ -420,7 +403,7 @@ def test_stream_raw_rejects_non_list_catalog_before_get_or_put(monkeypatch):
             return False
 
         def get(self, url):
-            return _FakeResp()
+            return httpx.Response(200, json={"files": {"raw/Empresas0.zip": {"size": "1"}}})
 
     monkeypatch.setattr(upload_mod.httpx, "Client", _FakeClient)
     monkeypatch.setattr(
@@ -435,12 +418,6 @@ def test_stream_raw_rejects_non_list_catalog_before_get_or_put(monkeypatch):
 def test_stream_raw_rejects_http_200_invalid_json_before_get_or_put(monkeypatch):
     """HTTP 200 with broken JSON is not a transient metadata outage."""
 
-    class _FakeResp:
-        status_code = 200
-
-        def json(self):
-            raise ValueError("malformed JSON")
-
     class _FakeClient:
         def __init__(self, *args, **kwargs):
             pass
@@ -452,7 +429,7 @@ def test_stream_raw_rejects_http_200_invalid_json_before_get_or_put(monkeypatch)
             return False
 
         def get(self, url):
-            return _FakeResp()
+            return httpx.Response(200, content=b"<html>malformed JSON</html>")
 
     monkeypatch.setattr(upload_mod.httpx, "Client", _FakeClient)
 
@@ -504,12 +481,6 @@ def test_stream_raw_denies_metadata_errors_before_get_or_put(monkeypatch, status
 
 
 def test_existing_raw_files_on_ia_returns_empty_on_404(monkeypatch):
-    class _FakeResp:
-        status_code = 404
-
-        def json(self):
-            return {}
-
     class _FakeClient:
         def __init__(self, *a, **kw):
             pass
@@ -521,7 +492,7 @@ def test_existing_raw_files_on_ia_returns_empty_on_404(monkeypatch):
             return False
 
         def get(self, url):
-            return _FakeResp()
+            return httpx.Response(404, json={})
 
     monkeypatch.setattr(upload_mod.httpx, "Client", _FakeClient)
     assert upload_mod._existing_raw_files_on_ia("ficha-2099-01") == set()
