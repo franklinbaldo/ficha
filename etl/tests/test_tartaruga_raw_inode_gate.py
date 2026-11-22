@@ -211,6 +211,7 @@ def test_zip37_open_failure_cannot_follow_any_put_attempt(monkeypatch, tmp_path)
         raise PartialBatchExposure("36 fake PUT attempts preceded ZIP 37 EMFILE")
     require(state["received"] == state["receipts"] == [], "unexpected body or receipt")
 
+
 def test_replay_boundary_probes_under_python_optimized():
     source = str(Path(__file__).resolve())
     cases = [
