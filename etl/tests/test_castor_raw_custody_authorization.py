@@ -219,7 +219,11 @@ def test_forged_v2_references_need_independent_monotonic_authority() -> None:
 
     class FakeAuthority:
         def confirm(self, *, month: str, run_id: str, claims: dict) -> bool:
-            return month == MONTH and run_id == RUN and claims == descriptor["raw_custody"]
+            return (
+                month == MONTH
+                and run_id == RUN
+                and claims == descriptor["raw_custody"]
+            )
 
     # This proves only the dependency-injection interface; it is NOT a real S/R/F proof.
     _require_raw_custody_authorization(MONTH, descriptor, authority=FakeAuthority())
