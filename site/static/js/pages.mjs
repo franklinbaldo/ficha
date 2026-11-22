@@ -12,7 +12,7 @@ function showProvenance(doc, parent, date, url) {
   const strip = add(doc,parent,'div','','provenance-strip');
   add(doc,strip,'span','Competência ' + date);
   add(doc,strip,'span','Origem declarada: Receita Federal · competência no catálogo');
-  anchor(doc,strip,'Arquivo de origem',url,true);
+  anchor(doc,strip,'Arquivo indicado no catálogo',url,true);
   add(doc,parent,'p','A consulta se refere à competência indicada, não necessariamente à situação atual. O acesso ao arquivo não certifica seu conteúdo integral.','fineprint');
 }
 function renderFieldList(doc, parent, record) {

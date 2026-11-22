@@ -36,6 +36,11 @@ test('renderizador distingue 404 de ausência no PB sem alegar integridade de to
   assert.match(treeText(output),/Arquivo indisponível/);
   assert.match(treeText(output),/Consulta inconclusiva/);
   assert.match(treeText(output),/A consulta se refere à competência indicada/);
+  const provenance = output.children.find(node => node.className === 'provenance-strip');
+  const declaredArchive = provenance?.children.find(node => node.tag === 'a');
+  assert.equal(declaredArchive?.textContent, 'Arquivo indicado no catálogo');
+  assert.equal(declaredArchive?.href, base.archiveUrl);
+  assert.doesNotMatch(treeText(output), /Arquivo de origem/);
   assert.doesNotMatch(treeText(output),/O registro corresponde|snapshot arquivado/);
   assert.doesNotMatch(treeText(output),/Nenhum registro encontrado/);
   renderCompanyRecord(doc,output,{...base,state:'absent-in-snapshot',data:null});
