@@ -207,10 +207,7 @@ def test_zip37_open_failure_cannot_follow_any_put_attempt(monkeypatch, tmp_path)
     require(state["staged"] == 37, "failure preceded full staging")
     if state["attempts"]:
         require(state["attempts"] == [spec.name for spec in specs[:-1]], "wrong attempt order")
-        require(
-            len(state["received"]) == len(state["receipts"]) == 36,
-            "wrong body/receipt counts",
-        )
+        require(len(state["received"]) == len(state["receipts"]) == 36, "wrong body/receipt counts")
         raise PartialBatchExposure("36 fake PUT attempts preceded ZIP 37 EMFILE")
     require(state["received"] == state["receipts"] == [], "unexpected body or receipt")
 
