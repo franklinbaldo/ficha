@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import socket
 import subprocess
 import sys
 from dataclasses import replace
@@ -444,6 +445,45 @@ def test_redirect_host_matches_url_and_headers_do_not_leak():
     require(all(obj.redirects == 1 for obj in receipt.objects))
     require(all("user-agent" not in request.headers for request in seen))
 
+
+
+@pytest.mark.parametrize("proxy_configuration", ["proxy", "transport", "mounts"])
+def test_explicit_authenticated_proxy_rejected_with_zero_socket_io(
+    proxy_configuration, monkeypatch
+):
+    """Even a synthetic CONNECT must never be attempted by this observer."""
+    proxy_url = "http://demo_user:demo_pass@127.0.0.1:9876"
+    if proxy_configuration == "proxy":
+        options = {"proxy": proxy_url}
+    elif proxy_configuration == "transport":
+        options = {"transport": httpx.HTTPTransport(proxy=proxy_url, trust_env=False)}
+    else:
+        options = {
+            "mounts": {
+                "https://": httpx.HTTPTransport(proxy=proxy_url, trust_env=False)
+            }
+        }
+
+    def forbid_connect(*_args, **_kwargs):
+        raise AssertionError("raw readback attempted proxy/socket I/O")
+
+    pins, _ = fixture_pins()
+    with httpx.Client(trust_env=False, **options) as client:
+        # No real or loopback connection may be made, even to test credentials.
+        monkeypatch.setattr(socket.socket, "connect", forbid_connect)
+        with pytest.raises(RawReadbackError, match="unauthenticated"):
+            readback_raw_batch(client, month="2026-07", pins=pins)
+
+
+def test_unrecognised_transport_rejected_before_mock_transport_io():
+    class CustomTransport(httpx.BaseTransport):
+        def handle_request(self, _request):
+            raise AssertionError("custom transport must not be used")
+
+    pins, _ = fixture_pins()
+    with httpx.Client(transport=CustomTransport(), trust_env=False) as client:
+        with pytest.raises(RawReadbackError, match="unauthenticated"):
+            readback_raw_batch(client, month="2026-07", pins=pins)
 
 def test_optimized_contract_subprocess():
     """Run this exact checked-out module and test file under Python -O in CI."""
