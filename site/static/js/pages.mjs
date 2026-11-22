@@ -217,6 +217,7 @@ export function renderExploreAssets(doc,parent,manifest,date,filter='') {
     track.setAttribute('aria-label',file.key+': '+formatBytes(file.size));
   }
   if(!entries.length) add(doc,parent,'p','Nenhum conjunto corresponde ao filtro.');
+  return entries.length;
 }
 
 export function renderCountSeries(doc,parent,manifest,kind) {
@@ -257,13 +258,13 @@ export async function mountExplore(doc,{loadManifest=fetchManifest}={}) {
       const snap=snaps.find(s=>s.date===select.value);
       const totals=catalogueTotals(snap);
       counter.textContent=totals.fileCount+' arquivos · '+formatBytes(totals.bytes)+' declarados';
-      renderExploreAssets(doc,output,manifest,select.value,filter.value);
+      const visible=renderExploreAssets(doc,output,manifest,select.value,filter.value);
       setParams({competencia:select.value});
+      status(state,'Exibindo '+visible+' de '+totals.fileCount+' arquivos declarados em '+select.value+'. Tamanhos do manifesto, não quantidade de empresas nem indicadores por UF.');
     };
     select.addEventListener('change',paint);
     filter.addEventListener('input',paint);
     paint();
-    status(state,'Visualização dos tamanhos dos arquivos no catálogo. Não representa quantidade de empresas, nem indicadores por UF.');
   }catch(error){status(state,'Exploração indisponível: '+error.message,true);}
 }
 
