@@ -256,18 +256,18 @@ def test_raw_run_id_gate_remains_effective_under_python_o() -> None:
     raw.pop("run_id")
     snippet = (
         "from ficha_etl.monthly_raw_custody_authorization import "
-        "_require_raw_custody_authorization as gate\\n"
-        "class AlwaysAccept:\\n"
-        "    def confirm(self, **_kwargs):\\n"
-        "        return True\\n"
-        f"claim = {raw!r}\\n"
-        "try:\\n"
+        "_require_raw_custody_authorization as gate\n"
+        "class AlwaysAccept:\n"
+        "    def confirm(self, **_kwargs):\n"
+        "        return True\n"
+        f"claim = {raw!r}\n"
+        "try:\n"
         "    gate('2026-07', {'source_attestation': {}, 'raw_custody': claim}, "
-        "authority=AlwaysAccept())\\n"
-        "except ValueError:\\n"
-        "    pass\\n"
-        "else:\\n"
-        "    raise SystemExit('FAIL: missing attempt ID accepted')\\n"
+        "authority=AlwaysAccept())\n"
+        "except ValueError:\n"
+        "    pass\n"
+        "else:\n"
+        "    raise SystemExit('FAIL: missing attempt ID accepted')\n"
     )
     result = subprocess.run(
         [sys.executable, "-O", "-c", snippet], capture_output=True, text=True, check=False
