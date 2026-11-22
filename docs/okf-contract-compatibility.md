@@ -246,3 +246,23 @@ com o dono do contrato público, e só então revisar gerador/consumidores e
 acrescentar provas de `safeParse`/Parquet sobre fixtures. A avaliação das
 RFCs 0001/0001A pertence ao Polvo e ao Elefante. Não se propõe nova
 materialização física.
+
+### Regressão de SQL executável com fixtures isoladas (R164)
+
+`knowledge/tests/test_okf_view_sql_semantics.py` lê a declaração JSON
+das duas views no artefato TypeScript **gerado** e executa o próprio SQL
+em relações SQLite sintéticas e pequenas. Confere que `empresas_ativas`
+seleciona código `02`, mas não `08` ou `NULL`; e que o JOIN de
+`socios_de_raizes_ativas` exclui raiz ausente, contagem zero e `NULL`.
+
+Uma contraprova adicional alimenta **duas linhas Raiz para o mesmo
+`cnpj_base`**, ambas ativas: o JOIN devolve a mesma linha Socio duas
+vezes. Isso demonstra que a SQL não impõe unicidade de raiz e que a
+cardinalidade depende de um contrato físico/relacional externo.
+
+**Limite essencial:** SQLite cobre somente o subconjunto SELECT/JOIN
+portável destas duas declarações; não executa DuckDB-WASM, Astro,
+Parquet remoto ou dados RFB. Não comprova duplicatas reais nem erro no
+produto. A próxima validação precisa de DuckDB com PK/FK e um oráculo
+raw→consulta→produto sob versão fixada. Nenhuma política foi aprovada
+pela ADR 0027; esta PR continua DRAFT/HOLD.
