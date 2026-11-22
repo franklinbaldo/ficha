@@ -17,6 +17,8 @@ Os 37 GETs individuais da [PR #463](https://github.com/franklinbaldo/ficha/pull/
 
 **Frescor do origin não decorre de SHA do corpo recebido.** [Castor R162](https://github.com/franklinbaldo/ficha/pull/466#issuecomment-7080248779) construiu dois mundos **sintéticos** observacionalmente indistinguíveis: 37 corpos B corretos são servidos (i) pelo origin B ou (ii) por cache adversarial B enquanto o origin está em A. A requisição `Cache-Control: no-cache` exige revalidação por cache conforme [RFC 9111 §5.2.1.4](https://www.rfc-editor.org/rfc/rfc9111.html#section-5.2.1.4); o mundo (ii) representa um intermediário hipoteticamente **não conforme**, não evidência de comportamento do IA nem defeito demonstrado na #463. O recibo `R_MATCH_AT_T_ONLY` descreve os **bytes entregues pelo endpoint observado**, não a versão ativa do origin.
 
+**R/origin e F são propriedades ortogonais.** `R_ORIGIN_EVIDENCED` exigiria evidência independente de que os bytes recebidos correspondem ao estado do origin no instante relevante; `F_EVIDENCED` exige evidência independente de que escritas/remoções tardias ou rollback não invalidam a geração publicada. Um cache adversarial pode invalidar inferência de R/origin **mesmo com F verdadeiro**; inversamente, origin atestado não impede PUT tardio. F11 é **pré-condição de evidência para R/origin na promoção**, não um ensaio que falsifique F. Ver [revisão semântica 🐝 Abelha R157](https://github.com/franklinbaldo/ficha/pull/466#issuecomment-7080869461).
+
 [IAS3](https://archive.org/developers/ias3.html) descreve ingestão assíncrona e versões antigas opcionais; [Tasks API](https://archive.org/developers/tasks.html) descreve serialização de tarefas por item. Nenhuma dessas descrições, isoladamente, prova create-only, CAS, drenagem de escritas pendentes, proteção a DELETE, exclusividade de todos os escritores ou monotonicidade da raiz. Ausência de garantia na documentação consultada tampouco prova impossibilidade técnica do serviço.
 
 ## Estados decisórios
@@ -25,7 +27,15 @@ Os 37 GETs individuais da [PR #463](https://github.com/franklinbaldo/ficha/pull/
 - **F_CANDIDATE / HOLD:** contrato externo específico é identificável, mas ainda não passou aos ensaios autorizados com implementação e credenciais efetivas.
 - **F_EVIDENCED / STILL_HOLD:** houve prova específica no backend escolhido, incluindo negativos e mutantes. Ainda não autoriza publicação: S (fonte/coorte), spool físico, U (intent UNKNOWN) e R são garantias separadas, além da estabilidade simultânea dos 37 objetos.
 
-Falta de registro, documentação ambígua, falha ou mudança de configuração => **F_UNAVAILABLE**. Não existe caminho desta RFC para declarar `REMOTE_VERSION_CONFIRMED`.
+Falta de registro ou demonstração **da própria autoridade de escrita F**, documentação ambígua sobre o fence, falha nos ensaios F ou mudança de sua configuração => **F_UNAVAILABLE**. Ausência de atestação de R/origin é **`R_ORIGIN_UNATTESTED`**, não altera automaticamente um estado F obtido independentemente. Não existe caminho desta RFC para declarar `REMOTE_VERSION_CONFIRMED`.
+
+| Evidência F | Evidência R/origin | Decisão |
+| --- | --- | --- |
+| `F_EVIDENCED` | `R_ORIGIN_UNATTESTED` | **HOLD**: fence pode estar provado; leitura de origin não |
+| `F_UNAVAILABLE` | `R_ORIGIN_EVIDENCED` | **HOLD**: origem pode estar atestada; escrita futura não |
+| `F_EVIDENCED` | `R_ORIGIN_EVIDENCED` | **STILL_HOLD** enquanto S, spool, U e coorte não estiverem comprovados |
+
+Nenhuma linha promove os 37 ZIPs.
 
 ## Identidade que precisa existir antes do primeiro PUT
 
@@ -60,15 +70,15 @@ Se nenhuma rota puder ser demonstrada no armazenamento e autoridade realmente es
 | F08 crash | Interromper depois de intent, antes do PUT; e depois de PUT/503 ambíguo | UNKNOWN persistido, zero replay |
 | F09 identidade | GET com SHA correto mas URL/chave/redirect divergente | Recusa mesmo com bytes corretos |
 | F10 mudança | Alterar ACL, cliente, regra de storage, backend ou authority generation | Invalidar prova antiga, qualificar novamente |
-| F11 cache/origin | Construir duas execuções com os mesmos 37 HTTP 200 e SHA B: origin B legítimo versus origin A com cache B adversarial (inclusive `no-cache` ignorado no modelo); variar observação independente do origin | Recusar equivalência `HTTP_BODY_MATCH => ORIGIN_CURRENT_B`; promover frescor somente com cadeia de confiança/documentação e ensaio autorizado específicos da origem; sem isso, `F_UNAVAILABLE/HOLD` |
+| F11 cache/origin (**limite R, não teste de F**) | Construir duas execuções com os mesmos 37 HTTP 200 e SHA B: origin B legítimo versus origin A com cache B adversarial (inclusive `no-cache` ignorado no modelo); variar observação independente do origin | Recusar `HTTP_BODY_MATCH => ORIGIN_CURRENT_B`; sem atestação específica da origem, `R_ORIGIN_UNATTESTED => HOLD`, **sem rebaixar automaticamente um F independentemente demonstrado** |
 
-Pelo menos um **mutante negativo** por propriedade deve ser detectado (desligar CAS, permitir overwrite, aceitar alias mutável, remover journal, excluir writer da política). Mock é apenas ensaio de lógica; não é teste do Internet Archive. Os testes de cliente/HTTPX da #463 pertencem a R, não demonstram F. Em especial, nenhum número de GETs, `Cache-Control: no-cache`, SHA de corpo ou redirect TLS autenticado **sozinho** certifica o estado atual do origin ou ausência de writes futuros.
+Pelo menos um **mutante negativo** por propriedade testada deve ser detectado (desligar CAS, permitir overwrite, aceitar alias mutável, remover journal, excluir writer da política). Mock é apenas ensaio de lógica; não é teste do Internet Archive. Os testes de cliente/HTTPX da #463 e o cenário F11 pertencem à fronteira de **R/origin**, não demonstram nem refutam isoladamente F. Em especial, nenhum número de GETs, `Cache-Control: no-cache`, SHA de corpo ou redirect TLS autenticado **sozinho** certifica o estado atual do origin ou ausência de writes futuros.
 
 **Fronteira adicional do adaptador R produtivo, distinta de F11:** o futuro adaptador deve **criar e possuir exclusivamente** seu `httpx.Client`, com transporte direto e TLS verificado, rejeitando transporte de teste/injetado (`MockTransport`), cliente compartilhado e cabeçalhos/proxies não autorizados antes de qualquer I/O. Em negativo offline, injetar resposta sintética B ou replay obsoleto com 37 SHA corretos e provar **zero promoção**. Um `MockTransport` continua legítimo **somente nos testes** da #463; rejeitá-lo no adaptador futuro não é mudança retroativa nem prova de fidelidade do origin. Registrar endpoint, redirects, autoridade TLS, headers cache/validação e origem da resposta; cabeçalhos `Age`/`Via`/`ETag` são observáveis auxiliares, não atestação infalível por si. Ver [decisão 🐘 R168](https://github.com/franklinbaldo/ficha/issues/433#issuecomment-7080295264).
 
 ## Pacote de evidência exigido
 
-Registrar os 37 pins e digest do descritor, chaves físicas, geração da autoridade, esquema de controle de escritores, versão e configuração do backend, SHA do commit, cenário F01–F11, ordem real de submissão/aplicação, status e headers, digest independente de GET, log de recusa do storage, resultado CAS e controles mutantes. Guardar hora, duração e limites; não registrar credenciais.
+Registrar os 37 pins e digest do descritor, chaves físicas, geração da autoridade, esquema de controle de escritores, versão e configuração do backend, SHA do commit, cenários F01–F10 para F e F11 para R/origin, ordem real de submissão/aplicação, status e headers, digest independente de GET, log de recusa do storage, resultado CAS e controles mutantes. Os dois campos de evidência devem ser independentes. Guardar hora, duração e limites; não registrar credenciais.
 
 Distinguir explicitamente três níveis: **documentação do provedor**, **simulação offline** e **teste remoto autorizado**. Um teste sob uma credencial não cobre administradores, writers legados ou DELETE por outras credenciais. Se a política mudar, a prova perde validade. Para promoção futura, S/U/R/F e estabilidade da coorte precisam ser demonstrados **conjuntamente**; 37 respostas 200 não constituem transação de lote.
 
