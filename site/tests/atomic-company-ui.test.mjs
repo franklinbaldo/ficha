@@ -35,9 +35,13 @@ test('renderizador distingue 404 de ausência no PB sem alegar integridade de to
   renderCompanyRecord(doc,output,{...base,state:'artifact-unavailable',data:null,httpStatus:404});
   assert.match(treeText(output),/Arquivo indisponível/);
   assert.match(treeText(output),/Consulta inconclusiva/);
+  assert.match(treeText(output),/A consulta se refere à competência indicada/);
+  assert.doesNotMatch(treeText(output),/O registro corresponde|snapshot arquivado/);
   assert.doesNotMatch(treeText(output),/Nenhum registro encontrado/);
   renderCompanyRecord(doc,output,{...base,state:'absent-in-snapshot',data:null});
   assert.match(treeText(output),/não localizado no registro Protobuf/);
+  assert.match(treeText(output),/Origem declarada: Receita Federal · competência no catálogo/);
+  assert.doesNotMatch(treeText(output),/O registro corresponde|snapshot arquivado/);
   assert.doesNotMatch(treeText(output),/registro íntegro|integridade (?:completa|verificada)/i);
 });
 
