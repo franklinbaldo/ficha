@@ -345,6 +345,15 @@ def test_real_kernel_emfile_after_fake_put36(monkeypatch, tmp_path):
             os.close(held.pop())
 
     def trace_kernel_open(path, mode="r", *args, **kwargs):
+        if path.name == names[-1] and mode == "rb" and len(state["attempts"]) == 36:
+            # The ZIP36 with-block closed one FD after the fake callback.
+            # Refill that genuinely available slot before the native open.
+            while True:
+                try:
+                    held.append(os.open(os.devnull, os.O_RDONLY))
+                except OSError as exc:
+                    require(exc.errno == errno.EMFILE, "unexpected refill failure")
+                    break
         try:
             return real_open(path, mode, *args, **kwargs)
         except OSError as exc:
