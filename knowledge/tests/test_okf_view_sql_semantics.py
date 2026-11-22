@@ -1,0 +1,77 @@
+"""Execute current generated OKF view SQL on small, independent SQLite fixtures.
+
+SQLite tests only the portable SELECT/JOIN subset used by these two views;
+this is not a DuckDB-WASM, Parquet, provenance, or published-site oracle.
+"""
+
+import json
+from pathlib import Path
+import sqlite3
+import unittest
+
+
+GENERATED_VIEWS = (
+    Path(__file__).resolve().parents[2] / "web/src/generated/ficha-okf.views.ts"
+)
+
+
+def view_sql_by_name():
+    content = GENERATED_VIEWS.read_text(encoding="utf-8")
+    marker = "export const okfConvenienceViews = "
+    if content.count(marker) != 1:
+        raise ValueError("Expected exactly one generated view declaration")
+    payload = content.split(marker, 1)[1].split(" as const satisfies", 1)[0]
+    views = json.loads(payload)
+    if not isinstance(views, list) or len(views) != 2:
+        raise ValueError("Unexpected generated view inventory")
+    sql = {view["name"]: view["sql"] for view in views}
+    if set(sql) != {"empresas_ativas", "socios_de_raizes_ativas"}:
+        raise ValueError("Missing or duplicate OKF view names")
+    return sql
+
+
+class GeneratedViewSqlSemanticsTest(unittest.TestCase):
+    def setUp(self):
+        self.connection = sqlite3.connect(":memory:")
+        self.addCleanup(self.connection.close)
+        self.connection.executescript("""
+            CREATE TABLE cnpjs (cnpj TEXT, situacao_cadastral TEXT);
+            INSERT INTO cnpjs VALUES ('A', '02'), ('B', '08'), ('C', NULL);
+            CREATE TABLE socios (cnpj_base TEXT, nome_socio_razao_social TEXT);
+            INSERT INTO socios VALUES
+                ('11111111', 'one-active-parent'),
+                ('22222222', 'inactive-parent'),
+                ('33333333', 'missing-parent'),
+                ('44444444', 'duplicate-active-parent'),
+                ('55555555', 'null-active-count');
+            CREATE TABLE raizes (cnpj_base TEXT, qtd_estabelecimentos_ativos INTEGER);
+            INSERT INTO raizes VALUES
+                ('11111111', 1), ('22222222', 0),
+                ('44444444', 1), ('44444444', 2), ('55555555', NULL);
+        """)
+        self.sql = view_sql_by_name()
+
+    def test_active_establishments_filters_inactive_and_unknown_status(self):
+        rows = self.connection.execute(self.sql["empresas_ativas"]).fetchall()
+        self.assertEqual(rows, [("A", "02")])
+
+    def test_join_excludes_missing_zero_and_null_parent(self):
+        rows = self.connection.execute(self.sql["socios_de_raizes_ativas"]).fetchall()
+        self.assertCountEqual(
+            rows,
+            [
+                ("11111111", "one-active-parent"),
+                ("44444444", "duplicate-active-parent"),
+                ("44444444", "duplicate-active-parent"),
+            ],
+        )
+
+    def test_duplicate_active_parent_multiplies_output_not_deduplicated(self):
+        rows = self.connection.execute(self.sql["socios_de_raizes_ativas"]).fetchall()
+        duplicated = [r for r in rows if r[0] == "44444444"]
+        self.assertEqual(len(duplicated), 2)
+        self.assertEqual(duplicated[0], duplicated[1])
+
+
+if __name__ == "__main__":
+    unittest.main()
