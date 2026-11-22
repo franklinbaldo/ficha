@@ -65,9 +65,13 @@ jobs:
 
       - name: Resolve inputs (defaults when triggered by push)
         id: cfg
+        env:
+          REQUESTED_SCRIPT: ${{ inputs.script }}
+          REQUESTED_TARGET_PR: ${{ inputs.target_pr }}
+          REQUESTED_MONTH: ${{ inputs.month }}
         run: |
-          SCRIPT="${{ inputs.script }}"
-          TARGET_PR="${{ inputs.target_pr }}"
+          SCRIPT="$REQUESTED_SCRIPT"
+          TARGET_PR="$REQUESTED_TARGET_PR"
           # Branch-aware defaults on push: this branch runs the IA
           # practicality probe and comments on its own PR (#41).
           # FORCE_FAIL was used while iterating to wake the subscribed
@@ -85,7 +89,21 @@ jobs:
           fi
           [ -z "$SCRIPT" ] && SCRIPT="phase1"
           [ -z "$TARGET_PR" ] && TARGET_PR="31"
-          MONTH="${{ inputs.month }}"
+          MONTH="$REQUESTED_MONTH"
+          # Never put workflow_dispatch strings directly into shell source or
+          # multiline GITHUB_OUTPUT records. Reject path and output injection.
+          if [[ ! "$SCRIPT" =~ ^[A-Za-z_][A-Za-z0-9_-]{0,63}$ ]]; then
+            echo "::error::invalid diagnostic script name"
+            exit 2
+          fi
+          if [[ ! "$TARGET_PR" =~ ^[1-9][0-9]*$ ]]; then
+            echo "::error::invalid target PR number"
+            exit 2
+          fi
+          if [[ -n "$MONTH" && ! "$MONTH" =~ ^[0-9]{4}-(0[1-9]|1[0-2])$ ]]; then
+            echo "::error::invalid snapshot month"
+            exit 2
+          fi
           echo "script=$SCRIPT" >> "$GITHUB_OUTPUT"
           echo "target_pr=$TARGET_PR" >> "$GITHUB_OUTPUT"
           echo "month=$MONTH" >> "$GITHUB_OUTPUT"
@@ -100,11 +118,12 @@ jobs:
           IA_SECRET_KEY: ${{ secrets.IA_SECRET_KEY }}
           CNPJ_SHARE_TOKEN: ${{ secrets.CNPJ_SHARE_TOKEN }}
           MONTH: ${{ steps.cfg.outputs.month }}
+          DIAGNOSTIC_SCRIPT: ${{ steps.cfg.outputs.script }}
           PYTHONIOENCODING: utf-8
           PYTHONUTF8: '1'
         run: |
           set -o pipefail
-          SCRIPT="scripts/diagnostics/${{ steps.cfg.outputs.script }}.py"
+          SCRIPT="scripts/diagnostics/${DIAGNOSTIC_SCRIPT}.py"
           if [ ! -f "$SCRIPT" ]; then
             echo "::error::script not found: etl/$SCRIPT"
             exit 2
@@ -120,11 +139,13 @@ jobs:
         continue-on-error: true
 
       - name: Build PR comment
-        if: always()
+        if: always() && steps.cfg.outcome == 'success'
         id: build
+        env:
+          DIAGNOSTIC_SCRIPT: ${{ steps.cfg.outputs.script }}
         run: |
           {
-            echo "## Phase 1 diagnostics — \`${{ steps.cfg.outputs.script }}\`"
+            echo "## Phase 1 diagnostics — \`${DIAGNOSTIC_SCRIPT}\`"
             echo ""
             echo "**Run:** [\`${{ github.run_id }}\`](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})"
             echo "**Trigger:** \`${{ github.event_name }}\`"
@@ -141,7 +162,7 @@ jobs:
           cat /tmp/comment.md
 
       - name: Post comment on PR
-        if: always()
+        if: always() && steps.cfg.outcome == 'success'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR: ${{ steps.cfg.outputs.target_pr }}
