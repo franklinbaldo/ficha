@@ -162,7 +162,7 @@ export function renderArchiveSelection(doc, parent, manifest, date) {
     if(file.sha256) add(doc,body,'code','SHA-256 declarado: '+file.sha256);
     else if(file.sha1) add(doc,body,'code','SHA-1 declarado: '+file.sha1);
     else add(doc,body,'p','Digest não declarado.');
-    if(file.url) anchor(doc,body,'Abrir arquivo no repositório de origem',file.url,true);
+    if(file.url) anchor(doc,body,'Abrir arquivo indicado no catálogo',file.url,true);
     else add(doc,body,'p','URL HTTPS não declarada.');
   }
   if(!entries.length) add(doc,parent,'p','Nenhum arquivo listado nesta competência.');
