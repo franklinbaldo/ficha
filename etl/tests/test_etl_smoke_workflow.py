@@ -61,7 +61,7 @@ print(f"snapshot atual: {current} — {lag} mês(es) atrás de {today:%Y-%m}")
 # RFB publica o mês M durante o próprio M (às vezes M+1), e o cron
 # roda dia 5 — lag saudável é 0-1, e 2 é tolerável no começo do mês.
 if lag >= 3:
-    print(f"::error::Snapshot {current} está {lag} meses atrasado — o cron mensal (etl-monthly) provavelmente está falhando. Verifique as últimas execuções e rode com inputs.month se necessário.")
+    print(f"::error::Snapshot {current} está {lag} meses atrasado — o alerta não distingue falha de suspensão deliberada. Verifique os runs e a política vigente (Ficha #433). Não execute o ETL manualmente sem autorização.")
     sys.exit(1)
 if lag == 2:
     print(f"::warning::Snapshot {current} está 2 meses atrás do calendário — verifique se o próximo cron mensal roda com sucesso.")
@@ -299,3 +299,29 @@ def test_negative_mutation_rejects_extra_live_event_triggers() -> None:
         mutated = deepcopy(original)
         mutated.get("on", mutated.get(True))[event_name] = configuration
         assert not _pr_is_fixture_only(mutated), event_name
+
+def test_stale_manifest_alert_is_nonzero_without_manual_dispatch_advice(
+    tmp_path: Path,
+) -> None:
+    """A red weekly alarm must not recommend starting an unauthorized ETL."""
+    import subprocess
+    import sys
+
+    public = tmp_path / "web" / "public"
+    public.mkdir(parents=True)
+    (public / "manifest.json").write_text('{"current":"2020-01"}', encoding="utf-8")
+
+    wrapper = _steps(_load())["Check manifest freshness"]["run"]
+    assert wrapper.startswith("python3 - <<'EOF'\n")
+    script = wrapper.split("python3 - <<'EOF'\n", 1)[1].rsplit("\nEOF", 1)[0]
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=tmp_path,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode == 1
+    assert "não distingue falha de suspensão deliberada" in proc.stdout
+    assert "Não execute o ETL manualmente sem autorização." in proc.stdout
+    assert "rode com inputs.month" not in proc.stdout
