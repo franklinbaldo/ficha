@@ -217,6 +217,64 @@ def test_forged_v2_references_need_independent_monotonic_authority() -> None:
         _require_raw_custody_authorization(MONTH, descriptor, authority=Denial())
 
 
+@pytest.mark.parametrize(
+    ("parsed_run", "raw_run"),
+    [
+        (None, None),  # both keys absent: old gate admitted None == None
+        ("", ""),
+        ("   ", "   "),
+        (17, 17),
+        (RUN, None),
+        (None, RUN),
+        (RUN, "different-attempt"),
+    ],
+)
+def test_raw_gate_refuses_missing_or_unbound_run_id_before_authority(
+    parsed_run: object, raw_run: object
+) -> None:
+    parsed = {} if parsed_run is None else {"run_id": parsed_run}
+    raw = _claimed_raw()
+    if raw_run is None:
+        raw.pop("run_id")
+    else:
+        raw["run_id"] = raw_run
+    descriptor = {"source_attestation": parsed, "raw_custody": raw}
+    calls: list[dict] = []
+
+    class AlwaysAccept:
+        def confirm(self, *, month: str, run_id: str, claims: dict) -> bool:
+            calls.append({"month": month, "run_id": run_id, "claims": claims})
+            return True
+
+    with pytest.raises(ValueError, match="nonempty run_id"):
+        _require_raw_custody_authorization(MONTH, descriptor, authority=AlwaysAccept())
+    assert calls == []
+
+
+def test_raw_run_id_gate_remains_effective_under_python_o() -> None:
+    raw = _claimed_raw()
+    raw.pop("run_id")
+    snippet = (
+        "from ficha_etl.monthly_raw_custody_authorization import "
+        "_require_raw_custody_authorization as gate\\n"
+        "class AlwaysAccept:\\n"
+        "    def confirm(self, **_kwargs):\\n"
+        "        return True\\n"
+        f"claim = {raw!r}\\n"
+        "try:\\n"
+        "    gate('2026-07', {'source_attestation': {}, 'raw_custody': claim}, "
+        "authority=AlwaysAccept())\\n"
+        "except ValueError:\\n"
+        "    pass\\n"
+        "else:\\n"
+        "    raise SystemExit('FAIL: missing attempt ID accepted')\\n"
+    )
+    result = subprocess.run(
+        [sys.executable, "-O", "-c", snippet], capture_output=True, text=True, check=False
+    )
+    assert result.returncode == 0, result.stderr
+
+
 def test_raw_gate_cannot_be_optimized_away_with_python_o() -> None:
     snippet = (
         "from ficha_etl.monthly_raw_custody_authorization import "
