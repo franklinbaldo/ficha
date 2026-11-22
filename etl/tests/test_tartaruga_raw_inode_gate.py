@@ -370,7 +370,10 @@ def test_real_kernel_emfile_after_fake_put36(monkeypatch, tmp_path):
     monkeypatch.setattr(upload, "_ia_s3_put", saturate_after_fake_put)
     caught = None
     try:
-        resource.setrlimit(resource.RLIMIT_NOFILE, (min(128, original_limit[0]), original_limit[1]))
+        resource.setrlimit(
+            resource.RLIMIT_NOFILE,
+            (min(128, original_limit[0]), original_limit[1]),
+        )
         try:
             invoke()
         except OSError as exc:
@@ -384,7 +387,10 @@ def test_real_kernel_emfile_after_fake_put36(monkeypatch, tmp_path):
         require(observed == [errno.EMFILE], "ZIP37 EMFILE not unique")
         require(caught is not None and caught.errno == errno.EMFILE, "wrong error")
         require(state["attempts"] == names[:-1], "unexpected fake PUT order")
-        require(len(state["received"]) == len(state["receipts"]) == 36, "wrong fake body count")
+        require(
+            len(state["received"]) == len(state["receipts"]) == 36,
+            "wrong fake body count",
+        )
         raise PartialBatchExposure("36 fake PUTs preceded real ZIP37 EMFILE")
     if caught is not None:
         require(not state["attempts"], "unexpected egress after local error")
@@ -399,7 +405,10 @@ def test_real_kernel_emfile_replay_python_optimized():
     target = f"{source}::test_real_kernel_emfile_after_fake_put36"
     child = subprocess.run(
         [sys.executable, "-O", "-m", "pytest", "-q", target],
-        capture_output=True, text=True, check=False, timeout=45,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=45,
     )
     require(child.returncode == 0, child.stdout + "\n" + child.stderr)
     require("1 xfailed" in child.stdout, child.stdout + "\n" + child.stderr)
