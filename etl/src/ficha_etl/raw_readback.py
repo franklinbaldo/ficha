@@ -156,7 +156,8 @@ def _check_client(client: httpx.Client) -> None:
         pool = getattr(transport, "_pool", None)
         tls_context = getattr(pool, "_ssl_context", None)
         direct_transport = (
-            type(pool) is httpcore.ConnectionPool and getattr(pool, "_proxy", object()) is None
+            type(pool) is httpcore.ConnectionPool
+            and getattr(pool, "_proxy", object()) is None
             and type(tls_context) is ssl.SSLContext
             and tls_context.verify_mode == ssl.CERT_REQUIRED
             and tls_context.check_hostname is True
