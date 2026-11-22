@@ -65,7 +65,7 @@ def arrange(monkeypatch, tmp_path: Path, *, scenario: str):
             path.write_bytes(data)
             staged[spec.name] = (path, len(data), hashlib.sha256(data).hexdigest())
             state["staged"] += 1
-            if spec.name == first:
+            if spec.name == first and scenario == "mutate":
                 state["writer"] = path.open("r+b")  # Open before entrypoint's last SHA.
         if scenario == "seal37":
             # Simulates a failure before returning an admitted batch. No seal
@@ -90,6 +90,9 @@ def arrange(monkeypatch, tmp_path: Path, *, scenario: str):
                 state["write_ok"] = True
             except OSError:
                 pass  # A physical seal might safely reject the write.
+            finally:
+                writer.close()  # Release before TemporaryDirectory cleanup on Windows.
+                state["writer"] = None
         payload = b"".join(chunks)
         require(len(payload) == int(content_length), "body differs from Content-Length")
         state["received"].append((name, payload))  # Before any simulated HTTP error.
