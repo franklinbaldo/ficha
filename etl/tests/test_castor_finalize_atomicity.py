@@ -66,6 +66,8 @@ def _mock_offline_inputs(monkeypatch: pytest.MonkeyPatch, *, alpha: bool) -> Non
     # Atomicity suite isolates the existing manifest gate. A separate suite
     # exercises the real external source receipt/attempt preflight.
     monkeypatch.setattr(monthly_sharded, "_require_source_attestation", lambda *a, **kw: None)
+    # This suite isolates downstream 100-shard/manifest atomicity, not raw custody.
+    monkeypatch.setattr(monthly_sharded, "_require_raw_custody_authorization", lambda *a, **kw: None)
     monkeypatch.setattr(monthly_sharded, "_load_descriptor", lambda *_: {"date": month})
     monkeypatch.setattr(monthly_sharded, "materialization_inputs_from_descriptor", lambda _: {})
     monkeypatch.setattr(monthly_sharded, "_load_all_receipts", lambda *_: receipts)
