@@ -30,6 +30,12 @@ _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 _CDN_HOST = re.compile(r"ia[0-9]+\.us\.archive\.org\Z")
 
 
+# Only HTTPX's built-in client header names are admissible. The request
+# itself is created without inheriting *any* client header or cookie jar.
+_DEFAULT_HEADER_NAMES = frozenset({"accept", "accept-encoding", "connection", "user-agent"})
+_REQUEST_HEADER_NAMES = frozenset({"host", "accept-encoding", "cache-control"})
+
+
 class RawReadbackError(RuntimeError):
     """No positive custody observation may be inferred from this failure."""
 
@@ -141,6 +147,7 @@ def _check_client(client: httpx.Client) -> None:
         or "authorization" in client.headers
         or "cookie" in client.headers
         or "proxy-authorization" in client.headers
+        or not set(client.headers).issubset(_DEFAULT_HEADER_NAMES)
         or bool(client.event_hooks.get("request"))
         or bool(client.event_hooks.get("response"))
     ):
@@ -161,14 +168,27 @@ def _read_one(client: httpx.Client, identifier: str, pin: RawPin) -> RawObjectOb
         try:
             # Never inherit automatic redirects or attach cookies/credentials.
             # Inspect the fully composed HTTPX request before any I/O.
-            request = client.build_request(
+            # HTTPX build_request merges mutable client defaults (including
+            # cookies from prior responses). Use an isolated request instead.
+            request = httpx.Request(
                 "GET",
                 current,
                 headers={"Accept-Encoding": "identity", "Cache-Control": "no-cache"},
             )
             _validate_archive_url(request.url, identifier, pin.name)
+            if (
+                request.headers.get("host") != request.url.host
+                or set(request.headers) != _REQUEST_HEADER_NAMES
+                or request.headers.get("accept-encoding") != "identity"
+                or request.headers.get("cache-control") != "no-cache"
+            ):
+                raise RawReadbackError("raw readback request authority/headers changed")
             response = client.send(request, stream=True, follow_redirects=False)
             with closing(response):
+                # A Set-Cookie may already be in the injected client's jar;
+                # reject immediately, before the next hop or object GET.
+                if "set-cookie" in response.headers:
+                    raise RawReadbackError("raw readback refuses response cookie state")
                 if response.status_code in (301, 302, 303, 307, 308):
                     locations = response.headers.get_list("location")
                     if redirects >= _MAX_REDIRECTS or len(locations) != 1 or not locations[0]:
