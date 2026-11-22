@@ -229,6 +229,28 @@ describe('OKF convenience views', () => {
     ]);
   });
 
+  it('records mixed-row preview failures without claiming live Parquet evidence', () => {
+    // The view helper validates its declared output rows, not the source
+    // relations or the public-v1 semantic contract.
+    const nullableSecondRow = { ...cnpjWholeRow, nome_fantasia: null };
+    expect(PublicV1CnpjSchema.safeParse(nullableSecondRow).success).toBe(true);
+    expect(() =>
+      validateOkfConvenienceViewRows('empresas_ativas', [cnpjWholeRow, nullableSecondRow])
+    ).toThrow(/invalid Cnpj row 1: nome_fantasia/);
+
+    const enumSecondRow = { ...cnpjWholeRow, porte_empresa: '99' };
+    expect(PublicV1CnpjSchema.safeParse(enumSecondRow).success).toBe(false);
+    expect(
+      validateOkfConvenienceViewRows('empresas_ativas', [cnpjWholeRow, enumSecondRow])
+    ).toEqual([cnpjWholeRow, enumSecondRow]);
+
+    const nullableSocio = { ...socioRow, cnpj_socio: null, tipo: '2', tipo_descricao: 'PF' };
+    expect(PublicV1SocioSchema.safeParse(nullableSocio).success).toBe(true);
+    expect(() =>
+      validateOkfConvenienceViewRows('socios_de_raizes_ativas', [socioRow, nullableSocio])
+    ).toThrow(/invalid Socio row 1: cnpj_socio/);
+  });
+
   it('demonstrates the Cnpj/Raiz null mismatch on complete rows', () => {
     const cnpjWithNull = { ...cnpjWholeRow, nome_fantasia: null };
     expect(PublicV1CnpjSchema.safeParse(cnpjWithNull).success).toBe(true);
