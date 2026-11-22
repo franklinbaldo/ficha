@@ -26,7 +26,28 @@ try {
       const select=page.locator('#acervo-competencia');
       assert.ok(await select.locator('option').count()>=2);
       assert.ok(await page.locator('#acervo-resultado').textContent());
-      view.checks.push({page:'acervo',files});
+      // Check the actual SSG/Chromium accessible link, not only the fake-DOM unit test.
+      // Opening a <details> element is local; never follow/download archive URLs.
+      const archiveLinks=page.locator('#acervo-resultado .archive-detail a');
+      const archiveLabels=await archiveLinks.allTextContents();
+      assert.ok(archiveLabels.length>0,'o catálogo deve renderizar links HTTPS');
+      assert.ok(archiveLabels.every(label=>label==='Abrir arquivo indicado no catálogo'),
+        'nenhuma URL de destino deve ser apresentada como repositório de origem');
+      const firstLinkedDetail=page.locator('#acervo-resultado details.archive-file')
+        .filter({has:page.locator('.archive-detail a')}).first();
+      const summary=firstLinkedDetail.locator('summary');
+      await summary.focus();
+      await page.keyboard.press('Enter');
+      assert.equal(await firstLinkedDetail.evaluate(node=>node.open),true,
+        'summary deve expandir com Enter');
+      const link=firstLinkedDetail.locator('.archive-detail a').first();
+      assert.ok((await link.getAttribute('href'))?.startsWith('https://'));
+      assert.equal(await link.getAttribute('target'),'_blank');
+      assert.equal(await link.getAttribute('rel'),'noopener noreferrer');
+      await page.keyboard.press('Tab');
+      assert.equal(await link.evaluate(node=>document.activeElement===node),true,
+        'Tab após summary aberto deve alcançar link rotulado');
+      view.checks.push({page:'acervo',files,archiveLinkKeyboard:true});
       await page.screenshot({path:out+'/greenfield-acervo-'+viewport.name+'.png',fullPage:true});
 
       await page.goto(base+'explorar/',{waitUntil:'domcontentloaded'});
