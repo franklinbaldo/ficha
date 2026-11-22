@@ -297,3 +297,29 @@ PK/FK reais, integridade do JOIN em produção ou o site SSG. O teste
 deve ser exercido no job ETL Linux/Windows com DuckDB instalado;
 o gate OKF Python stdlib continua separadamente. A ADR #253 e a
 decisão de contrato/versão permanecem em HOLD.
+
+
+### Competência sintética: pareamento de snapshots e oráculo raw→SQL (R166)
+
+Dois conjuntos pequenos e **sintéticos** (`2026-07`, `2026-08`) são
+gravados em seis Parquets locais distintos, sem consultar dados RFB.
+A mesma chave Raiz muda de ativa para inativa entre as competências,
+enquanto outra muda no sentido contrário. A SQL gerada das duas views
+é executada **separadamente** para cada par de relações; o oráculo
+independente é uma seleção Python das tuplas literais originais,
+sem reutilizar a SQL nem inferir semântica de `safeParse`.
+
+Uma auditoria SQL de cada fixture verifica ausência de chave Raiz
+duplicada e de sócio sem Raiz. Mesmo assim, a contraprova troca
+somente o Parquet Raiz de uma competência pelo da outra: os resultados
+da view de sócios mudam e deixam de coincidir com o oráculo da
+competência solicitada. **PK/FK válidas em cada arquivo isolado não
+provam pareamento temporal correto.** É necessário contrato explícito
+de versão/competência e cadeia de proveniência dos três inputs.
+
+O teste é local ao DuckDB Python e lê Parquet sintético; não
+verifica o snapshot real, manifesto, integridade física da publicação,
+carga do SSG ou DuckDB-WASM. As etiquetas de competência são apenas
+identificadores da fixture, não afirmam versões reais disponíveis.
+Nenhum contrato produtivo é alterado; ADR #253 e PR #346 permanecem
+DRAFT/HOLD.
