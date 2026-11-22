@@ -39,8 +39,9 @@ def _resolve(
         "GITHUB_EVENT_NAME": event,
         "GITHUB_REF_NAME": branch,
     }
+    resolve_run = _steps()["Resolve inputs (defaults when triggered by push)"]["run"]
     result = subprocess.run(
-        ["bash", "-e", "-c", _steps()["Resolve inputs (defaults when triggered by push)"]["run"]],
+        ["bash", "-e", "-c", resolve_run],
         cwd=tmp_path,
         env=env,
         capture_output=True,
