@@ -95,6 +95,9 @@ def _install(monkeypatch, tmp_path: Path, *, mutate=None, before_freeze=None, ia
             return ia_replies(len(files))
         return [SimpleNamespace(status_code=200, url="offline") for _ in files]
 
+    # Preserve historical handle-stability tests under an explicitly fake gate.
+    # Production legacy publishing remains HOLD without independent S/R/F.
+    monkeypatch.setattr(cli, "_require_legacy_run_custody", lambda: None)
     monkeypatch.setattr(cli, "make_progress", _Progress)
     monkeypatch.setattr(cli.transform, "transform_snapshot", transform)
     monkeypatch.setattr(cli.pack_mod, "pack_from_parquets", pack)
