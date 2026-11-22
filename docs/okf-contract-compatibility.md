@@ -299,27 +299,26 @@ o gate OKF Python stdlib continua separadamente. A ADR #253 e a
 decisão de contrato/versão permanecem em HOLD.
 
 
-### Competência sintética: pareamento de snapshots e oráculo raw→SQL (R166)
+### Competência sintética: pareamento de snapshots em SQLite (R166)
 
-Dois conjuntos pequenos e **sintéticos** (`2026-07`, `2026-08`) são
-gravados em seis Parquets locais distintos, sem consultar dados RFB.
-A mesma chave Raiz muda de ativa para inativa entre as competências,
-enquanto outra muda no sentido contrário. A SQL gerada das duas views
-é executada **separadamente** para cada par de relações; o oráculo
-independente é uma seleção Python das tuplas literais originais,
-sem reutilizar a SQL nem inferir semântica de `safeParse`.
+`knowledge/tests/test_okf_view_sql_semantics.py` agora executa a SQL
+gerada existente sobre dois conjuntos **sintéticos** de Cnpj, Socio
+e Raiz rotulados `2026-07` e `2026-08`. Os rótulos são apenas
+identificadores de fixtures; não afirmam versões RFB publicadas.
+Em cada competência, o teste audita unicidade da chave Raiz e
+ausência de sócio órfão, comparando as duas views com um oráculo Python
+independente construído das tuplas literais de origem.
 
-Uma auditoria SQL de cada fixture verifica ausência de chave Raiz
-duplicada e de sócio sem Raiz. Mesmo assim, a contraprova troca
-somente o Parquet Raiz de uma competência pelo da outra: os resultados
-da view de sócios mudam e deixam de coincidir com o oráculo da
-competência solicitada. **PK/FK válidas em cada arquivo isolado não
-provam pareamento temporal correto.** É necessário contrato explícito
-de versão/competência e cadeia de proveniência dos três inputs.
+Uma contraprova troca somente as linhas Raiz pela competência vizinha.
+Cada conjunto isolado preserva unicidade de chave e existência dos pais,
+mas o resultado do JOIN deixa de coincidir com o oráculo do mês pedido.
+**Validação individual de chave/FK não garante pareamento temporal**:
+é preciso um contrato explícito de versão, competência e proveniência
+de todos os inputs. Este teste não escolhe política de versionamento.
 
-O teste é local ao DuckDB Python e lê Parquet sintético; não
-verifica o snapshot real, manifesto, integridade física da publicação,
-carga do SSG ou DuckDB-WASM. As etiquetas de competência são apenas
-identificadores da fixture, não afirmam versões reais disponíveis.
-Nenhum contrato produtivo é alterado; ADR #253 e PR #346 permanecem
-DRAFT/HOLD.
+Esta regressão é **SQLite em memória**, não um teste DuckDB de
+snapshot físico nem dos Parquets publicados. O experimento R165
+anterior continua cobrindo DuckDB/Parquet sintético, sem competência.
+Não houve acesso a RFB, Internet Archive, dados publicados, DuckDB-WASM
+ou site SSG. ADR #253 e PR #346 seguem DRAFT/HOLD; não há migração
+de contrato, ETL ou publicação autorizada.
