@@ -175,6 +175,20 @@ rejeita `nome_fantasia: null` que o v1 aceita e admite `porte_empresa: '99'`
 que o v1 recusa. A regressão chama o consumidor real, sem consultar Parquet,
 IA ou a home SSG; não autoriza substituir contratos nem publicar dados.
 
+A regressão de lote sintético estende essa observação para a prévia de duas
+linhas. No consumidor `empresas_ativas`, um segundo Cnpj com
+`nome_fantasia: null` (v1 válido) interrompe a validação identificando
+**row 1**, ao passo que um segundo Cnpj com `porte_empresa: '99'` (v1 inválido)
+é devolvido normalmente pelo validador OKF. Na view
+`socios_de_raizes_ativas`, o segundo sócio PF com `cnpj_socio: null`
+também produz erro em **row 1**, apesar da aceitação pública v1. São
+testemunhas de **validação de output e de lote**, não uma execução de SQL nem
+afirmação de que essas linhas estejam nos Parquets publicados. Em especial,
+a view relacional declara `Raiz` como **input**, mas
+`validateOkfConvenienceViewRows` valida somente o **output Socio**;
+seu sucesso não atesta a nulabilidade, integridade referencial ou versão
+da relação `Raiz` consumida pelo JOIN.
+
 Essa diferença é **dívida já conhecida**, não um incidente novo na
 home pública SSG (`site/`), que é separada do módulo Astro `web/`.
 O teste não consulta Parquet remoto nem prova que determinada linha
