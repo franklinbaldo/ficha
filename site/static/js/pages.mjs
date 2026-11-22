@@ -11,9 +11,9 @@ export {mountHistory,renderHistoryComparison,fetchHistoryRecordAt} from './histo
 function showProvenance(doc, parent, date, url) {
   const strip = add(doc,parent,'div','','provenance-strip');
   add(doc,strip,'span','Competência ' + date);
-  add(doc,strip,'span','Receita Federal · snapshot arquivado');
+  add(doc,strip,'span','Origem declarada: Receita Federal · competência no catálogo');
   anchor(doc,strip,'Arquivo de origem',url,true);
-  add(doc,parent,'p','O registro corresponde à competência indicada, não necessariamente à situação atual. O acesso ao arquivo não certifica seu conteúdo integral.','fineprint');
+  add(doc,parent,'p','A consulta se refere à competência indicada, não necessariamente à situação atual. O acesso ao arquivo não certifica seu conteúdo integral.','fineprint');
 }
 function renderFieldList(doc, parent, record) {
   const list = add(doc,parent,'dl','','record-grid');
