@@ -1,6 +1,6 @@
 # Workflows do FICHA
 
-Inventário da `main` em **21/11/2026**: **15 workflows YAML** após remoção de `etl-bootstrap.yml` na [#275](https://github.com/franklinbaldo/ficha/pull/275) e aposentadoria do probe O Vigia. Os gatilhos descrevem configuração, não comprovam execução de um teste ou publicação.
+Inventário proposto para a `main` em **22/11/2026**: **15 workflows YAML** após remoção de `etl-bootstrap.yml` na [#275](https://github.com/franklinbaldo/ficha/pull/275) e aposentadoria do probe O Vigia. Os gatilhos descrevem configuração, não comprovam execução de um teste ou publicação.
 
 ## Site e gates de PR
 
