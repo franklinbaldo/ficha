@@ -17,6 +17,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import re
+import ssl
 from contextlib import closing
 from dataclasses import dataclass
 from urllib.parse import quote
@@ -144,15 +145,22 @@ def _check_client(client: httpx.Client) -> None:
     # mounts= can still inject authentication into a CONNECT tunnel, beyond
     # the origin request headers inspected below. Fail closed on HTTPX
     # internals: allow only a stock direct HTTPTransport with the exact
-    # httpcore.ConnectionPool class, or the test-only MockTransport.
+    # httpcore.ConnectionPool class and TLS peer verification, or the test-only
+    # MockTransport. CA roots and mutability of a caller-owned client are not
+    # independently attested by this preflight.
     transport = getattr(client, "_transport", None)
     mounts = getattr(client, "_mounts", None)
     if type(transport) is httpx.MockTransport:
         direct_transport = True  # synthetic tests, not proof of a real channel
     elif type(transport) is httpx.HTTPTransport:
         pool = getattr(transport, "_pool", None)
+        tls_context = getattr(pool, "_ssl_context", None)
         direct_transport = (
-            type(pool) is httpcore.ConnectionPool and getattr(pool, "_proxy", object()) is None
+            type(pool) is httpcore.ConnectionPool
+            and getattr(pool, "_proxy", object()) is None
+            and type(tls_context) is ssl.SSLContext
+            and tls_context.verify_mode == ssl.CERT_REQUIRED
+            and tls_context.check_hostname is True
         )
     else:
         direct_transport = False
