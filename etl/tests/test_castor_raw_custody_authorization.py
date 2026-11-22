@@ -55,14 +55,7 @@ def _descriptor() -> dict:
         "files": {kind: _identity() for kind in cli._STANDARD_FILE_NAMES},
         "lookups": {
             kind: _identity()
-            for kind in (
-                "cnaes",
-                "motivos",
-                "municipios",
-                "naturezas",
-                "paises",
-                "qualificacoes",
-            )
+            for kind in ("cnaes", "motivos", "municipios", "naturezas", "paises", "qualificacoes")
         },
         "row_counts": {"cnpjs": 10},
     }
@@ -83,9 +76,7 @@ def _claimed_raw(status: str = RAW_CONFIRMED) -> dict:
     }
 
 
-def _prepared(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> tuple[Path, Path, Path, dict]:
+def _prepared(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Path, Path, dict]:
     monkeypatch.setenv("FICHA_SOURCE_RUN_ID", RUN)
     monkeypatch.delenv("GITHUB_RUN_ID", raising=False)
     monkeypatch.delenv("GITHUB_RUN_ATTEMPT", raising=False)
@@ -170,9 +161,7 @@ def test_raw_unproven_descriptor_never_submits_or_promotes(
     assert not args.verification.exists()
 
 
-@pytest.mark.parametrize(
-    "state", ["pending", "unknown", "skipped_existing", "sent_unverified"]
-)
+@pytest.mark.parametrize("state", ["pending", "unknown", "skipped_existing", "sent_unverified"])
 def test_raw_transport_state_never_becomes_authorization(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, state: str
 ) -> None:
@@ -197,9 +186,7 @@ def test_raw_catalog_complete_returns_unproven_not_verified(
     monkeypatch.setattr(
         upload.upstream, "discover_token", lambda: pytest.fail("upstream GET forbidden")
     )
-    monkeypatch.setattr(
-        upload, "_ia_s3_put", lambda *_a, **_kw: pytest.fail("PUT forbidden")
-    )
+    monkeypatch.setattr(upload, "_ia_s3_put", lambda *_a, **_kw: pytest.fail("PUT forbidden"))
     monkeypatch.setattr(
         upload.raw_preflight, "stage_all", lambda *_a: pytest.fail("spool forbidden")
     )
@@ -219,11 +206,7 @@ def test_forged_v2_references_need_independent_monotonic_authority() -> None:
 
     class FakeAuthority:
         def confirm(self, *, month: str, run_id: str, claims: dict) -> bool:
-            return (
-                month == MONTH
-                and run_id == RUN
-                and claims == descriptor["raw_custody"]
-            )
+            return month == MONTH and run_id == RUN and claims == descriptor["raw_custody"]
 
     # This proves only the dependency-injection interface; it is NOT a real S/R/F proof.
     _require_raw_custody_authorization(MONTH, descriptor, authority=FakeAuthority())
@@ -248,9 +231,6 @@ def test_raw_gate_cannot_be_optimized_away_with_python_o() -> None:
         "    raise SystemExit('FAIL: accepted unproven v1')\n"
     )
     result = subprocess.run(
-        [sys.executable, "-O", "-c", snippet],
-        capture_output=True,
-        text=True,
-        check=False,
+        [sys.executable, "-O", "-c", snippet], capture_output=True, text=True, check=False
     )
     assert result.returncode == 0, result.stderr
