@@ -183,9 +183,7 @@ def test_raw_catalog_complete_returns_unproven_not_verified(
     names = {f"raw/{spec.name}" for spec in canonical_inventory()}
     assert len(names) == 37
     monkeypatch.setattr(upload, "_existing_raw_files_on_ia", lambda *_a: names)
-    monkeypatch.setattr(
-        upload.upstream, "discover_token", lambda: pytest.fail("upstream GET forbidden")
-    )
+    monkeypatch.setattr(upload.upstream, "discover_token", lambda: pytest.fail("upstream GET forbidden"))
     monkeypatch.setattr(upload, "_ia_s3_put", lambda *_a, **_kw: pytest.fail("PUT forbidden"))
     monkeypatch.setattr(
         upload.raw_preflight, "stage_all", lambda *_a: pytest.fail("spool forbidden")
