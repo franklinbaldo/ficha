@@ -146,7 +146,8 @@ def _check_client(client: httpx.Client) -> None:
     # the origin request headers inspected below. Fail closed on HTTPX
     # internals: allow only a stock direct HTTPTransport with the exact
     # httpcore.ConnectionPool class and TLS peer verification, or the test-only
-    # MockTransport. CA roots and mutability of a caller-owned client are not
+    # MockTransport. Direct means no UNIX-socket override or hidden connection
+    # retries. CA roots and mutability of a caller-owned client are not
     # independently attested by this preflight.
     transport = getattr(client, "_transport", None)
     mounts = getattr(client, "_mounts", None)
@@ -158,6 +159,11 @@ def _check_client(client: httpx.Client) -> None:
         direct_transport = (
             type(pool) is httpcore.ConnectionPool
             and getattr(pool, "_proxy", object()) is None
+            # Reject alternate UNIX-socket routing and hidden TCP reconnects.
+            # Private httpcore attributes are intentionally fail-closed.
+            and getattr(pool, "_uds", object()) is None
+            and type(getattr(pool, "_retries", None)) is int
+            and pool._retries == 0
             and type(tls_context) is ssl.SSLContext
             and tls_context.verify_mode == ssl.CERT_REQUIRED
             and tls_context.check_hostname is True

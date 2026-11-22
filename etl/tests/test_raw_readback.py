@@ -11,6 +11,7 @@ import sys
 from dataclasses import replace
 from pathlib import Path
 
+import httpcore
 import httpx
 import pytest
 
@@ -469,6 +470,45 @@ def test_explicit_authenticated_proxy_rejected_with_zero_socket_io(
         monkeypatch.setattr(socket.socket, "connect", forbid_connect)
         with pytest.raises(RawReadbackError, match="unauthenticated"):
             readback_raw_batch(client, month="2026-07", pins=pins)
+
+
+@pytest.mark.parametrize(
+    "transport_options",
+    [
+        pytest.param({"uds": "/tmp/ficha-offline-uds.sock"}, id="unix-socket-route"),
+        pytest.param({"retries": 2}, id="hidden-connection-retry"),
+    ],
+)
+def test_direct_transport_requires_tcp_route_and_zero_retries(
+    transport_options, monkeypatch
+):
+    """Neither an alternate UNIX route nor an implicit retry may start I/O."""
+    attempts = []
+
+    def forbid_connect(*_args, **_kwargs):
+        attempts.append("unexpected connection")
+        raise AssertionError("preflight attempted network or UNIX socket I/O")
+
+    pins, _ = fixture_pins()
+    transport = httpx.HTTPTransport(trust_env=False, **transport_options)
+    with httpx.Client(transport=transport, trust_env=False) as client:
+        monkeypatch.setattr(httpcore.SyncBackend, "connect_tcp", forbid_connect)
+        monkeypatch.setattr(httpcore.SyncBackend, "connect_unix_socket", forbid_connect)
+        with pytest.raises(RawReadbackError, match="unauthenticated"):
+            readback_raw_batch(client, month="2026-07", pins=pins)
+    require(not attempts, "unsafe transport must fail before socket connection")
+
+
+def test_explicit_zero_retry_direct_transport_preflight_has_no_io(monkeypatch):
+    def forbid_connect(*_args, **_kwargs):
+        raise AssertionError("direct client preflight started socket I/O")
+
+    with httpx.Client(
+        transport=httpx.HTTPTransport(trust_env=False, retries=0), trust_env=False
+    ) as client:
+        monkeypatch.setattr(httpcore.SyncBackend, "connect_tcp", forbid_connect)
+        monkeypatch.setattr(httpcore.SyncBackend, "connect_unix_socket", forbid_connect)
+        _check_client(client)
 
 
 def test_unrecognised_transport_rejected_before_mock_transport_io():
