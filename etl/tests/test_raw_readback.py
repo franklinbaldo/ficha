@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 import hashlib
+import os
+import subprocess
+import sys
 from dataclasses import replace
+from pathlib import Path
 
 import httpx
 import pytest
@@ -351,3 +355,120 @@ def test_credentials_refused_without_transport_access():
         harness(fail_handler, headers={"Authorization": "Bearer dummy"})
     with pytest.raises(RawReadbackError, match="unauthenticated"):
         harness(fail_handler, cookies={"session": "dummy"})
+
+
+@pytest.mark.parametrize(
+    "headers",
+    [
+        {"Host": "other-virtual-host.example"},
+        {"Host": "archive.org"},
+        {"X-Api-Key": "DUMMY-NOT-A-SECRET"},
+        {"X-Auth-Token": "DUMMY-NOT-A-SECRET"},
+    ],
+)
+def test_custom_host_or_header_rejected_without_any_transport(headers):
+    seen = []
+
+    def handler(request):
+        seen.append(request)
+        return httpx.Response(200, content=b"unexpected")
+
+    with pytest.raises(RawReadbackError, match="unauthenticated"):
+        harness(handler, headers=headers)
+    require(not seen, "caller-supplied Host or auth-like header must never reach transport")
+
+
+def test_set_cookie_on_http_200_refused_before_next_object():
+    seen = []
+    pins, bodies = fixture_pins()
+
+    def handler(request):
+        seen.append(request)
+        name = request.url.path.rsplit("/", 1)[-1]
+        return httpx.Response(
+            200,
+            content=bodies[name],
+            headers={"Set-Cookie": "probe=synthetic; Domain=archive.org; Path=/; Secure"},
+        )
+
+    with pytest.raises(RawReadbackError, match="cookie"):
+        harness(handler, pins=pins)
+    require(len(seen) == 1, "Set-Cookie 200 must prevent the second GET")
+    require("cookie" not in seen[0].headers)
+
+
+def test_set_cookie_on_redirect_refused_before_cdn_get():
+    seen = []
+
+    def handler(request):
+        seen.append(request)
+        return httpx.Response(
+            302,
+            headers={
+                "Location": "https://ia600107.us.archive.org/34/items/ficha-2026-07/raw/Cnaes.zip",
+                "Set-Cookie": "probe=synthetic; Domain=archive.org; Path=/; Secure",
+            },
+        )
+
+    with pytest.raises(RawReadbackError, match="cookie"):
+        harness(handler)
+    require(len(seen) == 1, "Set-Cookie redirect must not reach the CDN")
+    require("cookie" not in seen[0].headers)
+
+
+def test_redirect_host_matches_url_and_headers_do_not_leak():
+    pins, bodies = fixture_pins()
+    seen = []
+
+    def handler(request):
+        seen.append(request)
+        require(request.headers["host"] == request.url.host)
+        require(set(request.headers) == {"host", "accept-encoding", "cache-control"})
+        require("cookie" not in request.headers)
+        require("x-api-key" not in request.headers)
+        name = request.url.path.rsplit("/", 1)[-1]
+        if request.url.host == "archive.org":
+            return httpx.Response(
+                302,
+                headers={
+                    "Location": (
+                        "https://ia600107.us.archive.org/34/items/ficha-2026-07/raw/" + name
+                    )
+                },
+            )
+        return httpx.Response(200, content=bodies[name])
+
+    receipt = harness(handler, pins=pins, headers={"User-Agent": "DUMMY-SYNTHETIC"})
+    require(len(seen) == 74)
+    require(len(receipt.objects) == 37)
+    require(all(obj.redirects == 1 for obj in receipt.objects))
+    require(all("user-agent" not in request.headers for request in seen))
+
+
+def test_optimized_contract_subprocess():
+    """Run this exact checked-out module and test file under Python -O in CI."""
+    if os.environ.get("FICHA_READBACK_OPTIMIZED_CHILD") == "1":
+        return
+    env = dict(os.environ)
+    env["FICHA_READBACK_OPTIMIZED_CHILD"] = "1"
+    proc = subprocess.run(
+        [
+            sys.executable,
+            "-O",
+            "-m",
+            "pytest",
+            "-q",
+            str(Path(__file__).resolve()),
+            "-k",
+            "not optimized_contract_subprocess",
+        ],
+        env=env,
+        text=True,
+        capture_output=True,
+        timeout=180,
+        check=False,
+    )
+    require(
+        proc.returncode == 0,
+        "Python -O readback tests failed:\\n" + proc.stdout[-2000:] + proc.stderr[-2000:],
+    )
