@@ -27,7 +27,10 @@ class AmbiguousReplay(AssertionError):
 def _zip_bytes(name: str, version: str) -> bytes:
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_STORED) as archive:
-        archive.writestr("source.csv", (version + ":" + name).encode("ascii"))
+        archive.writestr(
+            zipfile.ZipInfo("source.csv", date_time=(1980, 1, 1, 0, 0, 0)),
+            (version + ":" + name).encode("ascii"),
+        )
     data = buf.getvalue()
     with zipfile.ZipFile(io.BytesIO(data)) as archive:
         if archive.testzip() is not None:
