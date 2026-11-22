@@ -117,9 +117,7 @@ def _check_client(client: httpx.Client) -> None:
         raise RawReadbackError("raw readback requires an unauthenticated client")
 
 
-def _read_one(
-    client: httpx.Client, identifier: str, pin: RawPin
-) -> RawObjectObservation:
+def _read_one(client: httpx.Client, identifier: str, pin: RawPin) -> RawObjectObservation:
     # Only canonical inventory names reach this point, but URL-encode defensively.
     request_url = f"https://archive.org/download/{identifier}/raw/{quote(pin.name, safe='')}"
     current = httpx.URL(request_url)
@@ -149,9 +147,7 @@ def _read_one(
                 if response.status_code != 200 or "content-range" in response.headers:
                     raise RawReadbackError("raw readback requires a complete HTTP 200 body")
                 encodings = response.headers.get_list("content-encoding")
-                if len(encodings) > 1 or (
-                    encodings and encodings[0].strip().lower() != "identity"
-                ):
+                if len(encodings) > 1 or (encodings and encodings[0].strip().lower() != "identity"):
                     raise RawReadbackError("raw readback refuses encoded HTTP bodies")
                 lengths = response.headers.get_list("content-length")
                 if lengths:
