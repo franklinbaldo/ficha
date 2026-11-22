@@ -41,7 +41,9 @@ def _zip_bytes(name: str, version: str) -> bytes:
     raises=AmbiguousReplay,
     reason="#433: ambiguous PUT followed by new invocation can replay without readback",
 )
-def test_unknown_after_503_prevents_restart_replay(monkeypatch, tmp_path: Path, second_version: str):
+def test_unknown_after_503_prevents_restart_replay(
+    monkeypatch, tmp_path: Path, second_version: str
+):
     specs = list(canonical_inventory())
     if len(specs) != 37 or len({spec.name for spec in specs}) != 37:
         raise AssertionError("fixture must have exactly 37 distinct sources")
@@ -49,7 +51,9 @@ def test_unknown_after_503_prevents_restart_replay(monkeypatch, tmp_path: Path, 
     first_name = specs[0].name
     first_a = _zip_bytes(first_name, "A")
     first_b = _zip_bytes(first_name, "B")
-    if len(first_a) != len(first_b) or hashlib.sha256(first_a).digest() == hashlib.sha256(first_b).digest():
+    if len(first_a) != len(first_b) or (
+        hashlib.sha256(first_a).digest() == hashlib.sha256(first_b).digest()
+    ):
         raise AssertionError("A/B must have equal length but distinct SHA-256")
 
     attempts: list[tuple[str, bytes]] = []
@@ -121,7 +125,14 @@ def test_unknown_after_503_prevents_restart_replay(monkeypatch, tmp_path: Path, 
 def test_unknown_restart_probe_in_optimized_python():
     path = Path(__file__).resolve()
     result = subprocess.run(
-        [sys.executable, "-O", "-m", "pytest", "-q", f"{path}::test_unknown_after_503_prevents_restart_replay"],
+        [
+            sys.executable,
+            "-O",
+            "-m",
+            "pytest",
+            "-q",
+            f"{path}::test_unknown_after_503_prevents_restart_replay",
+        ],
         text=True,
         capture_output=True,
         check=False,
