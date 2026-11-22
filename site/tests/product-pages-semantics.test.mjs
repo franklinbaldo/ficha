@@ -87,6 +87,21 @@ test('acervo e exploração contam arquivos expandidos, não conjuntos com shard
     ]);
     await mountExplore(exploreDoc, { loadManifest: async () => data });
     assert.equal(exploreDoc.at('explorar-contador').textContent, '3 arquivos · 60 B declarados');
+    // This count must be announced in the existing live status when filtering,
+    // not merely inserted into a newly rebuilt (non-live) chart subtree.
+    const state = exploreDoc.at('explorar-estado');
+    const filter = exploreDoc.at('explorar-filtro');
+    assert.match(state.textContent, /Exibindo 3 de 3 arquivos declarados em 2026-07/);
+    filter.value = 'inexistente';
+    filter.listeners.get('input')();
+    assert.match(state.textContent, /Exibindo 0 de 3 arquivos declarados em 2026-07/);
+    assert.equal(exploreDoc.at('explorar-grafico').children.at(-1).textContent,
+      'Nenhum conjunto corresponde ao filtro.');
+    filter.value = 'companies';
+    filter.listeners.get('input')();
+    assert.match(state.textContent, /Exibindo 2 de 3 arquivos declarados em 2026-07/);
+    assert.match(state.textContent, /não quantidade de empresas/);
+    assert.equal(exploreDoc.at('explorar-contador').textContent, '3 arquivos · 60 B declarados');
   });
 });
 
