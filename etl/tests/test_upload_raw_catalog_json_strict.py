@@ -35,6 +35,9 @@ def _mock_catalog(monkeypatch: pytest.MonkeyPatch, payload: bytes, status: int =
         b'{"files":[{"name":"raw/Empresas0.zip","size":"151"}],"irrelevant":NaN}',
         b'{"files":[{"name":"raw/Empresas0.zip","size":"151"}],"irrelevant":Infinity}',
         b'{"files":[{"name":"raw/Empresas0.zip","size":"151"}],"irrelevant":-Infinity}',
+        b'{"files":[{"name":"raw/Empresas0.zip","size":"151"}],"irrelevant":1e999}',
+        b'{"files":[{"name":"raw/Empresas0.zip","size":"151"}],"irrelevant":-1e999}',
+        b'{"files":[{"name":"raw/Empresas0.zip","size":"151"}],"nested":{"flag":-1e999}}',
         b'{"files":[{"name":"raw/Empresas0.zip","size":"151"}],"nested":{"flag":1,"flag":1}}',
     ],
 )
@@ -56,7 +59,7 @@ def test_unambiguous_ia_json_preserves_skip_observation(monkeypatch):
         monkeypatch,
         b'{"files":[{"name":"raw/Empresas0.zip","size":"151"},'
         b'{"name":"raw/Empresas1.zip","size":"0"},'
-        b'{"name":"cnpjs.parquet","size":"100"}]}',
+        b'{"name":"cnpjs.parquet","size":"100"}],"finite":1.25}',
     )
     assert upload._existing_raw_files_on_ia("ficha-2026-07") == {"raw/Empresas0.zip"}
 

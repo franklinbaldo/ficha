@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import math
 import tempfile
 import time
 from enum import Enum
@@ -301,6 +302,14 @@ def _reject_nonfinite_json_constant(value: str) -> object:
     raise ValueError(f"non-finite JSON constant: {value}")
 
 
+def _parse_finite_json_float(value: str) -> float:
+    """Reject finite JSON syntax whose Python float overflows to infinity."""
+    parsed = float(value)
+    if not math.isfinite(parsed):
+        raise ValueError(f"non-finite JSON number: {value}")
+    return parsed
+
+
 def _existing_raw_files_on_ia(identifier: str) -> set[str]:
     """Return raw names with unambiguous positive sizes in the IA catalog.
 
@@ -331,6 +340,7 @@ def _existing_raw_files_on_ia(identifier: str) -> set[str]:
         data = resp.json(
             object_pairs_hook=_reject_duplicate_json_keys,
             parse_constant=_reject_nonfinite_json_constant,
+            parse_float=_parse_finite_json_float,
         )
     except ValueError as exc:
         raise RuntimeError(f"IA raw metadata: invalid JSON for {identifier}") from exc
@@ -409,21 +419,24 @@ def stream_raw_zips_to_ia(
         staged = raw_preflight.stage_all(all_specs, month, token, Path(temp))
         for index, spec in enumerate(specs):
             path, size, pinned_sha = staged[spec.name]
-            # A second digest check catches ordinary pathname changes between
-            # preflight and PUT, but is NOT inode sealing against held writers.
+            # Verify and transmit via the SAME still-open descriptor. The
+            # pathname may be replaced after this check: reopening it would
+            # silently send different bytes. This does not seal against an
+            # existing writable FD or provide durable UNKNOWN recovery.
             with path.open("rb") as handle:
                 current_sha = hashlib.file_digest(handle, "sha256").hexdigest()
-            if current_sha != pinned_sha:
-                raise RuntimeError(f"raw preflight: staged bytes changed: {spec.name}")
-            _ia_s3_put(
-                identifier,
-                f"raw/{spec.name}",
-                raw_preflight.file_chunks(path),
-                content_length=str(size),
-                access_key=access_key,
-                secret_key=secret_key,
-                is_first=index == 0,
-            )
+                if current_sha != pinned_sha:
+                    raise RuntimeError(f"raw preflight: staged bytes changed: {spec.name}")
+                handle.seek(0)
+                _ia_s3_put(
+                    identifier,
+                    f"raw/{spec.name}",
+                    raw_preflight.file_chunks(handle),
+                    content_length=str(size),
+                    access_key=access_key,
+                    secret_key=secret_key,
+                    is_first=index == 0,
+                )
     log.info("raw preflight admitted %d sources; sent %d missing names", len(staged), len(specs))
     return RawStreamOutcome.SENT_UNVERIFIED
 
