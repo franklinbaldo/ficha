@@ -4,9 +4,11 @@ This is a *read-only primitive*, not a publication gate. A matching response
 establishes R at the time of the GET only. In particular it does not prove the
 source cohort (S), durable intent resolution, or exclusion of later writes (F).
 
-The caller supplies an unauthenticated httpx.Client with trust_env=False,
-without event hooks, and pins from the *sealed* source, never IA metadata.
-The client is not accepted as proof of transport or version identity. This module
+The caller supplies an unauthenticated direct httpx.Client with trust_env=False,
+without event hooks, proxies or mounts, and pins from the *sealed* source,
+never IA metadata. Only the stock direct transport or the test-only MockTransport
+is accepted; the client remains a trusted input, not a proof of channel security.
+This module
 is intentionally not wired to any upload/manifest/cron path (Ficha #433).
 """
 
@@ -19,6 +21,7 @@ from contextlib import closing
 from dataclasses import dataclass
 from urllib.parse import quote
 
+import httpcore
 import httpx
 
 from .sources import canonical_inventory, is_valid_month
@@ -137,10 +140,30 @@ def _validate_archive_url(url: httpx.URL, identifier: str, name: str) -> None:
 
 
 def _check_client(client: httpx.Client) -> None:
+    # trust_env=False only disables *ambient* proxies. Explicit proxy= and
+    # mounts= can still inject authentication into a CONNECT tunnel, beyond
+    # the origin request headers inspected below. Fail closed on HTTPX
+    # internals: allow only a stock direct HTTPTransport with the exact
+    # httpcore.ConnectionPool class, or the test-only MockTransport.
+    transport = getattr(client, "_transport", None)
+    mounts = getattr(client, "_mounts", None)
+    if type(transport) is httpx.MockTransport:
+        direct_transport = True  # synthetic tests, not proof of a real channel
+    elif type(transport) is httpx.HTTPTransport:
+        pool = getattr(transport, "_pool", None)
+        direct_transport = (
+            type(pool) is httpcore.ConnectionPool
+            and getattr(pool, "_proxy", object()) is None
+        )
+    else:
+        direct_transport = False
     if (
+        type(mounts) is not dict
+        or bool(mounts)  # explicit proxy=, mounts= and custom route transports
+        or not direct_transport
         # HTTPX 0.28 keeps trust_env private; fail closed on upgrades.
         # No ambient proxy/netrc/SSL overrides are admissible here.
-        getattr(client, "_trust_env", True) is not False
+        or getattr(client, "_trust_env", True) is not False
         or client.auth is not None
         or bool(client.cookies)
         or bool(client.params)
