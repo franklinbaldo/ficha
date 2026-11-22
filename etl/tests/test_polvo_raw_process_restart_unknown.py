@@ -97,7 +97,8 @@ def _worker(scratch: Path, phase: str) -> int:
         ):
             return 0
         raise
-    return 0 if phase == "second" else 7
+    # A silent no-op does not prove recovery from the ambiguous intent.
+    return 7
 
 
 def _child(scratch: Path, phase: str) -> subprocess.CompletedProcess[str]:
