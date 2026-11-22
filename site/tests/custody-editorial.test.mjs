@@ -9,6 +9,7 @@ test('copy pública distingue manifesto de custódia de arquivos', () => {
   const config = read('../config.toml');
   const acervo = read('../content/acervo.md');
   const historia = read('../content/historia.md');
+  const sobre = read('../content/sobre.md');
   const readme = read('../../README.md');
 
   assert.doesNotMatch(home, /preservados no Internet Archive/i);
@@ -17,6 +18,9 @@ test('copy pública distingue manifesto de custódia de arquivos', () => {
   assert.match(home, /Destino de arquivamento/);
   assert.match(acervo, /arquivos declarados no manifesto/);
   assert.match(historia, /competências declaradas no manifesto/);
+  assert.match(sobre, /organizados em competências declaradas no catálogo/);
+  assert.match(sobre, /## O que o sistema organiza/);
+  assert.doesNotMatch(sobre, /preservados por competência/i);
   assert.match(readme, /custódia de cada objeto exige conferência independente/);
 });
 
