@@ -231,3 +231,88 @@ def test_replay_boundary_probes_under_python_optimized():
     report = completed.stdout + "\n" + completed.stderr
     require(completed.returncode == 0, report)
     require("3 passed" in completed.stdout and "2 xfailed" in completed.stdout, report)
+
+
+# R159: real Linux FIFO swapped in after all 37 sources have been staged.
+# A per-source blocking open must never follow earlier PUT attempts.
+class FifoBlockedAfterEgress(AssertionError):
+    """A blocking ZIP-37 FIFO followed 36 fake PUT attempts."""
+
+
+class FifoOpenDeadline(RuntimeError):
+    """The kernel blocked an O_RDONLY open of a FIFO without a writer."""
+
+
+@pytest.mark.skipif(
+    os.name != "posix" or not hasattr(os, "mkfifo"),
+    reason="requires POSIX FIFO and SIGALRM",
+)
+@pytest.mark.xfail(
+    strict=True,
+    raises=FifoBlockedAfterEgress,
+    reason="#433: ZIP37 FIFO blocks after 36 local PUT attempts",
+)
+def test_zip37_fifo_must_be_rejected_before_any_put(monkeypatch, tmp_path):
+    import signal
+
+    invoke, state, _ = arrange(monkeypatch, tmp_path, scenario="control")
+    names = [s.name for s in canonical_inventory()]
+    last = names[-1]
+    stage_original = upload.raw_preflight.stage_all
+
+    def stage_fifo(*args, **kwargs):
+        staged = stage_original(*args, **kwargs)
+        path = staged[last][0]
+        path.unlink()
+        os.mkfifo(path)  # Real FIFO inode, no writer: O_RDONLY blocks.
+        return staged
+
+    monkeypatch.setattr(upload.raw_preflight, "stage_all", stage_fifo)
+    prior_handler = signal.getsignal(signal.SIGALRM)
+
+    def interrupt_blocked_open(_signum, _frame):
+        raise FifoOpenDeadline("ZIP37 open blocked on FIFO")
+
+    signal.signal(signal.SIGALRM, interrupt_blocked_open)
+    timed_out = False
+    try:
+        signal.setitimer(signal.ITIMER_REAL, 1.5)
+        try:
+            invoke()
+        except FifoOpenDeadline:
+            timed_out = True
+        except (OSError, RuntimeError):
+            # Prompt refusal before egress is acceptable.
+            pass
+        else:
+            raise AssertionError("FIFO was accepted as raw ZIP data")
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, prior_handler)
+
+    require(state["staged"] == 37, "FIFO injection preceded complete staging")
+    if state["attempts"]:
+        require(timed_out, "unexpected partial transmission without FIFO block")
+        require(state["attempts"] == names[:-1], "unexpected fake PUT order")
+        require(len(state["received"]) == len(state["receipts"]) == 36, "wrong fake receipts")
+        raise FifoBlockedAfterEgress("36 fake PUTs precede real ZIP37 FIFO block")
+    require(not timed_out, "FIFO block is unsafe even without a PUT")
+    require(state["received"] == state["receipts"] == [], "unexpected synthetic egress")
+
+
+@pytest.mark.skipif(
+    os.name != "posix" or not hasattr(os, "mkfifo"),
+    reason="requires POSIX FIFO and SIGALRM",
+)
+def test_fifo_failure_replayed_under_python_optimized():
+    source = str(Path(__file__).resolve())
+    test = f"{source}::test_zip37_fifo_must_be_rejected_before_any_put"
+    child = subprocess.run(
+        [sys.executable, "-O", "-m", "pytest", "-q", test],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+    )
+    require(child.returncode == 0, child.stdout + "\n" + child.stderr)
+    require("1 xfailed" in child.stdout, child.stdout + "\n" + child.stderr)
