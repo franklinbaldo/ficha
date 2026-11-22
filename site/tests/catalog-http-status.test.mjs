@@ -30,6 +30,16 @@ for (const status of [201, 206]) {
   });
 }
 
+test('HTTP 200 com Content-Range falha antes de decodificar JSON válido', async () => {
+  let decoded = 0;
+  await assert.rejects(fetchManifest({fetchImpl: async () => ({
+    status: 200,
+    headers: {get: name => name.toLowerCase() === 'content-range' ? 'bytes 0-19/100' : null},
+    json: async () => {decoded++; return manifest;},
+  })}), /Content-Range inesperado/);
+  assert.equal(decoded, 0, 'resposta contraditória não pode ser aceita como catálogo');
+});
+
 test('HTTP 404 de manifesto continua sendo indisponibilidade, não catálogo vazio', async () => {
   await assert.rejects(fetchManifest({fetchImpl: async () => ({
     status: 404, ok: false, json: async () => manifest,
