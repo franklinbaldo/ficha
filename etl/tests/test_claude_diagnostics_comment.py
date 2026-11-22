@@ -93,7 +93,7 @@ def test_comment_steps_are_gated_and_never_read_transcript() -> None:
     assert "steps.build.outcome == 'success'" in post["if"]
     assert build["env"]["DIAG_EXIT_CODE"] == "${{ steps.run.outputs.exit_code }}"
     assert build["env"]["DIAG_STATUS"] == "${{ steps.run.outcome }}"
-    assert "pipeline_status=(\"$"+"{PIPESTATUS[@]}\")" in steps["Run diagnostic script"]["run"]
+    assert 'pipeline_status=("${PIPESTATUS[@]}")' in steps["Run diagnostic script"]["run"]
     for step in (build, post):
         run = step["run"]
         for forbidden in ("diag.log", "tail ", "cat /tmp/comment.md", CANARY, "<details>"):
@@ -110,15 +110,11 @@ def test_comment_steps_are_gated_and_never_read_transcript() -> None:
 def test_status_only_comment_never_contains_synthetic_output(
     tmp_path: Path, script_exit: int, tee_fails: bool, expected: int
 ) -> None:
-    result, output = _run_diagnostic(
-        tmp_path, script_exit=script_exit, tee_fails=tee_fails
-    )
+    result, output = _run_diagnostic(tmp_path, script_exit=script_exit, tee_fails=tee_fails)
     assert result.returncode == expected, (result.stdout, result.stderr)
     assert output == {"exit_code": str(expected)}
     status = "success" if expected == 0 else "failure"
-    built, comment = _build_comment(
-        tmp_path, status=status, exit_code=str(expected)
-    )
+    built, comment = _build_comment(tmp_path, status=status, exit_code=str(expected))
     assert built.returncode == 0, built.stderr
     assert CANARY not in comment.read_text(encoding="utf-8")
     assert comment.read_text(encoding="utf-8") == (
@@ -147,8 +143,6 @@ def test_missing_script_records_failure_code_without_comment_output(tmp_path: Pa
 def test_invalid_metadata_fails_closed(
     tmp_path: Path, status: str, exit_code: str, run_id: str
 ) -> None:
-    built, comment = _build_comment(
-        tmp_path, status=status, exit_code=exit_code, run_id=run_id
-    )
+    built, comment = _build_comment(tmp_path, status=status, exit_code=exit_code, run_id=run_id)
     assert built.returncode == 2
     assert not comment.exists()
