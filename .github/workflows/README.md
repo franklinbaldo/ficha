@@ -1,6 +1,6 @@
 # Workflows do FICHA
 
-Inventário da `main` em **21/11/2026**: **16 workflows YAML** após remoção de `etl-bootstrap.yml` na [#275](https://github.com/franklinbaldo/ficha/pull/275). Os gatilhos descrevem configuração, não comprovam execução de um teste ou publicação.
+Inventário proposto para a `main` em **22/11/2026**: **15 workflows YAML** após remoção de `etl-bootstrap.yml` na [#275](https://github.com/franklinbaldo/ficha/pull/275) e aposentadoria do probe O Vigia. Os gatilhos descrevem configuração, não comprovam execução de um teste ou publicação.
 
 ## Site e gates de PR
 
@@ -29,7 +29,6 @@ Inventário da `main` em **21/11/2026**: **16 workflows YAML** após remoção d
 
 | Workflow | Eventos | Proteção e cautela |
 |---|---|---|
-| [`_tmp-ovigia-first-story-probe.yml`](_tmp-ovigia-first-story-probe.yml) | Push na branch `ops/ovigia-first-story-probe`; manual | Probe experimental, candidato a retirada após decisão explícita. |
 | [`claude-diagnostics.yml`](claude-diagnostics.yml) | Push em duas branches `claude/*` específicas; manual | Harness antigo de diagnóstico com credenciais IA; revisar necessidade antes de executar/retirar. |
 | [`probe-unzip-meta.yml`](probe-unzip-meta.yml) | Push em `probe/run-unzip-meta*`; manual | Experimento operacional com item IA descartável; **não** é gate de PR, não disparar sem autorização. |
 
@@ -39,6 +38,7 @@ Inventário da `main` em **21/11/2026**: **16 workflows YAML** após remoção d
 - **ETL:** `IA_ACCESS_KEY` e `IA_SECRET_KEY` pertencem aos secrets das operações autorizadas. `workflow_dispatch` não constitui autorização.
 - **CI exato:** conferir o SHA de HEAD e os **steps executados**; não contar `SKIPPED` como cobertura. O leitor Astro em `web/` e o site SSG em `site/` são consumidores distintos.
 - **Cobertura que sai ou muda:** [#275](https://github.com/franklinbaldo/ficha/pull/275) retirou só o bootstrap one-shot; `etl-monthly.yml`, cron, manifesto e gates foram preservados. [#280](https://github.com/franklinbaldo/ficha/pull/280) colocou fixtures no smoke de PR, preservando sondas semanais. A [#286](https://github.com/franklinbaldo/ficha/pull/286) foi **integrada em 21/11/2026**, squash [`3a5970ed`](https://github.com/franklinbaldo/ficha/commit/3a5970ed750f36095494c9732ed10ac8dabe0d4a): acrescentou replays cruzados seletivos Python/Protobuf ↔ TypeScript/Vitest, **sem retirar gates ou checks**. Não adicionou teste do site SSG, cuja verificação continua em `deploy.yml` e `visual-capture.yml`. O [CI pós-merge #44927852890](https://github.com/franklinbaldo/ficha/actions/runs/44927852890) concluiu com quatro jobs e steps `Test` executados com sucesso, mas o diff de workflow aciona todas as suítes: **não mede custo marginal de uma mudança isolada no wire**. Para medir, comparar runs com caminho e cobertura executada equivalentes, separando tempo de ciclo da soma de durações dos jobs ([método #268](https://github.com/franklinbaldo/ficha/issues/268#issuecomment-7052643123)). Outras remoções dependem de decisão na [#268](https://github.com/franklinbaldo/ficha/issues/268).
+- **Probe O Vigia aposentado:** removido apenas o workflow temporário `_tmp-ovigia-first-story-probe.yml` (push da branch exata `ops/ovigia-first-story-probe` e disparo manual); o ensaio de abril→maio não era gate de PR nem fonte de dados canônicos. Permanecem o histórico Git, a documentação do experimento e os fluxos de produto. O gatilho manual deixa de estar disponível via `main`; cópias em branches antigas não são apagadas por esta mudança.
 - **Este README é documental:** modificá-lo não executa ETL produtivo, publicação ou mudança de contrato. A aferição de custo dos filtros cruzados permanece separada na [#268](https://github.com/franklinbaldo/ficha/issues/268).
 
 Ver também [ADR 0005](../../docs/adr/0005-monorepo-web-etl.md), [site/README.md](../../site/README.md) e [Cafezinho](https://github.com/franklinbaldo/cafezinho/issues/21).
