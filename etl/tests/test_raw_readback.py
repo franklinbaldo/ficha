@@ -436,7 +436,7 @@ def test_redirect_host_matches_url_and_headers_do_not_leak():
                     )
                 },
             )
-        return httpx.Response(200, content=bodies[name])
+        return httpx.Response(200, stream=httpx.ByteStream(bodies[name]))
 
     receipt = harness(handler, pins=pins, headers={"User-Agent": "DUMMY-SYNTHETIC"})
     require(len(seen) == 74)
