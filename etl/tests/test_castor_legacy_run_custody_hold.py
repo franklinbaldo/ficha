@@ -34,7 +34,9 @@ def _forbid_egress(monkeypatch: pytest.MonkeyPatch) -> list[str]:
 
 @pytest.mark.parametrize("credentials", ["missing", "present"])
 def test_legacy_run_holds_before_work_and_derived_upload(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
     credentials: str,
 ) -> None:
     if credentials == "present":
@@ -49,9 +51,13 @@ def test_legacy_run_holds_before_work_and_derived_upload(
     original = b'{"current":"previous"}\n'
     manifest.write_bytes(original)
     rc = cli._cmd_run(
-        "2026-07", cache_dir=tmp_path / "cache",
-        output_dir=tmp_path / "output", manifest_path=manifest,
-        skip_upload=False, verify=False, verify_sample_size=1,
+        "2026-07",
+        cache_dir=tmp_path / "cache",
+        output_dir=tmp_path / "output",
+        manifest_path=manifest,
+        skip_upload=False,
+        verify=False,
+        verify_sample_size=1,
     )
     assert rc == 1
     assert "HOLD #433" in capsys.readouterr().err
@@ -61,27 +67,39 @@ def test_legacy_run_holds_before_work_and_derived_upload(
 
 
 def test_public_cli_run_without_skip_upload_is_not_an_escape(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     monkeypatch.setenv("IA_ACCESS_KEY", "synthetic")
     monkeypatch.setenv("IA_SECRET_KEY", "synthetic")
     effects = _forbid_egress(monkeypatch)
 
-    rc = cli.main([
-        "run", "--month", "2026-07", "--cache-dir", str(tmp_path / "cache"),
-        "--output", str(tmp_path / "output"), "--manifest", str(tmp_path / "manifest.json"),
-        "--no-verify",
-    ])
+    rc = cli.main(
+        [
+            "run",
+            "--month",
+            "2026-07",
+            "--cache-dir",
+            str(tmp_path / "cache"),
+            "--output",
+            str(tmp_path / "output"),
+            "--manifest",
+            str(tmp_path / "manifest.json"),
+            "--no-verify",
+        ]
+    )
     assert rc == 1
     assert "HOLD #433" in capsys.readouterr().err
     assert effects == []
     assert not (tmp_path / "manifest.json").exists()
 
 
-
 @pytest.mark.parametrize("credentials", ["missing", "present"])
 def test_standalone_pack_holds_before_build_or_upload(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
     credentials: str,
 ) -> None:
     if credentials == "present":
@@ -93,8 +111,11 @@ def test_standalone_pack_holds_before_build_or_upload(
     effects = _forbid_egress(monkeypatch)
     output = tmp_path / "companies.zip"
     rc = cli._cmd_pack(
-        "2026-07", output=output, local_parquets=None,
-        memory_limit_gb=None, skip_upload=False,
+        "2026-07",
+        output=output,
+        local_parquets=None,
+        memory_limit_gb=None,
+        skip_upload=False,
     )
     assert rc == 1
     assert "HOLD #433" in capsys.readouterr().err
@@ -103,7 +124,9 @@ def test_standalone_pack_holds_before_build_or_upload(
 
 
 def test_public_pack_command_is_not_an_escape(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     effects = _forbid_egress(monkeypatch)
     rc = cli.main(["pack", "--month", "2026-07", "--output", str(tmp_path / "pack.zip")])
@@ -111,7 +134,6 @@ def test_public_pack_command_is_not_an_escape(
     assert "HOLD #433" in capsys.readouterr().err
     assert effects == []
     assert not (tmp_path / "pack.zip").exists()
-
 
 
 def test_legacy_run_guard_survives_python_optimized_mode(tmp_path: Path) -> None:
