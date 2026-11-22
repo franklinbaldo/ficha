@@ -50,10 +50,18 @@ def arrange(monkeypatch, tmp_path: Path, *, scenario: str):
     originals = {spec.name: make_zip(spec.name, "A") for spec in specs}
     replacement = make_zip(first, "B")
     require(len(replacement) == len(originals[first]), "A/B unequal length")
-    require(hashlib.sha256(replacement).digest() != hashlib.sha256(originals[first]).digest(),
-            "A/B equal digest")
-    state = {"attempts": [], "received": [], "receipts": [], "writer": None,
-             "write_ok": False, "staged": 0}
+    require(
+        hashlib.sha256(replacement).digest() != hashlib.sha256(originals[first]).digest(),
+        "A/B equal digest",
+    )
+    state = {
+        "attempts": [],
+        "received": [],
+        "receipts": [],
+        "writer": None,
+        "write_ok": False,
+        "staged": 0,
+    }
 
     def stage_all(inventory, month, token, dest):
         require([s.name for s in inventory] == [s.name for s in specs], "inventory mismatch")
@@ -124,8 +132,10 @@ def test_all_37_sources_reach_fake_transport_unchanged(monkeypatch, tmp_path):
     require(result == upload.RawStreamOutcome.SENT_UNVERIFIED, "unexpected result")
     require(len(state["attempts"]) == len(state["received"]) == 37, "incomplete batch")
     require(state["staged"] == 37, "incomplete staging")
-    require(all(payload == originals[name] for name, payload in state["received"]),
-            "changed source in control")
+    require(
+        all(payload == originals[name] for name, payload in state["received"]),
+        "changed source in control",
+    )
 
 
 def test_synthetic_37th_gate_failure_causes_zero_put_attempts(monkeypatch, tmp_path):
@@ -179,7 +189,10 @@ def test_replay_boundary_probes_under_python_optimized():
     ]
     completed = subprocess.run(
         [sys.executable, "-O", "-m", "pytest", "-q", *(f"{source}::{case}" for case in cases)],
-        capture_output=True, text=True, check=False, timeout=180,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=180,
     )
     report = completed.stdout + "\n" + completed.stderr
     require(completed.returncode == 0, report)
