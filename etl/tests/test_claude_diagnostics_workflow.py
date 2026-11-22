@@ -63,8 +63,7 @@ def test_dispatch_strings_never_enter_shell_source() -> None:
     assert "DIAGNOSTIC_SCRIPT" not in steps["Build PR comment"]["env"]
     assert steps["Build PR comment"]["env"]["DIAG_STATUS"] == "${{ steps.run.outcome }}"
     assert (
-        steps["Build PR comment"]["env"]["DIAG_EXIT_CODE"]
-        == "${{ steps.run.outputs.exit_code }}"
+        steps["Build PR comment"]["env"]["DIAG_EXIT_CODE"] == "${{ steps.run.outputs.exit_code }}"
     )
     for name in ("Build PR comment", "Post comment on PR"):
         assert "steps.cfg.outcome == 'success'" in steps[name]["if"]
