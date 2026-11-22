@@ -289,6 +289,11 @@ def test_finalize_rejects_malformed_receipt_before_remote_probe(
     monkeypatch.setattr(
         "ficha_etl.monthly_sharded._require_source_attestation", lambda *a, **kw: None
     )
+    # Preserve malformed-receipt coverage after the independent raw custody gate.
+    monkeypatch.setattr(
+        "ficha_etl.monthly_sharded._require_raw_custody_authorization",
+        lambda *a, **kw: None,
+    )
     args = argparse.Namespace(
         month="2026-06",
         descriptor=str(descriptor_path),

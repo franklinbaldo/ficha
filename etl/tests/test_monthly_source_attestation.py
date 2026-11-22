@@ -138,9 +138,10 @@ def test_upload_outputs_checks_source_before_submit_and_secret(tmp_path: Path, m
         month="2026-07", descriptor=tmp_path / "descriptor.json", output_dir=out
     )
 
-    cli.command_upload_outputs(args)
-    assert calls == ["IA_ACCESS_KEY", "IA_SECRET_KEY", "submit"]
-    calls.clear()
+    # Parsed v1 receipt is not independent raw ZIP custody proof.
+    with pytest.raises(ValueError, match="raw custody v2 required"):
+        cli.command_upload_outputs(args)
+    assert calls == []
 
     # Failed source even with a previously valid descriptor must not reach submit.
     data = json.loads(path.read_text())
@@ -235,8 +236,9 @@ def test_produce_writes_attestation_before_first_raw_boundary(
     cli.command_produce(args)
     assert calls == ["transform", "key-gate", "build", "write", "raw", "write"]
     persisted = json.loads(args.descriptor.read_text())
-    assert persisted["source_attestation"]["raw_upload_status"] == "complete"
-    cli._require_source_attestation(args.month, args.output_dir, persisted)
+    assert persisted["source_attestation"]["raw_upload_status"] == "unknown"
+    with pytest.raises(ValueError, match="raw source upload did not complete"):
+        cli._require_source_attestation(args.month, args.output_dir, persisted)
 
 
 def test_produce_invalidates_stale_success_before_extract_failure(

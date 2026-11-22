@@ -29,6 +29,7 @@ import hashlib
 import logging
 import tempfile
 import time
+from enum import Enum
 from pathlib import Path
 
 import httpx
@@ -40,6 +41,14 @@ from .transform import _LOOKUP_KINDS
 from . import raw_preflight, upstream
 
 log = logging.getLogger(__name__)
+
+
+class RawStreamOutcome(str, Enum):
+    """Transport activity, never authenticated remote custody."""
+
+    ALL_NAMES_PRESENT_UNPROVEN = "all_names_present_unproven"
+    SENT_UNVERIFIED = "sent_unverified"
+
 
 # Timeout generoso: ZIPs grandes podem levar minutos pra transferir
 _STREAM_TIMEOUT = httpx.Timeout(connect=30.0, read=600.0, write=600.0, pool=30.0)
@@ -333,7 +342,7 @@ def stream_raw_zips_to_ia(
     secret_key: str,
     workers: int = 4,
     spool_dir: Path | None = None,
-) -> None:
+) -> RawStreamOutcome:
     """Admite todos os 37 ZIPs antes de qualquer IA PUT neste caminho.
 
     Exige scratch explícito e disponível; sem ele a rotina recusa publicação.
@@ -360,7 +369,7 @@ def stream_raw_zips_to_ia(
         )
     if not specs:
         log.info("all %d ZIPs already on ia:%s — stream is a no-op", len(all_specs), identifier)
-        return
+        return RawStreamOutcome.ALL_NAMES_PRESENT_UNPROVEN
 
     # Without an operator-selected disk there is no safe capacity assumption.
     # The old zero-disk producer cannot guarantee 37/37 before the first PUT.
@@ -398,6 +407,7 @@ def stream_raw_zips_to_ia(
                 is_first=index == 0,
             )
     log.info("raw preflight admitted %d sources; sent %d missing names", len(staged), len(specs))
+    return RawStreamOutcome.SENT_UNVERIFIED
 
 
 def _check_responses(responses: list, label: str, expected: int | None = None) -> None:
