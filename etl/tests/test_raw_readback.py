@@ -56,10 +56,12 @@ def test_all_37_full_reads_and_non_authorizing_receipt():
     require(not receipt.publication_authorized)
     require(not receipt.source_cohort_proven)
     require(not receipt.future_writes_fenced)
-    require(all(
-        obj.status == "R_MATCH_AT_T_ONLY" and not obj.publication_authorized
-        for obj in receipt.objects
-    ))
+    require(
+        all(
+            obj.status == "R_MATCH_AT_T_ONLY" and not obj.publication_authorized
+            for obj in receipt.objects
+        )
+    )
 
 
 def test_redirect_to_trusted_archive_cdn_and_relative_location():
@@ -72,12 +74,12 @@ def test_redirect_to_trusted_archive_cdn_and_relative_location():
         if request.url.host == "archive.org":
             return httpx.Response(
                 302,
-                headers={"Location": f"https://dn1.us.archive.org/0/items/ficha-2026-07/raw/{name}"},
+                headers={
+                    "Location": f"https://dn1.us.archive.org/0/items/ficha-2026-07/raw/{name}"
+                },
             )
         if request.url.host == "dn1.us.archive.org" and request.url.path.startswith("/0/items/"):
-            return httpx.Response(
-                307, headers={"Location": f"/download/ficha-2026-07/raw/{name}"}
-            )
+            return httpx.Response(307, headers={"Location": f"/download/ficha-2026-07/raw/{name}"})
         return httpx.Response(200, stream=httpx.ByteStream(bodies[name]))
 
     receipt = harness(handler, pins=pins)
@@ -104,9 +106,17 @@ def test_37th_bad_body_yields_no_success_receipt():
     require(calls == 37)
 
 
-@pytest.mark.parametrize("bad", [
-    "missing", "extra", "duplicate", "wrong_size_type", "wrong_sha", "bad_month",
-])
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "missing",
+        "extra",
+        "duplicate",
+        "wrong_size_type",
+        "wrong_sha",
+        "bad_month",
+    ],
+)
 def test_bad_inventory_refused_before_any_get(bad):
     pins, _ = fixture_pins()
     edited = list(pins)
@@ -137,14 +147,17 @@ def test_no_partial_no_unexpected_status(status):
         harness(lambda _: httpx.Response(status, content=b"abc"))
 
 
-@pytest.mark.parametrize("headers", [
-    {"Content-Encoding": "gzip"},
-    {"Content-Encoding": "br"},
-    {"Content-Range": "bytes 0-9/10"},
-    {"Content-Length": "1, 1"},
-    {"Content-Length": "0"},
-    {"Content-Length": "+1"},
-])
+@pytest.mark.parametrize(
+    "headers",
+    [
+        {"Content-Encoding": "gzip"},
+        {"Content-Encoding": "br"},
+        {"Content-Range": "bytes 0-9/10"},
+        {"Content-Length": "1, 1"},
+        {"Content-Length": "0"},
+        {"Content-Length": "+1"},
+    ],
+)
 def test_malicious_headers_fail_closed(headers):
     pins, bodies = fixture_pins()
     name = pins[0].name
@@ -156,14 +169,9 @@ def test_malicious_headers_fail_closed(headers):
         harness(handler, pins=pins)
 
 
-@pytest.mark.parametrize("location", [
-    "http://archive.org/download/ficha-2026-07/raw/Cnaes.zip",
-    "https://evil.example/download/ficha-2026-07/raw/Cnaes.zip",
-    "https://archive.org.evil.example/download/a",
-    "https://user:secret@archive.org/download/a",
-    "https://archive.org:444/download/a",
-    "https://archive.org/download/a?token=secret",
-])
+@pytest.mark.parametrize(
+    "location",
+    [
 def test_reject_redirects_before_following(location):
     count = 0
 
