@@ -300,6 +300,7 @@ def test_negative_mutation_rejects_extra_live_event_triggers() -> None:
         mutated.get("on", mutated.get(True))[event_name] = configuration
         assert not _pr_is_fixture_only(mutated), event_name
 
+
 def test_stale_manifest_alert_is_nonzero_without_manual_dispatch_advice(
     tmp_path: Path,
 ) -> None:
