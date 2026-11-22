@@ -28,7 +28,9 @@ def fixture_pins(letter: bytes = b"A") -> tuple[tuple[RawPin, ...], dict[str, by
 
 def harness(handler, *, pins=None, month="2026-07", **client_options):
     pins = fixture_pins()[0] if pins is None else pins
-    with httpx.Client(transport=httpx.MockTransport(handler), trust_env=False, **client_options) as client:
+    with httpx.Client(
+        transport=httpx.MockTransport(handler), trust_env=False, **client_options
+    ) as client:
         return readback_raw_batch(client, pins=pins, month=month)
 
 
@@ -78,8 +80,9 @@ def test_redirect_to_trusted_archive_cdn_and_relative_location():
                     "Location": f"https://ia600107.us.archive.org/34/items/ficha-2026-07/raw/{name}"
                 },
             )
-        if request.url.host == "ia600107.us.archive.org" and request.url.path.startswith(
-            "/34/items/"
+        if (
+            request.url.host == "ia600107.us.archive.org"
+            and request.url.path.startswith("/34/items/")
         ):
             return httpx.Response(
                 307, headers={"Location": f"/35/items/ficha-2026-07/raw/{name}"}
