@@ -73,5 +73,90 @@ class GeneratedViewSqlSemanticsTest(unittest.TestCase):
         self.assertEqual(duplicated[0], duplicated[1])
 
 
+    def test_competencia_pairing_requires_matching_raiz_snapshot(self):
+        # Literal independent inputs: labels do not claim published RFB vintages.
+        snapshots = {
+            "2026-07": {
+                "cnpjs": [("A", "02"), ("B", "08")],
+                "socios": [("11111111", "partner-one"), ("22222222", "partner-two")],
+                "raizes": [("11111111", 1), ("22222222", 0)],
+            },
+            "2026-08": {
+                "cnpjs": [("A", "08"), ("B", "02")],
+                "socios": [("11111111", "partner-one"), ("22222222", "partner-two")],
+                "raizes": [("11111111", 0), ("22222222", 1)],
+            },
+        }
+        for competencia, inputs in snapshots.items():
+            with self.subTest(competencia=competencia):
+                other = next(key for key in snapshots if key != competencia)
+                connection = sqlite3.connect(":memory:")
+                try:
+                    connection.executescript("""
+                        CREATE TABLE cnpjs (cnpj TEXT, situacao_cadastral TEXT);
+                        CREATE TABLE socios (
+                            cnpj_base TEXT, nome_socio_razao_social TEXT
+                        );
+                        CREATE TABLE raizes (
+                            cnpj_base TEXT, qtd_estabelecimentos_ativos INTEGER
+                        );
+                    """)
+                    for relation, rows in inputs.items():
+                        connection.executemany(
+                            f"INSERT INTO {relation} VALUES (?, ?)", rows
+                        )
+
+                    # Per-competence key and parent audits hold for both sets.
+                    duplicates = connection.execute("""
+                        SELECT cnpj_base FROM raizes GROUP BY cnpj_base
+                        HAVING COUNT(*) > 1
+                    """).fetchall()
+                    orphans = connection.execute("""
+                        SELECT s.cnpj_base FROM socios AS s
+                        WHERE NOT EXISTS (
+                            SELECT 1 FROM raizes AS r
+                            WHERE r.cnpj_base = s.cnpj_base
+                        )
+                    """).fetchall()
+                    self.assertEqual(duplicates, [])
+                    self.assertEqual(orphans, [])
+
+                    # The oracle reads literal raw tuples, not SQL or Zod output.
+                    expected_cnpjs = [
+                        row for row in inputs["cnpjs"] if row[1] == "02"
+                    ]
+                    active = {
+                        base
+                        for base, count in inputs["raizes"]
+                        if count is not None and count > 0
+                    }
+                    expected_socios = [
+                        row for row in inputs["socios"] if row[0] in active
+                    ]
+                    actual_cnpjs = connection.execute(
+                        self.sql["empresas_ativas"]
+                    ).fetchall()
+                    actual_socios = connection.execute(
+                        self.sql["socios_de_raizes_ativas"]
+                    ).fetchall()
+                    self.assertCountEqual(actual_cnpjs, expected_cnpjs)
+                    self.assertCountEqual(actual_socios, expected_socios)
+
+                    # Swapping only Raiz with a different, individually valid
+                    # snapshot changes the join even though key audits pass.
+                    connection.execute("DELETE FROM raizes")
+                    connection.executemany(
+                        "INSERT INTO raizes VALUES (?, ?)",
+                        snapshots[other]["raizes"],
+                    )
+                    swapped = connection.execute(
+                        self.sql["socios_de_raizes_ativas"]
+                    ).fetchall()
+                    self.assertNotEqual(sorted(swapped), sorted(expected_socios))
+                finally:
+                    connection.close()
+
+
+
 if __name__ == "__main__":
     unittest.main()
