@@ -121,9 +121,7 @@ def _validate_archive_url(url: httpx.URL, identifier: str, name: str) -> None:
     elif _CDN_HOST.fullmatch(host):
         # The drive number varies across IA storage nodes. Match *every*
         # remaining byte to the independently requested item and filename.
-        expected = rb"/[0-9]+/items/" + re.escape(encoded_id) + rb"/raw/" + re.escape(
-            encoded_name
-        )
+        expected = rb"/[0-9]+/items/" + re.escape(encoded_id) + rb"/raw/" + re.escape(encoded_name)
         matched = re.fullmatch(expected, url.raw_path) is not None
     else:
         matched = False
