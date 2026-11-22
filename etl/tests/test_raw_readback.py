@@ -42,6 +42,7 @@ def test_all_37_full_reads_and_non_authorizing_receipt():
         seen.append(request)
         require(request.headers["Accept-Encoding"] == "identity")
         require(request.headers["Cache-Control"] == "no-cache")
+        require(not request.url.query)
         require("authorization" not in request.headers and "cookie" not in request.headers)
         name = request.url.path.rsplit("/", 1)[-1]
         require(request.url.host == "archive.org")
@@ -51,7 +52,7 @@ def test_all_37_full_reads_and_non_authorizing_receipt():
             headers={"Content-Length": str(len(bodies[name]))},
         )
 
-    receipt = harness(handler, pins=pins)
+    receipt = harness(handler, pins=pins, params={})
     require(len(seen) == len(receipt.objects) == 37)
     require(receipt.total_size == sum(pin.size for pin in pins))
     require(receipt.status == "R_MATCH_AT_T_ONLY")
@@ -142,6 +143,20 @@ def test_client_hooks_refused_before_any_get(hook_kind):
     with pytest.raises(RawReadbackError, match="unauthenticated"):
         harness(handler, event_hooks={hook_kind: [inject_authorization]})
     require(len(seen) == 0, "unsafe event hook must be rejected without transport IO")
+
+
+def test_client_default_params_refused_before_any_get():
+    seen = []
+
+    def handler(request):
+        seen.append(str(request.url))
+        return httpx.Response(200, content=b"unexpected")
+
+    # HTTPX applies client.params after a caller validates the original URL.
+    # Refuse even synthetic query parameters before the first transport call.
+    with pytest.raises(RawReadbackError, match="unauthenticated"):
+        harness(handler, params={"token": "dummy"})
+    require(not seen, "client params must be rejected before transport I/O")
 
 
 @pytest.mark.parametrize(

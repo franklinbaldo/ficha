@@ -15,6 +15,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import re
+from contextlib import closing
 from dataclasses import dataclass
 from urllib.parse import quote
 
@@ -136,6 +137,7 @@ def _check_client(client: httpx.Client) -> None:
         getattr(client, "_trust_env", True) is not False
         or client.auth is not None
         or bool(client.cookies)
+        or bool(client.params)
         or "authorization" in client.headers
         or "cookie" in client.headers
         or "proxy-authorization" in client.headers
@@ -158,11 +160,15 @@ def _read_one(client: httpx.Client, identifier: str, pin: RawPin) -> RawObjectOb
         seen.add(str(current))
         try:
             # Never inherit automatic redirects or attach cookies/credentials.
-            with client.stream(
+            # Inspect the fully composed HTTPX request before any I/O.
+            request = client.build_request(
                 "GET",
                 current,
-                follow_redirects=False,
                 headers={"Accept-Encoding": "identity", "Cache-Control": "no-cache"},
+            )
+            _validate_archive_url(request.url, identifier, pin.name)
+            with closing(
+                client.send(request, stream=True, follow_redirects=False)
             ) as response:
                 if response.status_code in (301, 302, 303, 307, 308):
                     locations = response.headers.get_list("location")
