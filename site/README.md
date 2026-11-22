@@ -1,7 +1,7 @@
 ---
 type: Documentation
 title: Site público do FICHA (SSG Rust)
-description: Produto público e acervo com dados por competência, preservados no Internet Archive
+description: Site público e acervo de dados de CNPJ declarados por competência, com custódia a conferir
 ---
 
 # Site público FICHA · SSG Rust
@@ -14,15 +14,17 @@ A interface greenfield do FICHA traduz a [visão de produto](../docs/rfc/ficha-g
 - `templates/`: HTML semântico; `product.html` carrega JavaScript apenas nas páginas interativas.
 - `static/css/site.css`: identidade editorial responsiva.
 - `static/js/catalog.mjs`: catálogo e proveniência do manifesto.
-- `static/js/record.mjs`: consulta de CNPJ por competência, com DuckDB sob demanda e encerramento de recursos.
+- `static/js/atomic-record.mjs` e `atomic-browser.mjs`: ficha por CNPJ numérico v1, validação da raiz/membro Protobuf e lookup RFB de competência; o decoder canônico é empacotado pelo build SSG.
+- `static/js/record.mjs`: acesso legado por Parquet/DuckDB, restrito às rotas experimentais que o usam.
+- `static/js/history.mjs` e `page-helpers.mjs`: comparação histórica numérica Protobuf v1 e controles partilhados, sem fallback implícito.
 - `static/js/pages.mjs`: UI das páginas novas, sem resultados simulados.
-- `static/js/search-app.mjs`: busca experimental da home, com links de resultado para a ficha.
+- `static/js/search-app.mjs`: home encaminha CNPJ numérico completo com dígitos verificadores válidos para a ficha Protobuf, sem iniciar DuckDB; números com DV inválido são recusados antes de fetch, WASM ou navegação. Nomes e CNPJ alfanuméricos permanecem na busca experimental, com links de resultado apenas para CNPJ numérico com DV válido.
 - `scripts/finalize.mjs`: copia o manifesto original byte a byte e os módulos para o diretório de publicação.
 - `tests/`: testes de catálogo, consulta, regressões e páginas.
 
 ## Estado funcional e limites
 
-A navegação, o catálogo e os gráficos de **tamanho de arquivos declarados** funcionam a partir do manifesto do próprio site. A ficha e a comparação temporal executam consulta real **somente quando** os Parquets puderem ser acessados via CORS/Range. A [issue #208](https://github.com/franklinbaldo/ficha/issues/208) documenta uma falha desse transporte. Sem esse acesso, a UI mostra falha e ligação para a origem, não dados fictícios.
+A navegação, o catálogo e os gráficos de **tamanho de arquivos declarados** funcionam a partir do manifesto do próprio site. A ficha numérica completa lê um membro **Protobuf v1** da raiz e, quando encontra o CNPJ, consulta também `lookups.json` da mesma competência, conferindo o tamanho e SHA-256 declarados desse lookup. A rota não usa Parquet nem varre o ZIP inteiro; um HTTP 404 do membro continua inconclusivo. A comparação histórica por CNPJ numérico usa exclusivamente Protobuf v1. Na home, CNPJ numérico completo com DV válido navega diretamente para essa ficha, sem abrir Parquet/DuckDB; DV inválido gera erro local antes de fetch, WASM ou navegação. Busca por nome e CNPJ alfanumérico continuam usando o transporte legado Parquet/DuckDB, dependente de CORS/Range. A História recusa CNPJ alfanumérico antes de qualquer leitura remota; não existe fallback implícito. O [E2E Chromium #44586268099](https://github.com/franklinbaldo/ficha/actions/runs/44586268099), executado no HEAD da [PR #367](https://github.com/franklinbaldo/ficha/pull/367), consultou Nubank e Petrobras em PB público e testou os caminhos negativos; o [deploy Pages #44586905819](https://github.com/franklinbaldo/ficha/actions/runs/44586905819) atestou publicação/HTTP após o merge, **não** uma repetição do E2E na URL publicada. Um [ensaio independente no Pages em 20/11/2026](https://github.com/franklinbaldo/ficha/issues/269#issuecomment-7032628482) concluiu a ficha de quatro CNPJs de exemplo na competência 2026-07. Essa observação é pontual e tampouco atesta todos os shards nem disponibilidade contínua. O leitor ainda aceita `schema_version` ausente no manifesto e assume wire v1 no planejamento, sem receber do catálogo um atestado explícito da versão: [#383](https://github.com/franklinbaldo/ficha/issues/383) acompanha essa lacuna. A leitura de um registro não certifica a identidade de todos os ZIPs arquivados. A [issue #208](https://github.com/franklinbaldo/ficha/issues/208) mantém esse escopo e documenta a falha CORS do transporte legado. Sem acesso, a UI informa indisponibilidade, não dados fictícios.
 
 Os gráficos em Explorar descrevem arquivos, **não** quantidade de empresas, movimento econômico ou mapas por UF. Indicadores regionais demandam agregados com proveniência e contrato próprios. Não existe fallback opaco para uma API de terceiros.
 
@@ -36,7 +38,7 @@ node --test site/tests/*.test.mjs
 # Workflow deploy.yml: build SSG + HTTP smoke do site publicado
 ```
 
-O smoke HTTP comprova páginas e arquivos publicados, **não** a consulta real. O teste end-to-end real de CNPJ numérico/alfanumérico segue como condição de promoção funcional em #208.
+O smoke HTTP comprova páginas e arquivos publicados, **não** a consulta real. O pipeline de captura inclui agora um E2E específico com dois CNPJs numéricos publicados e casos negativos, distinto do smoke. A pesquisa alfanumérica v1.1 e a busca textual permanecem fora da fatia Protobuf v1; validar separadamente antes de declarar completude de #208.
 
 **Motto:** menos páginas que explicam o FICHA; mais páginas nas quais se utiliza o FICHA.
 

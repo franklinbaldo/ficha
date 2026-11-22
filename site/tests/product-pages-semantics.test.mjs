@@ -23,6 +23,7 @@ class FakeElement {
   get options() { return this.children; }
   addEventListener(name, listener) { this.listeners.set(name, listener); }
   setAttribute(name, value) { this.attributes[name] = value; }
+  removeAttribute(name) { delete this.attributes[name]; }
 }
 
 function fakeDocument(ids = []) {
@@ -39,7 +40,7 @@ function fakeDocument(ids = []) {
 function manifestWithShards() {
   const snapshot = date => ({
     date, row_counts: { cnpjs: 2 }, files: {
-      companies: { shards: [
+      companies: { shard_by:'cnpj_base_prefix_2', schema_version:'1.0.0', shards: [
         { shard: '00', size: 10, url: 'https://archive.org/00' },
         { shard: '01', size: 20, url: 'https://archive.org/01' },
       ] },
@@ -86,6 +87,21 @@ test('acervo e exploração contam arquivos expandidos, não conjuntos com shard
     ]);
     await mountExplore(exploreDoc, { loadManifest: async () => data });
     assert.equal(exploreDoc.at('explorar-contador').textContent, '3 arquivos · 60 B declarados');
+    // This count must be announced in the existing live status when filtering,
+    // not merely inserted into a newly rebuilt (non-live) chart subtree.
+    const state = exploreDoc.at('explorar-estado');
+    const filter = exploreDoc.at('explorar-filtro');
+    assert.match(state.textContent, /Exibindo 3 de 3 arquivos declarados em 2026-07/);
+    filter.value = 'inexistente';
+    filter.listeners.get('input')();
+    assert.match(state.textContent, /Exibindo 0 de 3 arquivos declarados em 2026-07/);
+    assert.equal(exploreDoc.at('explorar-grafico').children.at(-1).textContent,
+      'Nenhum conjunto corresponde ao filtro.');
+    filter.value = 'companies';
+    filter.listeners.get('input')();
+    assert.match(state.textContent, /Exibindo 2 de 3 arquivos declarados em 2026-07/);
+    assert.match(state.textContent, /não quantidade de empresas/);
+    assert.equal(exploreDoc.at('explorar-contador').textContent, '3 arquivos · 60 B declarados');
   });
 });
 
@@ -100,7 +116,7 @@ test('história rejeita competência inicial posterior antes de consultar ou alt
       loadManifest: async () => manifestWithShards(),
       lookup: async () => { lookups++; throw new Error('lookup não deve ocorrer'); },
     });
-    doc.at('historia-cnpj').value = '00000000E08G12';
+    doc.at('historia-cnpj').value = '33000167000101';
     doc.at('historia-inicio').value = '2026-07';
     doc.at('historia-fim').value = '2026-06';
     const originalUrl = globalThis.location.href;
@@ -125,10 +141,10 @@ test('história preserva ordem anterior → posterior numa comparação válida'
       loadManifest: async () => manifestWithShards(),
       lookup: async (_manifest, date, cnpj) => {
         lookups.push([date, cnpj]);
-        return { date, cnpj, data: null, source: 'https://archive.org/' + date };
+        return { date, cnpj, state:'found', data: {cnpj,razao_social:'Empresa '+date}, source: 'https://archive.org/' + date };
       },
     });
-    doc.at('historia-cnpj').value = '00000000E08G12';
+    doc.at('historia-cnpj').value = '33000167000101';
     doc.at('historia-inicio').value = '2026-06';
     doc.at('historia-fim').value = '2026-07';
     await doc.at('historia-form').listeners.get('submit')({ preventDefault() {} });
@@ -153,7 +169,9 @@ test('ficha descarta resposta tardia após mudança de CNPJ sem publicar URL ant
     doc.at('empresa-cnpj').value = '00000000E08G12';
     const submit = () => doc.at('empresa-form').listeners.get('submit')({ preventDefault() {} });
     const pending = submit();
-    assert.equal(doc.at('empresa-enviar').disabled, true);
+    assert.equal(doc.at('empresa-enviar').disabled, false,
+      'ficha mantém botão focável durante lookup');
+    assert.equal(doc.at('empresa-enviar').attributes['aria-disabled'], 'true');
     await submit(); // a synthetic repeated submit must not start another remote query
     assert.equal(lookups, 1);
     doc.at('empresa-cnpj').value = '00000000E08G13';
@@ -164,6 +182,8 @@ test('ficha descarta resposta tardia após mudança de CNPJ sem publicar URL ant
     assert.equal(doc.at('empresa-resultado').children.length, 0);
     assert.equal(globalThis.location.search, '', 'deep link must not record the stale request');
     assert.equal(doc.at('empresa-enviar').disabled, false);
+    assert.equal(doc.at('empresa-enviar').attributes['aria-disabled'], undefined,
+      'aria-disabled removido ao final do lookup obsoleto');
   });
 });
 
@@ -203,11 +223,14 @@ test('história interrompe segundo lookup quando a seleção muda após o primei
         throw new Error('second lookup must not run after a selection change');
       },
     });
-    doc.at('historia-cnpj').value = '00000000E08G12';
+    doc.at('historia-cnpj').value = '33000167000101';
     doc.at('historia-inicio').value = '2026-06';
     doc.at('historia-fim').value = '2026-07';
     const submit = () => doc.at('historia-form').listeners.get('submit')({ preventDefault() {} });
     const pending = submit();
+    assert.equal(doc.at('historia-enviar').disabled,false,
+      'comparador mantém foco durante leitura remota');
+    assert.equal(doc.at('historia-enviar').attributes['aria-disabled'],'true');
     await submit(); // reject reentrant comparisons during the first lookup
     assert.equal(lookups.length, 1);
     doc.at('historia-fim').value = '2026-06';
@@ -218,6 +241,8 @@ test('história interrompe segundo lookup quando a seleção muda após o primei
     assert.match(doc.at('historia-estado').textContent, /alterados durante a comparação/i);
     assert.equal(globalThis.location.search, '');
     assert.equal(doc.at('historia-enviar').disabled, false);
+    assert.equal(doc.at('historia-enviar').attributes['aria-disabled'], undefined,
+      'aria-disabled removido ao final de comparação obsoleta');
   });
 });
 
@@ -230,20 +255,140 @@ test('história descarta segunda resposta tardia após mudança do CNPJ', async 
     await mountHistory(doc, {
       loadManifest: async () => manifestWithShards(),
       lookup: async (_manifest, date, cnpj) => date === '2026-06'
-        ? { date, cnpj, source: 'https://archive.org/old', data: null }
+        ? { date, cnpj, source: 'https://archive.org/old', state:'found', data:{cnpj,razao_social:'Antiga'} }
         : new Promise(resolve => { finishNewer = resolve; }),
     });
-    doc.at('historia-cnpj').value = '00000000E08G12';
+    doc.at('historia-cnpj').value = '33000167000101';
     doc.at('historia-inicio').value = '2026-06';
     doc.at('historia-fim').value = '2026-07';
     const pending = doc.at('historia-form').listeners.get('submit')({ preventDefault() {} });
     await Promise.resolve(); // first lookup resolved; second has started
     assert.equal(typeof finishNewer, 'function');
-    doc.at('historia-cnpj').value = '00000000E08G13';
+    doc.at('historia-cnpj').value = '18236120000158';
     finishNewer({ date: '2026-07', source: 'https://archive.org/new', data: null });
     await pending;
     assert.equal(doc.at('historia-resultado').children.length, 0);
     assert.match(doc.at('historia-estado').textContent, /alterados durante a comparação/i);
     assert.equal(globalThis.location.search, '');
+  });
+});
+
+
+test('ficha: editar após resultado limpa deep link anterior mas preserva parâmetros alheios', async () => {
+  await withPageUrl(async () => {
+    globalThis.location.search = '?origem=exemplo';
+    const doc = fakeDocument(['empresa-cnpj','empresa-competencia','empresa-form',
+      'empresa-estado','empresa-resultado','empresa-enviar']);
+    let lookups = 0;
+    await mountCompany(doc, {
+      loadManifest: async () => manifestWithShards(),
+      lookup: async (_manifest,date,cnpj) => {
+        lookups++;
+        return {date,cnpj,data:{razao_social:'Empresa anterior'},source:'https://archive.org/old'};
+      },
+    });
+    doc.at('empresa-cnpj').value = '00000000E08G12';
+    await doc.at('empresa-form').listeners.get('submit')({preventDefault(){}});
+    assert.ok(doc.at('empresa-resultado').children.length > 0);
+    assert.equal(new URLSearchParams(globalThis.location.search).get('cnpj'), '00000000E08G12');
+    doc.at('empresa-cnpj').value = '00000000E08G13';
+    doc.at('empresa-cnpj').listeners.get('input')();
+    assert.equal(doc.at('empresa-resultado').children.length, 0);
+    assert.match(doc.at('empresa-estado').textContent,/Seleção alterada.*Pesquise novamente/);
+    assert.equal(lookups,1,'editar não consulta automaticamente');
+    assert.equal(globalThis.location.search, '?origem=exemplo', 'não manter CNPJ anterior na URL');
+    const reloadDoc = fakeDocument(['empresa-cnpj','empresa-competencia','empresa-form',
+      'empresa-estado','empresa-resultado','empresa-enviar']);
+    await mountCompany(reloadDoc, {
+      loadManifest: async () => manifestWithShards(),
+      lookup: async () => { lookups++; throw new Error('recarregar não deve consultar A'); },
+    });
+    assert.equal(lookups, 1, 'recarregar com URL limpa não reconsulta a seleção antiga');
+  });
+});
+
+test('ficha: edição A→B→A durante lookup descarta resposta antiga', async () => {
+  await withPageUrl(async () => {
+    const doc = fakeDocument(['empresa-cnpj','empresa-competencia','empresa-form',
+      'empresa-estado','empresa-resultado','empresa-enviar']);
+    let finish;
+    await mountCompany(doc, {
+      loadManifest: async () => manifestWithShards(),
+      lookup: async () => new Promise(resolve => { finish = resolve; }),
+    });
+    const input = doc.at('empresa-cnpj');
+    input.value = '00000000E08G12';
+    const pending = doc.at('empresa-form').listeners.get('submit')({preventDefault(){}});
+    input.value = '00000000E08G13';
+    input.listeners.get('input')();
+    input.value = '00000000E08G12';
+    input.listeners.get('input')();
+    finish({date:'2026-07',cnpj:'00000000E08G12',
+      data:{razao_social:'Resultado antigo'},source:'https://archive.org/old'});
+    await pending;
+    assert.equal(doc.at('empresa-resultado').children.length,0);
+    assert.match(doc.at('empresa-estado').textContent,/alterados durante a consulta/i);
+    assert.equal(globalThis.location.search,'','não publicar URL de requisição alterada');
+  });
+});
+
+test('história: editar competência limpa link antigo mas mantém parâmetros alheios', async () => {
+  await withPageUrl(async () => {
+    globalThis.location.search = '?origem=exemplo';
+    const doc = fakeDocument(['historia-competencias','historia-inicio','historia-fim',
+      'historia-form','historia-cnpj','historia-enviar','historia-estado','historia-resultado']);
+    let calls=0;
+    await mountHistory(doc,{
+      loadManifest:async()=>manifestWithShards(),
+      lookup:async (_manifest,date,cnpj)=>{
+        calls++;
+        return {date,cnpj,state:'found',data:{cnpj,razao_social:'Empresa '+date},source:'https://archive.org/'+date};
+      },
+    });
+    doc.at('historia-cnpj').value='33000167000101';
+    doc.at('historia-inicio').value='2026-06';
+    doc.at('historia-fim').value='2026-07';
+    await doc.at('historia-form').listeners.get('submit')({preventDefault(){}});
+    assert.ok(doc.at('historia-resultado').children.length>0);
+    assert.equal(new URLSearchParams(globalThis.location.search).get('de'), '2026-06');
+    doc.at('historia-fim').value='2026-06';
+    doc.at('historia-fim').listeners.get('change')();
+    assert.equal(doc.at('historia-resultado').children.length,0);
+    assert.match(doc.at('historia-estado').textContent,/Seleção alterada.*Pesquise novamente/);
+    assert.equal(calls,2);
+    assert.equal(globalThis.location.search, '?origem=exemplo');
+    const reloadDoc = fakeDocument(['historia-competencias','historia-inicio','historia-fim',
+      'historia-form','historia-cnpj','historia-enviar','historia-estado','historia-resultado']);
+    await mountHistory(reloadDoc, {loadManifest:async()=>manifestWithShards()});
+    assert.equal(reloadDoc.at('historia-cnpj').value, '', 'URL limpa não restaura CNPJ antigo');
+  });
+});
+
+test('história: edição A→B→A enquanto segunda fonte demora descarta comparação', async () => {
+  await withPageUrl(async () => {
+    const doc = fakeDocument(['historia-competencias','historia-inicio','historia-fim',
+      'historia-form','historia-cnpj','historia-enviar','historia-estado','historia-resultado']);
+    let finishNewer;
+    await mountHistory(doc,{
+      loadManifest:async()=>manifestWithShards(),
+      lookup:async (_manifest,date,cnpj)=>date==='2026-06'
+        ? {date,cnpj,state:'found',data:{cnpj,razao_social:'Antiga'},source:'https://archive.org/old'}
+        : new Promise(resolve=>{finishNewer=resolve;}),
+    });
+    doc.at('historia-cnpj').value='33000167000101';
+    doc.at('historia-inicio').value='2026-06';
+    doc.at('historia-fim').value='2026-07';
+    const pending=doc.at('historia-form').listeners.get('submit')({preventDefault(){}});
+    await Promise.resolve();
+    assert.equal(typeof finishNewer,'function');
+    doc.at('historia-cnpj').value='18236120000158';
+    doc.at('historia-cnpj').listeners.get('input')();
+    doc.at('historia-cnpj').value='33000167000101';
+    doc.at('historia-cnpj').listeners.get('input')();
+    finishNewer({date:'2026-07',data:null,source:'https://archive.org/new'});
+    await pending;
+    assert.equal(doc.at('historia-resultado').children.length,0);
+    assert.match(doc.at('historia-estado').textContent,/alterados durante a comparação/i);
+    assert.equal(globalThis.location.search,'');
   });
 });

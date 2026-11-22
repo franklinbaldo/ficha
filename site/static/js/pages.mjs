@@ -1,61 +1,19 @@
 import { archiveView, archivalFileEntries, catalogueTotals, competenceLabel,
   countKinds, fetchManifest, formatBytes, rowCountSeries, safeExternalURL,
   snapshotsDescending } from './catalog.mjs';
-import { canonicalCnpj, compareRecords, displayValue, fetchRecordAt, RECORD_FIELDS } from './record.mjs';
+import { canonicalCnpj, displayValue, RECORD_FIELDS } from './record.mjs';
+import { fetchCompanyByCnpj } from './atomic-browser.mjs';
+import { CnpjInputError } from './atomic-record.mjs';
+import {BASE,byId,create,add,anchor,option,status,setParams,params,watchSelection,populateDateSelect} from './page-helpers.mjs';
+import {mountHistory} from './history.mjs';
+export {mountHistory,renderHistoryComparison,fetchHistoryRecordAt} from './history.mjs';
 
-const BASE = '/ficha/';
-const byId = (doc, id) => doc.getElementById(id);
-function create(doc, tag, text = '', className = '') {
-  const node = doc.createElement(tag);
-  if (text !== '') node.textContent = text;
-  if (className) node.className = className;
-  return node;
-}
-function add(doc, parent, tag, text = '', className = '') {
-  const child = create(doc, tag, text, className);
-  parent.append(child);
-  return child;
-}
-function anchor(doc, parent, label, url, external = false) {
-  const safe = external ? safeExternalURL(url) : url;
-  if (!safe) return add(doc, parent, 'span', 'Link não declarado');
-  const link = add(doc, parent, 'a', label);
-  link.href = safe;
-  if (external) { link.target = '_blank'; link.rel = 'noopener noreferrer'; }
-  return link;
-}
-function option(doc, select, value, label) {
-  const item = create(doc,'option',label);
-  item.value = value;
-  select.append(item);
-}
-function status(node, message, error = false) {
-  node.textContent = message;
-  node.dataset.kind = error ? 'error' : 'info';
-}
-function setParams(params) {
-  const url = new URL(globalThis.location.href);
-  for (const [key, val] of Object.entries(params)) {
-    if (val === null || val === '') url.searchParams.delete(key);
-    else url.searchParams.set(key, val);
-  }
-  globalThis.history.replaceState(null, '', url);
-}
-function params() { return new URLSearchParams(globalThis.location.search); }
 function showProvenance(doc, parent, date, url) {
   const strip = add(doc,parent,'div','','provenance-strip');
   add(doc,strip,'span','Competência ' + date);
-  add(doc,strip,'span','Receita Federal · snapshot arquivado');
-  anchor(doc,strip,'Arquivo de origem',url,true);
-  add(doc,parent,'p','O registro corresponde à competência indicada, não necessariamente à situação atual. O acesso ao arquivo não certifica seu conteúdo integral.','fineprint');
-}
-function populateDateSelect(doc, select, manifest, selected) {
-  select.replaceChildren();
-  for (const snap of snapshotsDescending(manifest)) {
-    option(doc, select, snap.date,
-      competenceLabel(snap.date) + ' · ' + snap.date + (snap.date === manifest.current ? ' · referência' : ''));
-  }
-  if ([...select.options].some(o => o.value === selected)) select.value = selected;
+  add(doc,strip,'span','Origem declarada: Receita Federal · competência no catálogo');
+  anchor(doc,strip,'Arquivo indicado no catálogo',url,true);
+  add(doc,parent,'p','A consulta se refere à competência indicada, não necessariamente à situação atual. O acesso ao arquivo não certifica seu conteúdo integral.','fineprint');
 }
 function renderFieldList(doc, parent, record) {
   const list = add(doc,parent,'dl','','record-grid');
@@ -65,12 +23,39 @@ function renderFieldList(doc, parent, record) {
     add(doc,cell,'dd',displayValue(record[field]));
   }
 }
+/** An unrecognised or contradictory reader state is not a negative CNPJ search. */
+function requireCompanyObservation(result) {
+  if (!result || !['found', 'absent-in-snapshot', 'artifact-unavailable'].includes(result.state)) {
+    throw new Error('Estado do registro Protobuf desconhecido; consulta inconclusiva');
+  }
+  if (result.state === 'found' &&
+      (!result.data || typeof result.data !== 'object' || Array.isArray(result.data))) {
+    throw new Error('Registro marcado como encontrado sem dados; consulta inconclusiva');
+  }
+  if (result.state !== 'found' && result.data != null) {
+    throw new Error('Estado do registro contradiz os dados retornados; consulta inconclusiva');
+  }
+  if (result.state === 'found' && result.data.cnpj !== result.cnpj) {
+    throw new Error('CNPJ do registro divergente da consulta; consulta inconclusiva');
+  }
+  return result;
+}
+
 export function renderCompanyRecord(doc, parent, result) {
+  requireCompanyObservation(result);
   parent.replaceChildren();
+  if (result.state === 'artifact-unavailable') {
+    add(doc,parent,'h2','Arquivo indisponível nesta competência');
+    add(doc,parent,'p','O arquivo do registro não respondeu (HTTP 404). Consulta inconclusiva: isso não comprova ausência da empresa.');
+    showProvenance(doc,parent,result.date,result.archiveUrl || result.source);
+    return;
+  }
   if (!result.data) {
-    add(doc,parent,'h2','Nenhum registro encontrado nesta competência');
-    add(doc,parent,'p','A ausência na consulta não comprova encerramento, inexistência histórica ou mudança cadastral.');
-    showProvenance(doc,parent,result.date,result.source);
+    add(doc,parent,'h2',result.state === 'absent-in-snapshot'
+      ? 'CNPJ não localizado no registro Protobuf desta competência'
+      : 'Nenhum registro encontrado nesta competência');
+    add(doc,parent,'p','A ausência nesta consulta não comprova encerramento, inexistência histórica ou mudança cadastral.');
+    showProvenance(doc,parent,result.date,result.archiveUrl || result.source);
     return;
   }
   add(doc,parent,'p','FICHA CADASTRAL','eyebrow');
@@ -79,10 +64,13 @@ export function renderCompanyRecord(doc, parent, result) {
   add(doc,header,'span','CNPJ ' + result.cnpj,'mono');
   anchor(doc,header,'Comparar competências',BASE+'historia/?cnpj='+encodeURIComponent(result.cnpj));
   renderFieldList(doc,parent,result.data);
-  showProvenance(doc,parent,result.date,result.source);
+  if (result.partial) {
+    add(doc,parent,'p','Porte empresarial: Não determinado. O código Protobuf legado não permite afirmar o porte RFB. Simples/MEI não informados também permanecem indeterminados.','fineprint');
+  }
+  showProvenance(doc,parent,result.date,result.archiveUrl || result.source);
 }
 
-export async function mountCompany(doc, {loadManifest = fetchManifest, lookup = fetchRecordAt} = {}) {
+export async function mountCompany(doc, {loadManifest = fetchManifest, lookup = fetchCompanyByCnpj} = {}) {
   const input = byId(doc,'empresa-cnpj'), select = byId(doc,'empresa-competencia');
   const form = byId(doc,'empresa-form'), state = byId(doc,'empresa-estado');
   const output = byId(doc,'empresa-resultado'), submit = byId(doc,'empresa-enviar');
@@ -98,123 +86,61 @@ export async function mountCompany(doc, {loadManifest = fetchManifest, lookup = 
     return;
   }
   let busy = false;
+  const selection = watchSelection(
+    [[input, 'input'], [select, 'change']], state, output,
+    'CNPJ ou competência alterados durante a consulta. Aguarde a conclusão para pesquisar novamente.',
+    ['cnpj', 'competencia']);
   async function lookupSubmit(event) {
     event?.preventDefault();
     if (busy) return;
     const cnpj = canonicalCnpj(input.value);
-    if (!cnpj) { status(state,'Informe um CNPJ completo, numérico ou alfanumérico.',true); output.replaceChildren(); return; }
+    if (!cnpj) { setParams({cnpj:null,competencia:null}); status(state,'Informe um CNPJ completo, numérico ou alfanumérico.',true); output.replaceChildren(); selection.markTerminal(); return; }
     const date = select.value;
-    const stillCurrent = () => canonicalCnpj(input.value) === cnpj && select.value === date;
+    const version = selection.begin();
+    const stillCurrent = () => selection.current(version) &&
+      canonicalCnpj(input.value) === cnpj && select.value === date;
     const discarded = 'CNPJ ou competência alterados durante a consulta. Pesquise novamente.';
     busy = true;
-    submit.disabled = true;
+    // Preserve keyboard focus while the archival request is pending.
+    // The busy guard still prevents duplicate lookups.
+    submit.setAttribute('aria-disabled', 'true');
     output.replaceChildren();
     status(state,'Consultando o registro na competência '+date+'…');
     try {
       const result = await lookup(manifest,date,cnpj);
       // A delayed archival response must not be presented as the new selection.
       if (!stillCurrent()) { status(state,discarded); return; }
+      if (!result || result.cnpj !== cnpj || result.date !== date) {
+        throw new Error('Identidade ou competência divergente na resposta; consulta inconclusiva');
+      }
       setParams({cnpj,competencia:date});
       renderCompanyRecord(doc,output,result);
-      status(state,'Consulta concluída para '+date+'.');
+      if (result.state === 'artifact-unavailable') {
+        status(state,'Consulta inconclusiva: arquivo indisponível nesta competência (HTTP 404).',true);
+      } else if (result.state === 'absent-in-snapshot') {
+        status(state,'Consulta concluída: CNPJ não localizado no registro desta competência.');
+      } else {
+        status(state,'Consulta concluída para '+date+'.');
+      }
     } catch (error) {
       if (!stillCurrent()) { status(state,discarded); return; }
-      setParams({cnpj,competencia:date});
-      status(state,'Consulta indisponível: '+error.message,true);
-      add(doc,output,'p','Os arquivos continuam referenciados no catálogo. A leitura remota depende de um transporte compatível com CORS e HTTP Range.');
-      anchor(doc,output,'Consultar o catálogo de arquivos',BASE+'acervo/?competencia='+date);
-    } finally { busy = false; submit.disabled = false; }
+      if (error instanceof CnpjInputError) {
+        // Validation rejected this input before decoder or GET: do not
+        // announce an archival outage or share a URL as a completed query.
+        setParams({cnpj:null,competencia:null});
+        status(state,error.message,true);
+        add(doc,output,'p','Corrija o CNPJ antes de pesquisar novamente.');
+      } else {
+        setParams({cnpj,competencia:date});
+        status(state,'Consulta indisponível: '+error.message,true);
+        add(doc,output,'p','Não foi possível concluir a leitura remota. Isso não demonstra ausência de CNPJ no acervo.');
+        anchor(doc,output,'Consultar o catálogo de arquivos',BASE+'acervo/?competencia='+date);
+      }
+    } finally { busy = false; selection.finish(); submit.removeAttribute('aria-disabled'); }
   }
   form.addEventListener('submit',lookupSubmit);
   const initial = params().get('cnpj');
   if (initial) { input.value = initial; await lookupSubmit(); }
-}
-
-export function renderHistoryComparison(doc, parent, older, newer) {
-  parent.replaceChildren();
-  const title = add(doc,parent,'h2','Comparação de registros observados');
-  title.className = 'section-title';
-  const provenance = add(doc,parent,'p','Competências '+older.date+' e '+newer.date+'. As diferenças foram observadas entre snapshots; não representam datas exatas de alteração.');
-  provenance.className='fineprint';
-  if (!older.data || !newer.data) {
-    add(doc,parent,'p','Um ou ambos os snapshots não retornaram registro para este CNPJ. Não é possível concluir que a empresa nasceu, encerrou atividades ou mudou nesta data.');
-  } else {
-    const table = add(doc,parent,'table','','comparison-table');
-    const thead = add(doc,table,'thead'); const headers=add(doc,thead,'tr');
-    for(const text of ['Campo',older.date,newer.date]) add(doc,headers,'th',text);
-    const tbody = add(doc,table,'tbody');
-    for(const row of compareRecords(older.data,newer.data)) {
-      const tr = add(doc,tbody,'tr');
-      if(row.changed) tr.className='changed';
-      add(doc,tr,'th',row.label);
-      add(doc,tr,'td',row.before);
-      add(doc,tr,'td',row.after);
-    }
-  }
-  const sources = add(doc,parent,'div','','source-links');
-  anchor(doc,sources,'Fonte '+older.date,older.source,true);
-  anchor(doc,sources,'Fonte '+newer.date,newer.source,true);
-}
-
-export async function mountHistory(doc,{loadManifest=fetchManifest,lookup=fetchRecordAt}={}) {
-  const list=byId(doc,'historia-competencias'), from=byId(doc,'historia-inicio');
-  const to=byId(doc,'historia-fim'), form=byId(doc,'historia-form');
-  const input=byId(doc,'historia-cnpj'), button=byId(doc,'historia-enviar');
-  const state=byId(doc,'historia-estado'), output=byId(doc,'historia-resultado');
-  if (![list,from,to,form,input,button,state,output].every(Boolean)) return;
-  let manifest;
-  try { manifest=await loadManifest(); }
-  catch(error){ status(state,'Catálogo indisponível: '+error.message,true); button.disabled=true; return; }
-  const snaps=snapshotsDescending(manifest);
-  list.replaceChildren();
-  for (const snap of snaps) {
-    const li=add(doc,list,'li','','timeline-item');
-    add(doc,li,'span',snap.date,'mono');
-    add(doc,li,'strong',competenceLabel(snap.date));
-    if(snap.date===manifest.current) add(doc,li,'small','Referência do manifesto');
-  }
-  populateDateSelect(doc,from,manifest,params().get('de') || snaps.at(-1)?.date);
-  populateDateSelect(doc,to,manifest,params().get('ate') || manifest.current);
-  const initial=params().get('cnpj');
-  if(initial) input.value=initial;
-  if(snaps.length<2){
-    status(state,'O manifesto contém somente uma competência. A comparação exige pelo menos duas observações reais.');
-    button.disabled=true;
-    return;
-  }
-  status(state,'Escolha duas competências existentes. A comparação só será executada após solicitar.');
-  let busy = false;
-  form.addEventListener('submit',async event=>{
-    event.preventDefault();
-    if (busy) return;
-    const cnpj=canonicalCnpj(input.value);
-    output.replaceChildren();
-    if(!cnpj){status(state,'Informe um CNPJ completo.',true);return;}
-    const start=from.value, end=to.value;
-    if(start===end){status(state,'Selecione duas competências diferentes.',true);return;}
-    if(start>end){status(state,'A competência inicial deve ser anterior à competência final.',true);return;}
-    const stillCurrent = () => canonicalCnpj(input.value) === cnpj &&
-      from.value === start && to.value === end;
-    const discarded = 'CNPJ ou competências alterados durante a comparação. Pesquise novamente.';
-    busy = true;
-    button.disabled=true;
-    status(state,'Consultando os dois snapshots de forma sequencial…');
-    try {
-      const older=await lookup(manifest,start,cnpj);
-      // Avoid a second archival GET if the user changed the requested comparison.
-      if (!stillCurrent()) { status(state,discarded); return; }
-      const newer=await lookup(manifest,end,cnpj);
-      if (!stillCurrent()) { status(state,discarded); return; }
-      setParams({cnpj,de:start,ate:end});
-      renderHistoryComparison(doc,output,older,newer);
-      status(state,'Comparação concluída. Alterações são diferenças entre observações, não datas de eventos.');
-    }catch(error){
-      if (!stillCurrent()) { status(state,discarded); return; }
-      setParams({cnpj,de:start,ate:end});
-      status(state,'Comparação indisponível: '+error.message,true);
-      anchor(doc,output,'Ver competências disponíveis',BASE+'acervo/');
-    }finally{busy=false;button.disabled=false;}
-  });
 }
 
 export function renderArchiveSelection(doc, parent, manifest, date) {
@@ -274,8 +200,11 @@ export function renderExploreAssets(doc,parent,manifest,date,filter='') {
   const snapshot=snapshotsDescending(manifest).find(s=>s.date===date);
   if(!snapshot) {add(doc,parent,'p','Competência não publicada.');return;}
   const term=filter.trim().toLowerCase();
-  const entries=archivalFileEntries(snapshot).filter(e=>e.key.toLowerCase().includes(term));
-  const max=Math.max(1,...entries.map(e=>e.size ?? 0));
+  const allEntries=archivalFileEntries(snapshot);
+  const entries=allEntries.filter(e=>e.key.toLowerCase().includes(term));
+  // Keep the within-competence scale stable when a filter hides the largest file.
+  // Otherwise the same file appears to grow merely because the list was filtered.
+  const max=Math.max(1,...allEntries.map(e=>e.size ?? 0));
   const title=add(doc,parent,'p',entries.length+' arquivos correspondentes · '+date,'fineprint');
   title.className='fineprint';
   for(const file of entries) {
@@ -291,6 +220,7 @@ export function renderExploreAssets(doc,parent,manifest,date,filter='') {
     track.setAttribute('aria-label',file.key+': '+formatBytes(file.size));
   }
   if(!entries.length) add(doc,parent,'p','Nenhum conjunto corresponde ao filtro.');
+  return entries.length;
 }
 
 export function renderCountSeries(doc,parent,manifest,kind) {
@@ -331,13 +261,13 @@ export async function mountExplore(doc,{loadManifest=fetchManifest}={}) {
       const snap=snaps.find(s=>s.date===select.value);
       const totals=catalogueTotals(snap);
       counter.textContent=totals.fileCount+' arquivos · '+formatBytes(totals.bytes)+' declarados';
-      renderExploreAssets(doc,output,manifest,select.value,filter.value);
+      const visible=renderExploreAssets(doc,output,manifest,select.value,filter.value);
       setParams({competencia:select.value});
+      status(state,'Exibindo '+visible+' de '+totals.fileCount+' arquivos declarados em '+select.value+'. Tamanhos do manifesto, não quantidade de empresas nem indicadores por UF.');
     };
     select.addEventListener('change',paint);
     filter.addEventListener('input',paint);
     paint();
-    status(state,'Visualização dos tamanhos dos arquivos no catálogo. Não representa quantidade de empresas, nem indicadores por UF.');
   }catch(error){status(state,'Exploração indisponível: '+error.message,true);}
 }
 

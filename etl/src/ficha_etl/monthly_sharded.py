@@ -21,10 +21,19 @@ import os
 import sys
 import time
 from pathlib import Path
+from typing import BinaryIO
 
 import internetarchive as ia
 
 from . import transform, upload
+from .monthly_raw_custody_authorization import _require_raw_custody_authorization
+from .monthly_source_bag_gate import _write_receipt
+from .monthly_source_authorization import (
+    _SOURCE_SCHEMA,
+    _bind_source_receipt,
+    _require_source_attestation,
+    _source_receipt_path,
+)
 from .cnpj import SHARD_BY as COMPANIES_SHARD_BY
 from .pack import SCHEMA_VERSION as COMPANIES_WIRE_VERSION
 from .manifest import (
@@ -34,6 +43,7 @@ from .manifest import (
     update_manifest,
     write_production_descriptor,
 )
+from .monthly_estabelecimento_gate import run_monthly_gate
 from .publication_upload import submit_outputs_fail_closed
 from .remote_reuse import fetch_item_metadata
 from .shard_publish import ShardPublishError
@@ -244,10 +254,13 @@ def _shard_uploader(month: str):
     secret_key = _require_secret("IA_SECRET_KEY")
     identifier = f"ficha-{month}"
 
-    def upload_one(name: str, path: Path) -> None:
+    def upload_one(name: str, source: Path | BinaryIO) -> None:
+        # Prepared shards supply an already verified, anonymous open handle.
+        # The legacy one-step publisher still passes a pathname.
+        file_source = str(source) if isinstance(source, Path) else source
         responses = ia.upload(
             identifier,
-            files={name: str(path)},
+            files={name: file_source},
             access_key=access_key,
             secret_key=secret_key,
             retries=5,
@@ -314,6 +327,19 @@ def command_produce(args: argparse.Namespace) -> None:
     cache_dir = Path(args.cache_dir)
     descriptor_path = Path(args.descriptor)
 
+    # Even fetch/extract errors must invalidate a previous successful receipt.
+    _write_receipt(
+        _source_receipt_path(output_dir),
+        {
+            "schema": _SOURCE_SCHEMA,
+            "month": month,
+            "status": "failed",
+            "identity_level": "parsed-duckdb-source-not-zip-custody",
+            "reason": "produce has not completed source validation",
+            "parts": [],
+        },
+    )
+
     transform.transform_snapshot(
         month,
         cache_dir=cache_dir,
@@ -324,17 +350,43 @@ def command_produce(args: argparse.Namespace) -> None:
         reject_empty_estabelecimentos=True,
     )
 
-    # Transform may reject an invalid source, including a zero-byte CSV.
-    # Do not upload raw bytes or publish a descriptor on that failure.
-    if not args.skip_raw_upload:
-        upload.stream_raw_zips_to_ia(
-            month,
-            access_key=_require_secret("IA_ACCESS_KEY"),
-            secret_key=_require_secret("IA_SECRET_KEY"),
-        )
+    # Fail closed on duplicate keys and invalid CNPJ check digits before
+    # *any* raw ZIP PUT. Evidence survives gate failures as a job artifact.
+    run_monthly_gate(
+        month,
+        output_dir / "cnpjs.parquet",
+        output_dir.parent / "evidence" / "monthly-estabelecimento-key-gate.json",
+        output_dir.parent / "monthly-estabelecimento-key-gate",
+    )
 
+    # Bind the parsed-source witness to the descriptor before ANY first PUT.
+    # ZIP custody and retry pinning remain separate requirements under #281.
     descriptor = build_production_descriptor(month, output_dir)
+    _bind_source_receipt(month, output_dir, descriptor)
     write_production_descriptor(descriptor_path, descriptor)
+
+    if not args.skip_raw_upload:
+        try:
+            raw_outcome = upload.stream_raw_zips_to_ia(
+                month,
+                access_key=_require_secret("IA_ACCESS_KEY"),
+                secret_key=_require_secret("IA_SECRET_KEY"),
+            )
+        except Exception:
+            # The descriptor may survive a partial remote raw upload, but may
+            # never authorize independent derived uploads after that failure.
+            descriptor["source_attestation"]["raw_upload_status"] = "unknown"
+            write_production_descriptor(descriptor_path, descriptor)
+            raise
+        # No current transport outcome certifies remote bytes, S coorte or F fence.
+        # A legacy mock returning None is also not evidence of success.
+        descriptor["source_attestation"]["raw_upload_status"] = {
+            upload.RawStreamOutcome.ALL_NAMES_PRESENT_UNPROVEN: "skipped_existing",
+            upload.RawStreamOutcome.SENT_UNVERIFIED: "sent_unverified",
+        }.get(raw_outcome, "unknown")
+        write_production_descriptor(descriptor_path, descriptor)
+    # --skip-raw-upload deliberately leaves the descriptor pending. A future
+    # publication requires a separately verified raw completion contract.
     print(f"production descriptor written before output upload: {descriptor_path}")
 
 
@@ -343,6 +395,8 @@ def command_upload_outputs(args: argparse.Namespace) -> None:
     # A separately produced snapshot must not bypass the early guard.
     _require_safe_legacy_shard_upload()
     descriptor = _load_descriptor(Path(args.descriptor), month)
+    _require_source_attestation(month, Path(args.output_dir), descriptor)
+    _require_raw_custody_authorization(month, descriptor)
     plan = submit_outputs_fail_closed(
         month,
         Path(args.output_dir),
@@ -467,6 +521,7 @@ def _require_distinct_finalize_outputs(
     manifest_path: Path,
     descriptor_path: Path,
     receipts_dir: Path,
+    source_receipt: Path | None = None,
 ) -> None:
     """Reject aliasing of outputs with each other or immutable inputs.
 
@@ -486,6 +541,23 @@ def _require_distinct_finalize_outputs(
             if same_path or same_inode:
                 raise ValueError(f"finalize output paths must be distinct: {name} and {other_name}")
 
+    if source_receipt is not None:
+        # Separate immutable input artifact. Do not let a symlink or hardlink
+        # turn any output or the descriptor into this authority.
+        for name, path in paths:
+            if path.resolve() == source_receipt.resolve() or (
+                path.exists() and source_receipt.exists() and path.samefile(source_receipt)
+            ):
+                raise ValueError(f"source receipt aliases finalize {name}")
+        for prefix in PUBLIC_COMPANIES_GEOMETRY.prefixes():
+            shard_receipt = receipts_dir / f"receipt-{prefix}.json"
+            if shard_receipt.resolve() == source_receipt.resolve() or (
+                shard_receipt.exists()
+                and source_receipt.exists()
+                and shard_receipt.samefile(source_receipt)
+            ):
+                raise ValueError(f"source receipt aliases shard receipt-{prefix}")
+
     # A receipt is read-only input. Guard it before _load_all_receipts so that
     # a successful finalize cannot overwrite its own production checkpoint.
     for prefix in PUBLIC_COMPANIES_GEOMETRY.prefixes():
@@ -501,14 +573,29 @@ def _require_distinct_finalize_outputs(
 
 def command_finalize(args: argparse.Namespace) -> None:
     month = _require_month(args.month)
+    source_receipt = getattr(args, "source_receipt", None)
+    if not source_receipt:
+        raise ValueError("finalize requires --source-receipt from the producer artifact")
+    source_receipt_path = Path(source_receipt)
     _require_distinct_finalize_outputs(
         Path(args.snapshot_entry),
         Path(args.verification),
         Path(args.manifest),
         Path(args.descriptor),
         Path(args.receipts_dir),
+        source_receipt_path,
     )
     descriptor = _load_descriptor(Path(args.descriptor), month)
+    # Must be a separately transported producer receipt, validated before GET/HEAD
+    # and before building a candidate. The 100-shard gate still follows.
+    _require_source_attestation(
+        month,
+        Path(args.descriptor).parent / "output",
+        descriptor,
+        receipt_path=source_receipt_path,
+        require_run_id=True,
+    )
+    _require_raw_custody_authorization(month, descriptor)
     pinned = materialization_inputs_from_descriptor(descriptor)
     receipts = _load_all_receipts(Path(args.receipts_dir), month)
 
@@ -569,6 +656,17 @@ def command_finalize(args: argparse.Namespace) -> None:
             )
         )
 
+    # Detect changes to the external artifact while 100 remote shards were
+    # being verified. This narrows, but does not eliminate, TOCTOU if a local
+    # adversary can replace evidence immediately after the second read.
+    _require_source_attestation(
+        month,
+        Path(args.descriptor).parent / "output",
+        descriptor,
+        receipt_path=source_receipt_path,
+        require_run_id=True,
+    )
+    _require_raw_custody_authorization(month, descriptor)
     entry = finalize_sharded_snapshot_entry(descriptor, identities)
     snapshot_entry_path = Path(args.snapshot_entry)
     verification_path = Path(args.verification)
@@ -650,6 +748,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("finalize")
     p.add_argument("--month", required=True)
+    p.add_argument("--source-receipt", required=True)
     p.add_argument("--descriptor", required=True)
     p.add_argument("--receipts-dir", required=True)
     p.add_argument("--manifest", required=True)

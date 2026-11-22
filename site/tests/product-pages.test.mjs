@@ -46,7 +46,7 @@ test('só URLs HTTPS e hashes de 64 caracteres entram na apresentação', () => 
 
 test('um HTTP 404 não é interpretado como catálogo vazio', async () => {
   await assert.rejects(fetchManifest({fetchImpl:async()=>({ok:false,status:404})}),/HTTP 404/);
-  await assert.rejects(fetchManifest({fetchImpl:async()=>({ok:true,json:async()=>({current:'2026-07',snapshots:[]})})}),/ausente/);
+  await assert.rejects(fetchManifest({fetchImpl:async()=>({ok:true,status:200,json:async()=>({current:'2026-07',snapshots:[]})})}),/ausente/);
 });
 
 test('CNPJ alfanumérico é textual, com validação antes de qualquer I/O', async () => {
@@ -182,6 +182,36 @@ test('SSG tem páginas novas com formulários e navegação, sem Astro/Svelte', 
     assert.ok(template.includes(marker),marker);
   }
   const home=await read('../content/index.md');
-  assert.ok(home.includes('Cada empresa tem'));
+  assert.ok(home.includes('Consulte empresas e seu'));
   assert.ok(home.includes('id="busca-form"'));
+  assert.match(home, /<h2 id="referencia-titulo">Competência de referência<\/h2>/);
+  assert.doesNotMatch(home, /<h2 id="referencia-titulo">Competência atual<\/h2>/);
+});
+
+
+test('grafo estático Protobuf não carrega módulos analíticos ao abrir Empresa/História', async () => {
+  // The browser downloads static ESM dependencies before any form submission.
+  // Dynamic imports inside fetchRecordAt are intentionally excluded.
+  const staticDeps = source => [...source.matchAll(
+    /^\s*(?:import|export)\s+(?:[^;]*?\s+from\s+)?['"](\.\/[^'"]+\.mjs)['"]\s*;?/gm,
+  )].map(match => match[1]);
+  // Negative control: prove the auditor would catch the import that caused
+  // the unwanted eager download.
+  assert.deepEqual(staticDeps("import { createDuckDBEngine } from './duckdb-runtime.mjs';"),
+    ['./duckdb-runtime.mjs']);
+  const visited = new Set();
+  async function visit(name) {
+    if (visited.has(name)) return;
+    visited.add(name);
+    const source = await read('../static/js/' + name);
+    for (const relative of staticDeps(source)) {
+      assert.match(relative, /^\.\/[a-z0-9-]+\.mjs$/, 'revisar import ESM fora da pasta');
+      await visit(relative.slice(2));
+    }
+  }
+  await visit('pages.mjs');
+  assert.ok(visited.has('record.mjs'), 'o teste deve atravessar o módulo legado de apresentação');
+  for (const forbidden of ['duckdb-runtime.mjs', 'dataset.mjs', 'search-app.mjs']) {
+    assert.ok(!visited.has(forbidden), 'módulo analítico eager: ' + forbidden);
+  }
 });

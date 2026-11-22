@@ -7,12 +7,14 @@ This file is independent of the implementation on the Castor #246 branch.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
+from ficha_etl.monthly_source_bag_gate import EXPECTED_PARTS, _write_receipt
 from ficha_etl import manifest as manifest_mod
 from ficha_etl import monthly_sharded, shard_transfer
 from ficha_etl.shard_publish import ShardPublishError, publish_one_shard
@@ -20,6 +22,21 @@ from ficha_etl.shard_remote import PUBLIC_COMPANIES_GEOMETRY
 from ficha_etl.shard_transfer import ShardTransferAction
 
 MONTH = "2026-08"
+
+
+@pytest.fixture(autouse=True)
+def _isolate_legacy_manifest_writer_from_raw_custody(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """These tests exercise *downstream* compensation on synthetic v1 artifacts.
+
+    Production still enforces its independent raw v2 guard. The real guard is
+    covered without patching in test_castor_raw_custody_authorization.py.
+    """
+    monkeypatch.setattr(
+        monthly_sharded, "_require_raw_custody_authorization", lambda *a, **kw: None
+    )
+
 
 # Single producer-owned fixture, read by both Python and TS P0-D tests.
 PACKER_CA_MEMBER_HEX = (
@@ -82,6 +99,13 @@ def _receipt(prefix: str) -> dict:
     }
 
 
+@pytest.fixture(autouse=True)
+def _finalize_attempt(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("FICHA_SOURCE_RUN_ID", "test:finalize:1")
+    monkeypatch.delenv("GITHUB_RUN_ID", raising=False)
+    monkeypatch.delenv("GITHUB_RUN_ATTEMPT", raising=False)
+
+
 def _setup(tmp_path: Path, *, missing_receipt: str | None = None):
     receipts = tmp_path / "receipts"
     receipts.mkdir()
@@ -93,7 +117,34 @@ def _setup(tmp_path: Path, *, missing_receipt: str | None = None):
             )
 
     descriptor = tmp_path / "descriptor.json"
-    descriptor.write_text(json.dumps(_descriptor()), encoding="utf-8")
+    source = tmp_path / "source-receipt.json"
+    source_payload = {
+        "schema": "ficha-parsed-rfb-key-multiset-v1",
+        "month": MONTH,
+        "status": "ok",
+        "run_id": "test:finalize:1",
+        "identity_level": "parsed-duckdb-source-not-zip-custody",
+        "parts": [
+            {"zip_name": name, "parsed_csv_size": 100, "parsed_csv_rows": 1}
+            for name in EXPECTED_PARTS
+        ],
+        "parsed_source_rows": 10,
+        "produced_rows": 10,
+        "source_only_key_exists": False,
+        "output_only_key_exists": False,
+    }
+    _write_receipt(source, source_payload)
+    data = _descriptor()
+    data["row_counts"] = {"cnpjs": 10}
+    data["source_attestation"] = {
+        "schema": "ficha-parsed-source-receipt-binding-v1",
+        "month": MONTH,
+        "run_id": "test:finalize:1",
+        "receipt_sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
+        "cnpjs_sha256": data["files"]["cnpjs"]["sha256"],
+        "raw_upload_status": "complete",
+    }
+    descriptor.write_text(json.dumps(data), encoding="utf-8")
     manifest = tmp_path / "manifest.json"
     # Noncanonical bytes expose rewrites even if JSON semantics stay unchanged.
     before = b'{"current":"2026-07","snapshots":[{"date":"2026-07"}]}\n'
@@ -101,6 +152,7 @@ def _setup(tmp_path: Path, *, missing_receipt: str | None = None):
     args = argparse.Namespace(
         month=MONTH,
         descriptor=descriptor,
+        source_receipt=source,
         receipts_dir=receipts,
         attempts=1,
         interval_seconds=0,

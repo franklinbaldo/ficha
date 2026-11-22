@@ -23,6 +23,51 @@ if (siteMode === 'ssg') {
   const hasSearch = (await page.$('#busca-form')) !== null;
   if (hasSearch) {
     await page.waitForSelector('#busca-form', { timeout: 15_000 });
+    await page.locator('aside[aria-labelledby="referencia-titulo"] #competencia')
+      .waitFor({ state: 'visible' });
+    for (const viewport of [{ width: 390, height: 844 }, { width: 1440, height: 960 }]) {
+      await page.setViewportSize(viewport);
+      const pageWidth = await page.evaluate(() => document.documentElement.scrollWidth);
+      if (pageWidth > viewport.width) {
+        throw new Error(`Home SSG: conteúdo de ${pageWidth}px excede viewport de ${viewport.width}px`);
+      }
+    }
+    await page.locator('footer #ssg-search-btn').waitFor({ state: 'visible' });
+    await page.screenshot({ path: `${outputDir}/home-desktop.png`, fullPage: true });
+    await page.setViewportSize({ width: 390, height: 844 });
+    // Text-only enlargement (not native browser zoom) must reflow at 320/375px.
+    for (const width of [320, 375]) {
+      await page.setViewportSize({ width, height: 812 });
+      const scrollWidth = await page.evaluate(() => {
+        document.documentElement.style.fontSize = '200%';
+        return document.documentElement.scrollWidth;
+      });
+      if (scrollWidth > width) {
+        throw new Error(`Home SSG: texto 200% transborda ${scrollWidth}px / ${width}px`);
+      }
+    }
+    await page.evaluate(() => document.documentElement.style.removeProperty('font-size'));
+    await page.setViewportSize({ width: 390, height: 844 });
+    // A malformed numeric CNPJ must fail locally, before any PB/Parquet/WASM
+    // request or navigation. This exercises the published UI, not a test stub.
+    const originalUrl = page.url();
+    const invalidCnpjDataRequests = [];
+    const trackInvalidCnpjRequest = (request) => {
+      if (/\.(?:pb|parquet|wasm)(?:[?#]|$)/i.test(request.url())) {
+        invalidCnpjDataRequests.push(request.url());
+      }
+    };
+    page.on('request', trackInvalidCnpjRequest);
+    await page.locator('#busca-termo').fill('12.345.678/0001-99');
+    await page.locator('#busca-enviar').click();
+    await page.waitForFunction(() =>
+      document.querySelector('#consulta-estado')?.textContent?.includes('CNPJ inválido: confira os dígitos verificadores.'),
+    null, { timeout: 5000 });
+    page.off('request', trackInvalidCnpjRequest);
+    if (page.url() !== originalUrl || invalidCnpjDataRequests.length > 0) {
+      throw new Error('Home SSG: CNPJ com DV inválido navegou ou iniciou leitura de dados');
+    }
+    await page.goto(url, { waitUntil: 'domcontentloaded' });
   } else {
     await page.getByRole('heading', {
       name: 'Pesquisa por CNPJ ainda indisponível',
@@ -46,10 +91,16 @@ const axeResult = await page.evaluate(async () => window.axe.run(document, {
 }));
 const serious = axeResult.violations.filter((item) => ['serious', 'critical'].includes(item.impact));
 
-const interactiveSelector = 'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+const interactiveSelector = 'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), summary, [tabindex]:not([tabindex="-1"])';
 const expectedControls = await page.evaluate((selector) => {
   return [...document.querySelectorAll(selector)]
     .filter((el) => {
+      // Descendants of a closed <details> are not in the tab sequence, even if
+      // getBoundingClientRect() reports a box. The owning summary remains focusable.
+      const closedDetails = el.closest('details:not([open])');
+      if (closedDetails && !(el.tagName === 'SUMMARY' && el.parentElement === closedDetails)) {
+        return false;
+      }
       const style = getComputedStyle(el);
       const rect = el.getBoundingClientRect();
       return style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0 && rect.height > 0;

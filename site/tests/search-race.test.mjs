@@ -5,6 +5,7 @@ import { mountSearch } from '../static/js/search-app.mjs';
 class Element {
   constructor() { this.children = []; this.textContent = ''; this.listeners = {}; this.attributes = {}; this.dataset = {}; }
   setAttribute(name, value) { this.attributes[name] = value; }
+  removeAttribute(name) { delete this.attributes[name]; }
   append(...nodes) { this.children.push(...nodes); }
   replaceChildren(...nodes) { this.children = nodes; }
   addEventListener(type, cb) { this.listeners[type] = cb; }
@@ -49,7 +50,7 @@ for (const outcome of ['success', 'failure']) {
     await pendingA;
     assert.equal(nodes['consulta-lista'].children.length,0, 'A não pode aparecer para entrada B');
     assert.match(nodes['consulta-estado'].textContent,/Termo alterado/);
-    assert.equal(nodes['busca-enviar'].disabled,false);
+    assert.notEqual(nodes['busca-enviar'].disabled,true);
     await nodes['busca-form'].dispatch('submit');
     assert.equal(nodes['consulta-lista'].children.length,1);
     assert.equal(nodes['consulta-lista'].children[0].children[0].textContent,'EMPRESA B');

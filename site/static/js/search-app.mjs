@@ -1,6 +1,5 @@
-import { fetchCurrentDataset, probeParquetRange } from './dataset.mjs';
 import { attachAnalyticalFiles, planCompanyQuery, queryCompanies, stripCnpj } from './query-core.mjs';
-import { createDuckDBEngine } from './duckdb-runtime.mjs';
+import { validNumericCnpj } from './atomic-record.mjs';
 
 /** Render only text nodes; public CNPJ/empresa data must never become HTML. */
 export function renderCompanies(documentRef, list, rows) {
@@ -13,7 +12,9 @@ export function renderCompanies(documentRef, list, rows) {
     const location = [company.municipio_nome, company.uf].filter(Boolean).join(' / ');
     details.textContent = [String(company.cnpj ?? ''), location].filter(Boolean).join(' · ');
     const canonical = stripCnpj(String(company.cnpj ?? ''));
-    if (/^[A-Z0-9]{12}[0-9]{2}$/.test(canonical)) {
+    // The published Protobuf-first ficha accepts numeric v1 CNPJs only.
+    // Do not offer an action that rejects an alphanumeric search result.
+    if (validNumericCnpj(canonical)) {
       const link = documentRef.createElement('a');
       link.href = '/ficha/empresa/?cnpj=' + encodeURIComponent(canonical);
       link.textContent = 'Abrir ficha';
@@ -30,16 +31,22 @@ export function renderCompanies(documentRef, list, rows) {
 /** No request on module import. Data and WASM load only on a valid submission. */
 export function mountSearch({
   documentRef,
-  fetchDataset = fetchCurrentDataset,
-  probeRange = probeParquetRange,
-  createEngine = createDuckDBEngine,
+  // Do not fetch the analytical loader on a numeric Protobuf-first visit.
+  // The legacy name/alphanumeric path still imports it on first use.
+  fetchDataset = async () => (await import('./dataset.mjs')).fetchCurrentDataset(),
+  probeRange = async args => (await import('./dataset.mjs')).probeParquetRange(args),
+  // A numeric Protobuf redirect or failed Range probe must not load DuckDB JS.
+  createEngine = async () => (await import('./duckdb-runtime.mjs')).createDuckDBEngine(),
   attach = attachAnalyticalFiles,
   query = queryCompanies,
+  // Opt-in navigation: an exact numeric CNPJ already has a Protobuf-first page.
+  openNumericFicha,
 } = {}) {
   const form = documentRef.getElementById('busca-form');
   const input = documentRef.getElementById('busca-termo');
   const submit = documentRef.getElementById('busca-enviar');
   const status = documentRef.getElementById('consulta-estado');
+  const recovery = documentRef.getElementById('consulta-recuperacao');
   const list = documentRef.getElementById('consulta-lista');
   if (![form, input, submit, status, list].every(Boolean)) {
     throw new Error('Formulário de consulta SSG incompleto');
@@ -54,11 +61,21 @@ export function mountSearch({
     status.textContent = message;
     status.dataset.kind = kind;
   };
+  // The fallback link is a separate, keyboard-accessible paragraph, not an
+  // interactive child of the live status region. Older test hosts may omit it.
+  const showRecovery = visible => { if (recovery) recovery.hidden = !visible; };
+  showRecovery(false);
+  // The live status announces that a keyboard-accessible recovery link exists
+  // below it; the link itself stays outside the live region.
+  const recoveryGuidance = recovery
+    ? ' Esta falha não comprova ausência cadastral. Consulte o Acervo pelo link abaixo.'
+    : '';
   // Completed feedback belongs to the previous term. During an in-flight
   // request, notify on the first edit only: repeated live-region updates
   // would announce the same message at each keystroke.
   input.addEventListener('input', () => {
     inputVersion++;
+    showRecovery(false);
     if (active) {
       if (!pendingEditAnnounced) {
         pendingEditAnnounced = true;
@@ -102,11 +119,33 @@ export function mountSearch({
   async function onSubmit(event) {
     event.preventDefault();
     if (active) return;
+    showRecovery(false);
     const term = input.value.trim();
-    if (!planCompanyQuery(term)) {
+    const plan = planCompanyQuery(term);
+    if (!plan) {
       terminalFeedback = true;
       list.replaceChildren();
       setStatus('Informe um CNPJ completo ou ao menos três caracteres da razão social.', 'error');
+      return;
+    }
+    // The homepage's analytical Parquet origin can refuse browser CORS/Range.
+    // Numeric full CNPJs have a separate, bounded Protobuf reader on /empresa/.
+    // Keep alphanumeric CNPJs and name queries on their existing analytical path.
+    if (plan.mode === 'cnpj' && /^\d{14}$/.test(plan.param) &&
+        typeof openNumericFicha === 'function') {
+      list.replaceChildren();
+      terminalFeedback = true;
+      // The destination already enforces RFB check digits; reject here too,
+      // before navigating to a page that must refuse the invalid input.
+      if (!validNumericCnpj(plan.param)) {
+        setStatus('CNPJ inválido: confira os dígitos verificadores.', 'error');
+        return;
+      }
+      setStatus('Abrindo ficha numérica por Protobuf. A consulta continua sujeita à disponibilidade do acervo.');
+      try { openNumericFicha('/ficha/empresa/?cnpj=' + encodeURIComponent(plan.param)); }
+      catch (error) {
+        setStatus('Não foi possível abrir a ficha: ' + (error?.message || 'erro de navegação'), 'error');
+      }
       return;
     }
     const requestVersion = inputVersion;
@@ -115,7 +154,9 @@ export function mountSearch({
     active = true;
     terminalFeedback = false;
     pendingEditAnnounced = false;
-    submit.disabled = true;
+    // Keep the submit button focusable while busy. `disabled` would drop keyboard
+    // focus to BODY in Chromium; the `active` guard still suppresses duplicate work.
+    submit.setAttribute('aria-disabled', 'true');
     list.replaceChildren(); // never leave stale results visible during failures
     setStatus('Preparando consulta à competência publicada…');
     try {
@@ -127,7 +168,8 @@ export function mountSearch({
       }
       if (!session) {
         terminalFeedback = true;
-        setStatus('Os dados ainda não foram publicados (manifesto ausente).', 'error');
+        setStatus('Os dados ainda não foram publicados (manifesto ausente).' + recoveryGuidance, 'error');
+        showRecovery(true);
         return;
       }
       setStatus('Consultando a base analítica…');
@@ -145,14 +187,15 @@ export function mountSearch({
     } catch (error) {
       terminalFeedback = true;
       if (stillCurrent()) {
-        setStatus('Consulta indisponível: ' + (error?.message || 'erro desconhecido'), 'error');
+        setStatus('Consulta indisponível: ' + (error?.message || 'erro desconhecido') + recoveryGuidance, 'error');
+        showRecovery(true);
       } else {
         setStatus(discardedMessage);
       }
     } finally {
       active = false;
       pendingEditAnnounced = false;
-      submit.disabled = false;
+      submit.removeAttribute('aria-disabled');
     }
   }
   form.addEventListener('submit', onSubmit);

@@ -6,18 +6,22 @@ on:
     paths:
       - 'site/**'
       - 'web/public/manifest.json'
+      - 'web/src/generated/company.pb.js'
+      - 'web/package.json'
+      - 'web/bun.lock'
       - '.github/workflows/deploy.yml'
   pull_request:
     paths:
       - 'site/**'
       - 'web/public/manifest.json'
+      - 'web/src/generated/company.pb.js'
+      - 'web/package.json'
+      - 'web/bun.lock'
       - '.github/workflows/deploy.yml'
   workflow_dispatch:
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
 concurrency:
   group: pages-${{ github.event.pull_request.number || github.ref }}
@@ -38,6 +42,12 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.11
+      - name: Instalar decoder canônico via lockfile congelado
+        working-directory: web
+        run: bun install --frozen-lockfile
       - name: Testar finalizador e regras SSG com entradas adversariais
         run: |
           node --test site/scripts/finalize.test.mjs
@@ -60,8 +70,10 @@ jobs:
           ssg check --config config.toml
           ssg build --config config.toml
           node scripts/finalize.mjs
-          # All eight published JavaScript modules must survive SSG byte-for-byte.
-          for module in boot search-app duckdb-runtime query-core dataset catalog record pages; do
+          node scripts/bundle-protobuf.mjs
+          node scripts/check-protobuf-bundle.mjs
+          # Published unbundled JavaScript modules must survive SSG byte-for-byte.
+          for module in boot search-app duckdb-runtime query-core dataset catalog record pages history page-helpers atomic-record atomic-browser; do
             cmp "static/js/$module.mjs" "dist/ficha/js/$module.mjs"
           done
           cmp static/css/site.css dist/ficha/css/site.css
@@ -79,6 +91,9 @@ jobs:
     if: github.event_name != 'pull_request'
     needs: build
     runs-on: ubuntu-24.04
+    permissions:
+      pages: write
+      id-token: write
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
@@ -112,6 +127,11 @@ jobs:
           curl -fsSL --retry 3 "$BASE/explorar/" -o explorar.html
           curl -fsSL --retry 3 "$BASE/acervo/" -o acervo.html
           curl -fsSL --retry 3 "$BASE/js/pages.mjs" -o pages.mjs
+          curl -fsSL --retry 3 "$BASE/js/history.mjs" -o history.mjs
+          curl -fsSL --retry 3 "$BASE/js/page-helpers.mjs" -o page-helpers.mjs
+          curl -fsSL --retry 3 "$BASE/js/atomic-record.mjs" -o atomic-record.mjs
+          curl -fsSL --retry 3 "$BASE/js/atomic-browser.mjs" -o atomic-browser.mjs
+          curl -fsSL --retry 3 "$BASE/js/company-decoder.mjs" -o company-decoder.mjs
           curl -fsSL --retry 3 "$BASE/js/catalog.mjs" -o catalog.mjs
           curl -fsSL --retry 3 "$BASE/js/record.mjs" -o record.mjs
           curl -fsSL --retry 3 "$BASE/css/site.css" -o site.css
@@ -141,6 +161,11 @@ jobs:
           cmp site/static/js/catalog.mjs catalog.mjs
           cmp site/static/js/record.mjs record.mjs
           cmp site/static/js/pages.mjs pages.mjs
+          cmp site/static/js/history.mjs history.mjs
+          cmp site/static/js/page-helpers.mjs page-helpers.mjs
+          cmp site/static/js/atomic-record.mjs atomic-record.mjs
+          cmp site/static/js/atomic-browser.mjs atomic-browser.mjs
+          test "$(wc -c < company-decoder.mjs)" -gt 1000
           cmp site/static/css/site.css site.css
           cmp web/public/manifest.json manifest-live.json
           node -e "const d=require('./manifest-live.json');if(!d.current||!d.snapshots?.some(s=>s.date===d.current))process.exit(1); console.log('Pages MVP + manifest OK: '+d.current)"

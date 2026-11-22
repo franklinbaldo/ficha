@@ -6,6 +6,9 @@ on:
       - 'site/**'
       - 'web/public/manifest.json'
       - 'web/scripts/check-accessibility.mjs'
+      - 'web/scripts/check-greenfield.mjs'
+      - 'web/scripts/check-atomic-ssg.mjs'
+      - 'web/src/generated/company.pb.js'
       - 'web/package.json'
       - 'web/bun.lock'
       - '.github/workflows/visual-capture.yml'
@@ -13,6 +16,12 @@ on:
 
 permissions:
   contents: read
+
+# A new commit supersedes an older PR browser audit; independent manual
+# replays keep their own run ID and are never cancelled.
+concurrency:
+  group: ssg-browser-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   capture:
@@ -56,9 +65,13 @@ jobs:
           ssg check --config config.toml
           ssg build --config config.toml
           node scripts/finalize.mjs
+          node scripts/bundle-protobuf.mjs
+          node scripts/check-protobuf-bundle.mjs
+      # Both audits use the default Playwright headless shell (no browser channel).
+      # The browser assertions themselves fail if the runner lacks required libraries.
       - name: Install Chromium
         working-directory: web
-        run: bunx playwright install chromium --with-deps
+        run: bunx playwright install chromium --only-shell
       - name: Serve built Pages artifact locally
         run: |
           set -euo pipefail
@@ -80,6 +93,9 @@ jobs:
       - name: Exercise product pages in Chromium (manifest real, no Parquet fetch)
         working-directory: web
         run: node scripts/check-greenfield.mjs http://127.0.0.1:4321/ficha/ ../accessibility-evidence
+      - name: Exercise numeric Protobuf SSG against public IA member endpoints
+        working-directory: web
+        run: node scripts/check-atomic-ssg.mjs http://127.0.0.1:4321/ficha/ ../accessibility-evidence
       - name: Upload browser accessibility evidence
         if: always()
         uses: actions/upload-artifact@v4

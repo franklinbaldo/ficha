@@ -29,7 +29,7 @@ if (matches.length !== 1 || archiveUrl?.protocol !== 'https:' ||
 }
 const expectedPwa = {
   background_color:'#ffffff',
-  description:'Dados públicos de CNPJ por competência, preservados no Internet Archive.',
+  description:'Dados públicos de CNPJ por competência e arquivos declarados no catálogo FICHA.',
   display:'standalone',
   name:'FICHA',
   orientation:'portrait-primary',
@@ -53,8 +53,9 @@ try { await lstat(cssURL); throw new Error('CSS já existe; não sobrescrever');
 catch (err) { if (err?.code !== 'ENOENT') throw err; }
 await copyFile(new URL('../static/css/site.css', import.meta.url), cssURL);
 
-const jsFiles = ['boot.mjs', 'search-app.mjs', 'duckdb-runtime.mjs', 'query-core.mjs',
-  'dataset.mjs', 'catalog.mjs', 'record.mjs', 'pages.mjs'];
+const jsFiles = ['boot.mjs', 'examples.mjs', 'search-app.mjs', 'duckdb-runtime.mjs', 'query-core.mjs',
+  'dataset.mjs', 'catalog.mjs', 'record.mjs', 'pages.mjs', 'history.mjs', 'page-helpers.mjs',
+  'atomic-record.mjs', 'atomic-browser.mjs'];
 await mkdir(new URL('js/', root), { recursive: true });
 for (const file of jsFiles) {
   const target = new URL('js/' + file, root);
@@ -67,6 +68,19 @@ const indexURL = new URL('index.html',root);
 const aboutURL = new URL('sobre/index.html',root);
 let index = (await required(indexURL)).toString('utf8');
 const about = (await required(aboutURL)).toString('utf8');
+const companyPage = (await required(new URL('empresa/index.html', root))).toString('utf8');
+const companyButtons = companyPage.match(/<button\b[^>]*\bid="empresa-enviar"[^>]*>/g) ?? [];
+if (companyButtons.length !== 1 || !/\saria-label="Abrir ficha"(?=[\s>])/.test(companyButtons[0])) {
+  throw new Error('Botão Abrir ficha sem nome acessível em português no HTML SSG');
+}
+
+// The pinned SSG can infer an English icon label for the decorative arrow
+// and override the visible 'Pesquisar' name. Reject such generated output.
+const searchButtons = index.match(/<button\b[^>]*\bid="busca-enviar"[^>]*>/g) ?? [];
+if (searchButtons.length !== 1 || !/\saria-label="Pesquisar"(?=[\s>])/.test(searchButtons[0])) {
+  throw new Error('Botão Pesquisar sem nome acessível em português no HTML SSG');
+}
+
 const [year,month] = manifest.current.split('-').map(Number);
 const label = new Intl.DateTimeFormat('pt-BR', {month:'long',year:'numeric',timeZone:'UTC'})
   .format(new Date(Date.UTC(year,month-1,1))) + ' (' + manifest.current + ')';
