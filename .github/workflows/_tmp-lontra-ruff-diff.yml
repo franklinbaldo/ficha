@@ -1,0 +1,21 @@
+name: "Temporary Lontra Ruff format diff"
+on:
+  pull_request:
+    paths:
+      - "etl/src/ficha_etl/raw_readback.py"
+      - "etl/tests/test_raw_readback.py"
+      - ".github/workflows/_tmp-lontra-ruff-diff.yml"
+permissions:
+  contents: read
+jobs:
+  format-diff:
+    if: github.event.pull_request.head.ref == 'lontra/raw-readback-observation-433'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+      - name: Print formatter diff (diagnostic only)
+        working-directory: etl
+        run: |
+          uv sync --extra dev
+          uv run ruff format --diff src/ficha_etl/raw_readback.py tests/test_raw_readback.py
