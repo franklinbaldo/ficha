@@ -366,6 +366,31 @@ describe('OKF convenience views', () => {
     ).toThrow(/returned invalid Socio row/);
   });
 
+  it('does not mistake valid output shapes for proof of SQL selection or parent lineage', () => {
+    // The real SELECT filters active establishments. A shape-only validator
+    // cannot establish that its caller actually executed that SELECT.
+    const inactiveCnpj = { ...cnpjWholeRow, situacao_cadastral: '08' };
+    expect(PublicV1CnpjSchema.safeParse(inactiveCnpj).success).toBe(true);
+    expect(getOkfConvenienceView('empresas_ativas').sql).toContain(
+      "WHERE situacao_cadastral = '02'"
+    );
+    expect(validateOkfConvenienceViewRows('empresas_ativas', [inactiveCnpj])).toEqual([
+      inactiveCnpj,
+    ]);
+
+    // The second view joins Socio against Raiz, but validation receives only
+    // Socio output. No Raiz fixture or JOIN is executed in this test.
+    const unattestedSocio = { ...socioRow, cnpj_base: '99999999' };
+    const relationalView = getOkfConvenienceView('socios_de_raizes_ativas');
+    expect(relationalView.inputs).toEqual(['Socio', 'Raiz']);
+    expect(relationalView.sql).toContain('JOIN raizes AS r USING (cnpj_base)');
+    expect(relationalView.sql).toContain('r.qtd_estabelecimentos_ativos > 0');
+    expect(PublicV1SocioSchema.safeParse(unattestedSocio).success).toBe(true);
+    expect(
+      validateOkfConvenienceViewRows('socios_de_raizes_ativas', [unattestedSocio])
+    ).toEqual([unattestedSocio]);
+  });
+
   it('fails closed for unknown view names', () => {
     expect(() => getOkfConvenienceView('nao_existe')).toThrow(/Unknown OKF convenience view/);
   });
