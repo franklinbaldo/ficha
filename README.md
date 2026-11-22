@@ -84,13 +84,13 @@ uv run --no-sync ficha-etl --help
 uv run --no-sync ficha-etl run --help
 ```
 
-**Atenção:** `ficha-etl run --month YYYY-MM` **não é um comando de inspeção**. Com `IA_ACCESS_KEY` e `IA_SECRET_KEY`, a opção padrão (`skip_upload=False`) tenta enviar ZIPs RFB, Parquets e `companies.zip` ao Internet Archive e atualizar o manifesto **local**. Sem credenciais, o modo padrão recusa continuar. Mesmo com `--skip-upload`, ele ainda pode baixar/processar grandes volumes e escrever Parquets, ZIP local e o manifesto local: **não é teste barato nem somente leitura**. Consulte [etl/README.md](etl/README.md) antes de executá-lo.
+**Atenção (HOLD #433):** `ficha-etl run --month YYYY-MM` **não é comando de inspeção**. Desde a [PR #456](https://github.com/franklinbaldo/ficha/pull/456), o CLI legado recusa `skip_upload=False` **antes de iniciar o processamento ou acessar credenciais**, mesmo que `IA_ACCESS_KEY` e `IA_SECRET_KEY` estejam configuradas. `ficha-etl pack` sem `--skip-upload` também recusa a publicação. O modo `--skip-upload` permite somente trabalho **local**, mas ainda pode baixar/processar grandes volumes e escrever Parquets, ZIP e manifesto **local**: **não é teste barato nem somente leitura, nem comprova custódia remota**. A publicação mensal permanece em HOLD até existir autoridade independente S/R/F. Consulte [etl/README.md](etl/README.md) antes de executar qualquer caminho.
 
 O CLI `run` gera `companies.zip` monolítico; a [esteira mensal versionada](.github/workflows/etl-monthly.yml) usa `monthly_sharded`, 100 shards e etapas separadas de validação/promoção. Uma rota não valida a outra. Nenhum ETL real, backfill, upload ou promoção está autorizado por este quickstart.
 
 ## O conceito "Ficha"
 
-Inspirado nos antigos fichários de metal, cada empresa pode ser lida como uma ficha vinculada a uma competência específica. A série de snapshots preserva estados cadastrais ao longo do tempo e mantém os dados disponíveis como infraestrutura aberta, não apenas como resultado de uma busca no site.
+Inspirado nos antigos fichários de metal, cada empresa pode ser lida como uma ficha vinculada a uma competência específica. O catálogo organiza declarações de snapshots históricos para consulta e reutilização; a disponibilidade e a identidade dos bytes de cada artefato precisam de conferência independente, e não decorrem da mera presença no manifesto.
 
 ---
 
