@@ -1,0 +1,22 @@
+name: "Temporary Lontra optimized tests"
+on:
+  pull_request:
+    paths:
+      - "etl/src/ficha_etl/raw_readback.py"
+      - "etl/tests/test_raw_readback.py"
+      - ".github/workflows/_tmp-lontra-opt-tests.yml"
+permissions:
+  contents: read
+jobs:
+  optimized:
+    if: github.event.pull_request.head.ref == 'lontra/raw-readback-observation-433'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+      - name: Real Ficha tree tests under Python -O
+        working-directory: etl
+        run: |
+          uv python install 3.11
+          uv sync --extra dev
+          uv run python -O -m pytest -q tests/test_raw_readback.py
