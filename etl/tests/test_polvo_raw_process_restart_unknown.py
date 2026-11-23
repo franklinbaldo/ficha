@@ -47,7 +47,11 @@ def _worker(scratch: Path, phase: str, failure: str) -> int:
     specs = list(canonical_inventory())
     if len(specs) != 37 or len({spec.name for spec in specs}) != 37:
         raise AssertionError("expected canonical 37/37 inventory")
-    if phase not in ("first", "second") or failure not in ("http503", "timeout", "kill-midput"):
+    if phase not in ("first", "second") or failure not in (
+        "http503",
+        "timeout",
+        "kill-midput",
+    ):
         raise AssertionError("invalid offline phase or failure")
 
     generation = "A" if phase == "first" else "B"
