@@ -136,67 +136,35 @@ def test_upload_outputs_invalid_month(mock_upload, tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# upload_raw_zips
+# upload_raw_zips (legacy raw cache mirror is deliberately disabled)
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.parametrize("cache_state", ["empty", "one", "all", "zero_byte"])
 @patch("ficha_etl.upload.ia.upload")
-def test_upload_raw_zips_uses_raw_prefix(mock_upload, tmp_path):
+def test_upload_raw_zips_refuses_legacy_egress(mock_upload, tmp_path, cache_state):
+    """A partial, empty or full cache cannot bypass raw custody admission."""
     month = "2026-04"
-    _make_raw_zips(tmp_path, month)
-    mock_upload.return_value = [_make_response()]
+    if cache_state == "all":
+        _make_raw_zips(tmp_path, month)
+    elif cache_state in ("one", "zero_byte"):
+        local = tmp_path / month / next(iter(canonical_inventory())).name
+        local.parent.mkdir(parents=True)
+        with zipfile.ZipFile(local, "w") as archive:
+            archive.writestr("source.csv", b"cnpj;value\n1;A\n")
+        if cache_state == "zero_byte":
+            local.write_bytes(b"")
 
-    upload_mod.upload_raw_zips(month, tmp_path, access_key="A", secret_key="S")
-
-    files_arg = mock_upload.call_args[1].get("files") or mock_upload.call_args[0][1]
-    # Todos os remote names devem começar com "raw/"
-    assert all(k.startswith("raw/") for k in files_arg)
-
-
-@patch("ficha_etl.upload.ia.upload")
-def test_upload_raw_zips_uploads_all_37(mock_upload, tmp_path):
-    month = "2026-04"
-    _make_raw_zips(tmp_path, month)
-    mock_upload.return_value = [_make_response()]
-
-    upload_mod.upload_raw_zips(month, tmp_path, access_key="A", secret_key="S")
-
-    files_arg = mock_upload.call_args[1].get("files") or mock_upload.call_args[0][1]
-    assert len(files_arg) == 37
-
-
-@patch("ficha_etl.upload.ia.upload")
-def test_upload_raw_zips_raises_if_no_zips_found(mock_upload, tmp_path):
-    """Se o cache estiver vazio, levanta FileNotFoundError."""
-    with pytest.raises(FileNotFoundError, match="no raw ZIPs"):
-        upload_mod.upload_raw_zips("2026-04", tmp_path, access_key="A", secret_key="S")
+    with pytest.raises(RuntimeError, match="raw cache upload is disabled"):
+        upload_mod.upload_raw_zips(month, tmp_path, access_key="A", secret_key="S")
     mock_upload.assert_not_called()
 
 
 @patch("ficha_etl.upload.ia.upload")
-def test_upload_raw_zips_skips_zero_byte_files(mock_upload, tmp_path):
-    month = "2026-04"
-    _make_raw_zips(tmp_path, month)
-    # Torna um ZIP zero-byte
-    first_zip = tmp_path / month / next(iter(canonical_inventory())).name
-    first_zip.write_bytes(b"")
-
-    mock_upload.return_value = [_make_response()]
-    upload_mod.upload_raw_zips(month, tmp_path, access_key="A", secret_key="S")
-
-    files_arg = mock_upload.call_args[1].get("files") or mock_upload.call_args[0][1]
-    # Deve ter 36 (37 - 1 zero-byte)
-    assert len(files_arg) == 36
-
-
-@patch("ficha_etl.upload.ia.upload")
-def test_upload_raw_zips_raises_on_http_error(mock_upload, tmp_path):
-    month = "2026-04"
-    _make_raw_zips(tmp_path, month)
-    mock_upload.return_value = [_make_response(status=500)]
-
-    with pytest.raises(RuntimeError, match="500"):
-        upload_mod.upload_raw_zips(month, tmp_path, access_key="A", secret_key="S")
+def test_upload_raw_zips_invalid_month_remains_rejected(mock_upload, tmp_path):
+    with pytest.raises(ValueError, match="YYYY-MM"):
+        upload_mod.upload_raw_zips("2026-13", tmp_path, access_key="A", secret_key="S")
+    mock_upload.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
