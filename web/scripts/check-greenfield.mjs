@@ -11,7 +11,7 @@ const reports=[];
 // WCAG 2.x relative luminance/contrast for browser-computed opaque RGB colors.
 function contrastRatio(colorA,colorB) {
   const luminance=color=>{
-    const match=/^rgb\\(\\s*(\\d+)\\s*,\\s*(\\d+)\\s*,\\s*(\\d+)\\s*\\)$/.exec(color);
+    const match=/^rgb\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\)$/.exec(color);
     assert.ok(match,'opaque RGB color expected from getComputedStyle: '+color);
     const rgb=match.slice(1).map(channel=>Number(channel)/255)
       .map(value=>value<=0.04045?value/12.92:((value+0.055)/1.055)**2.4);
