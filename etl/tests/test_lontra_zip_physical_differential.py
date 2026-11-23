@@ -212,7 +212,7 @@ def test_nonempty_member_physical_differential(
     Mutants currently accepted by a consumer become XFAIL after strict preflight.
     """
     source = tmp_path / "nonempty.zip"
-    payload = b"1;2\\n"
+    payload = b"1;2\n"
     member = zipfile.ZipInfo("DATA.ESTABELE", date_time=(1980, 1, 1, 0, 0, 0))
     member.compress_type = zipfile.ZIP_STORED if kind.startswith("stored") else zipfile.ZIP_DEFLATED
     member.create_system = 3
@@ -228,9 +228,7 @@ def test_nonempty_member_physical_differential(
         local = struct.unpack_from("<IHHHHHIIIHH", raw, entry.header_offset)
         offset = entry.header_offset + 30 + local[-2] + local[-1]
         compressed = raw[offset : offset + entry.compress_size]
-        replacement = (
-            compressed[:-1] if kind == "deflate_truncated" else compressed + b"JUNK"
-        )
+        replacement = compressed[:-1] if kind == "deflate_truncated" else compressed + b"JUNK"
         _alter_member_deflate(source, replacement)
 
     with zipfile.ZipFile(source) as archive:
@@ -248,13 +246,14 @@ def test_nonempty_member_physical_differential(
         try:
             if parallel:
                 load_zips_parallel(
-                    con, [("source_rows", source, ("a", "b"))],
-                    work_dir=tmp_path / "work", decompress_workers=1,
+                    con,
+                    [("source_rows", source, ("a", "b"))],
+                    work_dir=tmp_path / "work",
+                    decompress_workers=1,
                 )
             else:
                 create_table_from_zip_streaming(
-                    con, "source_rows", source, ("a", "b"),
-                    work_dir=tmp_path / "work",
+                    con, "source_rows", source, ("a", "b"), work_dir=tmp_path / "work"
                 )
         except (RuntimeError, zipfile.BadZipFile, zlib.error):
             if preflight_message is None:
