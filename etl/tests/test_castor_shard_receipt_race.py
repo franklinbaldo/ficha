@@ -248,9 +248,7 @@ def test_portable_final_path_replacement_can_relabel_receipt(
             embedded = json.loads(archive.read("_meta.json"))["materialization"]["id"]
             body = archive.read(sharded_pack.cnpjpath("42000000"))
         data = path.read_bytes()
-        return embedded, body, len(data), hashlib.sha1(
-            data, usedforsecurity=False
-        ).hexdigest()
+        return embedded, body, len(data), hashlib.sha1(data, usedforsecurity=False).hexdigest()
 
     embedded_a, body_a, size_a, sha_a = actual(receipt_a.path)
     embedded_b, body_b, size_b, sha_b = actual(receipt_b.path)
@@ -265,9 +263,7 @@ def test_portable_final_path_replacement_can_relabel_receipt(
     # inspect the embedded _meta.json and therefore accepts the bad identity.
     from ficha_etl.shard_transfer import plan_opt_in_v11_shard
 
-    planned_a = plan_opt_in_v11_shard(
-        sessions["A"], receipt_a, pinned_inputs=pins["A"]
-    )
+    planned_a = plan_opt_in_v11_shard(sessions["A"], receipt_a, pinned_inputs=pins["A"])
     if planned_a.materialization_id != expected_a.materialization_id():
         raise AssertionError("planner changed A's declared materialization ID")
     if (planned_a.size, planned_a.sha1) != (size_a, sha_a):
