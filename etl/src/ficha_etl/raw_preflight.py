@@ -77,33 +77,36 @@ def _check_member_exact(
     local_extra = handle.read(extra_len)
     if len(local_extra) != extra_len:
         raise RuntimeError("raw preflight: truncated ZIP local extra")
+    # Parse *all* local extras: bit 3 changes which size fields are
+    # authoritative, but never excuses broken TLV framing or a missing
+    # ZIP64 record for explicit 0xffffffff sentinels.
+    cursor = 0
+    zip64_extra = None
+    while cursor < len(local_extra):
+        if cursor + 4 > len(local_extra):
+            raise RuntimeError("raw preflight: malformed ZIP local extra")
+        kind, width = struct.unpack_from("<HH", local_extra, cursor)
+        cursor += 4
+        if cursor + width > len(local_extra):
+            raise RuntimeError("raw preflight: malformed ZIP local extra")
+        if kind == 1:
+            if zip64_extra is not None:
+                raise RuntimeError("raw preflight: duplicate ZIP64 local extra")
+            zip64_extra = local_extra[cursor : cursor + width]
+        cursor += width
+    if 0xFFFFFFFF in (local_compressed, local_uncompressed):
+        needed = 8 * ((local_compressed == 0xFFFFFFFF) + (local_uncompressed == 0xFFFFFFFF))
+        if zip64_extra is None or len(zip64_extra) < needed:
+            raise RuntimeError("raw preflight: missing ZIP64 local sizes")
+        cursor = 0
+        if local_uncompressed == 0xFFFFFFFF:
+            local_uncompressed = struct.unpack_from("<Q", zip64_extra, cursor)[0]
+            cursor += 8
+        if local_compressed == 0xFFFFFFFF:
+            local_compressed = struct.unpack_from("<Q", zip64_extra, cursor)[0]
+    # Without bit 3, the local CRC and decoded sizes must match central.
+    # With bit 3, the data descriptor remains authoritative.
     if not flags & 8:
-        # Without a data descriptor, local CRC and sizes must agree with
-        # the central directory. ZIP64 may encode sizes in local extra 0x0001.
-        if 0xFFFFFFFF in (local_compressed, local_uncompressed):
-            cursor = 0
-            zip64_extra = None
-            while cursor < len(local_extra):
-                if cursor + 4 > len(local_extra):
-                    raise RuntimeError("raw preflight: malformed ZIP local extra")
-                kind, width = struct.unpack_from("<HH", local_extra, cursor)
-                cursor += 4
-                if cursor + width > len(local_extra):
-                    raise RuntimeError("raw preflight: malformed ZIP local extra")
-                if kind == 1:
-                    if zip64_extra is not None:
-                        raise RuntimeError("raw preflight: duplicate ZIP64 local extra")
-                    zip64_extra = local_extra[cursor : cursor + width]
-                cursor += width
-            needed = 8 * ((local_compressed == 0xFFFFFFFF) + (local_uncompressed == 0xFFFFFFFF))
-            if zip64_extra is None or len(zip64_extra) < needed:
-                raise RuntimeError("raw preflight: missing ZIP64 local sizes")
-            cursor = 0
-            if local_uncompressed == 0xFFFFFFFF:
-                local_uncompressed = struct.unpack_from("<Q", zip64_extra, cursor)[0]
-                cursor += 8
-            if local_compressed == 0xFFFFFFFF:
-                local_compressed = struct.unpack_from("<Q", zip64_extra, cursor)[0]
         if (local_crc, local_compressed, local_uncompressed) != (
             entry.CRC,
             entry.compress_size,
