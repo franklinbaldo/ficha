@@ -168,8 +168,7 @@ def test_parquet_snapshot_output_collision(parquet_views, tmp_path: Path):
     target = str(alternative).replace("\\", "/").replace("'", "''")
     parquet_views.execute(f"COPY revised_raizes TO '{target}' (FORMAT PARQUET)")
     parquet_views.execute(
-        "CREATE OR REPLACE VIEW raizes AS "
-        f"SELECT * FROM read_parquet('{target}')"
+        f"CREATE OR REPLACE VIEW raizes AS SELECT * FROM read_parquet('{target}')"
     )
 
     changed = parquet_views.execute(sql).fetchall()
