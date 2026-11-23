@@ -65,7 +65,10 @@ def _check_fixture(raw: bytes, bit3: bool, disk32: int) -> None:
         cd = reader.start_dir
         _require(struct.unpack_from("<H", raw, cd + 34)[0] == 0xFFFF, "disk16 sentinel")
         _require(entry.extra == struct.pack("<HHI", 1, 4, disk32), "disk32 extra")
-        _require(struct.unpack_from("<I", raw, cd + 46 + len(NAME) + 4)[0] == disk32, "raw disk32")
+        _require(
+            struct.unpack_from("<I", raw, cd + 46 + len(NAME) + 4)[0] == disk32,
+            "raw disk32",
+        )
 
 
 def _preflight(tmp_path: Path, raw: bytes) -> tuple[int, int]:
@@ -76,7 +79,9 @@ def _preflight(tmp_path: Path, raw: bytes) -> tuple[int, int]:
 
 @pytest.mark.parametrize("method", METHODS, ids=["stored", "deflated"])
 @pytest.mark.parametrize("bit3", [False, True])
-def test_central_zip64_disk32_zero_allowed(tmp_path: Path, method: int, bit3: bool) -> None:
+def test_central_zip64_disk32_zero_allowed(
+    tmp_path: Path, method: int, bit3: bool
+) -> None:
     raw = _fixture(method, bit3, 0)
     _check_fixture(raw, bit3, 0)
     _require(_preflight(tmp_path, raw) == (len(DATA), 1), "disk32 zero rejected")
