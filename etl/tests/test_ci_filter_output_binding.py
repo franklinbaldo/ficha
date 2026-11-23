@@ -67,7 +67,15 @@ def test_real_workflow_binds_test_to_unconditional_filter_output() -> None:
 @pytest.mark.parametrize("job", JOBS)
 @pytest.mark.parametrize(
     "mutation",
-    ("drop-id", "rename-id", "skip-producer", "mask-producer", "wrong-output", "mask-test", "test-before-producer"),
+    (
+        "drop-id",
+        "rename-id",
+        "skip-producer",
+        "mask-producer",
+        "wrong-output",
+        "mask-test",
+        "test-before-producer",
+    ),
 )
 def test_mismatched_or_skipped_filter_cannot_appear_green(job: str, mutation: str) -> None:
     workflow = deepcopy(_workflow())
