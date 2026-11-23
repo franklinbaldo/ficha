@@ -100,6 +100,40 @@ def test_matching_central_and_local_name_with_unicode_path_is_valid(
     "method", [zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED], ids=["stored", "deflated"]
 )
 @pytest.mark.parametrize("bit3", [False, True], ids=["no-descriptor", "descriptor"])
+@pytest.mark.xfail(
+    _UNICODE_PATH_ALIAS_SELECTED,
+    strict=True,
+    raises=RuntimeError,
+    reason="#477: decoded 0x7075 alias must not reject matching physical ZIP names",
+)
+def test_alias_must_not_reject_matching_raw_central_local_names(
+    tmp_path: Path, method: int, bit3: bool
+) -> None:
+    """Local/central physical names both A, but central Unicode alias is B."""
+    alias = "Z" * len(_NAME)
+    path = tmp_path / "matching-physical-names.zip"
+    path.write_bytes(_make_zip(method, bit3, alias, change_local=False))
+    with zipfile.ZipFile(path) as archive:
+        info = archive.infolist()[0]
+        expected = alias if _UNICODE_PATH_ALIAS_SELECTED else _NAME
+        if info.filename != expected or info.orig_filename != _NAME:
+            raise AssertionError("unexpected Unicode Path runtime behavior")
+        if archive.read(info) != _PAYLOAD:
+            raise AssertionError("stdlib could not read matching raw-name ZIP")
+    try:
+        result = _raw_zip_crc_and_budget(path, expanded=0, members=0)
+    except RuntimeError as exc:
+        if "ZIP member name mismatch" not in str(exc):
+            raise AssertionError("preflight rejected for an unrelated reason") from exc
+        raise
+    if result != (len(_PAYLOAD), 1):
+        raise AssertionError(f"matching raw names were rejected: {result!r}")
+
+
+@pytest.mark.parametrize(
+    "method", [zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED], ids=["stored", "deflated"]
+)
+@pytest.mark.parametrize("bit3", [False, True], ids=["no-descriptor", "descriptor"])
 @pytest.mark.parametrize("alias_kind", ["benign", "traversal"])
 @pytest.mark.xfail(
     _UNICODE_PATH_ALIAS_SELECTED,
@@ -148,6 +182,7 @@ def test_optimized_python_replays_unicode_path_identity() -> None:
             "pytest",
             "-q",
             base + "test_matching_central_and_local_name_with_unicode_path_is_valid",
+            base + "test_alias_must_not_reject_matching_raw_central_local_names",
             base + "test_alias_cannot_hide_raw_central_local_name_disagreement",
         ],
         capture_output=True,
