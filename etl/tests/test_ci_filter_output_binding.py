@@ -28,6 +28,10 @@ def assert_filter_output_binding(workflow: dict) -> None:
         job_config = workflow["jobs"][job]
         _require("if" not in job_config, f"{job}: CI job must not be conditional")
         _require(
+            "needs" not in job_config,
+            f"{job}: independent test gate may not depend on a skipped job",
+        )
+        _require(
             job_config.get("continue-on-error") in (None, False),
             f"{job}: CI job failure must not be masked",
         )
@@ -83,6 +87,7 @@ def test_real_workflow_binds_test_to_unconditional_filter_output() -> None:
         "test-before-producer",
         "skip-job",
         "mask-job",
+        "skipped-prerequisite",
     ),
 )
 def test_mismatched_or_skipped_filter_cannot_appear_green(job: str, mutation: str) -> None:
@@ -94,6 +99,13 @@ def test_mismatched_or_skipped_filter_cannot_appear_green(job: str, mutation: st
         workflow["jobs"][job]["if"] = "${{ false }}"
     elif mutation == "mask-job":
         workflow["jobs"][job]["continue-on-error"] = True
+    elif mutation == "skipped-prerequisite":
+        workflow["jobs"]["dormant"] = {
+            "runs-on": "ubuntu-latest",
+            "if": "${{ false }}",
+            "steps": [{"run": "true"}],
+        }
+        workflow["jobs"][job]["needs"] = ["dormant"]
     elif mutation == "drop-id":
         producer.pop("id")
     elif mutation == "rename-id":
