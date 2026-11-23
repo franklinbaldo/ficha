@@ -131,5 +131,58 @@ class ManifestOkfPairingTest(unittest.TestCase):
         )
 
 
+    def test_self_consistent_same_size_rewrite_requires_prior_receipt(self):
+        # Fully synthetic byte fixtures: neither payload is a real RFB Parquet.
+        # A previously pinned receipt is modeled independently of the
+        # mutable manifest; the test does not establish such a receipt exists.
+        original = b"11111111,1\n"
+        rewritten = b"11111111,2\n"
+        self.assertEqual(len(original), len(rewritten))
+        date = self.manifest["current"]
+        view = self.views["socios_de_raizes_ativas"]
+        candidate = copy.deepcopy(self.manifest)
+        snapshot = next(s for s in candidate["snapshots"] if s["date"] == date)
+        raiz = snapshot["files"]["raizes"]
+        raiz["size"] = len(original)
+        raiz["sha256"] = hashlib.sha256(original).hexdigest()
+
+        prior_receipt = {
+            "competence": date,
+            "schema_version": snapshot["schema_version"],
+            "url": raiz["url"],
+            "size": len(original),
+            "sha256": hashlib.sha256(original).hexdigest(),
+        }
+
+        def matches_prior_receipt(manifest, physical_bytes):
+            snap = next(s for s in manifest["snapshots"] if s["date"] == date)
+            entry = snap["files"]["raizes"]
+            return (
+                date == prior_receipt["competence"]
+                and snap["schema_version"] == prior_receipt["schema_version"]
+                and entry["url"] == prior_receipt["url"]
+                and entry["size"] == prior_receipt["size"] == len(physical_bytes)
+                and entry["sha256"]
+                == prior_receipt["sha256"]
+                == hashlib.sha256(physical_bytes).hexdigest()
+            )
+
+        self.assertTrue(matches_prior_receipt(candidate, original))
+        before = _binding(candidate, date, view)
+
+        forged = copy.deepcopy(candidate)
+        forged_raiz = next(
+            s for s in forged["snapshots"] if s["date"] == date
+        )["files"]["raizes"]
+        forged_raiz["sha256"] = hashlib.sha256(rewritten).hexdigest()
+        # URL, schema version, competence and byte length stay unchanged.
+        self.assertEqual(forged_raiz["size"], prior_receipt["size"])
+        self.assertEqual(forged_raiz["url"], prior_receipt["url"])
+        self.assertNotEqual(_binding(forged, date, view), before)
+        self.assertRegex(_binding(forged, date, view), SHA256)
+        self.assertEqual(forged_raiz["sha256"], hashlib.sha256(rewritten).hexdigest())
+        self.assertFalse(matches_prior_receipt(forged, rewritten))
+
+
 if __name__ == "__main__":
     unittest.main()
