@@ -557,7 +557,6 @@ def upload_companies_zip(
     log.info("uploaded ia:%s/companies.zip OK", identifier)
 
 
-
 def upload_raw_zips(
     month: str,
     cache_dir: Path,
