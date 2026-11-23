@@ -128,7 +128,7 @@ def test_declared_central_width_overrun_rejected_by_zipfile(tmp_path: Path, meth
 
 
 @pytest.mark.parametrize("method", _METHODS, ids=["stored", "deflated"])
-@pytest.mark.parametrize("extra", (b"", b"\x5cx34\x5cx12\x5cx00\x5cx00"))
+@pytest.mark.parametrize("extra", (b"", b"\x34\x12\x00\x00"))
 def test_well_framed_central_extra_without_descriptor(tmp_path: Path, method: int, extra: bytes):
     """Bit 3 is not a precondition for accepting well-framed central extras."""
     if not _well_framed_tlvs(extra):
