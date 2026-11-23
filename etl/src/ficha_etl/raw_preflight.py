@@ -37,6 +37,119 @@ def _raw_preflight_specs(specs: list) -> None:
         raise RuntimeError("raw preflight: invalid canonical inventory")
 
 
+_CRITICAL_RAW_EXTRA_TAGS = frozenset((0x0001, 0x000A, 0x5455, 0x7075))
+
+
+def _check_raw_extra_fields(extra: bytes, *, boundary: str) -> bytes | None:
+    """Validate Common ZIP extras at each boundary, retaining ZIP64 local data.
+
+    Allow 1–3 terminal zero bytes; disallow malformed TLVs, nonempty 0x0000
+    padding, and duplicate metadata tags whose interpretation is ambiguous.
+    Unknown tags may repeat. This is an admission policy, not RFB provenance.
+    """
+    cursor = 0
+    seen_critical: set[int] = set()
+    zip64_extra = None
+    while cursor < len(extra):
+        if len(extra) - cursor < 4:
+            if any(extra[cursor:]):
+                raise RuntimeError(f"raw preflight: malformed ZIP {boundary} extra")
+            break
+        kind, width = struct.unpack_from("<HH", extra, cursor)
+        cursor += 4
+        if width > len(extra) - cursor:
+            raise RuntimeError(f"raw preflight: malformed ZIP {boundary} extra")
+        if kind == 0 and width:
+            raise RuntimeError(f"raw preflight: invalid ZIP {boundary} padding extra")
+        if kind in _CRITICAL_RAW_EXTRA_TAGS:
+            if kind in seen_critical:
+                if kind == 1:
+                    raise RuntimeError(f"raw preflight: duplicate ZIP64 {boundary} extra")
+                raise RuntimeError(f"raw preflight: duplicate ZIP {boundary} extra")
+            seen_critical.add(kind)
+        if kind == 1:
+            zip64_extra = extra[cursor : cursor + width]
+        cursor += width
+    return zip64_extra
+
+
+def _check_raw_zip64_sizes(
+    extra: bytes | None,
+    *,
+    boundary: str,
+    compressed32: int,
+    uncompressed32: int,
+    bit3: bool = False,
+    local_crc: int = 0,
+    offset32: int | None = None,
+    disk16: int | None = None,
+) -> tuple[int, int]:
+    """Reject redundant ZIP64 payloads and require exact sentinel-driven layout."""
+    if bit3:
+        if local_crc or compressed32 or uncompressed32 or extra not in (None, b""):
+            raise RuntimeError("raw preflight: invalid ZIP64 local bit3 sizes/CRC")
+        return 0, 0
+    need_u = uncompressed32 == 0xFFFFFFFF
+    need_c = compressed32 == 0xFFFFFFFF
+    need_o = offset32 == 0xFFFFFFFF
+    need_d = disk16 == 0xFFFF
+    expected = 8 * (int(need_u) + int(need_c) + int(need_o)) + 4 * int(need_d)
+    if extra is None:
+        if expected:
+            raise RuntimeError(f"raw preflight: missing ZIP64 {boundary} sizes")
+        return compressed32, uncompressed32
+    if len(extra) != expected:
+        raise RuntimeError(f"raw preflight: invalid ZIP64 {boundary} size layout")
+    cursor = 0
+    uncompressed, compressed = uncompressed32, compressed32
+    if need_u:
+        uncompressed = struct.unpack_from("<Q", extra, cursor)[0]
+        cursor += 8
+    if need_c:
+        compressed = struct.unpack_from("<Q", extra, cursor)[0]
+        cursor += 8
+    if need_o:
+        cursor += 8
+    if need_d and struct.unpack_from("<I", extra, cursor)[0] != 0:
+        raise RuntimeError("raw preflight: unsupported ZIP64 central disk")
+    return compressed, uncompressed
+
+
+def _check_raw_central_zip64(archive: zipfile.ZipFile, entries: list[zipfile.ZipInfo]) -> None:
+    """Inspect original central 32-bit fields before trusting ZipInfo decoding."""
+    handle = archive.fp
+    if handle is None:
+        raise RuntimeError("raw preflight: unreadable ZIP central directory")
+    handle.seek(archive.start_dir)
+    for entry in entries:
+        header = handle.read(46)
+        if len(header) != 46 or header[:4] != b"PK\x01\x02":
+            raise RuntimeError("raw preflight: invalid ZIP central header")
+        compressed32, uncompressed32 = struct.unpack_from("<II", header, 20)
+        name_len, extra_len, comment_len, disk16 = struct.unpack_from("<HHHH", header, 28)
+        offset32 = struct.unpack_from("<I", header, 42)[0]
+        name = handle.read(name_len)
+        extra = handle.read(extra_len)
+        comment = handle.read(comment_len)
+        if len(name) != name_len or len(extra) != extra_len or len(comment) != comment_len:
+            raise RuntimeError("raw preflight: truncated ZIP central header")
+        if extra != entry.extra:
+            raise RuntimeError("raw preflight: ZIP central extra mismatch")
+        if disk16 not in (0, 0xFFFF):
+            raise RuntimeError("raw preflight: unsupported ZIP central member disk")
+        zip64_extra = _check_raw_extra_fields(extra, boundary="central")
+        compressed, uncompressed = _check_raw_zip64_sizes(
+            zip64_extra,
+            boundary="central",
+            compressed32=compressed32,
+            uncompressed32=uncompressed32,
+            offset32=offset32,
+            disk16=disk16,
+        )
+        if (compressed, uncompressed) != (entry.compress_size, entry.file_size):
+            raise RuntimeError("raw preflight: ZIP64 central size mismatch")
+
+
 def _check_member_exact(
     archive: zipfile.ZipFile, entry: zipfile.ZipInfo, budget: int, next_offset: int
 ) -> int:
@@ -77,33 +190,15 @@ def _check_member_exact(
     local_extra = handle.read(extra_len)
     if len(local_extra) != extra_len:
         raise RuntimeError("raw preflight: truncated ZIP local extra")
-    # Parse *all* local extras: bit 3 changes which size fields are
-    # authoritative, but never excuses broken TLV framing or a missing
-    # ZIP64 record for explicit 0xffffffff sentinels.
-    cursor = 0
-    zip64_extra = None
-    while cursor < len(local_extra):
-        if cursor + 4 > len(local_extra):
-            raise RuntimeError("raw preflight: malformed ZIP local extra")
-        kind, width = struct.unpack_from("<HH", local_extra, cursor)
-        cursor += 4
-        if cursor + width > len(local_extra):
-            raise RuntimeError("raw preflight: malformed ZIP local extra")
-        if kind == 1:
-            if zip64_extra is not None:
-                raise RuntimeError("raw preflight: duplicate ZIP64 local extra")
-            zip64_extra = local_extra[cursor : cursor + width]
-        cursor += width
-    if 0xFFFFFFFF in (local_compressed, local_uncompressed):
-        needed = 8 * ((local_compressed == 0xFFFFFFFF) + (local_uncompressed == 0xFFFFFFFF))
-        if zip64_extra is None or len(zip64_extra) < needed:
-            raise RuntimeError("raw preflight: missing ZIP64 local sizes")
-        cursor = 0
-        if local_uncompressed == 0xFFFFFFFF:
-            local_uncompressed = struct.unpack_from("<Q", zip64_extra, cursor)[0]
-            cursor += 8
-        if local_compressed == 0xFFFFFFFF:
-            local_compressed = struct.unpack_from("<Q", zip64_extra, cursor)[0]
+    zip64_extra = _check_raw_extra_fields(local_extra, boundary="local")
+    local_compressed, local_uncompressed = _check_raw_zip64_sizes(
+        zip64_extra,
+        boundary="local",
+        compressed32=local_compressed,
+        uncompressed32=local_uncompressed,
+        bit3=bool(flags & 8),
+        local_crc=local_crc,
+    )
     # Without bit 3, the local CRC and decoded sizes must match central.
     # With bit 3, the data descriptor remains authoritative.
     if not flags & 8:
@@ -201,6 +296,8 @@ def _raw_zip_crc_and_budget(path: Path, *, expanded: int, members: int) -> tuple
                 position: (positions[i + 1] if i + 1 < len(positions) else archive.start_dir)
                 for i, position in enumerate(positions)
             }
+            # Match raw central sentinel bits to the exact ZIP64 payload.
+            _check_raw_central_zip64(archive, entries)
             for entry in entries:
                 if entry.flag_bits & 1:
                     raise RuntimeError("raw preflight: encrypted ZIP member")
