@@ -213,6 +213,29 @@ def test_parallel_pending_futures_cleaned_after_duckdb_error(
         con.close()
 
 
+
+@pytest.mark.parametrize("payload", [b"", b"A;SAFE\n"], ids=["empty", "nonempty"])
+def test_single_loader_duckdb_error_cleans_owned_scratch(tmp_path, monkeypatch, payload):
+    """A consumer SQL failure must remove scratch but preserve unrelated files."""
+    monkeypatch.setattr(streaming, "_SHM_DIR", None)
+    source = make_zip(tmp_path / "source.zip", payload)
+    work = tmp_path / "work"
+    work.mkdir()
+    sibling = work / "unrelated.csv"
+    sibling.write_bytes(b"keep")
+
+    con = duckdb.connect()
+    try:
+        with pytest.raises(duckdb.Error):
+            streaming.create_table_from_zip_streaming(
+                con, "bad-name", source, COLS, work_dir=work
+            )
+        equal(sibling.read_bytes(), b"keep")
+        equal(list(work.iterdir()), [sibling])
+    finally:
+        con.close()
+
+
 def test_optimized_python_replays_regressions():
     if not __debug__:
         return
