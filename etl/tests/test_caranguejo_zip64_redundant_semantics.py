@@ -117,11 +117,6 @@ def test_no_extra_control(tmp_path: Path, method: int, bit3: bool):
 @pytest.mark.parametrize("bit3", [False, True])
 @pytest.mark.parametrize("boundary", ["local", "central"])
 @pytest.mark.parametrize("contradict", [False, True])
-@pytest.mark.xfail(
-    strict=True,
-    raises=pytest.fail.Exception,
-    reason="Common ZIP: nonempty ZIP64 sizes without 32-bit sentinels",
-)
 def test_redundant_zip64_rejected(
     tmp_path: Path,
     method: int,
