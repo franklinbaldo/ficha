@@ -1,9 +1,9 @@
 """Offline ZIP central/local extra profile controls for Ficha #490/#433.
 
 Contract oracles are separate: APPNOTE §4.5.1 defines complete TLVs;
-Common ZIP §extraFields permits up to 3 trailing zero bytes and prohibits
-repeated critical ZIP64 tag 0x0001. XFAIL(strict) records undecided behavior;
-it does not authorize accepting a file from the RFB or an IA upload.
+Common ZIP §extraFields permits up to 3 terminal zero bytes and prohibits
+repeated critical 0x0001/0x000a/0x5455/0x7075 tags per header.
+Passing synthetic admission tests does not authenticate RFB bytes or permit upload.
 """
 
 from __future__ import annotations
@@ -133,11 +133,6 @@ def test_complete_unknown_tlv_and_zero_tail_control(tmp_path: Path, method: int,
     _require_admitted(_preflight(tmp_path, raw))
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=pytest.fail.Exception,
-    reason="Common ZIP terminal zero padding not admitted by current central TLV guard",
-)
 @pytest.mark.parametrize("method", _METHODS, ids=["stored", "deflated"])
 @pytest.mark.parametrize("descriptor", [False, True], ids=["no_bit3", "bit3"])
 @pytest.mark.parametrize("count", [1, 2, 3], ids=["pad1", "pad2", "pad3"])
@@ -174,11 +169,6 @@ def test_single_zip64_central_with_sentinel(tmp_path: Path, method: int, descrip
     _require_admitted(_preflight(tmp_path, raw))
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=pytest.fail.Exception,
-    reason="Common ZIP prohibits duplicate critical ZIP64 central tag 0x0001",
-)
 @pytest.mark.parametrize("method", _METHODS, ids=["stored", "deflated"])
 @pytest.mark.parametrize("descriptor", [False, True], ids=["no_bit3", "bit3"])
 @pytest.mark.parametrize("variant", ["duplicate_equal", "duplicate_conflict"])
@@ -207,11 +197,6 @@ def test_duplicate_unknown_tags_are_allowed(tmp_path: Path, method: int, descrip
     _require_admitted(_preflight(tmp_path, raw))
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=pytest.fail.Exception,
-    reason="Common ZIP zero padding rejected by existing local guard on main",
-)
 @pytest.mark.parametrize("method", _METHODS, ids=["stored", "deflated"])
 @pytest.mark.parametrize("descriptor", [False, True], ids=["no_bit3", "bit3"])
 @pytest.mark.parametrize("placement", ["local", "both"])
@@ -256,11 +241,6 @@ def test_repeated_zero_width_padding_tlvs_are_allowed(
     _require_admitted(_preflight(tmp_path, raw))
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=pytest.fail.Exception,
-    reason="Common ZIP padding tag 0x0000 requires zero data length",
-)
 @pytest.mark.parametrize("method", _METHODS, ids=["stored", "deflated"])
 @pytest.mark.parametrize("descriptor", [False, True], ids=["no_bit3", "bit3"])
 @pytest.mark.parametrize("placement", ["local", "central"])
@@ -288,11 +268,6 @@ def test_nonempty_zero_tag_padding_must_be_rejected(
     pytest.fail("nonempty 0x0000 padding TLV accepted by preflight")
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=pytest.fail.Exception,
-    reason="Common ZIP prohibits repeated NTFS/UT/Unicode critical extras",
-)
 @pytest.mark.parametrize("method", _METHODS, ids=["stored", "deflated"])
 @pytest.mark.parametrize("descriptor", [False, True], ids=["no_bit3", "bit3"])
 @pytest.mark.parametrize("placement", ["local", "central"])
@@ -324,7 +299,7 @@ def test_repeated_critical_metadata_tags_must_be_rejected(
 
 
 def test_optimized_python_replays_common_zip_contract_matrix():
-    """Re-run all three typed XFAIL families and positive controls under -O."""
+    """Re-run contract positives and negatives under optimized Python."""
     selectors = [
         f"{__file__}::test_complete_unknown_tlv_and_zero_tail_control",
         f"{__file__}::test_common_zip_central_zero_padding",
@@ -349,11 +324,6 @@ def test_optimized_python_replays_common_zip_contract_matrix():
         raise AssertionError(child.stdout + "\n" + child.stderr)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=pytest.fail.Exception,
-    reason="Common ZIP 1–3 trailing zero bytes require no preceding TLV",
-)
 @pytest.mark.parametrize("method", _METHODS, ids=["stored", "deflated"])
 @pytest.mark.parametrize("descriptor", [False, True], ids=["no_bit3", "bit3"])
 @pytest.mark.parametrize("placement", ["local", "central"])
@@ -363,7 +333,7 @@ def test_common_zip_zero_only_tail_per_boundary(
 ):
     """Separate local/central regression: zero-only extra has no preceding TLV.
 
-    Synthetic CRC-preserving ZIP, real preflight, typed XFAIL until repaired.
+    Synthetic CRC-preserving ZIP, real preflight, policy regression.
     Keeping exactly one nonempty extra boundary prevents the other boundary
     from masking an incorrect rejection. Replay is included under python -O.
     """
