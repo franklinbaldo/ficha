@@ -55,10 +55,12 @@ def _make_zip(
     raw = bytearray(sink.getvalue())
     central = raw.find(b"PK\x01\x02")
     eocd = raw.rfind(b"PK\x05\x06")
-    assert central > 0 and eocd > central
+    if not (central > 0 and eocd > central):
+        raise AssertionError("ZIP fixture missing central header or EOCD")
 
     local_name, old_local_extra = struct.unpack_from("<HH", raw, 26)
-    assert not old_local_extra
+    if old_local_extra:
+        raise AssertionError("ZIP fixture unexpectedly has local extra")
     if local_extra:
         raw[30 + local_name : 30 + local_name] = local_extra
         struct.pack_into("<H", raw, 28, len(local_extra))
@@ -68,9 +70,11 @@ def _make_zip(
         struct.pack_into("<I", raw, eocd + 16, old_start + len(local_extra))
 
     central_name, old_central_extra, comment = struct.unpack_from("<HHH", raw, central + 28)
-    assert not old_central_extra and not comment
+    if old_central_extra or comment:
+        raise AssertionError("ZIP fixture unexpectedly has central extra/comment")
     compressed_size, uncompressed_size = struct.unpack_from("<II", raw, central + 20)
-    assert uncompressed_size == len(_PAYLOAD)
+    if uncompressed_size != len(_PAYLOAD):
+        raise AssertionError("ZIP fixture size mismatch")
     if zip64_central is not None:
         first = struct.pack("<HHQQ", 1, 16, uncompressed_size, compressed_size)
         if zip64_central == "single":
@@ -97,12 +101,17 @@ def _make_zip(
 
 def _check_zipfile(raw: bytes, central_extra: bytes, *, descriptor: bool) -> None:
     with zipfile.ZipFile(io.BytesIO(raw)) as archive:
-        assert len(archive.infolist()) == 1
+        if len(archive.infolist()) != 1:
+            raise AssertionError("ZIP fixture must have exactly one member")
         entry = archive.infolist()[0]
-        assert entry.extra == central_extra
-        assert bool(entry.flag_bits & 8) == descriptor
-        assert archive.read(entry) == _PAYLOAD
-        assert archive.testzip() is None
+        if entry.extra != central_extra:
+            raise AssertionError("ZIP fixture lost central extra")
+        if bool(entry.flag_bits & 8) != descriptor:
+            raise AssertionError("ZIP fixture bit 3 mismatch")
+        if archive.read(entry) != _PAYLOAD:
+            raise AssertionError("ZIP fixture payload mismatch")
+        if archive.testzip() is not None:
+            raise AssertionError("ZIP fixture CRC mismatch")
 
 
 def _preflight(tmp_path: Path, raw: bytes) -> tuple[int, int]:
@@ -111,12 +120,17 @@ def _preflight(tmp_path: Path, raw: bytes) -> tuple[int, int]:
     return _raw_zip_crc_and_budget(path, expanded=0, members=0)
 
 
+def _require_admitted(result: tuple[int, int]) -> None:
+    if result != (len(_PAYLOAD), 1):
+        raise AssertionError(f"preflight admission count/size mismatch: {result!r}")
+
+
 @pytest.mark.parametrize("method", _METHODS, ids=["stored", "deflated"])
 @pytest.mark.parametrize("descriptor", [False, True], ids=["no_bit3", "bit3"])
 def test_complete_unknown_tlv_and_zero_tail_control(tmp_path: Path, method: int, descriptor: bool):
     raw = _make_zip(method, descriptor=descriptor, central_extra=_UNKNOWN)
     _check_zipfile(raw, _UNKNOWN, descriptor=descriptor)
-    assert _preflight(tmp_path, raw) == (len(_PAYLOAD), 1)
+    _require_admitted(_preflight(tmp_path, raw))
 
 
 @pytest.mark.xfail(
@@ -137,7 +151,7 @@ def test_common_zip_central_zero_padding(tmp_path: Path, method: int, descriptor
         if str(exc) != "raw preflight: malformed ZIP central extra":
             raise
         pytest.fail("valid Common ZIP central zero padding rejected by TLV guard")
-    assert result == (len(_PAYLOAD), 1)
+    _require_admitted(result)
 
 
 @pytest.mark.parametrize("method", _METHODS, ids=["stored", "deflated"])
@@ -157,7 +171,7 @@ def test_single_zip64_central_with_sentinel(tmp_path: Path, method: int, descrip
     with zipfile.ZipFile(io.BytesIO(raw)) as archive:
         extra = archive.infolist()[0].extra
     _check_zipfile(raw, extra, descriptor=descriptor)
-    assert _preflight(tmp_path, raw) == (len(_PAYLOAD), 1)
+    _require_admitted(_preflight(tmp_path, raw))
 
 
 @pytest.mark.xfail(
@@ -190,7 +204,7 @@ def test_duplicate_unknown_tags_are_allowed(tmp_path: Path, method: int, descrip
     extra = _UNKNOWN * 2
     raw = _make_zip(method, descriptor=descriptor, central_extra=extra)
     _check_zipfile(raw, extra, descriptor=descriptor)
-    assert _preflight(tmp_path, raw) == (len(_PAYLOAD), 1)
+    _require_admitted(_preflight(tmp_path, raw))
 
 
 @pytest.mark.xfail(
@@ -222,7 +236,7 @@ def test_common_zip_zero_padding_local_boundary(
         if str(exc) not in expected:
             raise
         pytest.fail("valid Common ZIP local zero padding rejected by TLV guard")
-    assert result == (len(_PAYLOAD), 1)
+    _require_admitted(result)
 
 
 @pytest.mark.parametrize("method", _METHODS, ids=["stored", "deflated"])
@@ -239,7 +253,7 @@ def test_repeated_zero_width_padding_tlvs_are_allowed(
         central_extra=extra if placement in ("central", "both") else b"",
     )
     _check_zipfile(raw, extra if placement in ("central", "both") else b"", descriptor=descriptor)
-    assert _preflight(tmp_path, raw) == (len(_PAYLOAD), 1)
+    _require_admitted(_preflight(tmp_path, raw))
 
 
 @pytest.mark.xfail(
