@@ -32,6 +32,14 @@ Mesmo com `--skip-upload`, o `run` pode baixar dados completos, consumir CPU/dis
 
 Outros subcomandos: `list-snapshots`, `list-files`, `download`, `transform`, `pack`, `fetch`, `smoke`. Alguns acessam rede, executam trabalho ou escrevem arquivos. Qualquer ETL real, backfill, upload ou promoção depende de autorização operacional específica.
 
+
+### API Python legada `upload_raw_zips` (Ficha #485)
+
+**Mudança incompatível de comportamento na [PR #485](https://github.com/franklinbaldo/ficha/pull/485), ainda sujeita à revisão e integração.** A função importável `ficha_etl.upload.upload_raw_zips(month, cache_dir, *, access_key, secret_key)` mantém sua assinatura, mas **recusa toda competência válida com `RuntimeError` antes de consultar cache, inventário, credenciais remotas ou enviar bytes**. Meses inválidos continuam causando `ValueError`. Anteriormente, ela espelhava até um subconjunto de 1/37 ZIPs e chamava `ia.upload`; em cache vazio, podia gerar `FileNotFoundError`. Clientes Python externos podem, portanto, deixar de funcionar mesmo com cache completo. A ausência de chamadores na árvore versionada **não** demonstra inexistência de consumidores externos.
+
+Não há substituto de publicação raw autorizado. **Não** migrar chamadas para `stream_raw_zips_to_ia`, `_stream_one_zip_with_retry`, `ia.upload` ou `_ia_s3_put` para contornar a recusa: as rotas restantes não têm a cadeia de custódia S/U/R/F demonstrada. A regressão de [#479](https://github.com/franklinbaldo/ficha/pull/479) documenta retries/reentradas sem `UNKNOWN` persistido; a [RFC F15](https://github.com/franklinbaldo/ficha/pull/466) exige inventário de **todos os writers**, não só o fechamento deste helper. A [#433](https://github.com/franklinbaldo/ficha/issues/433) permanece **HOLD** até critérios de custódia e revisão excepcional.
+
+
 ## Contratos com os consumidores
 
 O Parquet **não é o único contrato** entre o ETL e o site público. As três fronteiras devem ser testadas separadamente:
