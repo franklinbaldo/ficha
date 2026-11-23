@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import io
+import os
 import signal
 import subprocess
 import sys
@@ -89,7 +90,9 @@ def _worker(scratch: Path, phase: str, failure: str, expected_optimize: int) -> 
                 raise AssertionError("expected nonempty partial fake wire body")
             prefix = first_chunk[: len(first_chunk) // 2]
             (scratch / "wire-first.bin").write_bytes(prefix)
-            (scratch / "wire-ready.flag").write_text("partial-body-awaiting-kill")
+            pending = scratch / "wire-ready.pending"
+            pending.write_text(_READY)
+            pending.replace(scratch / "wire-ready.flag")
             time.sleep(90)  # Parent kills the child; timeout is only a failsafe.
             raise AssertionError("first child was not killed")
         body = b"".join(chunks)
@@ -155,7 +158,7 @@ def _kill_parked_child(child: subprocess.Popen[str], marker: Path) -> None:
         if not terminate(int(child._handle), _WINDOWS_KILL_CODE):
             raise ctypes.WinError(ctypes.get_last_error())
     else:
-        child.send_signal(signal.SIGKILL)
+        os.kill(child.pid, signal.SIGKILL)
     if child.wait(timeout=15) != _kill_exit_code():
         raise AssertionError("worker did not terminate with the reserved hard-kill status")
 
