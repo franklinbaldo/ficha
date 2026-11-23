@@ -1,7 +1,9 @@
 """Offline process-restart oracle for the Ficha #433 raw UNKNOWN contract.
 
 Two distinct Python interpreters call the real stream_raw_zips_to_ia entrypoint.
-Every RFB/IA boundary is synthetic. No network, ETL or publishing occurs.
+The first response is either HTTP 503 or a response ReadTimeout *after*
+all request bytes were consumed by the fake transport. Every RFB/IA boundary
+is synthetic. No network, ETL or publishing occurs.
 """
 
 from __future__ import annotations
@@ -36,15 +38,15 @@ def _payload(name: str, generation: str) -> bytes:
     return output.getvalue()
 
 
-def _worker(scratch: Path, phase: str) -> int:
+def _worker(scratch: Path, phase: str, failure: str) -> int:
     # Imports and patches live inside the child, not in the pytest parent.
     from ficha_etl import upload
 
     specs = list(canonical_inventory())
     if len(specs) != 37 or len({spec.name for spec in specs}) != 37:
         raise AssertionError("expected canonical 37/37 inventory")
-    if phase not in ("first", "second"):
-        raise AssertionError("invalid offline phase")
+    if phase not in ("first", "second") or failure not in ("http503", "timeout"):
+        raise AssertionError("invalid offline phase or failure")
 
     generation = "A" if phase == "first" else "B"
     upload._existing_raw_files_on_ia = lambda _identifier: set()
@@ -72,6 +74,9 @@ def _worker(scratch: Path, phase: str) -> int:
         (scratch / f"wire-{phase}.bin").write_bytes(body)
         if phase == "first":
             # The transport consumed the entire body; the response is ambiguous.
+            if failure == "timeout":
+                # Request body fully consumed; the response is not observed.
+                raise upload.httpx.ReadTimeout("offline response timeout")
             raise upload._IAS3Error(503, "https://s3.us.archive.org/offline")
         raise ReplayAttempt("second fake PUT reached after process restart")
 
@@ -85,6 +90,10 @@ def _worker(scratch: Path, phase: str) -> int:
     except upload._IAS3Error as exc:
         if phase == "first" and exc.status == 503:
             return 53
+        raise
+    except upload.httpx.ReadTimeout:
+        if phase == "first" and failure == "timeout":
+            return 54
         raise
     except ReplayAttempt:
         return 42
@@ -101,9 +110,9 @@ def _worker(scratch: Path, phase: str) -> int:
     return 7
 
 
-def _child(scratch: Path, phase: str) -> subprocess.CompletedProcess[str]:
+def _child(scratch: Path, phase: str, failure: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        [sys.executable, str(Path(__file__).resolve()), "--offline-worker", str(scratch), phase],
+        [sys.executable, str(Path(__file__).resolve()), "--offline-worker", str(scratch), phase, failure],
         capture_output=True,
         text=True,
         check=False,
@@ -111,12 +120,17 @@ def _child(scratch: Path, phase: str) -> subprocess.CompletedProcess[str]:
     )
 
 
+@pytest.mark.parametrize(
+    ("failure", "first_exit"),
+    [("http503", 53), ("timeout", 54)],
+    ids=("http-503", "read-timeout-after-body"),
+)
 @pytest.mark.xfail(
     strict=True,
     raises=AmbiguousReplay,
     reason="#433: true process restart must not replay an ambiguous raw PUT",
 )
-def test_unknown_after_real_process_restart(tmp_path: Path):
+def test_unknown_after_real_process_restart(tmp_path: Path, failure: str, first_exit: int):
     specs = list(canonical_inventory())
     first = specs[0].name
     a = _payload(first, "A")
@@ -124,11 +138,11 @@ def test_unknown_after_real_process_restart(tmp_path: Path):
     if len(a) != len(b) or hashlib.sha256(a).digest() == hashlib.sha256(b).digest():
         raise AssertionError("A/B must collide in length but not SHA-256")
 
-    one = _child(tmp_path, "first")
-    if one.returncode != 53 or (tmp_path / "wire-first.bin").read_bytes() != a:
-        raise AssertionError(f"first process did not send A then get 503: {one}")
+    one = _child(tmp_path, "first", failure)
+    if one.returncode != first_exit or (tmp_path / "wire-first.bin").read_bytes() != a:
+        raise AssertionError(f"first process did not send A then fail ambiguously: {one}")
     # The interpreter has exited. No in-memory UNKNOWN can survive this line.
-    two = _child(tmp_path, "second")
+    two = _child(tmp_path, "second", failure)
     second_wire = tmp_path / "wire-second.bin"
     if two.returncode == 0 and not second_wire.exists():
         return  # A future durable, explicit fail-closed guard is sufficient.
@@ -154,11 +168,11 @@ def test_unknown_process_restart_in_optimized_python():
         check=False,
         timeout=240,
     )
-    if result.returncode != 0 or "1 xfailed" not in result.stdout:
+    if result.returncode != 0 or "2 xfailed" not in result.stdout:
         raise AssertionError(result.stdout + "\n" + result.stderr)
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 4 or sys.argv[1] != "--offline-worker":
-        raise SystemExit("offline worker only: --offline-worker SCRATCH first|second")
-    raise SystemExit(_worker(Path(sys.argv[2]), sys.argv[3]))
+    if len(sys.argv) != 5 or sys.argv[1] != "--offline-worker":
+        raise SystemExit("offline worker only: --offline-worker SCRATCH first|second http503|timeout")
+    raise SystemExit(_worker(Path(sys.argv[2]), sys.argv[3], sys.argv[4]))
