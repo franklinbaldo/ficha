@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import io
 import struct
+import subprocess
+import sys
 import zipfile
 from pathlib import Path
 
@@ -110,6 +112,7 @@ def test_complete_unknown_tlv_and_zero_tail_control(tmp_path: Path, method: int,
 
 @pytest.mark.xfail(
     strict=True,
+    raises=pytest.fail.Exception,
     reason="Common ZIP terminal zero padding not admitted by current central TLV guard",
 )
 @pytest.mark.parametrize("method", _METHODS, ids=["stored", "deflated"])
@@ -119,7 +122,13 @@ def test_common_zip_central_zero_padding(tmp_path: Path, method: int, descriptor
     extra = _UNKNOWN + bytes(count)
     raw = _make_zip(method, descriptor=descriptor, central_extra=extra)
     _check_zipfile(raw, extra, descriptor=descriptor)
-    assert _preflight(tmp_path, raw) == (len(_PAYLOAD), 1)
+    try:
+        result = _preflight(tmp_path, raw)
+    except RuntimeError as exc:
+        if str(exc) != "raw preflight: malformed ZIP central extra":
+            raise
+        pytest.fail("valid Common ZIP central zero padding rejected by TLV guard")
+    assert result == (len(_PAYLOAD), 1)
 
 
 @pytest.mark.parametrize("method", _METHODS, ids=["stored", "deflated"])
@@ -144,6 +153,7 @@ def test_single_zip64_central_with_sentinel(tmp_path: Path, method: int, descrip
 
 @pytest.mark.xfail(
     strict=True,
+    raises=pytest.fail.Exception,
     reason="Common ZIP prohibits duplicate critical ZIP64 central tag 0x0001",
 )
 @pytest.mark.parametrize("method", _METHODS, ids=["stored", "deflated"])
@@ -156,8 +166,13 @@ def test_common_zip_duplicate_zip64_central_is_rejected(
     with zipfile.ZipFile(io.BytesIO(raw)) as archive:
         extra = archive.infolist()[0].extra
     _check_zipfile(raw, extra, descriptor=descriptor)
-    with pytest.raises(RuntimeError, match="duplicate ZIP64 central extra"):
+    try:
         _preflight(tmp_path, raw)
+    except RuntimeError as exc:
+        if str(exc) != "raw preflight: duplicate ZIP64 central extra":
+            raise
+        return
+    pytest.fail("duplicate critical ZIP64 central field admitted by preflight")
 
 
 @pytest.mark.parametrize("method", _METHODS, ids=["stored", "deflated"])
@@ -171,6 +186,7 @@ def test_duplicate_unknown_tags_are_allowed(tmp_path: Path, method: int, descrip
 
 @pytest.mark.xfail(
     strict=True,
+    raises=pytest.fail.Exception,
     reason="Common ZIP zero padding rejected by existing local guard on main",
 )
 @pytest.mark.parametrize("method", _METHODS, ids=["stored", "deflated"])
@@ -187,4 +203,35 @@ def test_common_zip_zero_padding_local_boundary(
         central_extra=extra if placement == "both" else b"",
     )
     _check_zipfile(raw, extra if placement == "both" else b"", descriptor=descriptor)
-    assert _preflight(tmp_path, raw) == (len(_PAYLOAD), 1)
+    try:
+        result = _preflight(tmp_path, raw)
+    except RuntimeError as exc:
+        expected = {"raw preflight: malformed ZIP local extra"}
+        if placement == "both":
+            expected.add("raw preflight: malformed ZIP central extra")
+        if str(exc) not in expected:
+            raise
+        pytest.fail("valid Common ZIP local zero padding rejected by TLV guard")
+    assert result == (len(_PAYLOAD), 1)
+
+
+def test_optimized_python_replays_common_zip_contract_matrix():
+    """Re-run all three typed XFAIL families and positive controls under -O."""
+    selectors = [
+        f"{__file__}::test_complete_unknown_tlv_and_zero_tail_control",
+        f"{__file__}::test_common_zip_central_zero_padding",
+        f"{__file__}::test_nonzero_central_tail_is_rejected",
+        f"{__file__}::test_single_zip64_central_with_sentinel",
+        f"{__file__}::test_common_zip_duplicate_zip64_central_is_rejected",
+        f"{__file__}::test_duplicate_unknown_tags_are_allowed",
+        f"{__file__}::test_common_zip_zero_padding_local_boundary",
+    ]
+    child = subprocess.run(
+        [sys.executable, "-O", "-m", "pytest", "-q", *selectors],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=180,
+    )
+    if child.returncode:
+        raise AssertionError(child.stdout + "\n" + child.stderr)
