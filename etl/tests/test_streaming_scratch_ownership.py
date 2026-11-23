@@ -233,6 +233,71 @@ def test_single_loader_duckdb_error_cleans_owned_scratch(tmp_path, monkeypatch, 
         con.close()
 
 
+def test_single_and_batch_apis_keep_distinct_scratch(tmp_path, monkeypatch):
+    """Single-ZIP and parallel APIs must not share a staging filename."""
+    monkeypatch.setattr(streaming, "_SHM_DIR", None)
+    original_decompress = streaming._decompress_zip
+    original_load = streaming._load_from_result
+
+    a = make_zip(tmp_path / "A" / "same.zip", b"A;SINGLE\n" * 11)
+    b = make_zip(tmp_path / "B" / "same.zip", b"B;BATCH\n" * 13)
+    a_staged = threading.Event()
+    b_staged = threading.Event()
+    a_consumed = threading.Event()
+
+    def ordered_decompress(zip_path, table, columns, *, tmp_dir):
+        if zip_path == a:
+            result = original_decompress(zip_path, table, columns, tmp_dir=tmp_dir)
+            a_staged.set()
+            wait(b_staged, "batch producer")
+            return result
+        if zip_path == b:
+            wait(a_staged, "single producer")
+            result = original_decompress(zip_path, table, columns, tmp_dir=tmp_dir)
+            b_staged.set()
+            wait(a_consumed, "single consumer")
+            return result
+        return original_decompress(zip_path, table, columns, tmp_dir=tmp_dir)
+
+    def ordered_load(con, result):
+        try:
+            return original_load(con, result)
+        finally:
+            if con is single_con:
+                a_consumed.set()
+
+    monkeypatch.setattr(streaming, "_decompress_zip", ordered_decompress)
+    monkeypatch.setattr(streaming, "_load_from_result", ordered_load)
+    work = tmp_path / "work"
+    single_con, batch_con = duckdb.connect(), duckdb.connect()
+    try:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+            single = executor.submit(
+                streaming.create_table_from_zip_streaming,
+                single_con,
+                "rows",
+                a,
+                COLS,
+                work_dir=work,
+            )
+            wait(a_staged, "single staging")
+            batch = executor.submit(
+                streaming.load_zips_parallel,
+                batch_con,
+                [("rows", b, COLS)],
+                work_dir=work,
+                decompress_workers=1,
+            )
+            single.result(timeout=30)
+            batch.result(timeout=30)
+        equal(single_con.execute("SELECT DISTINCT a, b FROM rows").fetchall(), [("A", "SINGLE")])
+        equal(batch_con.execute("SELECT DISTINCT a, b FROM rows").fetchall(), [("B", "BATCH")])
+        empty_scratch(work)
+    finally:
+        single_con.close()
+        batch_con.close()
+
+
 def test_optimized_python_replays_regressions():
     if not __debug__:
         return
