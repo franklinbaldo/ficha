@@ -26,6 +26,11 @@ try {
       const select=page.locator('#acervo-competencia');
       assert.ok(await select.locator('option').count()>=2);
       assert.ok(await page.locator('#acervo-resultado').textContent());
+      // Allow the initial SSG resources to settle before auditing local-only interactions.
+      await page.waitForLoadState('networkidle');
+      const filterRequests=[];
+      const trackFilterRequest=request=>filterRequests.push(request.method()+' '+request.url());
+      page.on('request',trackFilterRequest);
       const filter=page.getByRole('searchbox',{name:'Filtrar arquivos desta competência'});
       const counter=page.locator('#acervo-contagem');
       assert.equal((await counter.textContent()).trim(),files+' de '+files+' arquivos exibidos');
@@ -52,7 +57,11 @@ try {
       assert.equal((await counter.textContent()).trim(),newCount+' de '+newCount+' arquivos exibidos');
       await select.selectOption(originalDate);
       assert.equal(await page.locator('#acervo-resultado .archive-file').count(),files);
-      view.checks.push({page:'acervo',files,filterKeyboard:true,filtered:matches});
+      page.off('request',trackFilterRequest);
+      assert.deepEqual(filterRequests,[],
+        'filtro, limpeza e troca de competência não podem criar requisições de rede');
+      view.checks.push({page:'acervo',files,filterKeyboard:true,filtered:matches,
+        requestsDuringFilter:filterRequests.length});
       await page.screenshot({path:out+'/greenfield-acervo-'+viewport.name+'.png',fullPage:true});
 
       await page.goto(base+'explorar/',{waitUntil:'domcontentloaded'});
