@@ -25,12 +25,17 @@ class _NonSeekable(io.BytesIO):
 _NAME = "K3241.K03200Y2.D60808.EMPRECSV"
 _PAYLOAD = b"1;2\n"
 _METHODS = (zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED)
-_VALID = (b"", b"\x34\x12\x01\x00x")
+_VALID = (
+    b"",
+    b"\x34\x12\x01\x00x",
+    b"\x34\x12\x00\x00",
+    b"\x34\x12\x00\x00\x78\x56\x01\x00z",
+)
 _INVALID = (b"Q", b"\x34\x12\x01")  # orphan byte; partial TLV header
 
 
-def _make_zip(method: int, central_extra: bytes) -> bytes:
-    sink = _NonSeekable()
+def _make_zip(method: int, central_extra: bytes, *, descriptor: bool = True) -> bytes:
+    sink = _NonSeekable() if descriptor else io.BytesIO()
     with zipfile.ZipFile(sink, "w", compression=method) as archive:
         archive.writestr(_NAME, _PAYLOAD)
     raw = bytearray(sink.getvalue())
@@ -63,14 +68,14 @@ def _well_framed_tlvs(extra: bytes) -> bool:
     return True
 
 
-def _assert_stdlib_accepts(raw: bytes, central_extra: bytes) -> None:
+def _assert_stdlib_accepts(raw: bytes, central_extra: bytes, *, descriptor: bool = True) -> None:
     with zipfile.ZipFile(io.BytesIO(raw)) as archive:
         entries = archive.infolist()
         if len(entries) != 1:
             raise AssertionError("expected exactly one ZIP member")
         entry = entries[0]
-        if not entry.flag_bits & 8 or entry.extra != central_extra:
-            raise AssertionError("central-extra fixture not preserved with bit 3")
+        if bool(entry.flag_bits & 8) != descriptor or entry.extra != central_extra:
+            raise AssertionError("central-extra fixture or descriptor flag not preserved")
         if archive.testzip() is not None or archive.read(entry) != _PAYLOAD:
             raise AssertionError("ZIP payload/CRC changed")
 
@@ -90,11 +95,6 @@ def test_well_framed_central_extra_is_accepted(tmp_path: Path, method: int, extr
 
 @pytest.mark.parametrize("method", _METHODS, ids=["stored", "deflated"])
 @pytest.mark.parametrize("extra", _INVALID)
-@pytest.mark.xfail(
-    strict=True,
-    raises=pytest.fail.Exception,
-    reason="Known gap: central-directory extra TLV framing unchecked (#433)",
-)
 def test_malformed_central_extra_must_be_rejected(tmp_path: Path, method: int, extra: bytes):
     if _well_framed_tlvs(extra):
         raise AssertionError("negative control is structurally valid")
@@ -111,10 +111,56 @@ def test_malformed_central_extra_must_be_rejected(tmp_path: Path, method: int, e
     pytest.fail("malformed central extra accepted by raw preflight")
 
 
+@pytest.mark.parametrize("method", _METHODS, ids=["stored", "deflated"])
+def test_declared_central_width_overrun_rejected_by_zipfile(tmp_path: Path, method: int):
+    """Prove a distinct, pre-existing stdlib rejection path (not the new TLV guard)."""
+    overrun = b"\x34\x12\x02\x00x"  # declares 2 bytes; carries 1
+    if _well_framed_tlvs(overrun):
+        raise AssertionError("overrun control is structurally valid")
+    raw = _make_zip(method, overrun)
+    with pytest.raises(zipfile.BadZipFile):
+        zipfile.ZipFile(io.BytesIO(raw))
+    path = tmp_path / "central-width-overrun.zip"
+    path.write_bytes(raw)
+    with pytest.raises(RuntimeError, match="raw preflight: invalid ZIP"):
+        _raw_zip_crc_and_budget(path, expanded=0, members=0)
+
+
+@pytest.mark.parametrize("method", _METHODS, ids=["stored", "deflated"])
+@pytest.mark.parametrize("extra", (b"", b"\x34\x12\x00\x00"))
+def test_well_framed_central_extra_without_descriptor(tmp_path: Path, method: int, extra: bytes):
+    """Bit 3 is not a precondition for accepting well-framed central extras."""
+    if not _well_framed_tlvs(extra):
+        raise AssertionError("positive control is malformed")
+    raw = _make_zip(method, extra, descriptor=False)
+    _assert_stdlib_accepts(raw, extra, descriptor=False)
+    path = tmp_path / "central-no-descriptor-valid.zip"
+    path.write_bytes(raw)
+    if _raw_zip_crc_and_budget(path, expanded=0, members=0) != (len(_PAYLOAD), 1):
+        raise AssertionError("non-bit3 central-extra positive incorrectly rejected")
+
+
+@pytest.mark.parametrize("method", _METHODS, ids=["stored", "deflated"])
+@pytest.mark.parametrize("extra", _INVALID)
+def test_malformed_central_extra_without_descriptor(tmp_path: Path, method: int, extra: bytes):
+    """The same central framing rule must hold without a data descriptor."""
+    if _well_framed_tlvs(extra):
+        raise AssertionError("negative control is structurally valid")
+    raw = _make_zip(method, extra, descriptor=False)
+    _assert_stdlib_accepts(raw, extra, descriptor=False)
+    path = tmp_path / "central-no-descriptor-malformed.zip"
+    path.write_bytes(raw)
+    with pytest.raises(RuntimeError, match="raw preflight: malformed ZIP central extra"):
+        _raw_zip_crc_and_budget(path, expanded=0, members=0)
+
+
 def test_optimized_python_replays_central_extra_matrix():
     selectors = [
         f"{__file__}::test_well_framed_central_extra_is_accepted",
         f"{__file__}::test_malformed_central_extra_must_be_rejected",
+        f"{__file__}::test_declared_central_width_overrun_rejected_by_zipfile",
+        f"{__file__}::test_well_framed_central_extra_without_descriptor",
+        f"{__file__}::test_malformed_central_extra_without_descriptor",
     ]
     child = subprocess.run(
         [sys.executable, "-O", "-m", "pytest", "-q", *selectors],
