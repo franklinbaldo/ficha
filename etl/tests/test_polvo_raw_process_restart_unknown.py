@@ -40,10 +40,12 @@ def _payload(name: str, generation: str) -> bytes:
     return output.getvalue()
 
 
-def _worker(scratch: Path, phase: str, failure: str) -> int:
+def _worker(scratch: Path, phase: str, failure: str, expected_optimize: int) -> int:
     # Imports and patches live inside the child, not in the pytest parent.
     from ficha_etl import upload
 
+    if sys.flags.optimize != expected_optimize:
+        raise AssertionError("worker optimization mode differs from parent")
     specs = list(canonical_inventory())
     if len(specs) != 37 or len({spec.name for spec in specs}) != 37:
         raise AssertionError("expected canonical 37/37 inventory")
@@ -74,6 +76,9 @@ def _worker(scratch: Path, phase: str, failure: str) -> int:
     def fake_put(identifier, remote_name, chunks, *, content_length, **_kwargs):
         if identifier != "ficha-2026-07" or remote_name != f"raw/{specs[0].name}":
             raise AssertionError("unexpected fake remote target")
+        attempt = scratch / f"attempt-{phase}.flag"
+        with attempt.open("xb") as marker:
+            marker.write(b"fake PUT entered")
         if phase == "first" and failure == "kill-midput":
             # The fake socket has accepted only a prefix of one chunk, not
             # a complete body. The parent must kill this *actual process*
@@ -106,7 +111,7 @@ def _worker(scratch: Path, phase: str, failure: str) -> int:
             "2026-07", access_key="fake", secret_key="fake", workers=1, spool_dir=scratch
         )
     except upload._IAS3Error as exc:
-        if phase == "first" and exc.status == 503:
+        if phase == "first" and failure == "http503" and exc.status == 503:
             return 53
         raise
     except upload.httpx.ReadTimeout:
@@ -118,10 +123,8 @@ def _worker(scratch: Path, phase: str, failure: str) -> int:
     except Exception as exc:
         # A future implementation may fail closed only for an explicit UNKNOWN
         # state. Arbitrary exceptions must not count as a successful fence.
-        evidence = f"{type(exc).__name__}: {exc}".lower()
-        if phase == "second" and any(
-            term in evidence for term in ("unknown", "journal", "ambiguous", "reconcil")
-        ):
+        refusal = getattr(upload, "RawAuthorityRefusal", None)
+        if phase == "second" and isinstance(refusal, type) and isinstance(exc, refusal):
             return 0
         raise
     # A silent no-op does not prove recovery from the ambiguous intent.
@@ -131,11 +134,13 @@ def _worker(scratch: Path, phase: str, failure: str) -> int:
 def _child(scratch: Path, phase: str, failure: str) -> subprocess.CompletedProcess[str]:
     command = [
         sys.executable,
+        *(["-O"] * sys.flags.optimize),
         str(Path(__file__).resolve()),
         "--offline-worker",
         str(scratch),
         phase,
         failure,
+        str(sys.flags.optimize),
     ]
     if phase == "first" and failure == "kill-midput":
         # Cross-platform parent-directed process kill, gated on a filesystem
@@ -192,6 +197,8 @@ def test_unknown_after_real_process_restart(tmp_path: Path, failure: str, first_
 
     one = _child(tmp_path, "first", failure)
     first_wire = tmp_path / "wire-first.bin"
+    if not (tmp_path / "attempt-first.flag").exists():
+        raise AssertionError("first worker did not enter fake PUT")
     if failure == "kill-midput":
         if (
             one.returncode == 0
@@ -206,9 +213,10 @@ def test_unknown_after_real_process_restart(tmp_path: Path, failure: str, first_
     # The interpreter has exited. No in-memory UNKNOWN can survive this line.
     two = _child(tmp_path, "second", failure)
     second_wire = tmp_path / "wire-second.bin"
-    if two.returncode == 0 and not second_wire.exists():
+    second_attempt = tmp_path / "attempt-second.flag"
+    if two.returncode == 0 and not second_wire.exists() and not second_attempt.exists():
         return  # A future durable, explicit fail-closed guard is sufficient.
-    if two.returncode != 42 or not second_wire.exists():
+    if two.returncode != 42 or not second_wire.exists() or not second_attempt.exists():
         raise AssertionError(f"unexpected second-process result: {two}")
     if second_wire.read_bytes() != b:
         raise AssertionError("second attempt did not transmit B")
@@ -235,8 +243,8 @@ def test_unknown_process_restart_in_optimized_python():
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 5 or sys.argv[1] != "--offline-worker":
+    if len(sys.argv) != 6 or sys.argv[1] != "--offline-worker":
         raise SystemExit(
-            "offline worker only: --offline-worker SCRATCH first|second http503|timeout|kill-midput"
+            "offline worker only: --offline-worker SCRATCH first|second http503|timeout|kill-midput OPTIMIZE"
         )
-    raise SystemExit(_worker(Path(sys.argv[2]), sys.argv[3], sys.argv[4]))
+    raise SystemExit(_worker(Path(sys.argv[2]), sys.argv[3], sys.argv[4], int(sys.argv[5])))

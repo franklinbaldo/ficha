@@ -59,6 +59,7 @@ def test_unknown_after_503_prevents_restart_replay(
     ):
         raise AssertionError("A/B must have equal length but distinct SHA-256")
 
+    entered: list[str] = []
     attempts: list[tuple[str, bytes]] = []
     generation = 0
 
@@ -86,6 +87,7 @@ def test_unknown_after_503_prevents_restart_replay(
     def fake_put(identifier, remote_name, chunks, *, content_length, **_kwargs):
         if identifier != "ficha-2026-07" or not remote_name.startswith("raw/"):
             raise AssertionError("unexpected IA destination")
+        entered.append(remote_name)
         body = b"".join(chunks)
         if len(body) != int(content_length):
             raise AssertionError("truncated synthetic body")
@@ -101,16 +103,16 @@ def test_unknown_after_503_prevents_restart_replay(
         upload.stream_raw_zips_to_ia("2026-07", **kwargs)
     if first_error.value.status != 503:
         raise AssertionError("fixture must produce HTTP 503 only after fake wire body")
-    if len(attempts) != 1 or attempts[0] != (f"raw/{first_name}", first_a):
+    if entered != [f"raw/{first_name}"] or attempts != [(f"raw/{first_name}", first_a)]:
         raise AssertionError("first attempt did not transmit admitted A")
 
     # Simulates a later process invocation: local TemporaryDirectory from the
     # first call is gone; no independent remote digest/readback has occurred.
+    outcome = None
     try:
         upload.stream_raw_zips_to_ia("2026-07", **kwargs)
-    except (RuntimeError, ValueError):
-        # A future fail-closed journal gate may reject the second invocation.
-        pass
+    except Exception as exc:
+        outcome = exc
 
     if len(attempts) > 1:
         second_name, second_body = attempts[1]
@@ -123,6 +125,14 @@ def test_unknown_after_503_prevents_restart_replay(
             f"second PUT without readback (A/B differ={second_version == 'B'}); "
             f"wire attempts={len(attempts)}"
         )
+
+    refusal = getattr(upload, "RawAuthorityRefusal", None)
+    if (
+        entered != [f"raw/{first_name}"]
+        or not isinstance(refusal, type)
+        or not isinstance(outcome, refusal)
+    ):
+        raise AssertionError("second invocation must refuse explicitly before any PUT")
 
 
 def test_unknown_restart_probe_in_optimized_python():

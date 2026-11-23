@@ -79,11 +79,14 @@ def test_legacy_raw_retry_reissues_changed_body_after_503(monkeypatch: pytest.Mo
 
     source_a = zip_body(b"row=A")
     source_b = zip_body(b"row=B")
-    assert len(source_a) == len(source_b)
-    assert hashlib.sha256(source_a).digest() != hashlib.sha256(source_b).digest()
+    if len(source_a) != len(source_b) or (
+        hashlib.sha256(source_a).digest() == hashlib.sha256(source_b).digest()
+    ):
+        raise AssertionError("A/B must have equal lengths and different digests")
 
     source_url = "https://rfb.invalid/offline/Empresas0.zip"
     source_gets: list[str] = []
+    fake_put_attempts: list[str] = []
     fake_put_bodies: list[bytes] = []
 
     def rfb_handler(request: httpx.Request) -> httpx.Response:
@@ -114,6 +117,7 @@ def test_legacy_raw_retry_reissues_changed_body_after_503(monkeypatch: pytest.Mo
     ) -> None:
         if (identifier, remote_name) != ("ficha-2026-07", "raw/Empresas0.zip"):
             raise AssertionError("wrong fake remote key")
+        fake_put_attempts.append(remote_name)
         body = b"".join(chunks)
         if len(body) != int(content_length):
             raise AssertionError("incomplete fake request body")
@@ -138,8 +142,15 @@ def test_legacy_raw_retry_reissues_changed_body_after_503(monkeypatch: pytest.Mo
             secret_key="fake",
             is_first=True,
         )
-    except upload._IAS3Error:
+    except upload._IAS3Error as exc:
         # Expected fail-closed behavior: preserve UNKNOWN and never send B.
-        pass
-    if source_gets != [source_url] or fake_put_bodies != [source_a]:
+        if exc.status != 503:
+            raise AssertionError("wrong transport failure") from exc
+    else:
+        raise AssertionError("ambiguous HTTP 503 was swallowed")
+    if (
+        source_gets != [source_url]
+        or fake_put_attempts != ["raw/Empresas0.zip"]
+        or fake_put_bodies != [source_a]
+    ):
         raise AssertionError("legacy raw retry made an unadmitted second GET or PUT")
