@@ -331,3 +331,11 @@ Chaves únicas, ausência de órfãos e paridade da saída **não provam**
 pareamento temporal: requer-se proveniência/competência de **cada input**.
 Não usa Parquet RFB, site publicado ou hashes de arquivos reais;
 nenhum contrato ou produto é alterado.
+
+### Recibo de entrada declarado no manifesto local (R169)
+
+`knowledge/tests/test_okf_view_manifest_pairing.py` cruza as views OKF com
+competência, `schema_version`, URL, tamanho e SHA-256 **declarados** no
+`manifest.json` versionado. A troca sintética de Raiz por outra competência
+altera a identidade composta, sem alterar código produtivo. Hash declarado
+não autentica bytes remotos nem origem RFB. Teste sem rede; ADR #253 em HOLD.
