@@ -26,7 +26,7 @@ layout: product
     <button type="button" id="acervo-limpar" class="button-secondary" disabled>Limpar filtro</button>
   </div>
   <p id="acervo-contagem" role="status" aria-live="polite" aria-atomic="true" class="fineprint">Aguardando lista de arquivos…</p>
-  <div id="acervo-resultado" aria-label="Arquivos declarados no manifesto"></div>
+  <div id="acervo-resultado" role="region" aria-label="Arquivos declarados no manifesto"></div>
 </section>
 <section class="footnote-section">
   <h2>Custódia e disponibilidade são coisas diferentes.</h2>
