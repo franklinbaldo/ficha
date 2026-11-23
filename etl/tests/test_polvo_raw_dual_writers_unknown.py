@@ -109,9 +109,7 @@ def test_dual_writer_oracle_mutations(
             raise AssertionError("mutation must not be mistaken for the real counterexample")
 
 
-def _run_dual_writers(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, expected_optimize: int
-) -> None:
+def _run_dual_writers(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, expected_optimize: int) -> None:
     specs = list(canonical_inventory())
     if len(specs) != 37 or len({spec.name for spec in specs}) != 37:
         raise AssertionError("fixture must contain 37 unique canonical ZIPs")
@@ -231,6 +229,7 @@ def test_two_writer_regression_in_optimized_python() -> None:
     )
     if child.returncode or "1 xfailed" not in child.stdout:
         raise AssertionError(child.stdout + "\n" + child.stderr)
+
 
 if __name__ == "__main__":
     if len(sys.argv) != 3 or sys.argv[1] != "--offline-dual-worker":
