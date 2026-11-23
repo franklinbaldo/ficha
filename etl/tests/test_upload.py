@@ -167,6 +167,30 @@ def test_upload_raw_zips_invalid_month_remains_rejected(mock_upload, tmp_path):
     mock_upload.assert_not_called()
 
 
+def test_upload_raw_zips_rejects_before_cache_or_remote_io(monkeypatch):
+    """The legacy guard must run before inventory, filesystem or network access."""
+
+    class ForbiddenCache:
+        def __truediv__(self, _part):
+            pytest.fail("legacy raw cache pathname was inspected")
+
+        def __fspath__(self):
+            pytest.fail("legacy raw cache pathname was materialized")
+
+    def forbid(*_args, **_kwargs):
+        pytest.fail("legacy raw helper crossed a forbidden I/O boundary")
+
+    for name in ("canonical_inventory", "item_id", "_existing_raw_files_on_ia", "_ia_s3_put"):
+        monkeypatch.setattr(upload_mod, name, forbid)
+    monkeypatch.setattr(upload_mod.ia, "upload", forbid)
+    monkeypatch.setattr(upload_mod.httpx, "Client", forbid)
+
+    with pytest.raises(RuntimeError, match="raw cache upload is disabled"):
+        upload_mod.upload_raw_zips(
+            "2026-04", ForbiddenCache(), access_key="A", secret_key="S"
+        )
+
+
 # ---------------------------------------------------------------------------
 # Streaming retry path (zero-disk)
 # ---------------------------------------------------------------------------
