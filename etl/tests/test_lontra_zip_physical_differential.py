@@ -176,14 +176,19 @@ def test_member_semantics_characterization_pending_primary_rfb_contract(
         _require_equal(archive.infolist()[0].is_dir(), name.endswith("/"))
 
     # This is a *physical* pass, not a semantic endorsement of the member name.
-    _require_equal(_raw_zip_crc_and_budget(source, expanded=0, members=0), (len(payload), 1))
+    _require_equal(
+        _raw_zip_crc_and_budget(source, expanded=0, members=0), (len(payload), 1)
+    )
 
     con = duckdb.connect()
     try:
         work = tmp_path / "work"
         if parallel:
             load_zips_parallel(
-                con, [("source_rows", source, ("a", "b"))], work_dir=work, decompress_workers=1
+                con,
+                [("source_rows", source, ("a", "b"))],
+                work_dir=work,
+                decompress_workers=1,
             )
         else:
             create_table_from_zip_streaming(
@@ -193,6 +198,8 @@ def test_member_semantics_characterization_pending_primary_rfb_contract(
             con.execute("SELECT COUNT(*) FROM source_rows").fetchone()[0], expected_rows
         )
         if expected_rows:
-            _require_equal(con.execute("SELECT a, b FROM source_rows").fetchall(), [("1", "2")])
+            _require_equal(
+                con.execute("SELECT a, b FROM source_rows").fetchall(), [("1", "2")]
+            )
     finally:
         con.close()
