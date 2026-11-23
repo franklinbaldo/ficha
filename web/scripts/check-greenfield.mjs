@@ -8,6 +8,19 @@ const out=process.argv[3] || '../accessibility-evidence';
 await mkdir(out,{recursive:true});
 const browser=await chromium.launch({headless:true});
 const reports=[];
+// WCAG 2.x relative luminance/contrast for browser-computed opaque RGB colors.
+function contrastRatio(colorA,colorB) {
+  const luminance=color=>{
+    const match=/^rgb\\(\\s*(\\d+)\\s*,\\s*(\\d+)\\s*,\\s*(\\d+)\\s*\\)$/.exec(color);
+    assert.ok(match,'opaque RGB color expected from getComputedStyle: '+color);
+    const rgb=match.slice(1).map(channel=>Number(channel)/255)
+      .map(value=>value<=0.04045?value/12.92:((value+0.055)/1.055)**2.4);
+    return 0.2126*rgb[0]+0.7152*rgb[1]+0.0722*rgb[2];
+  };
+  const a=luminance(colorA),b=luminance(colorB);
+  return (Math.max(a,b)+0.05)/(Math.min(a,b)+0.05);
+}
+
 try {
   for(const viewport of [{width:320,height:720,name:'reflow-320'},
                          {width:375,height:812,name:'mobile'},
@@ -106,10 +119,43 @@ try {
       const trackFilterRequest=request=>filterRequests.push(request.method()+' '+request.url());
       page.on('request',trackFilterRequest);
       const filter=page.getByRole('searchbox',{name:'Filtrar arquivos desta competência'});
+      // Visual affordance: input and native select borders must be perceivable
+      // both against their fill and the page. This is a component regression,
+      // not a claim of site-wide WCAG conformance.
+      const contrastSamples=await page.evaluate(()=>{
+        const paper=getComputedStyle(document.body).backgroundColor;
+        const fields=['#acervo-filtro','#acervo-competencia'].map(selector=>{
+          const style=getComputedStyle(document.querySelector(selector));
+          return {selector,border:style.borderTopColor,fill:style.backgroundColor,
+            width:style.borderTopWidth,kind:style.borderTopStyle};
+        });
+        return {paper,fields};
+      });
+      for(const field of contrastSamples.fields) {
+        assert.equal(field.width,'1px',field.selector+' must retain a visible border');
+        assert.equal(field.kind,'solid',field.selector+' border style');
+        for(const [surface,color] of Object.entries({paper:contrastSamples.paper,fill:field.fill})) {
+          const ratio=contrastRatio(field.border,color);
+          assert.ok(ratio>=3,field.selector+' border contrast against '+surface+
+            ' must be >= 3:1, got '+ratio.toFixed(3)+':1');
+        }
+      }
+      view.checks.push({page:'acervo-border-contrast',...contrastSamples,
+        minimumContrast:Math.min(...contrastSamples.fields.flatMap(field=>[
+          contrastRatio(field.border,contrastSamples.paper),
+          contrastRatio(field.border,field.fill)]))});
       const counter=page.locator('#acervo-contagem');
       assert.equal((await counter.textContent()).trim(),files+' de '+files+' arquivos exibidos');
       const archiveUrl=page.url();
       await filter.focus();
+      const focusRing=await filter.evaluate(element=>{
+        const style=getComputedStyle(element);
+        return {visible:element.matches(':focus-visible'),kind:style.outlineStyle,
+          width:parseFloat(style.outlineWidth)};
+      });
+      assert.ok(focusRing.visible,'keyboard-ready filter must show :focus-visible');
+      assert.equal(focusRing.kind,'solid','focus indicator must remain visible');
+      assert.ok(focusRing.width>=3,'focus indicator must retain at least 3 CSS px');
       await page.keyboard.type('companies/0');
       const matches=await page.locator('#acervo-resultado .archive-file').count();
       assert.ok(matches>0 && matches<files,'filtro deve reduzir a lista localmente');
