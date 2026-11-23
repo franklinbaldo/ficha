@@ -18,7 +18,7 @@ layout: product
   <h2>Competências declaradas</h2>
   <p class="fineprint">A competência corrente do manifesto não é necessariamente a última publicada pela Receita Federal.</p>
   <ul id="acervo-competencias" class="snapshot-list"></ul>
-  <div class="form-field compact-select"><label for="acervo-competencia">Inspecionar competência</label><select id="acervo-competencia"></select></div>
+  <div class="form-field compact-select"><label for="acervo-competencia">Inspecionar competência</label><select id="acervo-competencia" disabled></select></div>
   <p id="acervo-estado" role="status" aria-live="polite" class="interface-status">Carregando o catálogo…</p>
   <div class="form-field compact-select">
     <label for="acervo-filtro">Filtrar arquivos desta competência</label>

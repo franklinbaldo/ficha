@@ -178,7 +178,8 @@ export async function mountArchive(doc,{loadManifest=fetchManifest}={}) {
   const filter=byId(doc,'acervo-filtro'), count=byId(doc,'acervo-contagem');
   const clear=byId(doc,'acervo-limpar');
   if(![select,output,state,list].every(Boolean)) return;
-  // The controls are unusable until the catalogue has loaded successfully.
+  // All archive controls stay inert until the catalogue has loaded successfully.
+  select.disabled=true;
   if(filter) filter.disabled=true;
   if(clear) clear.disabled=true;
   try{
@@ -194,6 +195,7 @@ export async function mountArchive(doc,{loadManifest=fetchManifest}={}) {
       add(doc,row,'span',formatBytes(total.bytes));
       if(snap.date===manifest.current) add(doc,row,'small','Referência');
     }
+    select.disabled=false;
     if(filter) filter.disabled=false;
     const paint=(updateUrl=true)=>{
       const {shown,total}=renderArchiveSelection(doc,output,manifest,select.value,filter?.value||'');
@@ -215,6 +217,7 @@ export async function mountArchive(doc,{loadManifest=fetchManifest}={}) {
     paint();
     status(state, snaps.length+' competência(s) declarada(s) no manifesto publicado.');
   }catch(error){
+    select.disabled=true;
     if(filter) filter.disabled=true;
     if(clear) clear.disabled=true;
     if(count) status(count,'Lista de arquivos indisponível: filtro desativado.',true);

@@ -124,6 +124,7 @@ test('Acervo filtra sem GET/alteração da URL, anuncia X/Y e restaura foco ao l
     const clear=doc.at('acervo-limpar'), select=doc.at('acervo-competencia');
     assert.equal(count.textContent,'108 de 108 arquivos exibidos');
     assert.equal(input.disabled,false);
+    assert.equal(select.disabled,false,'competência liberada após carregar catálogo');
     assert.equal(clear.disabled,true);
     const originalUrl=globalThis.location.href;
     input.value='PARTNERS/0';
@@ -167,11 +168,14 @@ test('Acervo falha fechado no carregamento: estado anunciado e controles desativ
     const pending=new Promise((_,reject)=>{rejectLoad=reject;});
     const mounting=mountArchive(doc,{loadManifest:()=>pending});
     const filter=doc.at('acervo-filtro'), clear=doc.at('acervo-limpar');
+    const select=doc.at('acervo-competencia');
     const count=doc.at('acervo-contagem'), state=doc.at('acervo-estado');
+    assert.equal(select.disabled,true,'competência começa desativada enquanto aguarda manifesto');
     assert.equal(filter.disabled,true,'filtro deve iniciar indisponível');
     assert.equal(clear.disabled,true,'limpar deve iniciar indisponível');
     rejectLoad(new Error('falha simulada de manifesto'));
     await mounting;
+    assert.equal(select.disabled,true,'competência permanece inativa se manifesto rejeita');
     assert.equal(filter.disabled,true);
     assert.equal(clear.disabled,true);
     assert.equal(count.textContent,'Lista de arquivos indisponível: filtro desativado.');
@@ -186,6 +190,7 @@ test('Acervo falha fechado no carregamento: estado anunciado e controles desativ
 test('Fonte SSG fornece rótulo, contagem viva e limpeza acessíveis',()=>{
   const html=readFileSync(new URL('../content/acervo.md',import.meta.url),'utf8');
   assert.match(html,/<label for="acervo-filtro">Filtrar arquivos desta competência<\/label>/);
+  assert.match(html,/<select id="acervo-competencia" disabled><\/select>/);
   assert.match(html,/<input id="acervo-filtro"[^>]* disabled \/>/);
   assert.match(html,/<button type="button" id="acervo-limpar"[^>]* disabled>/);
   assert.match(html,/<p id="acervo-contagem" role="status" aria-live="polite" aria-atomic="true"/);

@@ -25,6 +25,7 @@ try {
       assert.ok(files>=9,'catálogo precisa incluir arquivos da competência real');
       const select=page.locator('#acervo-competencia');
       assert.ok(await select.locator('option').count()>=2);
+      assert.equal(await select.isDisabled(),false,'competência ativa após manifesto');
       assert.ok(await page.locator('#acervo-resultado').textContent());
       // Allow the initial SSG resources to settle before auditing local-only interactions.
       await page.waitForLoadState('networkidle');
@@ -85,6 +86,7 @@ try {
         await outage.goto(base+'acervo/',{waitUntil:'domcontentloaded'});
         await outage.waitForFunction(()=>document.querySelector('#acervo-estado')?.textContent
           .includes('Não foi possível abrir o acervo'));
+        assert.equal(await outage.locator('#acervo-competencia').isDisabled(),true);
         assert.equal(await outage.locator('#acervo-filtro').isDisabled(),true);
         assert.equal(await outage.locator('#acervo-limpar').isDisabled(),true);
         assert.match(await outage.locator('#acervo-contagem').textContent(),
