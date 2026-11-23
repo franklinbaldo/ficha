@@ -26,12 +26,20 @@ try {
         // CSS text enlargement probes reflow, not native browser zoom.
         const regular=await page.evaluate(()=>parseFloat(
           getComputedStyle(document.documentElement).fontSize));
+        const regularButton=await page.locator('#acervo-limpar').evaluate(el=>
+          parseFloat(getComputedStyle(el).fontSize));
         await page.addStyleTag({content:'html { font-size: 200% !important; }'});
         const enlarged=await page.evaluate(()=>parseFloat(
           getComputedStyle(document.documentElement).fontSize));
+        const enlargedButton=await page.locator('#acervo-limpar').evaluate(el=>
+          parseFloat(getComputedStyle(el).fontSize));
         assert.ok(enlarged>=regular*1.99,
           '200% text probe must actually enlarge the root font: '+regular+' to '+enlarged);
-        view.checks.push({page:'acervo-text-scale',regular,enlarged});
+        assert.ok(enlargedButton>=regularButton*1.99,
+          'Limpar filtro deve ampliar com a raiz (não usar fonte fixa do navegador): '+
+            JSON.stringify({regularButton,enlargedButton}));
+        view.checks.push({page:'acervo-text-scale',regular,enlarged,
+          regularButton,enlargedButton});
       }
       await page.waitForFunction(()=>document.querySelectorAll('#acervo-resultado .archive-file').length>0);
       const files=await page.locator('#acervo-resultado .archive-file').count();
@@ -151,9 +159,29 @@ try {
       await filter.fill('nenhum-arquivo-corresponde');
       assert.equal(await page.locator('#acervo-resultado .archive-file').count(),0);
       assert.match(await page.locator('#acervo-resultado').textContent(),/Nenhum arquivo corresponde ao filtro/);
-      await page.getByRole('button',{name:'Limpar filtro'}).focus();
+      const clearButton=page.getByRole('button',{name:'Limpar filtro'});
+      assert.equal(await clearButton.isEnabled(),true,'limpar deve estar habilitado com filtro ativo');
+      if(viewport.textScale) {
+        const clearLayout=await clearButton.evaluate(el=>{
+          const r=el.getBoundingClientRect();
+          return {left:r.left,right:r.right,viewportWidth:innerWidth,
+            scrollWidth:document.documentElement.scrollWidth};
+        });
+        assert.ok(clearLayout.left>=0 && clearLayout.right<=clearLayout.viewportWidth+1 &&
+          clearLayout.scrollWidth<=clearLayout.viewportWidth+1,
+          'Limpar filtro ampliado deve caber sem rolagem horizontal: '+JSON.stringify(clearLayout));
+        view.checks.push({page:'acervo-clear-button',...clearLayout});
+      }
+      await clearButton.focus();
       await page.keyboard.press('Enter');
       assert.equal(await page.locator('#acervo-resultado .archive-file').count(),files);
+      if(viewport.textScale) {
+        const afterClear=await page.evaluate(()=>({
+          scrollWidth:document.documentElement.scrollWidth,viewportWidth:innerWidth,
+        }));
+        assert.ok(afterClear.scrollWidth<=afterClear.viewportWidth+1,
+          'Limpar com fonte ampliada não deve causar rolagem horizontal: '+JSON.stringify(afterClear));
+      }
       assert.equal(await filter.inputValue(),'');
       assert.equal(await filter.evaluate(el=>document.activeElement===el),true,'limpar devolve foco');
       const originalDate=await select.inputValue();
