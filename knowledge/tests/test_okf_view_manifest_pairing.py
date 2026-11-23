@@ -236,8 +236,12 @@ class ManifestOkfPairingTest(unittest.TestCase):
         replacement = "a" * 64 if previous_digest != "a" * 64 else "b" * 64
         snap["files"]["socios"]["sha256"] = replacement
         self.assertEqual(snap["files"]["raizes"], raiz_only_receipt["raizes"])
-        self.assertEqual(snap["files"]["socios"]["size"], full_prior_receipt["socios"]["size"])
-        self.assertEqual(snap["files"]["socios"]["url"], full_prior_receipt["socios"]["url"])
+        self.assertEqual(
+            snap["files"]["socios"]["size"], full_prior_receipt["socios"]["size"]
+        )
+        self.assertEqual(
+            snap["files"]["socios"]["url"], full_prior_receipt["socios"]["url"]
+        )
         self.assertNotEqual(_binding(changed, date, view), baseline)
 
         def matching_receipts(snapshot, receipts):
