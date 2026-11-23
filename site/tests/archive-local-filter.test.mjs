@@ -92,6 +92,16 @@ test('Acervo filtra somente chave, sem perder totais, digest ou URL segura',()=>
   assert.match(nodes.find(node=>node.tag==='code').textContent,/^SHA-256 declarado: a{64}$/);
   assert.equal(nodes.find(node=>node.tag==='a').href,
     'https://archive.org/download/example/companies-0.zip');
+  assert.equal(nodes.find(node=>node.tag==='a').textContent,
+    'Abrir arquivo indicado no catálogo: companies/00');
+  assert.ok(nodes.every(node=>!/repositório de origem/i.test(node.textContent)),
+    'destino no Internet Archive não prova origem institucional');
+  renderArchiveSelection(doc,root,data,'2026-07','companies/0');
+  const filteredLinks=descendants(root).filter(node=>node.tag==='a');
+  assert.equal(filteredLinks.length,10);
+  assert.equal(new Set(filteredLinks.map(node=>node.textContent)).size,10,
+    'nomes dos links filtrados precisam ser únicos na lista assistiva');
+  assert.ok(filteredLinks.every(node=>node.textContent.startsWith('Abrir arquivo indicado no catálogo: companies/')));
   assert.equal(nodes.find(node=>node.tag==='div' &&
     node.children[0]?.textContent==='108 arquivos declarados').children[0].textContent,
     '108 arquivos declarados');
