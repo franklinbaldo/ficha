@@ -170,3 +170,12 @@ def test_optimized_python_replays_local_extra_matrix():
     )
     if child.returncode:
         raise AssertionError(child.stdout + "\n" + child.stderr)
+
+def test_temporary_formatter_diagnostic():
+    result = subprocess.run(
+        ["ruff", "format", "--diff", __file__],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    raise AssertionError("RUFF DIFF\n" + result.stdout + "\n" + result.stderr)
