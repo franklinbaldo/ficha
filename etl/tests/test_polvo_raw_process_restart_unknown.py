@@ -112,7 +112,14 @@ def _worker(scratch: Path, phase: str, failure: str) -> int:
 
 def _child(scratch: Path, phase: str, failure: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        [sys.executable, str(Path(__file__).resolve()), "--offline-worker", str(scratch), phase, failure],
+        [
+            sys.executable,
+            str(Path(__file__).resolve()),
+            "--offline-worker",
+            str(scratch),
+            phase,
+            failure,
+        ],
         capture_output=True,
         text=True,
         check=False,
