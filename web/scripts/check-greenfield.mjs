@@ -41,6 +41,18 @@ try {
       assert.ok(matches>0 && matches<files,'filtro deve reduzir a lista localmente');
       assert.equal((await counter.textContent()).trim(),matches+' de '+files+' arquivos exibidos');
       assert.equal(page.url(),archiveUrl,'filtro não altera URL de competência');
+      const firstFiltered=page.locator('#acervo-resultado .archive-file').first();
+      const firstKey=(await firstFiltered.locator('summary strong').textContent()).trim();
+      await firstFiltered.locator('summary').press('Enter');
+      const catalogLink=firstFiltered.getByRole('link',{
+        name:'Abrir arquivo indicado no catálogo: '+firstKey,
+      });
+      assert.equal(await catalogLink.count(),1,
+        'arquivo filtrado deve conservar nome acessível único e proveniência cautelosa');
+      assert.ok((await catalogLink.getAttribute('href')).startsWith('https://'));
+      await catalogLink.focus();
+      assert.equal(await catalogLink.evaluate(el=>document.activeElement===el),true,
+        'link do arquivo deve receber foco dentro do disclosure');
       await filter.fill('nenhum-arquivo-corresponde');
       assert.equal(await page.locator('#acervo-resultado .archive-file').count(),0);
       assert.match(await page.locator('#acervo-resultado').textContent(),/Nenhum arquivo corresponde ao filtro/);
