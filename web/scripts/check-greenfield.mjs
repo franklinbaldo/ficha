@@ -42,11 +42,14 @@ try {
       assert.equal(await page.locator('#acervo-resultado .archive-file').count(),files);
       assert.equal(await filter.inputValue(),'');
       assert.equal(await filter.evaluate(el=>document.activeElement===el),true,'limpar devolve foco');
+      const originalDate=await select.inputValue();
       await filter.fill('companies/00');
       await select.selectOption({index:1});
       assert.equal(await filter.inputValue(),'','trocar competência limpa filtro');
       const newCount=await page.locator('#acervo-resultado .archive-file').count();
       assert.equal((await counter.textContent()).trim(),newCount+' de '+newCount+' arquivos exibidos');
+      await select.selectOption(originalDate);
+      assert.equal(await page.locator('#acervo-resultado .archive-file').count(),files);
       view.checks.push({page:'acervo',files,filterKeyboard:true,filtered:matches});
       await page.screenshot({path:out+'/greenfield-acervo-'+viewport.name+'.png',fullPage:true});
 
