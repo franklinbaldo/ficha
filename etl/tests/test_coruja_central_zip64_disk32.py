@@ -124,3 +124,13 @@ def test_optimized_central_disk32_replay() -> None:
     )
     if child.returncode:
         raise AssertionError(child.stdout + "\n" + child.stderr)
+
+
+def test_formatter_diagnostic() -> None:
+    result = subprocess.run(
+        ["ruff", "format", "--diff", __file__],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    raise AssertionError("RUFF_FORMAT_DIFF:\n" + result.stdout + result.stderr)
