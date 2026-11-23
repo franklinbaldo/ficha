@@ -336,6 +336,7 @@ def test_optimized_python_replays_common_zip_contract_matrix():
         f"{__file__}::test_repeated_zero_width_padding_tlvs_are_allowed",
         f"{__file__}::test_nonempty_zero_tag_padding_must_be_rejected",
         f"{__file__}::test_repeated_critical_metadata_tags_must_be_rejected",
+        f"{__file__}::test_common_zip_zero_only_tail_per_boundary",
     ]
     child = subprocess.run(
         [sys.executable, "-O", "-m", "pytest", "-q", *selectors],
@@ -346,3 +347,40 @@ def test_optimized_python_replays_common_zip_contract_matrix():
     )
     if child.returncode:
         raise AssertionError(child.stdout + "\n" + child.stderr)
+
+
+@pytest.mark.xfail(
+    strict=True,
+    raises=pytest.fail.Exception,
+    reason="Common ZIP 1–3 trailing zero bytes require no preceding TLV",
+)
+@pytest.mark.parametrize("method", _METHODS, ids=["stored", "deflated"])
+@pytest.mark.parametrize("descriptor", [False, True], ids=["no_bit3", "bit3"])
+@pytest.mark.parametrize("placement", ["local", "central"])
+@pytest.mark.parametrize("count", [1, 2, 3], ids=["zero1", "zero2", "zero3"])
+def test_common_zip_zero_only_tail_per_boundary(
+    tmp_path: Path, method: int, descriptor: bool, placement: str, count: int
+):
+    """Separate local/central regression: zero-only extra has no preceding TLV.
+
+    Synthetic CRC-preserving ZIP, real preflight, typed XFAIL until repaired.
+    Keeping exactly one nonempty extra boundary prevents the other boundary
+    from masking an incorrect rejection. Replay is included under python -O.
+    """
+    extra = bytes(count)
+    raw = _make_zip(
+        method,
+        descriptor=descriptor,
+        local_extra=extra if placement == "local" else b"",
+        central_extra=extra if placement == "central" else b"",
+    )
+    _check_zipfile(
+        raw, extra if placement == "central" else b"", descriptor=descriptor
+    )
+    try:
+        result = _preflight(tmp_path, raw)
+    except RuntimeError as exc:
+        if str(exc) != f"raw preflight: malformed ZIP {placement} extra":
+            raise
+        pytest.fail(f"Common ZIP zero-only tail rejected at {placement} boundary")
+    _require_admitted(result)
