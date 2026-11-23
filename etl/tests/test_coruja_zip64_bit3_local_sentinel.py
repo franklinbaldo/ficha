@@ -128,11 +128,6 @@ def test_bit3_empty_local_zip64_is_allowed(tmp_path: Path, method: int) -> None:
 
 @pytest.mark.parametrize("method", _METHODS, ids=["stored", "deflated"])
 @pytest.mark.parametrize("sentinel", _SENTINELS)
-@pytest.mark.xfail(
-    strict=True,
-    raises=pytest.fail.Exception,
-    reason="Common ZIP bit3: local CRC/32-bit sizes zero and ZIP64 extra size zero",
-)
 def test_bit3_sentinel_local_zip64_must_be_rejected(
     tmp_path: Path, method: int, sentinel: str
 ) -> None:

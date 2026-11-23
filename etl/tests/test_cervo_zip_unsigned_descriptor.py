@@ -31,6 +31,27 @@ def _zip_with_descriptor(
         else:
             archive.writestr("K3241.K03200Y2.D60808.EMPRECSV", payload)
     raw = sink.getvalue()
+    if zip64:
+        # Python force_zip64 + bit3 writes local sentinels and a 16-byte
+        # ZIP64 size payload, contrary to the selected Common ZIP profile.
+        # Keep the 64-bit descriptor while zeroing local size placeholders
+        # and replacing the size payload with an allowed empty ZIP64 field.
+        normalized = bytearray(raw)
+        name_len, extra_len = struct.unpack_from("<HH", normalized, 26)
+        if (
+            extra_len != 20
+            or normalized[30 + name_len : 34 + name_len] != b"\x01\x00\x10\x00"
+        ):
+            raise AssertionError("unexpected force_zip64 local extra")
+        struct.pack_into("<II", normalized, 18, 0, 0)
+        del normalized[34 + name_len : 50 + name_len]
+        struct.pack_into("<H", normalized, 28, 4)
+        eocd = normalized.rfind(b"PK\x05\x06")
+        if eocd < 0:
+            raise AssertionError("ZIP EOCD missing after bit3 normalization")
+        offset = struct.unpack_from("<I", normalized, eocd + 16)[0]
+        struct.pack_into("<I", normalized, eocd + 16, offset - 16)
+        raw = bytes(normalized)
     if not unsigned:
         return raw
 
