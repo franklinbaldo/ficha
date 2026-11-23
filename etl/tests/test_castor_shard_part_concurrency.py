@@ -65,9 +65,7 @@ def _payload(path: Path) -> bytes:
         return archive.read(sharded_pack.cnpjpath("42000000"))
 
 
-def test_separate_names_do_not_conflict(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_separate_names_do_not_conflict(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Positive control: two different final names retain distinct contents."""
     lookups = _setup(monkeypatch)
     for name, content in (("companies-42.zip", b"A"), ("companies-43.zip", b"B")):
