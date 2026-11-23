@@ -51,9 +51,15 @@ try {
       assert.equal(await catalogLink.count(),1,
         'arquivo filtrado deve conservar nome acessível único e proveniência cautelosa');
       assert.ok((await catalogLink.getAttribute('href')).startsWith('https://'));
-      await catalogLink.focus();
+      assert.equal(await catalogLink.getAttribute('target'),'_blank',
+        'destino externo deve abrir em nova aba');
+      assert.equal(await catalogLink.getAttribute('rel'),'noopener noreferrer',
+        'nova aba externa precisa impedir acesso a window.opener');
+      // Opening <details> via Enter must permit natural keyboard traversal.
+      // Programmatic .focus() would conceal a broken Tab order.
+      await page.keyboard.press('Tab');
       assert.equal(await catalogLink.evaluate(el=>document.activeElement===el),true,
-        'link do arquivo deve receber foco dentro do disclosure');
+        'Tab a partir do summary deve alcançar o link do arquivo');
       await filter.fill('nenhum-arquivo-corresponde');
       assert.equal(await page.locator('#acervo-resultado .archive-file').count(),0);
       assert.match(await page.locator('#acervo-resultado').textContent(),/Nenhum arquivo corresponde ao filtro/);
