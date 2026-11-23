@@ -40,15 +40,11 @@ def test_legacy_cache_helper_refuses_partial_raw_without_any_ia_egress(
         files = kwargs.get("files")
         assert isinstance(files, dict)
         assert list(files) == [f"raw/{specs[0].name}"]
-        raise LegacyRawEgressReached(
-            "legacy helper reached ia.upload with just 1/37 raw ZIPs"
-        )
+        raise LegacyRawEgressReached("legacy helper reached ia.upload with just 1/37 raw ZIPs")
 
     monkeypatch.setattr(upload.ia, "upload", reject_sink)
 
     # A future fail-closed guard can refuse the partial lot by raising.
     # No-op silence and unguarded IA calls are not accepted as passing.
     with pytest.raises((RuntimeError, ValueError, FileNotFoundError)):
-        upload.upload_raw_zips(
-            "2026-07", tmp_path, access_key="fake", secret_key="fake"
-        )
+        upload.upload_raw_zips("2026-07", tmp_path, access_key="fake", secret_key="fake")
