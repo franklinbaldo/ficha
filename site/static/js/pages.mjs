@@ -186,10 +186,10 @@ export async function mountArchive(doc,{loadManifest=fetchManifest}={}) {
     const manifest=await loadManifest();
     const snaps=snapshotsDescending(manifest);
     populateDateSelect(doc,select,manifest,params().get('competencia') || manifest.current);
-    // The archive's 320px selector needs a short native-option label. The full
-    // month name remains in the selected snapshot heading and catalogue list.
+    // Native options show only the date so they stay legible at 200% CSS text
+    // in a 320px viewport. The catalogue list separately marks the reference.
     for(const item of select.options) {
-      item.textContent=item.value+(item.value===manifest.current?' · referência':'');
+      item.textContent=item.value;
     }
     list.replaceChildren();
     for(const snap of snaps){

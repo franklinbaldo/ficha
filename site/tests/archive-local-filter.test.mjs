@@ -126,10 +126,12 @@ test('Acervo filtra sem GET/alteração da URL, anuncia X/Y e restaura foco ao l
     assert.equal(input.disabled,false);
     assert.equal(select.disabled,false,'competência liberada após carregar catálogo');
     assert.deepEqual(select.options.map(item=>item.textContent),
-      ['2026-07 · referência','2026-06'],
-      'somente o Acervo abrevia as opções, sem alterar as datas selecionáveis');
+      ['2026-07','2026-06'],
+      'rótulos de data cabem no seletor mesmo com ampliação de texto');
     assert.equal(doc.at('acervo-estado').textContent,
       '2 competências declaradas no manifesto publicado.');
+    assert.ok(descendants(doc.at('acervo-competencias')).some(n=>n.textContent==='Referência'),
+      'identificação de referência continua visível na lista após abreviar opções');
     assert.equal(clear.disabled,true);
     const originalUrl=globalThis.location.href;
     input.value='PARTNERS/0';
@@ -174,7 +176,7 @@ test('Acervo flexiona corretamente uma competência declarada',async()=>{
     assert.equal(doc.at('acervo-estado').textContent,
       '1 competência declarada no manifesto publicado.');
     assert.equal(doc.at('acervo-competencia').options[0].textContent,
-      '2026-07 · referência');
+      '2026-07');
   });
 });
 

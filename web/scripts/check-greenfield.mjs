@@ -49,6 +49,9 @@ try {
       }
       const select=page.locator('#acervo-competencia');
       assert.ok(await select.locator('option').count()>=2);
+      assert.equal(await page.locator('#acervo-competencias small')
+        .filter({hasText:'Referência'}).count(),1,
+        'referência continua identificada fora do seletor, sem truncamento do valor');
       assert.equal(await select.isDisabled(),false,'competência ativa após manifesto');
       // A native select may truncate its selected option without page overflow.
       // Measure rendered label width and leave space for the platform arrow.
@@ -64,8 +67,8 @@ try {
             parseFloat(style.paddingLeft)-parseFloat(style.paddingRight)-32;
           return {label,width,space};
         });
-        assert.match(selectedLabel.label,/^\d{4}-\d{2} · referência$/,
-          'opção de referência usa rótulo compacto específico do Acervo');
+        assert.match(selectedLabel.label,/^\d{4}-\d{2}$/,
+          'opções nativas devem exibir a data compacta, inclusive com texto a 200%');
         assert.ok(selectedLabel.width<=selectedLabel.space,
           'texto selecionado precisa caber com reserva de 32px para seta nativa: '+
             JSON.stringify(selectedLabel));
