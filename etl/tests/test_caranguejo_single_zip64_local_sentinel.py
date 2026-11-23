@@ -175,7 +175,9 @@ def test_stdlib_paired_local_zip64_sizes_accepted(tmp_path: Path, method: int) -
 
 
 @pytest.mark.parametrize("method", _METHODS, ids=["stored", "deflated"])
-def test_zero_local_sizes_without_zip64_extra_accepted(tmp_path: Path, method: int) -> None:
+def test_zero_local_sizes_without_zip64_extra_accepted(
+    tmp_path: Path, method: int
+) -> None:
     source = tmp_path / "zero.zip"
     raw = _source_zip(method, force_zip64=False)
     with zipfile.ZipFile(io.BytesIO(raw)) as archive:
@@ -238,7 +240,9 @@ def _verify_presence_fixture(raw: bytes, case: str) -> None:
         "zero_with_zip64_extra": (0, 0),
     }
     _require(bool(struct.unpack_from("<H", raw, 6)[0] & 8), "presence bit 3")
-    _require(struct.unpack_from("<II", raw, 18) == expected[case], "presence local sizes")
+    _require(
+        struct.unpack_from("<II", raw, 18) == expected[case], "presence local sizes"
+    )
     name_len, extra_len = struct.unpack_from("<HH", raw, 26)
     _require(extra_len == 20, "presence ZIP64 extra width")
     local_extra = raw[30 + name_len : 30 + name_len + extra_len]
