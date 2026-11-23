@@ -25,7 +25,12 @@ class _NonSeekable(io.BytesIO):
 _NAME = "K3241.K03200Y2.D60808.EMPRECSV"
 _PAYLOAD = b"1;2\n"
 _METHODS = (zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED)
-_VALID = (b"", b"\x34\x12\x01\x00x", b"\x34\x12\x00\x00", b"\x34\x12\x00\x00\x78\x56\x01\x00z")
+_VALID = (
+    b"",
+    b"\x34\x12\x01\x00x",
+    b"\x34\x12\x00\x00",
+    b"\x34\x12\x00\x00\x78\x56\x01\x00z",
+)
 _INVALID = (b"Q", b"\x34\x12\x01")  # orphan byte; partial TLV header
 
 
