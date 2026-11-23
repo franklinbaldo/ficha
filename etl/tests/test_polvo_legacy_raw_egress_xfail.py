@@ -95,7 +95,9 @@ def test_legacy_raw_retry_reissues_changed_body_after_503(monkeypatch: pytest.Mo
             raise AssertionError("unexpected offline upstream request")
         source_gets.append(str(request.url))
         body = source_a if len(source_gets) == 1 else source_b
-        return httpx.Response(200, stream=httpx.ByteStream(body), headers={"Content-Length": str(len(body))})
+        return httpx.Response(
+            200, stream=httpx.ByteStream(body), headers={"Content-Length": str(len(body))}
+        )
 
     transport = httpx.MockTransport(rfb_handler)
     original_client = httpx.Client
