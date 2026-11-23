@@ -210,3 +210,13 @@ def test_python_optimized_replays_single_sentinel_matrix() -> None:
     )
     if child.returncode != 0:
         raise AssertionError(child.stdout + "\n" + child.stderr)
+
+
+def test_formatter_diagnostic_temp() -> None:
+    result = subprocess.run(
+        [sys.executable, "-m", "ruff", "format", "--diff", __file__],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    raise AssertionError("TEMP FORMAT DIFF\n" + result.stdout + "\n" + result.stderr)
