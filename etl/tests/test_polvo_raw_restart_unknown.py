@@ -85,9 +85,9 @@ def test_unknown_after_503_prevents_restart_replay(
         return staged
 
     def fake_put(identifier, remote_name, chunks, *, content_length, **_kwargs):
+        entered.append(remote_name)
         if identifier != "ficha-2026-07" or not remote_name.startswith("raw/"):
             raise AssertionError("unexpected IA destination")
-        entered.append(remote_name)
         body = b"".join(chunks)
         if len(body) != int(content_length):
             raise AssertionError("truncated synthetic body")

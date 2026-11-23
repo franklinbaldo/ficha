@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import io
+import signal
 import subprocess
 import sys
 import time
@@ -74,11 +75,11 @@ def _worker(scratch: Path, phase: str, failure: str, expected_optimize: int) -> 
         return staged
 
     def fake_put(identifier, remote_name, chunks, *, content_length, **_kwargs):
-        if identifier != "ficha-2026-07" or remote_name != f"raw/{specs[0].name}":
-            raise AssertionError("unexpected fake remote target")
         attempt = scratch / f"attempt-{phase}.flag"
         with attempt.open("xb") as marker:
             marker.write(b"fake PUT entered")
+        if identifier != "ficha-2026-07" or remote_name != f"raw/{specs[0].name}":
+            raise AssertionError("unexpected fake remote target")
         if phase == "first" and failure == "kill-midput":
             # The fake socket has accepted only a prefix of one chunk, not
             # a complete body. The parent must kill this *actual process*
@@ -131,6 +132,47 @@ def _worker(scratch: Path, phase: str, failure: str, expected_optimize: int) -> 
     return 7
 
 
+_READY = "partial-body-awaiting-kill"
+_WINDOWS_KILL_CODE = 197
+_RESTART_PREFIX = "POLVO_OFFLINE_RESTART_RESULT="
+
+
+def _kill_exit_code() -> int:
+    return _WINDOWS_KILL_CODE if sys.platform == "win32" else -signal.SIGKILL
+
+
+def _kill_parked_child(child: subprocess.Popen[str], marker: Path) -> None:
+    if marker.read_text() != _READY or child.poll() is not None:
+        raise AssertionError("worker is not parked at the exact partial PUT handshake")
+    if sys.platform == "win32":
+        import ctypes
+        from ctypes import wintypes
+
+        terminate = ctypes.WinDLL("kernel32", use_last_error=True).TerminateProcess
+        terminate.argtypes = [wintypes.HANDLE, wintypes.UINT]
+        terminate.restype = wintypes.BOOL
+        # Popen owns this handle until its context is closed.
+        if not terminate(int(child._handle), _WINDOWS_KILL_CODE):
+            raise ctypes.WinError(ctypes.get_last_error())
+    else:
+        child.send_signal(signal.SIGKILL)
+    if child.wait(timeout=15) != _kill_exit_code():
+        raise AssertionError("worker did not terminate with the reserved hard-kill status")
+
+
+@pytest.mark.parametrize("code", [0, 1, 42, 197])
+def test_spontaneous_exit_after_handshake_is_not_parent_kill(tmp_path, code):
+    marker = tmp_path / "ready.flag"
+    program = "from pathlib import Path; import sys; Path(sys.argv[1]).write_text(sys.argv[2])"
+    with subprocess.Popen(
+        [sys.executable, "-c", program + f"; raise SystemExit({code})", str(marker), _READY]
+    ) as child:
+        if child.wait(timeout=15) != code or marker.read_text() != _READY:
+            raise AssertionError("negative control failed to exit after handshake")
+        with pytest.raises(AssertionError, match="not parked"):
+            _kill_parked_child(child, marker)
+
+
 def _child(scratch: Path, phase: str, failure: str) -> subprocess.CompletedProcess[str]:
     command = [
         sys.executable,
@@ -161,11 +203,13 @@ def _child(scratch: Path, phase: str, failure: str) -> subprocess.CompletedProce
                             f"child exited before partial fake PUT: {child.returncode}"
                         )
                     time.sleep(0.02)
-                if not marker.exists() or child.poll() is not None:
+                if not marker.exists():
                     raise AssertionError("fake PUT never reached the kill barrier")
+                # Only this path counts as the intentional kill; cleanup never does.
+                _kill_parked_child(child, marker)
             finally:
                 if child.poll() is None:
-                    child.kill()  # SIGKILL (POSIX); hard terminate (Windows).
+                    child.kill()
                 out, err = child.communicate(timeout=15)
             return subprocess.CompletedProcess(command, child.returncode, out, err)
     return subprocess.run(
@@ -201,7 +245,7 @@ def test_unknown_after_real_process_restart(tmp_path: Path, failure: str, first_
         raise AssertionError("first worker did not enter fake PUT")
     if failure == "kill-midput":
         if (
-            one.returncode == 0
+            one.returncode != _kill_exit_code()
             or not (tmp_path / "wire-ready.flag").exists()
             or not first_wire.exists()
             or not (0 < len(first_wire.read_bytes()) < len(a))
@@ -214,9 +258,20 @@ def test_unknown_after_real_process_restart(tmp_path: Path, failure: str, first_
     two = _child(tmp_path, "second", failure)
     second_wire = tmp_path / "wire-second.bin"
     second_attempt = tmp_path / "attempt-second.flag"
-    if two.returncode == 0 and not second_wire.exists() and not second_attempt.exists():
+    markers = [line for line in two.stdout.splitlines() if line.startswith(_RESTART_PREFIX)]
+    if (
+        two.returncode == 0
+        and markers == [_RESTART_PREFIX + "REFUSED"]
+        and not second_wire.exists()
+        and not second_attempt.exists()
+    ):
         return  # A future durable, explicit fail-closed guard is sufficient.
-    if two.returncode != 42 or not second_wire.exists() or not second_attempt.exists():
+    if (
+        two.returncode != 42
+        or markers != [_RESTART_PREFIX + "REPLAY"]
+        or not second_wire.exists()
+        or not second_attempt.exists()
+    ):
         raise AssertionError(f"unexpected second-process result: {two}")
     if second_wire.read_bytes() != b:
         raise AssertionError("second attempt did not transmit B")
@@ -247,4 +302,7 @@ if __name__ == "__main__":
         raise SystemExit(
             "offline worker only: --offline-worker SCRATCH first|second http503|timeout|kill-midput OPTIMIZE"
         )
-    raise SystemExit(_worker(Path(sys.argv[2]), sys.argv[3], sys.argv[4], int(sys.argv[5])))
+    code = _worker(Path(sys.argv[2]), sys.argv[3], sys.argv[4], int(sys.argv[5]))
+    if code in (0, 42):
+        print(_RESTART_PREFIX + ("REFUSED" if code == 0 else "REPLAY"), flush=True)
+    raise SystemExit(code)

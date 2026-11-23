@@ -149,10 +149,10 @@ def _run_dual_writers(
         return result
 
     def fake_put(identifier, remote_name, chunks, *, content_length, **_kwargs):
-        if (identifier, remote_name) != ("ficha-2026-07", f"raw/{first_name}"):
-            raise AssertionError("unexpected fake IA object")
         with observed_lock:
             attempts.append(identity.generation)
+        if (identifier, remote_name) != ("ficha-2026-07", f"raw/{first_name}"):
+            raise AssertionError("unexpected fake IA object")
         body = b"".join(chunks)
         if len(body) != int(content_length):
             raise AssertionError("synthetic PUT body truncated")
@@ -196,6 +196,58 @@ def _run_dual_writers(
     _check_outcomes(attempts, observed, outcomes, {"A": a, "B": b})
 
 
+_DUAL_PREFIX = "POLVO_OFFLINE_DUAL_RESULT="
+
+
+def _check_dual_child(child: subprocess.CompletedProcess[str]) -> None:
+    markers = [line for line in child.stdout.splitlines() if line.startswith(_DUAL_PREFIX)]
+    if child.returncode == 42 and markers == [_DUAL_PREFIX + "CONCURRENT"]:
+        raise ConcurrentRawWrite("offline worker observed two exact writes and HTTP 503 outcomes")
+    if child.returncode != 0 or markers != [_DUAL_PREFIX + "PASS"]:
+        raise AssertionError(child.stdout + "\n" + child.stderr)
+
+
+@pytest.mark.parametrize("code", [0, 42])
+def test_dual_worker_early_exit_is_not_a_result(code):
+    child = subprocess.run(
+        [sys.executable, "-c", f"raise SystemExit({code})"],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=15,
+    )
+    with pytest.raises(AssertionError) as error:
+        _check_dual_child(child)
+    if isinstance(error.value, ConcurrentRawWrite):
+        raise AssertionError("early exit must not be classified as a counterexample")
+
+
+@pytest.mark.parametrize(
+    ("code", "markers"),
+    [
+        (0, ["PASS"]),
+        (42, ["CONCURRENT"]),
+        (0, ["CONCURRENT"]),
+        (42, ["PASS"]),
+        (42, ["CONCURRENT", "CONCURRENT"]),
+        (0, ["PASS", "CONCURRENT"]),
+    ],
+)
+def test_dual_terminal_marker_oracle(code, markers):
+    stdout = "\n".join(_DUAL_PREFIX + marker for marker in markers)
+    child = subprocess.CompletedProcess([], code, stdout, "")
+    if code == 0 and markers == ["PASS"]:
+        _check_dual_child(child)
+    elif code == 42 and markers == ["CONCURRENT"]:
+        with pytest.raises(ConcurrentRawWrite):
+            _check_dual_child(child)
+    else:
+        with pytest.raises(AssertionError) as error:
+            _check_dual_child(child)
+        if isinstance(error.value, ConcurrentRawWrite):
+            raise AssertionError("invalid marker must not be classified as a counterexample")
+
+
 @pytest.mark.xfail(
     strict=True,
     raises=ConcurrentRawWrite,
@@ -211,10 +263,7 @@ def test_two_writers_must_not_put_the_same_raw_name_without_singleflight() -> No
         check=False,
         timeout=90,
     )
-    if child.returncode == 42:
-        raise ConcurrentRawWrite("offline worker observed two exact writes and HTTP 503 outcomes")
-    if child.returncode != 0:
-        raise AssertionError(child.stdout + "\n" + child.stderr)
+    _check_dual_child(child)
 
 
 def test_two_writer_regression_in_optimized_python() -> None:
@@ -239,8 +288,11 @@ if __name__ == "__main__":
     expected_optimize = int(sys.argv[2])
     if sys.flags.optimize != expected_optimize:
         raise AssertionError("incorrect worker optimization mode")
+    result = "PASS"
     with tempfile.TemporaryDirectory() as scratch, pytest.MonkeyPatch.context() as patch:
         try:
             _run_dual_writers(patch, Path(scratch), expected_optimize)
         except ConcurrentRawWrite:
-            raise SystemExit(42) from None
+            result = "CONCURRENT"
+    print(_DUAL_PREFIX + result, flush=True)
+    raise SystemExit(42 if result == "CONCURRENT" else 0)
