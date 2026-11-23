@@ -32,7 +32,7 @@ def _make_empty_zip(path: Path, compression: int) -> None:
         archive.writestr(member, b"")
 
 
-def _alter_empty_deflate(path: Path, replacement: bytes) -> None:
+def _alter_member_deflate(path: Path, replacement: bytes) -> None:
     """Replace exactly the compressed payload, correcting ZIP size/offset fields."""
     with zipfile.ZipFile(path) as archive:
         member = archive.infolist()[0]
@@ -77,9 +77,9 @@ def _fixture(path: Path, kind: str) -> None:
     if kind == "stored_gap":
         _insert_unclaimed_stored_bytes(path, b"JUNK")
     elif kind == "deflate_truncated":
-        _alter_empty_deflate(path, b"\x03")
+        _alter_member_deflate(path, b"\x03")
     elif kind == "deflate_trailing":
-        _alter_empty_deflate(path, b"\x03\x00JUNK")
+        _alter_member_deflate(path, b"\x03\x00JUNK")
     elif kind not in {"stored_clean", "deflate_clean"}:
         raise ValueError(f"unknown fixture {kind}")
     with zipfile.ZipFile(path) as archive:
@@ -188,5 +188,89 @@ def test_member_semantics_characterization_pending_primary_rfb_contract(
         if expected_rows:
             rows = con.execute("SELECT a, b FROM source_rows").fetchall()
             _require_equal(rows, [("1", "2")])
+    finally:
+        con.close()
+
+
+@pytest.mark.parametrize("parallel", [False, True])
+@pytest.mark.parametrize(
+    ("kind", "preflight_message"),
+    [
+        ("stored_clean", None),
+        ("deflate_clean", None),
+        ("stored_gap", "unclaimed ZIP payload bytes"),
+        ("deflate_truncated", "truncated ZIP deflate stream"),
+        ("deflate_trailing", "trailing ZIP deflate bytes"),
+    ],
+)
+def test_nonempty_member_physical_differential(
+    tmp_path: Path, kind: str, preflight_message: str | None, parallel: bool
+) -> None:
+    """The same nonempty bytes must not bypass framing through either consumer.
+
+    The positive controls are physical ZIPs only, not a primary RFB name policy.
+    Mutants currently accepted by a consumer become XFAIL after strict preflight.
+    """
+    source = tmp_path / "nonempty.zip"
+    payload = b"1;2\\n"
+    member = zipfile.ZipInfo("DATA.ESTABELE", date_time=(1980, 1, 1, 0, 0, 0))
+    member.compress_type = zipfile.ZIP_STORED if kind.startswith("stored") else zipfile.ZIP_DEFLATED
+    member.create_system = 3
+    with zipfile.ZipFile(source, "w") as archive:
+        archive.writestr(member, payload)
+
+    if kind == "stored_gap":
+        _insert_unclaimed_stored_bytes(source, b"JUNK")
+    elif kind in {"deflate_truncated", "deflate_trailing"}:
+        with zipfile.ZipFile(source) as archive:
+            entry = archive.infolist()[0]
+        raw = source.read_bytes()
+        local = struct.unpack_from("<IHHHHHIIIHH", raw, entry.header_offset)
+        offset = entry.header_offset + 30 + local[-2] + local[-1]
+        compressed = raw[offset : offset + entry.compress_size]
+        replacement = (
+            compressed[:-1] if kind == "deflate_truncated" else compressed + b"JUNK"
+        )
+        _alter_member_deflate(source, replacement)
+
+    with zipfile.ZipFile(source) as archive:
+        _require_equal(archive.testzip(), None)
+        _require_equal(archive.read(archive.infolist()[0]), payload)
+
+    if preflight_message is None:
+        _require_equal(_raw_zip_crc_and_budget(source, expanded=0, members=0), (4, 1))
+    else:
+        with pytest.raises(RuntimeError, match=preflight_message):
+            _raw_zip_crc_and_budget(source, expanded=0, members=0)
+
+    con = duckdb.connect()
+    try:
+        try:
+            if parallel:
+                load_zips_parallel(
+                    con, [("source_rows", source, ("a", "b"))],
+                    work_dir=tmp_path / "work", decompress_workers=1,
+                )
+            else:
+                create_table_from_zip_streaming(
+                    con, "source_rows", source, ("a", "b"),
+                    work_dir=tmp_path / "work",
+                )
+        except (RuntimeError, zipfile.BadZipFile, zlib.error):
+            if preflight_message is None:
+                raise
+            _require_equal(
+                con.execute(
+                    "SELECT COUNT(*) FROM duckdb_tables() WHERE table_name = 'source_rows'"
+                ).fetchone()[0],
+                0,
+            )
+        else:
+            _require_equal(
+                con.execute("SELECT a, b FROM source_rows").fetchall(),
+                [("1", "2")],
+            )
+            if preflight_message is not None:
+                pytest.xfail(f"#477: {kind} nonempty ZIP admitted by consumer")
     finally:
         con.close()
