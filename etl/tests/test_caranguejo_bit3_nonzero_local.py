@@ -60,7 +60,9 @@ def _mutate(raw: bytes, case: str) -> bytes:
     forged = bytearray(raw)
     with zipfile.ZipFile(io.BytesIO(raw)) as archive:
         entry, = archive.infolist()
-        data_end = entry.header_offset + 30 + len(entry.filename.encode()) + entry.compress_size
+        data_end = (
+            entry.header_offset + 30 + len(entry.filename.encode()) + entry.compress_size
+        )
         _require(forged[data_end : data_end + 4] == b"PK\x07\x08", "signed descriptor")
         _require(archive.start_dir == data_end + 16, "16-byte data descriptor")
         if case == "crc_one":
@@ -72,7 +74,9 @@ def _mutate(raw: bytes, case: str) -> bytes:
         elif case == "uncompressed_one":
             struct.pack_into("<I", forged, 22, 1)
         elif case == "sizes_actual":
-            struct.pack_into("<III", forged, 14, entry.CRC, entry.compress_size, entry.file_size)
+            struct.pack_into(
+                "<III", forged, 14, entry.CRC, entry.compress_size, entry.file_size
+            )
         elif case == "all_fake":
             struct.pack_into("<III", forged, 14, 1234, 5678, 91011)
         elif case == "descriptor_bad_crc":
@@ -97,10 +101,14 @@ def _verify_fixture(raw: bytes, case: str) -> None:
         _require(bool(entry.flag_bits & 8), "central descriptor bit set")
         _require(entry.CRC == zipfile.crc32(_PAYLOAD), "central CRC authentic")
         _require(entry.file_size == len(_PAYLOAD), "central size authentic")
-        data_end = entry.header_offset + 30 + len(entry.filename.encode()) + entry.compress_size
+        data_end = (
+            entry.header_offset + 30 + len(entry.filename.encode()) + entry.compress_size
+        )
         _require(raw[data_end : data_end + 4] == b"PK\x07\x08", "descriptor signature")
         descriptor_crc, packed, unpacked = struct.unpack_from("<III", raw, data_end + 4)
-        _require((packed, unpacked) == (entry.compress_size, entry.file_size), "descriptor sizes")
+        _require(
+            (packed, unpacked) == (entry.compress_size, entry.file_size), "descriptor sizes"
+        )
         _require(
             (descriptor_crc == entry.CRC) == (case != "descriptor_bad_crc"),
             "descriptor CRC changed only in negative control",
@@ -133,7 +141,9 @@ def test_bit3_zero_local_baseline(tmp_path: Path, method: int) -> None:
     raises=pytest.fail.Exception,
     reason="#493 profile F: bit-3 nonzero local CRC/sizes accepted; policy unresolved",
 )
-def test_bit3_nonzero_local_fields_rejected(tmp_path: Path, method: int, case: str) -> None:
+def test_bit3_nonzero_local_fields_rejected(
+    tmp_path: Path, method: int, case: str
+) -> None:
     raw = _mutate(_source_zip(method), case)
     _verify_fixture(raw, case)
     source = tmp_path / "f.zip"
@@ -149,13 +159,17 @@ def test_bit3_nonzero_local_fields_rejected(tmp_path: Path, method: int, case: s
 
 @pytest.mark.parametrize("method", _METHODS, ids=["stored", "deflated"])
 @pytest.mark.parametrize("case", _NEGATIVE_CASES)
-def test_bit3_negative_controls_rejected(tmp_path: Path, method: int, case: str) -> None:
+def test_bit3_negative_controls_rejected(
+    tmp_path: Path, method: int, case: str
+) -> None:
     raw = _mutate(_source_zip(method), case)
     _verify_fixture(raw, case)
     source = tmp_path / "negative.zip"
     source.write_bytes(raw)
     expected = (
-        "ZIP descriptor mismatch" if case == "descriptor_bad_crc" else "ZIP local header mismatch"
+        "ZIP descriptor mismatch"
+        if case == "descriptor_bad_crc"
+        else "ZIP local header mismatch"
     )
     with pytest.raises(RuntimeError, match=expected):
         _raw_zip_crc_and_budget(source, expanded=0, members=0)
