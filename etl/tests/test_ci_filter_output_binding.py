@@ -15,6 +15,12 @@ import yaml
 
 WORKFLOW = Path(__file__).resolve().parents[2] / ".github" / "workflows" / "ci.yml"
 JOBS = {"web": "web", "etl": "etl", "etl-windows": "etl", "ficha-py": "ficha-py"}
+TEST_RUNS = {
+    "web": "bun run test",
+    "etl": "uv run pytest tests",
+    "etl-windows": "uv run pytest tests -q",
+    "ficha-py": "uv run pytest tests",
+}
 
 
 def _require(predicate: bool, message: str) -> None:
@@ -64,6 +70,10 @@ def assert_filter_output_binding(workflow: dict) -> None:
             tests[0].get("continue-on-error") in (None, False),
             f"{job}: Test failure may not be masked",
         )
+        _require(
+            tests[0].get("run") == TEST_RUNS[job],
+            f"{job}: Test step must execute the expected test suite",
+        )
 
 
 def _workflow() -> dict:
@@ -88,6 +98,8 @@ def test_real_workflow_binds_test_to_unconditional_filter_output() -> None:
         "skip-job",
         "mask-job",
         "skipped-prerequisite",
+        "noop-test",
+        "missing-test-command",
     ),
 )
 def test_mismatched_or_skipped_filter_cannot_appear_green(job: str, mutation: str) -> None:
@@ -118,6 +130,10 @@ def test_mismatched_or_skipped_filter_cannot_appear_green(job: str, mutation: st
         producer["with"]["filters"] = "other:\n  - 'etl/**'\n"
     elif mutation == "mask-test":
         consumer["continue-on-error"] = True
+    elif mutation == "noop-test":
+        consumer["run"] = "true"
+    elif mutation == "missing-test-command":
+        consumer.pop("run")
     elif mutation == "test-before-producer":
         steps.remove(consumer)
         steps.insert(steps.index(producer), consumer)
