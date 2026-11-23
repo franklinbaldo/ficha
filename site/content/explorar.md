@@ -12,6 +12,7 @@ layout: product
   <p class="eyebrow">03 / EXPLORAR</p>
   <h1>Veja o tamanho do acervo.</h1>
   <p class="lede">Conheça os conjuntos de dados de cada competência e compare sua dimensão. Esta visualização usa exclusivamente metadados reais do manifesto publicado.</p>
+  <p class="fineprint">As barras de arquivos usam o maior tamanho declarado da competência como referência. Filtrar a lista não muda a escala; arquivos sem tamanho informado não recebem barra.</p>
 </section>
 <section class="workspace">
   <h2>Conjuntos por competência</h2>
