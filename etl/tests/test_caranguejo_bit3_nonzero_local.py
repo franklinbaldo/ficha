@@ -194,3 +194,16 @@ def test_python_optimized_replays_bit3_nonzero_local() -> None:
     )
     if child.returncode:
         raise AssertionError(child.stdout + "\n" + child.stderr)
+
+
+def test_temporary_ruff_format_probe() -> None:
+    """Temporary diagnostic; remove after capturing formatter's exact diff."""
+    result = subprocess.run(
+        ["uv", "run", "ruff", "format", "--diff", __file__],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+    )
+    if result.stdout or result.stderr:
+        raise AssertionError(result.stdout + "\n" + result.stderr)
