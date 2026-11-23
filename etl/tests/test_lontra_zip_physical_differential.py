@@ -7,6 +7,8 @@ member-name contract remains undecided in #477. No network or production ETL.
 from __future__ import annotations
 
 import struct
+import subprocess
+import sys
 import zipfile
 import zlib
 from pathlib import Path
@@ -273,3 +275,23 @@ def test_nonempty_member_physical_differential(
                 pytest.xfail(f"#477: {kind} nonempty ZIP admitted by consumer")
     finally:
         con.close()
+
+
+def test_optimized_python_replays_zip_controls() -> None:
+    """Run the real ETL differential tests under Python -O, without recursion."""
+    tests = (
+        "test_integral_empty_member_is_accepted_in_both_paths",
+        "test_invalid_empty_member_preflight_vs_consumer",
+        "test_member_semantics_characterization_pending_primary_rfb_contract",
+        "test_nonempty_member_physical_differential",
+    )
+    selectors = [f"{__file__}::{name}" for name in tests]
+    child = subprocess.run(
+        [sys.executable, "-O", "-m", "pytest", "-q", *selectors],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=180,
+    )
+    if child.returncode:
+        raise AssertionError(child.stdout + "\n" + child.stderr)
