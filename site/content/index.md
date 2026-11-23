@@ -47,7 +47,7 @@ layout: index
     </div>
     <aside class="hero-bottom" aria-labelledby="referencia-titulo">
       <p class="eyebrow">Referência do catálogo</p>
-      <h2 id="referencia-titulo">Competência atual</h2>
+      <h2 id="referencia-titulo">Competência de referência</h2>
       <p id="competencia">__FICHA_CURRENT_COMPETENCE__</p>
       <dl class="reference-data">
         <div><dt>Origem dos dados</dt><dd>Receita Federal</dd></div>

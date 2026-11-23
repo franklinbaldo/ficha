@@ -12,7 +12,7 @@ export function renderHistoryComparison(doc, parent, older, newer) {
   const provenance = add(doc,parent,'p','Competências '+older.date+' e '+newer.date+'. As diferenças foram observadas entre snapshots; não representam datas exatas de alteração.');
   provenance.className='fineprint';
   if (older.partial || newer.partial) {
-    add(doc,parent,'p','A comparação numérica utiliza Protobuf v1 arquivado. Campos desconhecidos permanecem não informados, e o porte histórico não pode ser determinado por este wire.','fineprint');
+    add(doc,parent,'p','A comparação numérica utiliza Protobuf v1 declarado no manifesto. Campos desconhecidos permanecem não informados, e o porte histórico não pode ser determinado por este wire.','fineprint');
   }
   if (older.state === 'absent-in-snapshot' || newer.state === 'absent-in-snapshot') {
     add(doc,parent,'h3','Comparação incompleta: CNPJ não localizado');

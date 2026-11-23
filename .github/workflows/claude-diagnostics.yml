@@ -1,10 +1,9 @@
 name: Claude — Phase 1 diagnostics
 
 # Workflow harness for Claude to run diagnostic / debugging code with
-# IA secret access. Always posts a comment on the target PR with the
-# stdout/stderr summary and exits with the script's exit code so PR
-# subscribers (e.g. mcp__github__subscribe_pr_activity) get woken up
-# on failure.
+# IA secret access. Posts only status, numeric exit code and run link
+# to the target PR, never the diagnostic stdout/stderr transcript. The
+# job still fails when the diagnostic fails.
 #
 # Currently runs Phase 1 step 1.2 (simples cardinality probe) +
 # 1.1-lite (IA inventory check). See docs/perf-plan-2026-05.md.
@@ -65,9 +64,13 @@ jobs:
 
       - name: Resolve inputs (defaults when triggered by push)
         id: cfg
+        env:
+          REQUESTED_SCRIPT: ${{ inputs.script }}
+          REQUESTED_TARGET_PR: ${{ inputs.target_pr }}
+          REQUESTED_MONTH: ${{ inputs.month }}
         run: |
-          SCRIPT="${{ inputs.script }}"
-          TARGET_PR="${{ inputs.target_pr }}"
+          SCRIPT="$REQUESTED_SCRIPT"
+          TARGET_PR="$REQUESTED_TARGET_PR"
           # Branch-aware defaults on push: this branch runs the IA
           # practicality probe and comments on its own PR (#41).
           # FORCE_FAIL was used while iterating to wake the subscribed
@@ -85,7 +88,21 @@ jobs:
           fi
           [ -z "$SCRIPT" ] && SCRIPT="phase1"
           [ -z "$TARGET_PR" ] && TARGET_PR="31"
-          MONTH="${{ inputs.month }}"
+          MONTH="$REQUESTED_MONTH"
+          # Never put workflow_dispatch strings directly into shell source or
+          # multiline GITHUB_OUTPUT records. Reject path and output injection.
+          if [[ ! "$SCRIPT" =~ ^[A-Za-z_][A-Za-z0-9_-]{0,63}$ ]]; then
+            echo "::error::invalid diagnostic script name"
+            exit 2
+          fi
+          if [[ ! "$TARGET_PR" =~ ^[1-9][0-9]*$ ]]; then
+            echo "::error::invalid target PR number"
+            exit 2
+          fi
+          if [[ -n "$MONTH" && ! "$MONTH" =~ ^[0-9]{4}-(0[1-9]|1[0-2])$ ]]; then
+            echo "::error::invalid snapshot month"
+            exit 2
+          fi
           echo "script=$SCRIPT" >> "$GITHUB_OUTPUT"
           echo "target_pr=$TARGET_PR" >> "$GITHUB_OUTPUT"
           echo "month=$MONTH" >> "$GITHUB_OUTPUT"
@@ -100,48 +117,50 @@ jobs:
           IA_SECRET_KEY: ${{ secrets.IA_SECRET_KEY }}
           CNPJ_SHARE_TOKEN: ${{ secrets.CNPJ_SHARE_TOKEN }}
           MONTH: ${{ steps.cfg.outputs.month }}
+          DIAGNOSTIC_SCRIPT: ${{ steps.cfg.outputs.script }}
           PYTHONIOENCODING: utf-8
           PYTHONUTF8: '1'
         run: |
           set -o pipefail
-          SCRIPT="scripts/diagnostics/${{ steps.cfg.outputs.script }}.py"
+          SCRIPT="scripts/diagnostics/${DIAGNOSTIC_SCRIPT}.py"
           if [ ! -f "$SCRIPT" ]; then
-            echo "::error::script not found: etl/$SCRIPT"
+            echo "::error::diagnostic script not found"
+            printf 'exit_code=2\n' >> "$GITHUB_OUTPUT"
             exit 2
           fi
+          # GitHub invokes Bash with errexit; suspend it for this pipeline
+          # so PIPESTATUS is available even when the diagnostic fails.
+          set +e
           uv run python "$SCRIPT" 2>&1 | tee /tmp/diag.log
-        # continue-on-error: capture log → post PR comment → propagate
-        # exit code via the final "Propagate script exit code" step.
-        # Failures are NOT swallowed — they reach the PR via the comment
-        # AND the workflow fails on the last step. Removing this would
-        # make the workflow fail mid-job before the comment posts,
-        # losing the diagnostic output that's the whole point of this
-        # workflow.
+          pipeline_status=("${PIPESTATUS[@]}")
+          set -e
+          exit_code="${pipeline_status[0]}"
+          # Failure of tee must not become a green diagnostic.
+          if [ "${pipeline_status[1]}" -ne 0 ] && [ "$exit_code" -eq 0 ]; then
+            exit_code="${pipeline_status[1]}"
+          fi
+          printf 'exit_code=%s\n' "$exit_code" >> "$GITHUB_OUTPUT"
+          exit "$exit_code"
+        # Continue to a red/green status-only comment; the final step
+        # propagates failure without publishing diagnostic output.
         continue-on-error: true
 
       - name: Build PR comment
-        if: always()
+        if: always() && steps.cfg.outcome == 'success' && (steps.run.outcome == 'success' || steps.run.outcome == 'failure')
         id: build
+        env:
+          DIAG_STATUS: ${{ steps.run.outcome }}
+          DIAG_EXIT_CODE: ${{ steps.run.outputs.exit_code }}
         run: |
-          {
-            echo "## Phase 1 diagnostics — \`${{ steps.cfg.outputs.script }}\`"
-            echo ""
-            echo "**Run:** [\`${{ github.run_id }}\`](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})"
-            echo "**Trigger:** \`${{ github.event_name }}\`"
-            echo "**Status:** \`${{ steps.run.outcome }}\`"
-            echo ""
-            echo "<details><summary>Output (last 200 lines)</summary>"
-            echo ""
-            echo '```'
-            tail -n 200 /tmp/diag.log 2>/dev/null || echo "(no output captured)"
-            echo '```'
-            echo ""
-            echo "</details>"
-          } > /tmp/comment.md
-          cat /tmp/comment.md
-
+          # Refuse missing/non-numeric output and unexpected metadata.
+          if [[ ! "$DIAG_STATUS" =~ ^(success|failure)$ || ! "$DIAG_EXIT_CODE" =~ ^[0-9]{1,3}$ || ! "$GITHUB_RUN_ID" =~ ^[0-9]+$ || ! "$GITHUB_REPOSITORY" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
+            echo "::error::invalid diagnostic metadata"
+            exit 2
+          fi
+          printf '## Diagnostic run\n\n**Status:** `%s`\n**Exit code:** `%s`\n**Run:** [`%s`](https://github.com/%s/actions/runs/%s)\n' \
+            "$DIAG_STATUS" "$DIAG_EXIT_CODE" "$GITHUB_RUN_ID" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" > /tmp/comment.md
       - name: Post comment on PR
-        if: always()
+        if: always() && steps.cfg.outcome == 'success' && steps.build.outcome == 'success'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR: ${{ steps.cfg.outputs.target_pr }}
@@ -152,7 +171,7 @@ jobs:
         if: always()
         run: |
           if [ "${{ steps.run.outcome }}" != "success" ]; then
-            echo "::error::diagnostic script failed; see PR comment + run log"
+            echo "::error::diagnostic script failed; see run status and log"
             exit 1
           fi
           if [ "${{ steps.cfg.outputs.force_fail }}" = "1" ]; then
