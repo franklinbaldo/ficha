@@ -192,6 +192,37 @@ def test_upload_raw_zips_rejects_before_cache_or_remote_io(monkeypatch):
         upload_mod.upload_raw_zips("2026-04", cache, access_key="A", secret_key="S")
 
 
+def test_legacy_raw_guard_does_not_cover_distinct_stream_entrypoint(monkeypatch, tmp_path):
+    """Offline differential: legacy refusal is not a global raw writer fence."""
+    metadata_lookups: list[str] = []
+
+    def fake_inventory_lookup(identifier):
+        metadata_lookups.append(identifier)
+        return set()
+
+    def forbid_external_io(*_args, **_kwargs):
+        pytest.fail("external I/O crossed in differential writer test")
+
+    monkeypatch.setattr(upload_mod, "_existing_raw_files_on_ia", fake_inventory_lookup)
+    monkeypatch.setattr(upload_mod.upstream, "discover_token", forbid_external_io)
+    monkeypatch.setattr(upload_mod, "_ia_s3_put", forbid_external_io)
+    monkeypatch.setattr(upload_mod.ia, "upload", forbid_external_io)
+
+    with pytest.raises(RuntimeError, match="raw cache upload is disabled"):
+        upload_mod.upload_raw_zips("2026-04", tmp_path, access_key="A", secret_key="S")
+    if metadata_lookups:
+        raise AssertionError("legacy helper touched remote metadata before refusing")
+
+    # The streaming path is separately callable. It consults a synthetic
+    # catalog, then refuses without spool; this test never performs a PUT.
+    with pytest.raises(RuntimeError, match="requires an existing explicit spool_dir"):
+        upload_mod.stream_raw_zips_to_ia(
+            "2026-04", access_key="A", secret_key="S", spool_dir=None
+        )
+    if metadata_lookups != [item_id("2026-04")]:
+        raise AssertionError("streaming entrypoint did not reach its independent admission")
+
+
 # ---------------------------------------------------------------------------
 # Streaming retry path (zero-disk)
 # ---------------------------------------------------------------------------
