@@ -96,11 +96,29 @@ def test_corrupted_descriptor_crc_is_rejected(tmp_path: Path, unsigned: bool):
         _raw_zip_crc_and_budget(source, expanded=0, members=0)
 
 
+
+@pytest.mark.parametrize("method", [zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED])
+def test_corrupted_signed_descriptor_marker_is_rejected(tmp_path: Path, method: int):
+    raw = bytearray(_zip_with_descriptor(b"a;b\n", method=method, unsigned=False))
+    signature_offset = _descriptor_crc_offset(raw) - 4
+    if raw[signature_offset : signature_offset + 4] != b"PK\\x07\\x08":
+        raise AssertionError("signed descriptor expected")
+    raw[signature_offset] ^= 1
+    with zipfile.ZipFile(io.BytesIO(raw)) as archive:
+        if archive.testzip() is not None:
+            raise AssertionError("stdlib unexpectedly rejected negative control")
+    source = tmp_path / "test.zip"
+    source.write_bytes(raw)
+    with pytest.raises(RuntimeError, match="ZIP descriptor signature mismatch"):
+        _raw_zip_crc_and_budget(source, expanded=0, members=0)
+
+
 def test_optimized_python_replays_descriptor_controls():
     tests = (
         "test_valid_descriptors",
         "test_unsigned_crc_equal_signature_is_valid",
         "test_corrupted_descriptor_crc_is_rejected",
+        "test_corrupted_signed_descriptor_marker_is_rejected",
     )
     selectors = [f"{__file__}::{name}" for name in tests]
     child = subprocess.run(
