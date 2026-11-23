@@ -30,6 +30,7 @@ _MUTATIONS = (
     "orphan_tlv_byte",
     "duplicate_zip64",
     "missing_zip64",
+    "short_zip64_value",
 )
 _PAYLOAD = b"a;b\n"
 _NAME = "K3241.K03200Y2.D60808.EMPRECSV"
@@ -84,6 +85,11 @@ def _mutant(raw: bytes, mutation: str) -> bytes:
         new = old + old
     elif mutation == "missing_zip64":
         new = b""
+    elif mutation == "short_zip64_value":
+        # Both local size fields use ZIP64 sentinels. A complete TLV with
+        # only one 64-bit value is still too short for two required sizes.
+        # The second 8 bytes form an unrelated, well-framed extra field.
+        new = struct.pack("<HH8sHH4s", 1, 8, bytes(8), 0x9999, 4, bytes(4))
     else:
         raise AssertionError(f"unknown mutation {mutation}")
     forged = bytearray(raw[:start] + new + raw[start + extra_len :])
