@@ -208,4 +208,3 @@ def test_python_optimized_replays_single_sentinel_matrix() -> None:
     )
     if child.returncode != 0:
         raise AssertionError(child.stdout + "\n" + child.stderr)
-
