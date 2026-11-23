@@ -1,9 +1,10 @@
 """Offline process-restart oracle for the Ficha #433 raw UNKNOWN contract.
 
 Two distinct Python interpreters call the real stream_raw_zips_to_ia entrypoint.
-The first response is either HTTP 503 or a response ReadTimeout *after*
-all request bytes were consumed by the fake transport. Every RFB/IA boundary
-is synthetic. No network, ETL or publishing occurs.
+The first process either receives HTTP 503, a response ReadTimeout after
+all request bytes were consumed by the fake transport, or is killed while
+a fake transport holds a partial body. Every RFB/IA boundary is synthetic.
+No network, ETL or publishing occurs.
 """
 
 from __future__ import annotations
@@ -12,6 +13,7 @@ import hashlib
 import io
 import subprocess
 import sys
+import time
 import zipfile
 from pathlib import Path
 
@@ -45,7 +47,7 @@ def _worker(scratch: Path, phase: str, failure: str) -> int:
     specs = list(canonical_inventory())
     if len(specs) != 37 or len({spec.name for spec in specs}) != 37:
         raise AssertionError("expected canonical 37/37 inventory")
-    if phase not in ("first", "second") or failure not in ("http503", "timeout"):
+    if phase not in ("first", "second") or failure not in ("http503", "timeout", "kill-midput"):
         raise AssertionError("invalid offline phase or failure")
 
     generation = "A" if phase == "first" else "B"
@@ -68,6 +70,18 @@ def _worker(scratch: Path, phase: str, failure: str) -> int:
     def fake_put(identifier, remote_name, chunks, *, content_length, **_kwargs):
         if identifier != "ficha-2026-07" or remote_name != f"raw/{specs[0].name}":
             raise AssertionError("unexpected fake remote target")
+        if phase == "first" and failure == "kill-midput":
+            # The fake socket has accepted only a prefix of one chunk, not
+            # a complete body. The parent must kill this *actual process*
+            # while it is inside the fake transport, before any response.
+            first_chunk = next(iter(chunks), b"")
+            if len(first_chunk) < 2:
+                raise AssertionError("expected nonempty partial fake wire body")
+            prefix = first_chunk[: len(first_chunk) // 2]
+            (scratch / "wire-first.bin").write_bytes(prefix)
+            (scratch / "wire-ready.flag").write_text("partial-body-awaiting-kill")
+            time.sleep(90)  # Parent kills the child; timeout is only a failsafe.
+            raise AssertionError("first child was not killed")
         body = b"".join(chunks)
         if len(body) != int(content_length):
             raise AssertionError("truncated fake wire body")
@@ -111,26 +125,44 @@ def _worker(scratch: Path, phase: str, failure: str) -> int:
 
 
 def _child(scratch: Path, phase: str, failure: str) -> subprocess.CompletedProcess[str]:
+    command = [
+        sys.executable,
+        str(Path(__file__).resolve()),
+        "--offline-worker",
+        str(scratch),
+        phase,
+        failure,
+    ]
+    if phase == "first" and failure == "kill-midput":
+        # Cross-platform parent-directed process kill, gated on a durable
+        # observation that the child is *inside* the fake partial PUT.
+        # No timing assumption about child start-up or its Python imports.
+        with subprocess.Popen(
+            command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+        ) as child:
+            deadline = time.monotonic() + 30
+            marker = scratch / "wire-ready.flag"
+            while not marker.exists() and time.monotonic() < deadline:
+                if child.poll() is not None:
+                    out, err = child.communicate(timeout=5)
+                    raise AssertionError(
+                        f"child exited before partial fake PUT: {child.returncode} {out} {err}"
+                    )
+                time.sleep(0.02)
+            if not marker.exists() or child.poll() is not None:
+                raise AssertionError("fake PUT never reached the kill barrier")
+            child.kill()  # SIGKILL on POSIX; hard termination on Windows.
+            out, err = child.communicate(timeout=15)
+            return subprocess.CompletedProcess(command, child.returncode, out, err)
     return subprocess.run(
-        [
-            sys.executable,
-            str(Path(__file__).resolve()),
-            "--offline-worker",
-            str(scratch),
-            phase,
-            failure,
-        ],
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=90,
+        command, capture_output=True, text=True, check=False, timeout=90
     )
 
 
 @pytest.mark.parametrize(
     ("failure", "first_exit"),
-    [("http503", 53), ("timeout", 54)],
-    ids=("http-503", "read-timeout-after-body"),
+    [("http503", 53), ("timeout", 54), ("kill-midput", None)],
+    ids=("http-503", "read-timeout-after-body", "hard-kill-during-partial-put"),
 )
 @pytest.mark.xfail(
     strict=True,
@@ -146,7 +178,17 @@ def test_unknown_after_real_process_restart(tmp_path: Path, failure: str, first_
         raise AssertionError("A/B must collide in length but not SHA-256")
 
     one = _child(tmp_path, "first", failure)
-    if one.returncode != first_exit or (tmp_path / "wire-first.bin").read_bytes() != a:
+    first_wire = tmp_path / "wire-first.bin"
+    if failure == "kill-midput":
+        if (
+            one.returncode == 0
+            or not (tmp_path / "wire-ready.flag").exists()
+            or not first_wire.exists()
+            or not (0 < len(first_wire.read_bytes()) < len(a))
+            or first_wire.read_bytes() != a[: len(first_wire.read_bytes())]
+        ):
+            raise AssertionError(f"child was not killed inside partial fake PUT: {one}")
+    elif one.returncode != first_exit or not first_wire.exists() or first_wire.read_bytes() != a:
         raise AssertionError(f"first process did not send A then fail ambiguously: {one}")
     # The interpreter has exited. No in-memory UNKNOWN can survive this line.
     two = _child(tmp_path, "second", failure)
@@ -175,13 +217,13 @@ def test_unknown_process_restart_in_optimized_python():
         check=False,
         timeout=240,
     )
-    if result.returncode != 0 or "2 xfailed" not in result.stdout:
+    if result.returncode != 0 or "3 xfailed" not in result.stdout:
         raise AssertionError(result.stdout + "\n" + result.stderr)
 
 
 if __name__ == "__main__":
     if len(sys.argv) != 5 or sys.argv[1] != "--offline-worker":
         raise SystemExit(
-            "offline worker only: --offline-worker SCRATCH first|second http503|timeout"
+            "offline worker only: --offline-worker SCRATCH first|second http503|timeout|kill-midput"
         )
     raise SystemExit(_worker(Path(sys.argv[2]), sys.argv[3], sys.argv[4]))
