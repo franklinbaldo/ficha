@@ -9,7 +9,8 @@ await mkdir(out,{recursive:true});
 const browser=await chromium.launch({headless:true});
 const reports=[];
 try {
-  for(const viewport of [{width:375,height:812,name:'mobile'},
+  for(const viewport of [{width:320,height:720,name:'reflow-320'},
+                         {width:375,height:812,name:'mobile'},
                          {width:1440,height:900,name:'desktop'}]) {
     const page=await browser.newPage({viewport:{width:viewport.width,height:viewport.height},
       serviceWorkers:'block'});
@@ -23,6 +24,14 @@ try {
       await page.waitForFunction(()=>document.querySelectorAll('#acervo-resultado .archive-file').length>0);
       const files=await page.locator('#acervo-resultado .archive-file').count();
       assert.ok(files>=9,'catálogo precisa incluir arquivos da competência real');
+      if(viewport.name==='reflow-320') {
+        const dimensions=await page.evaluate(()=>({
+          scrollWidth:document.documentElement.scrollWidth,
+          viewportWidth:window.innerWidth,
+        }));
+        assert.ok(dimensions.scrollWidth<=dimensions.viewportWidth+1,
+          'Acervo a 320 CSS px não deve exigir rolagem horizontal: '+JSON.stringify(dimensions));
+      }
       const select=page.locator('#acervo-competencia');
       assert.ok(await select.locator('option').count()>=2);
       assert.equal(await select.isDisabled(),false,'competência ativa após manifesto');
@@ -60,6 +69,14 @@ try {
       await page.keyboard.press('Tab');
       assert.equal(await catalogLink.evaluate(el=>document.activeElement===el),true,
         'Tab a partir do summary deve alcançar o link do arquivo');
+      if(viewport.name==='reflow-320') {
+        const dimensions=await page.evaluate(()=>({
+          scrollWidth:document.documentElement.scrollWidth,
+          viewportWidth:window.innerWidth,
+        }));
+        assert.ok(dimensions.scrollWidth<=dimensions.viewportWidth+1,
+          'Detalhe aberto com digest e link deve reflow a 320 CSS px: '+JSON.stringify(dimensions));
+      }
       await filter.fill('nenhum-arquivo-corresponde');
       assert.equal(await page.locator('#acervo-resultado .archive-file').count(),0);
       assert.match(await page.locator('#acervo-resultado').textContent(),/Nenhum arquivo corresponde ao filtro/);
