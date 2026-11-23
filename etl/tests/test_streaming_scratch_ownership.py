@@ -3,6 +3,7 @@
 Synthetic local ZIPs only. No HTTP, RFB data, or publication.
 The race is ordered by threading.Event, not scheduling or sleeps.
 """
+
 from __future__ import annotations
 
 import concurrent.futures
