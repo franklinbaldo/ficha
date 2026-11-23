@@ -105,7 +105,7 @@ jobs:
           # RFB publica o mês M durante o próprio M (às vezes M+1), e o cron
           # roda dia 5 — lag saudável é 0-1, e 2 é tolerável no começo do mês.
           if lag >= 3:
-              print(f"::error::Snapshot {current} está {lag} meses atrasado — o cron mensal (etl-monthly) provavelmente está falhando. Verifique as últimas execuções e rode com inputs.month se necessário.")
+              print(f"::error::Snapshot {current} está {lag} meses atrasado — o alerta não distingue falha de suspensão deliberada. Verifique os runs e a política vigente (Ficha #433). Não execute o ETL manualmente sem autorização.")
               sys.exit(1)
           if lag == 2:
               print(f"::warning::Snapshot {current} está 2 meses atrás do calendário — verifique se o próximo cron mensal roda com sucesso.")
