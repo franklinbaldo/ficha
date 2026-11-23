@@ -135,6 +135,8 @@ def _check_raw_central_zip64(archive: zipfile.ZipFile, entries: list[zipfile.Zip
             raise RuntimeError("raw preflight: truncated ZIP central header")
         if extra != entry.extra:
             raise RuntimeError("raw preflight: ZIP central extra mismatch")
+        if disk16 not in (0, 0xFFFF):
+            raise RuntimeError("raw preflight: unsupported ZIP central member disk")
         zip64_extra = _check_raw_extra_fields(extra, boundary="central")
         compressed, uncompressed = _check_raw_zip64_sizes(
             zip64_extra,
