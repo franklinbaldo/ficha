@@ -19,11 +19,6 @@ class LegacyRawEgressReached(AssertionError):
     """Historical cache helper reached the raw IA write boundary."""
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=LegacyRawEgressReached,
-    reason="#433/F15: legacy raw-cache helper lacks global custody admission",
-)
 def test_legacy_cache_helper_refuses_partial_raw_without_any_ia_egress(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -44,9 +39,10 @@ def test_legacy_cache_helper_refuses_partial_raw_without_any_ia_egress(
 
     monkeypatch.setattr(upload.ia, "upload", reject_sink)
 
-    # A future fail-closed guard can refuse the partial lot by raising.
-    # No-op silence and unguarded IA calls are not accepted as passing.
-    with pytest.raises((RuntimeError, ValueError, FileNotFoundError)):
+    # Since #485, the legacy path MUST refuse before any cache or remote I/O.
+    # Exact RuntimeError distinguishes fail-closed refusal from missing files.
+    # The fake sink also makes any accidental IA egress fail this test.
+    with pytest.raises(RuntimeError, match="raw cache upload is disabled"):
         upload.upload_raw_zips("2026-07", tmp_path, access_key="fake", secret_key="fake")
 
 
