@@ -38,10 +38,7 @@ def _zip_with_descriptor(
         # and replacing the size payload with an allowed empty ZIP64 field.
         normalized = bytearray(raw)
         name_len, extra_len = struct.unpack_from("<HH", normalized, 26)
-        if (
-            extra_len != 20
-            or normalized[30 + name_len : 34 + name_len] != b"\x01\x00\x10\x00"
-        ):
+        if extra_len != 20 or normalized[30 + name_len : 34 + name_len] != b"\x01\x00\x10\x00":
             raise AssertionError("unexpected force_zip64 local extra")
         struct.pack_into("<II", normalized, 18, 0, 0)
         del normalized[34 + name_len : 50 + name_len]
