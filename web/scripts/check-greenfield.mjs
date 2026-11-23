@@ -47,6 +47,10 @@ try {
       assert.equal(await firstLinkedDetail.evaluate(node=>node.open),true,
         'summary deve expandir com Enter');
       const link=firstLinkedDetail.locator('.archive-detail a').first();
+      const accessibleName=(await link.textContent()).trim();
+      const namedLink=page.getByRole('link',{name:accessibleName,exact:true});
+      assert.equal(await namedLink.count(),1,
+        'o link expandido precisa ter nome único na árvore de acessibilidade do Chromium');
       assert.ok((await link.getAttribute('href'))?.startsWith('https://'));
       assert.equal(await link.getAttribute('target'),'_blank');
       assert.equal(await link.getAttribute('rel'),'noopener noreferrer');
