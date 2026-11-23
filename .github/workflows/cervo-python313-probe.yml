@@ -1,0 +1,23 @@
+name: Cervo temporary Python313 interop probe
+on:
+  pull_request:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  python313:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Ruff diagnostic
+        run: |
+          cd etl
+          uv run --python 3.13 ruff format --diff tests/test_cervo_unicode_path_header_identity.py || true
+      - name: Exercise actual preflight on Python313
+        run: |
+          cd etl
+          uv run --python 3.13 pytest -q tests/test_cervo_unicode_path_header_identity.py
