@@ -25,7 +25,7 @@ class _NonSeekable(io.BytesIO):
 _NAME = "K3241.K03200Y2.D60808.EMPRECSV"
 _PAYLOAD = b"1;2\n"
 _METHODS = (zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED)
-_VALID = (b"", b"\x34\x12\x01\x00x")
+_VALID = (b"", b"\x34\x12\x01\x00x", b"\x34\x12\x00\x00", b"\x34\x12\x00\x00\x78\x56\x01\x00z")
 _INVALID = (b"Q", b"\x34\x12\x01")  # orphan byte; partial TLV header
 
 
@@ -90,11 +90,6 @@ def test_well_framed_central_extra_is_accepted(tmp_path: Path, method: int, extr
 
 @pytest.mark.parametrize("method", _METHODS, ids=["stored", "deflated"])
 @pytest.mark.parametrize("extra", _INVALID)
-@pytest.mark.xfail(
-    strict=True,
-    raises=pytest.fail.Exception,
-    reason="Known gap: central-directory extra TLV framing unchecked (#433)",
-)
 def test_malformed_central_extra_must_be_rejected(tmp_path: Path, method: int, extra: bytes):
     if _well_framed_tlvs(extra):
         raise AssertionError("negative control is structurally valid")
