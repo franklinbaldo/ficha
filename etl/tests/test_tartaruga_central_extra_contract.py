@@ -225,7 +225,6 @@ def test_common_zip_zero_padding_local_boundary(
     assert result == (len(_PAYLOAD), 1)
 
 
-
 @pytest.mark.parametrize("method", _METHODS, ids=["stored", "deflated"])
 @pytest.mark.parametrize("descriptor", [False, True], ids=["no_bit3", "bit3"])
 @pytest.mark.parametrize("placement", ["central", "local", "both"])
@@ -239,9 +238,7 @@ def test_repeated_zero_width_padding_tlvs_are_allowed(
         local_extra=extra if placement in ("local", "both") else b"",
         central_extra=extra if placement in ("central", "both") else b"",
     )
-    _check_zipfile(
-        raw, extra if placement in ("central", "both") else b"", descriptor=descriptor
-    )
+    _check_zipfile(raw, extra if placement in ("central", "both") else b"", descriptor=descriptor)
     assert _preflight(tmp_path, raw) == (len(_PAYLOAD), 1)
 
 
@@ -263,9 +260,7 @@ def test_nonempty_zero_tag_padding_must_be_rejected(
         local_extra=invalid if placement == "local" else b"",
         central_extra=invalid if placement == "central" else b"",
     )
-    _check_zipfile(
-        raw, invalid if placement == "central" else b"", descriptor=descriptor
-    )
+    _check_zipfile(raw, invalid if placement == "central" else b"", descriptor=descriptor)
     try:
         _preflight(tmp_path, raw)
     except RuntimeError as exc:
