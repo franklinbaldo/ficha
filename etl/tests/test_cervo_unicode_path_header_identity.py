@@ -99,9 +99,10 @@ def test_alias_cannot_hide_raw_central_local_name_disagreement(
     tmp_path: Path, method: int, bit3: bool, alias_kind: str
 ) -> None:
     """Raw preflight must reject the archive zipfile.open cannot read."""
-    alias = (
-        "Z" * len(_NAME) if alias_kind == "benign" else "../" + "X" * (len(_NAME) - 3)
-    )
+    if alias_kind == "benign":
+        alias = "Z" * len(_NAME)
+    else:
+        alias = "../" + "X" * (len(_NAME) - 3)
     path = tmp_path / "split-name.zip"
     path.write_bytes(_make_zip(method, bit3, alias, change_local=True))
     with zipfile.ZipFile(path) as archive:
