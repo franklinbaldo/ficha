@@ -99,7 +99,7 @@ def test_real_workflow_binds_test_to_unconditional_filter_output() -> None:
         "mask-job",
         "skipped-prerequisite",
         "noop-test",
-        "missing-test-command",
+        "echo-no-tests",
     ),
 )
 def test_mismatched_or_skipped_filter_cannot_appear_green(job: str, mutation: str) -> None:
@@ -132,8 +132,8 @@ def test_mismatched_or_skipped_filter_cannot_appear_green(job: str, mutation: st
         consumer["continue-on-error"] = True
     elif mutation == "noop-test":
         consumer["run"] = "true"
-    elif mutation == "missing-test-command":
-        consumer.pop("run")
+    elif mutation == "echo-no-tests":
+        consumer["run"] = "echo tests-not-executed"
     elif mutation == "test-before-producer":
         steps.remove(consumer)
         steps.insert(steps.index(producer), consumer)
