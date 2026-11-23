@@ -29,7 +29,7 @@ def _zip_with_descriptor(payload: bytes, *, method: int, unsigned: bool) -> byte
         return raw
 
     with zipfile.ZipFile(io.BytesIO(raw)) as archive:
-        (entry,) = archive.infolist()
+        entry = archive.infolist()[0]
         offset = entry.header_offset
         local = struct.unpack_from("<IHHHHHIIIHH", raw, offset)
         name_length, extra_length = local[-2:]
@@ -47,7 +47,7 @@ def _zip_with_descriptor(payload: bytes, *, method: int, unsigned: bool) -> byte
 
 def _descriptor_crc_offset(raw: bytes) -> int:
     with zipfile.ZipFile(io.BytesIO(raw)) as archive:
-        (entry,) = archive.infolist()
+        entry = archive.infolist()[0]
         local = struct.unpack_from("<IHHHHHIIIHH", raw, entry.header_offset)
         start = entry.header_offset + 30 + local[-2] + local[-1] + entry.compress_size
         gap = archive.start_dir - start
@@ -56,7 +56,7 @@ def _descriptor_crc_offset(raw: bytes) -> int:
 
 @pytest.mark.parametrize("method", [zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED])
 @pytest.mark.parametrize("unsigned", [False, True])
-def test_regular_data_descriptors_are_valid(tmp_path: Path, method: int, unsigned: bool):
+def test_valid_descriptors(tmp_path: Path, method: int, unsigned: bool):
     raw = _zip_with_descriptor(b"a;b\n", method=method, unsigned=unsigned)
     with zipfile.ZipFile(io.BytesIO(raw)) as archive:
         if archive.testzip() is not None:
@@ -74,7 +74,8 @@ def test_unsigned_crc_equal_signature_is_valid(tmp_path: Path):
         raise AssertionError("incorrect collision fixture")
     raw = _zip_with_descriptor(payload, method=zipfile.ZIP_STORED, unsigned=True)
     with zipfile.ZipFile(io.BytesIO(raw)) as archive:
-        if archive.testzip() is not None or archive.read(archive.infolist()[0]) != payload:
+        readback = archive.read(archive.infolist()[0])
+        if archive.testzip() is not None or readback != payload:
             raise AssertionError("invalid fixture")
     source = tmp_path / "test.zip"
     source.write_bytes(raw)
@@ -99,12 +100,13 @@ def test_corrupted_descriptor_crc_is_rejected(tmp_path: Path, unsigned: bool):
 
 def test_optimized_python_replays_descriptor_controls():
     tests = (
-        "test_regular_data_descriptors_are_valid",
+        "test_valid_descriptors",
         "test_unsigned_crc_equal_signature_is_valid",
         "test_corrupted_descriptor_crc_is_rejected",
     )
+    selectors = [f"{__file__}::{name}" for name in tests]
     child = subprocess.run(
-        [sys.executable, "-O", "-m", "pytest", "-q", *(f"{__file__}::{name}" for name in tests)],
+        [sys.executable, "-O", "-m", "pytest", "-q", *selectors],
         capture_output=True,
         text=True,
         check=False,
