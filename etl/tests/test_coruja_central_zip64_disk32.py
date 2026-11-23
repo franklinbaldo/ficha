@@ -2,6 +2,7 @@
 
 Test-only: files are synthetic; use the real _raw_zip_crc_and_budget.
 """
+
 from __future__ import annotations
 
 import io
@@ -79,9 +80,7 @@ def _preflight(tmp_path: Path, raw: bytes) -> tuple[int, int]:
 
 @pytest.mark.parametrize("method", METHODS, ids=["stored", "deflated"])
 @pytest.mark.parametrize("bit3", [False, True])
-def test_central_zip64_disk32_zero_allowed(
-    tmp_path: Path, method: int, bit3: bool
-) -> None:
+def test_central_zip64_disk32_zero_allowed(tmp_path: Path, method: int, bit3: bool) -> None:
     raw = _fixture(method, bit3, 0)
     _check_fixture(raw, bit3, 0)
     _require(_preflight(tmp_path, raw) == (len(DATA), 1), "disk32 zero rejected")
@@ -125,12 +124,3 @@ def test_optimized_central_disk32_replay() -> None:
     if child.returncode:
         raise AssertionError(child.stdout + "\n" + child.stderr)
 
-
-def test_formatter_diagnostic() -> None:
-    result = subprocess.run(
-        ["ruff", "format", "--diff", __file__],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    raise AssertionError("RUFF_FORMAT_DIFF:\n" + result.stdout + result.stderr)
