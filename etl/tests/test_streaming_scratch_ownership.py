@@ -152,7 +152,11 @@ def test_late_crc_failure_removes_partial_scratch(tmp_path, monkeypatch):
     try:
         with pytest.raises(zipfile.BadZipFile):
             streaming.create_table_from_zip_streaming(
-                con, "rows", source, COLS, work_dir=work
+                con,
+                "rows",
+                source,
+                COLS,
+                work_dir=work,
             )
         empty_scratch(work)
     finally:
