@@ -78,9 +78,7 @@ def _preflight(tmp_path: Path, raw: bytes) -> tuple[int, int]:
 @pytest.mark.parametrize("method", _METHODS, ids=["stored", "deflated"])
 @pytest.mark.parametrize("bit3", [False, True])
 @pytest.mark.parametrize("disk16", [0, 0xFFFF], ids=["plain", "zip64-zero"])
-def test_central_disk_zero_allowed(
-    tmp_path: Path, method: int, bit3: bool, disk16: int
-) -> None:
+def test_central_disk_zero_allowed(tmp_path: Path, method: int, bit3: bool, disk16: int) -> None:
     raw = _make(method, bit3, disk16)
     _check_fixture(raw, bit3, disk16)
     _require(_preflight(tmp_path, raw) == (len(_DATA), 1), "valid disk rejected")
