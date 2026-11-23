@@ -215,16 +215,14 @@ def test_distinct_parquet_snapshots_can_have_equal_sql_results(tmp_path: Path):
 
     # The actual Parquet bytes differ. Yet both SQL results are identical.
     assert receipts["2026-07"][1] != receipts["2026-08"][1]
-    assert outputs["2026-07"] == outputs["2026-08"] == [
-        ("11111111", "partner-one")
-    ]
+    expected_rows = [("11111111", "partner-one")]
+    assert outputs["2026-07"] == expected_rows
+    assert outputs["2026-08"] == expected_rows
 
     # A *previously bound* input digest detects a swap that output parity misses.
     expected_digest = receipts["2026-07"][1]
-    assert hashlib.sha256(receipts["2026-07"][0].read_bytes()).hexdigest() == (
-        expected_digest
-    )
-    assert hashlib.sha256(receipts["2026-08"][0].read_bytes()).hexdigest() != (
-        expected_digest
-    )
+    july_data = receipts["2026-07"][0].read_bytes()
+    august_data = receipts["2026-08"][0].read_bytes()
+    assert hashlib.sha256(july_data).hexdigest() == expected_digest
+    assert hashlib.sha256(august_data).hexdigest() != expected_digest
     # These fixture receipts do not authenticate RFB origin or competence.
