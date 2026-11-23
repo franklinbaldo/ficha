@@ -211,4 +211,5 @@ test('Fonte SSG fornece rótulo, contagem viva e limpeza acessíveis',()=>{
   assert.match(html,/<input id="acervo-filtro"[^>]* disabled \/>/);
   assert.match(html,/<button type="button" id="acervo-limpar"[^>]* disabled>/);
   assert.match(html,/<p id="acervo-contagem" role="status" aria-live="polite" aria-atomic="true"/);
+  assert.match(html,/<div id="acervo-resultado" role="region" aria-label="Arquivos declarados no manifesto"><\/div>/);
 });
