@@ -114,7 +114,7 @@ def test_malformed_central_extra_must_be_rejected(tmp_path: Path, method: int, e
 @pytest.mark.parametrize("method", _METHODS, ids=["stored", "deflated"])
 def test_declared_central_width_overrun_rejected_by_zipfile(tmp_path: Path, method: int):
     """Prove a distinct, pre-existing stdlib rejection path (not the new TLV guard)."""
-    overrun = b"\\x34\\x12\\x02\\x00x"  # declares 2 bytes; carries 1
+    overrun = b"\x34\x12\x02\x00x"  # declares 2 bytes; carries 1
     if _well_framed_tlvs(overrun):
         raise AssertionError("overrun control is structurally valid")
     raw = _make_zip(method, overrun)
