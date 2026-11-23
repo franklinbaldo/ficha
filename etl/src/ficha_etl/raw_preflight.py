@@ -37,6 +37,42 @@ def _raw_preflight_specs(specs: list) -> None:
         raise RuntimeError("raw preflight: invalid canonical inventory")
 
 
+_CRITICAL_RAW_EXTRA_TAGS = frozenset((0x0001, 0x000A, 0x5455, 0x7075))
+
+
+def _check_raw_extra_fields(extra: bytes, *, boundary: str) -> bytes | None:
+    """Validate Common ZIP extras at each boundary, retaining ZIP64 local data.
+
+    Allow 1–3 terminal zero bytes; disallow malformed TLVs, nonempty 0x0000
+    padding, and duplicate metadata tags whose interpretation is ambiguous.
+    Unknown tags may repeat. This is an admission policy, not RFB provenance.
+    """
+    cursor = 0
+    seen_critical: set[int] = set()
+    zip64_extra = None
+    while cursor < len(extra):
+        if len(extra) - cursor < 4:
+            if any(extra[cursor:]):
+                raise RuntimeError(f"raw preflight: malformed ZIP {boundary} extra")
+            break
+        kind, width = struct.unpack_from("<HH", extra, cursor)
+        cursor += 4
+        if width > len(extra) - cursor:
+            raise RuntimeError(f"raw preflight: malformed ZIP {boundary} extra")
+        if kind == 0 and width:
+            raise RuntimeError(f"raw preflight: invalid ZIP {boundary} padding extra")
+        if kind in _CRITICAL_RAW_EXTRA_TAGS:
+            if kind in seen_critical:
+                if kind == 1:
+                    raise RuntimeError(f"raw preflight: duplicate ZIP64 {boundary} extra")
+                raise RuntimeError(f"raw preflight: duplicate ZIP {boundary} extra")
+            seen_critical.add(kind)
+        if kind == 1:
+            zip64_extra = extra[cursor : cursor + width]
+        cursor += width
+    return zip64_extra
+
+
 def _check_member_exact(
     archive: zipfile.ZipFile, entry: zipfile.ZipInfo, budget: int, next_offset: int
 ) -> int:
@@ -77,23 +113,8 @@ def _check_member_exact(
     local_extra = handle.read(extra_len)
     if len(local_extra) != extra_len:
         raise RuntimeError("raw preflight: truncated ZIP local extra")
-    # Parse *all* local extras: bit 3 changes which size fields are
-    # authoritative, but never excuses broken TLV framing or a missing
-    # ZIP64 record for explicit 0xffffffff sentinels.
-    cursor = 0
-    zip64_extra = None
-    while cursor < len(local_extra):
-        if cursor + 4 > len(local_extra):
-            raise RuntimeError("raw preflight: malformed ZIP local extra")
-        kind, width = struct.unpack_from("<HH", local_extra, cursor)
-        cursor += 4
-        if cursor + width > len(local_extra):
-            raise RuntimeError("raw preflight: malformed ZIP local extra")
-        if kind == 1:
-            if zip64_extra is not None:
-                raise RuntimeError("raw preflight: duplicate ZIP64 local extra")
-            zip64_extra = local_extra[cursor : cursor + width]
-        cursor += width
+    # Bit 3 affects which sizes are authoritative, not TLV framing.
+    zip64_extra = _check_raw_extra_fields(local_extra, boundary="local")
     if 0xFFFFFFFF in (local_compressed, local_uncompressed):
         needed = 8 * ((local_compressed == 0xFFFFFFFF) + (local_uncompressed == 0xFFFFFFFF))
         if zip64_extra is None or len(zip64_extra) < needed:
@@ -202,17 +223,9 @@ def _raw_zip_crc_and_budget(path: Path, *, expanded: int, members: int) -> tuple
                 for i, position in enumerate(positions)
             }
             for entry in entries:
-                # ZipFile accepts orphan/truncated central extra TLVs. Reject
-                # malformed framing before trusting its member metadata.
-                cursor = 0
-                while cursor < len(entry.extra):
-                    if len(entry.extra) - cursor < 4:
-                        raise RuntimeError("raw preflight: malformed ZIP central extra")
-                    _, width = struct.unpack_from("<HH", entry.extra, cursor)
-                    cursor += 4
-                    if width > len(entry.extra) - cursor:
-                        raise RuntimeError("raw preflight: malformed ZIP central extra")
-                    cursor += width
+                # ZipFile tolerates malformed and ambiguous central extras.
+                # Check the same admission profile as the local header.
+                _check_raw_extra_fields(entry.extra, boundary="central")
                 if entry.flag_bits & 1:
                     raise RuntimeError("raw preflight: encrypted ZIP member")
                 if entry.file_size < 0 or expanded + entry.file_size > _MAX_RAW_UNCOMPRESSED_BYTES:
