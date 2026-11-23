@@ -125,6 +125,7 @@ jobs:
         if: steps.changes.outputs.etl == 'true'
         run: |
           uv run ruff check src tests bench
+          uv run ruff format --diff tests/test_okf_view_duckdb_parquet.py
           uv run ruff format --check src tests bench
 
       - name: Test
