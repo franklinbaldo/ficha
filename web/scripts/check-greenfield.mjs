@@ -64,6 +64,23 @@ try {
         requestsDuringFilter:filterRequests.length});
       await page.screenshot({path:out+'/greenfield-acervo-'+viewport.name+'.png',fullPage:true});
 
+      // Failure-mode regression: the SSG must not expose an inert, enabled filter.
+      const outage=await browser.newPage({viewport:{width:viewport.width,height:viewport.height},
+        serviceWorkers:'block'});
+      try {
+        await outage.route('**/manifest.json',route=>route.fulfill({
+          status:503,contentType:'application/json',body:'{}'}));
+        await outage.goto(base+'acervo/',{waitUntil:'domcontentloaded'});
+        await outage.waitForFunction(()=>document.querySelector('#acervo-estado')?.textContent
+          .includes('Não foi possível abrir o acervo'));
+        assert.equal(await outage.locator('#acervo-filtro').isDisabled(),true);
+        assert.equal(await outage.locator('#acervo-limpar').isDisabled(),true);
+        assert.match(await outage.locator('#acervo-contagem').textContent(),
+          /Lista de arquivos indisponível: filtro desativado/);
+        assert.equal(await outage.locator('#acervo-resultado .archive-file').count(),0);
+        view.checks.push({page:'acervo-outage',status:'filter-disabled-on-503'});
+      } finally { await outage.close(); }
+
       await page.goto(base+'explorar/',{waitUntil:'domcontentloaded'});
       await page.waitForFunction(()=>document.querySelectorAll('.asset-row').length>0 &&
         document.querySelectorAll('.series-row').length>0);

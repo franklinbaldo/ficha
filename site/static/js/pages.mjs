@@ -178,6 +178,9 @@ export async function mountArchive(doc,{loadManifest=fetchManifest}={}) {
   const filter=byId(doc,'acervo-filtro'), count=byId(doc,'acervo-contagem');
   const clear=byId(doc,'acervo-limpar');
   if(![select,output,state,list].every(Boolean)) return;
+  // The controls are unusable until the catalogue has loaded successfully.
+  if(filter) filter.disabled=true;
+  if(clear) clear.disabled=true;
   try{
     const manifest=await loadManifest();
     const snaps=snapshotsDescending(manifest);
@@ -191,9 +194,10 @@ export async function mountArchive(doc,{loadManifest=fetchManifest}={}) {
       add(doc,row,'span',formatBytes(total.bytes));
       if(snap.date===manifest.current) add(doc,row,'small','Referência');
     }
+    if(filter) filter.disabled=false;
     const paint=(updateUrl=true)=>{
       const {shown,total}=renderArchiveSelection(doc,output,manifest,select.value,filter?.value||'');
-      if(count) status(count,shown+' de '+total+' arquivos exibidos');
+      if(count) status(count,shown+' de '+total+' arquivo'+(total===1?'':'s')+' exibido'+(total===1?'':'s'));
       if(clear) clear.disabled=!(filter?.value||'');
       if(updateUrl) setParams({competencia:select.value});
     };
@@ -210,7 +214,12 @@ export async function mountArchive(doc,{loadManifest=fetchManifest}={}) {
     });
     paint();
     status(state, snaps.length+' competência(s) declarada(s) no manifesto publicado.');
-  }catch(error){status(state,'Não foi possível abrir o acervo: '+error.message,true);}
+  }catch(error){
+    if(filter) filter.disabled=true;
+    if(clear) clear.disabled=true;
+    if(count) status(count,'Lista de arquivos indisponível: filtro desativado.',true);
+    status(state,'Não foi possível abrir o acervo: '+error.message,true);
+  }
 }
 
 export function renderExploreAssets(doc,parent,manifest,date,filter='') {

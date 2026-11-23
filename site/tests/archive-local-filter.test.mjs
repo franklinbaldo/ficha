@@ -113,6 +113,7 @@ test('Acervo filtra sem GET/alteração da URL, anuncia X/Y e restaura foco ao l
     const input=doc.at('acervo-filtro'), count=doc.at('acervo-contagem');
     const clear=doc.at('acervo-limpar'), select=doc.at('acervo-competencia');
     assert.equal(count.textContent,'108 de 108 arquivos exibidos');
+    assert.equal(input.disabled,false);
     assert.equal(clear.disabled,true);
     const originalUrl=globalThis.location.href;
     input.value='PARTNERS/0';
@@ -134,7 +135,7 @@ test('Acervo filtra sem GET/alteração da URL, anuncia X/Y e restaura foco ao l
     select.value='2026-06';
     select.listeners.get('change')();
     assert.equal(input.value,'','troca de competência elimina filtro antigo');
-    assert.equal(count.textContent,'1 de 1 arquivos exibidos');
+    assert.equal(count.textContent,'1 de 1 arquivo exibido');
     assert.equal(new URL(globalThis.location).searchParams.get('competencia'),'2026-06');
     assert.equal(new URL(globalThis.location).searchParams.get('origem'),'teste');
     assert.equal(loads,1);
@@ -149,10 +150,33 @@ test('Acervo preserva estado sem arquivos e não confunde filtro com ausência d
   assert.ok(descendants(root).some(node=>node.textContent==='Nenhum arquivo listado nesta competência.'));
 });
 
+test('Acervo falha fechado no carregamento: estado anunciado e controles desativados',async()=>{
+  await withUrl(async()=>{
+    const doc=documentWith(ARCHIVE_IDS);
+    let rejectLoad;
+    const pending=new Promise((_,reject)=>{rejectLoad=reject;});
+    const mounting=mountArchive(doc,{loadManifest:()=>pending});
+    const filter=doc.at('acervo-filtro'), clear=doc.at('acervo-limpar');
+    const count=doc.at('acervo-contagem'), state=doc.at('acervo-estado');
+    assert.equal(filter.disabled,true,'filtro deve iniciar indisponível');
+    assert.equal(clear.disabled,true,'limpar deve iniciar indisponível');
+    rejectLoad(new Error('falha simulada de manifesto'));
+    await mounting;
+    assert.equal(filter.disabled,true);
+    assert.equal(clear.disabled,true);
+    assert.equal(count.textContent,'Lista de arquivos indisponível: filtro desativado.');
+    assert.equal(count.dataset.kind,'error');
+    assert.match(state.textContent,/Não foi possível abrir o acervo: falha simulada de manifesto/);
+    assert.equal(filter.listeners.has('input'),false);
+    assert.equal(clear.listeners.has('click'),false);
+    assert.equal(descendants(doc.at('acervo-resultado')).filter(n=>n.tag==='details').length,0);
+  });
+});
+
 test('Fonte SSG fornece rótulo, contagem viva e limpeza acessíveis',()=>{
   const html=readFileSync(new URL('../content/acervo.md',import.meta.url),'utf8');
   assert.match(html,/<label for="acervo-filtro">Filtrar arquivos desta competência<\/label>/);
-  assert.match(html,/<input id="acervo-filtro" type="search"/);
-  assert.match(html,/<button type="button" id="acervo-limpar"/);
+  assert.match(html,/<input id="acervo-filtro"[^>]* disabled \/>/);
+  assert.match(html,/<button type="button" id="acervo-limpar"[^>]* disabled>/);
   assert.match(html,/<p id="acervo-contagem" role="status" aria-live="polite" aria-atomic="true"/);
 });

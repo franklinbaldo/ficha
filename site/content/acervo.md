@@ -22,8 +22,8 @@ layout: product
   <p id="acervo-estado" role="status" aria-live="polite" class="interface-status">Carregando o catálogo…</p>
   <div class="form-field compact-select">
     <label for="acervo-filtro">Filtrar arquivos desta competência</label>
-    <input id="acervo-filtro" type="search" placeholder="Ex.: companies/00" autocomplete="off" />
-    <button type="button" id="acervo-limpar" class="button-secondary">Limpar filtro</button>
+    <input id="acervo-filtro" type="search" placeholder="Ex.: companies/00" autocomplete="off" disabled />
+    <button type="button" id="acervo-limpar" class="button-secondary" disabled>Limpar filtro</button>
   </div>
   <p id="acervo-contagem" role="status" aria-live="polite" aria-atomic="true" class="fineprint">Aguardando lista de arquivos…</p>
   <div id="acervo-resultado" aria-label="Arquivos declarados no manifesto"></div>
