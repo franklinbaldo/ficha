@@ -41,4 +41,16 @@ Aceite de F15 requer:
 
 Rotas possíveis de remediação: remover helper legado **após** provar que não existem consumidores dependentes; torná-lo indisponível em produção; ou rotear cada saída raw por uma única capacidade que exija autorização externa atestada. A escolha é arquitetural, sujeita à coordenação do 🐘 e revisão 🦅 antes de mudar ETL.
 
+## F15, caso diferencial e transição de XFAIL (23/11/2026)
+
+A [PR #485](https://github.com/franklinbaldo/ficha/pull/485), **DRAFT e não integrada** em 23/11, oferece uma correção **somente** para `upload_raw_zips`: preserva a assinatura Python mas lança `RuntimeError` para mês válido antes de consultar cache, inventário ou IA. A [CI do HEAD `9084b85d`](https://github.com/franklinbaldo/ficha/actions/runs/45133547199) concluiu os testes ETL Linux/Windows; esse resultado prova a guarda na branch, **não** a custódia global. A função importável era capaz de aceitar 1/37 ZIPs; busca na árvore versionada localizou definição e testes, não um chamador produtivo, **sem excluir importadores externos**. A mudança é deliberadamente incompatível: cache vazio podia lançar `FileNotFoundError` e cache com arquivos podia enviar bytes; agora mês válido sempre falha. O aviso está no `etl/README.md` da #485.
+
+**Teste diferencial obrigatório na decisão de integração:**
+
+- **Rota A, fechada na #485:** com cache vazio, 1/37 e 37/37, instrumentar `ia.upload`, inventário e filesystem como sentinelas; exigir exceção antes de I/O. A #485 contém negativos específicos, inclusive um teste que falha se o helper tocar qualquer dessas fronteiras.
+- **Rota B, ainda aberta:** pela função distinta `stream_raw_zips_to_ia`, exercitar dois processos com bytes A/B de igual nome/tamanho e SHA diferente, um primeiro PUT sintético ambíguo e novo GET/PUT sem readback. A [#479](https://github.com/franklinbaldo/ficha/pull/479) já conserva regressões `XFAIL(strict=True)` para esse cenário e para o retry legado; fechar A **não** corrige B, não cria journal U, nem impõe fence F. Os transportes são falsos.
+- **Transição controlada:** depois de **integrar** #485 e reconciliar #479 com a `main` por merge não destrutivo, a regressão de `upload_raw_zips` em #479 deve perder **apenas seu** marcador `xfail`, tornar-se PASS obrigatório e continuar rejeitando qualquer chamada ao sink. Antes da integração, a branch antiga ainda deve continuar XFAIL; depois dela, deixar `XPASS(strict)` tornaria a CI vermelha por um comportamento desejado. Preservar separadamente os outros XFAIL de UNKNOWN/retry até existirem correções reais. Renovar gates no SHA exato.
+
+**Alcance da evidência:** a prova local não inventaria credenciais, executores externos, refs antigas nem writers fora da árvore; não demonstra imutabilidade remota, CAS, ausência de PUT tardio ou operação contra IAS3. O aceite de F15 permanece pendente mesmo se a #485 for integrada.
+
 **Status:** `F15_EGRESS_COVERAGE_UNATTESTED` e `F_UNAVAILABLE/HOLD`. A evidência atual é de leitura estática e teste com cliente falso. Sem RFB/IAS3 real, ETL produtivo, credenciais, upload, manifesto, custos ou merge.
