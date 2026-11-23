@@ -15,7 +15,7 @@ import duckdb
 import pytest
 
 from ficha_etl.raw_preflight import _raw_zip_crc_and_budget
-from ficha_etl.streaming import create_table_from_zip_streaming
+from ficha_etl.streaming import create_table_from_zip_streaming, load_zips_parallel
 
 
 def _require_equal(actual: object, expected: object) -> None:
@@ -141,5 +141,56 @@ def test_invalid_empty_member_preflight_vs_consumer(
         else:
             _require_equal(con.execute("SELECT COUNT(*) FROM source_rows").fetchone()[0], 0)
             pytest.xfail(f"#477: {kind} accepted as valid empty table by ZIP consumer")
+    finally:
+        con.close()
+
+
+@pytest.mark.parametrize(
+    ("name", "payload", "expected_rows"),
+    [
+        ("folder/", b"", 0),
+        ("folder/", b"1;2\\n", 0),
+        ("notes.txt", b"", 0),
+        ("notes.txt", b"1;2\\n", 1),
+    ],
+)
+@pytest.mark.parametrize("parallel", [False, True])
+def test_member_semantics_characterization_pending_primary_rfb_contract(
+    tmp_path: Path, name: str, payload: bytes, expected_rows: int, parallel: bool
+) -> None:
+    """Record current behavior in both *real* consumers, not an acceptance policy.
+
+    Physical CRC/framing validation alone cannot establish that a directory or
+    TXT member is an admissible RFB data file. These synthetic examples are
+    characterization tests; #477 still requires primary source evidence.
+    """
+    source = tmp_path / "semantic.zip"
+    member = zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0))
+    member.compress_type = zipfile.ZIP_STORED
+    member.create_system = 3
+    with zipfile.ZipFile(source, "w") as archive:
+        archive.writestr(member, payload)
+    with zipfile.ZipFile(source) as archive:
+        _require_equal(archive.testzip(), None)
+        _require_equal(len(archive.infolist()), 1)
+        _require_equal(archive.infolist()[0].is_dir(), name.endswith("/"))
+
+    # This is a *physical* pass, not a semantic endorsement of the member name.
+    _require_equal(_raw_zip_crc_and_budget(source, expanded=0, members=0), (len(payload), 1))
+
+    con = duckdb.connect()
+    try:
+        work = tmp_path / "work"
+        if parallel:
+            load_zips_parallel(
+                con, [("source_rows", source, ("a", "b"))], work_dir=work, decompress_workers=1
+            )
+        else:
+            create_table_from_zip_streaming(
+                con, "source_rows", source, ("a", "b"), work_dir=work
+            )
+        _require_equal(con.execute("SELECT COUNT(*) FROM source_rows").fetchone()[0], expected_rows)
+        if expected_rows:
+            _require_equal(con.execute("SELECT a, b FROM source_rows").fetchall(), [("1", "2")])
     finally:
         con.close()
