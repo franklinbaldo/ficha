@@ -98,9 +98,7 @@ def test_valid_bit3_extra_without_sentinels(tmp_path: Path, method: int, extra: 
     raises=pytest.fail.Exception,
     reason="Known gap: bit-3 local TLV framing is not checked without ZIP64 (#433)",
 )
-def test_malformed_bit3_extra_without_sentinels(
-    tmp_path: Path, method: int, extra: bytes
-):
+def test_malformed_bit3_extra_without_sentinels(tmp_path: Path, method: int, extra: bytes):
     raw = _fixture(method, extra)
     if _complete_tlvs(extra):
         raise AssertionError("negative control is structurally valid")
