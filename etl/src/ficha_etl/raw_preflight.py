@@ -122,7 +122,11 @@ def _check_member_exact(
             raise RuntimeError("raw preflight: invalid ZIP data descriptor")
         handle.seek(data_end)
         descriptor = handle.read(gap)
-        if descriptor.startswith(b"PK\x07\x08"):
+        # Descriptor length disambiguates the optional signature. An unsigned
+        # descriptor's CRC-32 may itself equal the signature 0x08074b50.
+        if gap in (16, 24):
+            if not descriptor.startswith(b"PK\x07\x08"):
+                raise RuntimeError("raw preflight: ZIP descriptor signature mismatch")
             descriptor = descriptor[4:]
         if len(descriptor) == 12:
             descriptor_values = struct.unpack("<III", descriptor)
