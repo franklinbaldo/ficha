@@ -101,12 +101,20 @@ def test_concurrent_same_stem_isolated_with_real_duckdb(tmp_path, monkeypatch, c
         with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
             future_a = executor.submit(
                 streaming.create_table_from_zip_streaming,
-                ca, "rows", a, COLS, work_dir=work
+                ca,
+                "rows",
+                a,
+                COLS,
+                work_dir=work,
             )
             wait(a_staged, "A producer")
             future_b = executor.submit(
                 streaming.create_table_from_zip_streaming,
-                cb, "rows", b, COLS, work_dir=work
+                cb,
+                "rows",
+                b,
+                COLS,
+                work_dir=work,
             )
             future_a.result(timeout=30)
             if corrupt_rival:
@@ -141,7 +149,9 @@ def test_late_crc_failure_removes_partial_scratch(tmp_path, monkeypatch):
 
 @pytest.mark.parametrize("bad_branch", ["load", "empty"])
 def test_parallel_pending_futures_cleaned_after_duckdb_error(
-    tmp_path, monkeypatch, bad_branch
+    tmp_path,
+    monkeypatch,
+    bad_branch,
 ):
     """Worker B stages only after DuckDB executes failing branch A."""
     monkeypatch.setattr(streaming, "_SHM_DIR", None)
@@ -177,8 +187,10 @@ def test_parallel_pending_futures_cleaned_after_duckdb_error(
     try:
         with pytest.raises(duckdb.Error):
             streaming.load_zips_parallel(
-                con, [("bad-name", bad, COLS), ("good", good, COLS)],
-                work_dir=work, decompress_workers=2
+                con,
+                [("bad-name", bad, COLS), ("good", good, COLS)],
+                work_dir=work,
+                decompress_workers=2,
             )
         empty_scratch(work)
     finally:
@@ -190,8 +202,14 @@ def test_optimized_python_replays_regressions():
         return
     result = subprocess.run(
         [
-            sys.executable, "-O", "-m", "pytest", "-q", __file__,
-            "-k", "not optimized_python"
+            sys.executable,
+            "-O",
+            "-m",
+            "pytest",
+            "-q",
+            __file__,
+            "-k",
+            "not optimized_python",
         ],
         cwd=Path(__file__).parent,
         env=os.environ.copy(),
