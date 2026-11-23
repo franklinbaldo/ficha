@@ -89,7 +89,7 @@ def _mutant(raw: bytes, mutation: str) -> bytes:
         # Both local size fields use ZIP64 sentinels. A complete TLV with
         # only one 64-bit value is still too short for two required sizes.
         # The second 8 bytes form an unrelated, well-framed extra field.
-        new = struct.pack("<HH8sHH4s", 1, 8, bytes(8), 0x5455, 4, bytes(4))
+        new = struct.pack("<HH8sHH4s", 1, 8, bytes(8), 0x9999, 4, bytes(4))
     else:
         raise AssertionError(f"unknown mutation {mutation}")
     forged = bytearray(raw[:start] + new + raw[start + extra_len :])
