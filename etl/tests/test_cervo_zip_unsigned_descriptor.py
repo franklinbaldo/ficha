@@ -96,12 +96,11 @@ def test_corrupted_descriptor_crc_is_rejected(tmp_path: Path, unsigned: bool):
         _raw_zip_crc_and_budget(source, expanded=0, members=0)
 
 
-
 @pytest.mark.parametrize("method", [zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED])
 def test_corrupted_signed_descriptor_marker_is_rejected(tmp_path: Path, method: int):
     raw = bytearray(_zip_with_descriptor(b"a;b\n", method=method, unsigned=False))
     signature_offset = _descriptor_crc_offset(raw) - 4
-    if raw[signature_offset : signature_offset + 4] != b"PK\\x07\\x08":
+    if raw[signature_offset : signature_offset + 4] != b"PK\x07\x08":
         raise AssertionError("signed descriptor expected")
     raw[signature_offset] ^= 1
     with zipfile.ZipFile(io.BytesIO(raw)) as archive:
