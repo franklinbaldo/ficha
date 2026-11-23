@@ -16,8 +16,8 @@ jobs:
       - name: Ruff diagnostic
         run: |
           cd etl
-          uv run --python 3.13 ruff format --diff tests/test_cervo_unicode_path_header_identity.py || true
+          uv run --python 3.13 --with ruff==0.15.12 ruff format --diff tests/test_cervo_unicode_path_header_identity.py || true
       - name: Exercise actual preflight on Python313
         run: |
           cd etl
-          uv run --python 3.13 pytest -q tests/test_cervo_unicode_path_header_identity.py
+          uv run --python 3.13 --with pytest pytest -q tests/test_cervo_unicode_path_header_identity.py
