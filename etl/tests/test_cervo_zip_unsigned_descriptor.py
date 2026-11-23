@@ -85,9 +85,7 @@ def test_unsigned_crc_equal_signature_is_valid(tmp_path: Path):
 
 @pytest.mark.parametrize("unsigned", [False, True])
 def test_corrupted_descriptor_crc_is_rejected(tmp_path: Path, unsigned: bool):
-    raw = bytearray(
-        _zip_with_descriptor(b"a;b\n", method=zipfile.ZIP_DEFLATED, unsigned=unsigned)
-    )
+    raw = bytearray(_zip_with_descriptor(b"a;b\n", method=zipfile.ZIP_DEFLATED, unsigned=unsigned))
     raw[_descriptor_crc_offset(raw)] ^= 1
     with zipfile.ZipFile(io.BytesIO(raw)) as archive:
         if archive.testzip() is not None:
