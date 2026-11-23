@@ -557,6 +557,7 @@ def upload_companies_zip(
     log.info("uploaded ia:%s/companies.zip OK", identifier)
 
 
+
 def upload_raw_zips(
     month: str,
     cache_dir: Path,
@@ -564,42 +565,14 @@ def upload_raw_zips(
     access_key: str,
     secret_key: str,
 ) -> None:
-    """Espelha os ZIPs crus da RFB para ficha-YYYY-MM/raw/.
+    """Refuse the unsafe legacy raw-cache egress path (#433/F15).
 
-    Pula ZIPs ausentes no cache (warning) mas falha se nenhum for encontrado.
-
-    Args:
-        month: snapshot no formato YYYY-MM.
-        cache_dir: raiz do cache local; ZIPs esperados em cache_dir/month/*.zip.
-        access_key: IA S3-like access key.
-        secret_key: IA S3-like secret key.
+    This historical helper accepted partial raw cohorts and delegated to
+    ia.upload without a durable UNKNOWN journal, sealed spool or readback.
+    Keep the importable API but never attempt filesystem or network I/O
+    until a shared custody authority can authorize all raw writers.
     """
     if not is_valid_month(month):
         raise ValueError(f"month must be YYYY-MM, got {month!r}")
 
-    raw_dir = cache_dir / month
-    files: dict[str, str] = {}
-    for spec in canonical_inventory():
-        local = raw_dir / spec.name
-        if local.exists() and local.stat().st_size > 0:
-            # Remote name com prefixo raw/ cria "pasta" no item IA.
-            files[f"raw/{spec.name}"] = str(local)
-        else:
-            log.warning("raw ZIP not in cache, skipping mirror: %s", local)
-
-    if not files:
-        raise FileNotFoundError(f"no raw ZIPs found in {raw_dir} — run download first")
-
-    identifier = item_id(month)
-    log.info("uploading %d raw ZIPs to ia:%s/raw/", len(files), identifier)
-    responses = ia.upload(
-        identifier,
-        files=files,
-        access_key=access_key,
-        secret_key=secret_key,
-        retries=_RETRIES,
-        retries_sleep=_RETRY_SLEEP,
-        verbose=True,
-    )
-    _check_responses(responses, "raw-zips")
-    log.info("uploaded %d raw ZIPs to ia:%s OK", len(files), identifier)
+    raise RuntimeError("raw cache upload is disabled pending Ficha #433 custody authority")
