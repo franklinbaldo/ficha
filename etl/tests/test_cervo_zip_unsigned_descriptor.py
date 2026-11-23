@@ -42,6 +42,7 @@ def _zip_with_descriptor(
             raise AssertionError("unexpected force_zip64 local extra")
         struct.pack_into("<II", normalized, 18, 0, 0)
         del normalized[34 + name_len : 50 + name_len]
+        struct.pack_into("<H", normalized, 32 + name_len, 0)
         struct.pack_into("<H", normalized, 28, 4)
         eocd = normalized.rfind(b"PK\x05\x06")
         if eocd < 0:
