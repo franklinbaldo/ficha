@@ -111,10 +111,26 @@ def test_malformed_central_extra_must_be_rejected(tmp_path: Path, method: int, e
     pytest.fail("malformed central extra accepted by raw preflight")
 
 
+@pytest.mark.parametrize("method", _METHODS, ids=["stored", "deflated"])
+def test_declared_central_width_overrun_rejected_by_zipfile(tmp_path: Path, method: int):
+    """Prove a distinct, pre-existing stdlib rejection path (not the new TLV guard)."""
+    overrun = b"\\x34\\x12\\x02\\x00x"  # declares 2 bytes; carries 1
+    if _well_framed_tlvs(overrun):
+        raise AssertionError("overrun control is structurally valid")
+    raw = _make_zip(method, overrun)
+    with pytest.raises(zipfile.BadZipFile):
+        zipfile.ZipFile(io.BytesIO(raw))
+    path = tmp_path / "central-width-overrun.zip"
+    path.write_bytes(raw)
+    with pytest.raises(RuntimeError, match="raw preflight: invalid ZIP"):
+        _raw_zip_crc_and_budget(path, expanded=0, members=0)
+
+
 def test_optimized_python_replays_central_extra_matrix():
     selectors = [
         f"{__file__}::test_well_framed_central_extra_is_accepted",
         f"{__file__}::test_malformed_central_extra_must_be_rejected",
+        f"{__file__}::test_declared_central_width_overrun_rejected_by_zipfile",
     ]
     child = subprocess.run(
         [sys.executable, "-O", "-m", "pytest", "-q", *selectors],
