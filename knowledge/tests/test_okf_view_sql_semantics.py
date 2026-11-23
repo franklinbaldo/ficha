@@ -4,6 +4,7 @@ SQLite tests only the portable SELECT/JOIN subset used by these two views;
 this is not a DuckDB-WASM, Parquet, provenance, or published-site oracle.
 """
 
+import hashlib
 import json
 from pathlib import Path
 import sqlite3
@@ -156,6 +157,59 @@ class GeneratedViewSqlSemanticsTest(unittest.TestCase):
                 finally:
                     connection.close()
 
+    def test_equal_outputs_do_not_establish_raiz_competencia(self):
+        # Both physical snapshots have valid unique keys and no orphans.
+        # Their different positive counts are invisible to SELECT s.*.
+        socios = [
+            ("11111111", "partner-one"),
+            ("22222222", "partner-two"),
+        ]
+        snapshots = {
+            "2026-07": [("11111111", 1), ("22222222", 0)],
+            "2026-08": [("11111111", 2), ("22222222", 0)],
+        }
+        self.connection.execute("DELETE FROM socios")
+        self.connection.execute("DELETE FROM raizes")
+        self.connection.executemany("INSERT INTO socios VALUES (?, ?)", socios)
+
+        outputs = {}
+        digests = {}
+        for competencia, raizes in snapshots.items():
+            with self.subTest(competencia=competencia):
+                self.connection.execute("DELETE FROM raizes")
+                self.connection.executemany(
+                    "INSERT INTO raizes VALUES (?, ?)", raizes
+                )
+                duplicates = self.connection.execute("""
+                    SELECT cnpj_base FROM raizes GROUP BY cnpj_base
+                    HAVING COUNT(*) > 1
+                """).fetchall()
+                orphans = self.connection.execute("""
+                    SELECT s.cnpj_base FROM socios AS s
+                    WHERE NOT EXISTS (
+                        SELECT 1 FROM raizes AS r
+                        WHERE r.cnpj_base = s.cnpj_base
+                    )
+                """).fetchall()
+                self.assertEqual(duplicates, [])
+                self.assertEqual(orphans, [])
+
+                # Independent raw-tuple oracle for the current SQL semantics.
+                active = {base for base, count in raizes if count > 0}
+                expected = [row for row in socios if row[0] in active]
+                actual = self.connection.execute(
+                    self.sql["socios_de_raizes_ativas"]
+                ).fetchall()
+                self.assertCountEqual(actual, expected)
+                outputs[competencia] = actual
+                digests[competencia] = hashlib.sha256(
+                    json.dumps(raizes).encode("utf-8")
+                ).hexdigest()
+
+        # A real byte-level difference exists, but output parity masks it:
+        # consuming August Raiz for July would still pass an output oracle.
+        self.assertNotEqual(digests["2026-07"], digests["2026-08"])
+        self.assertCountEqual(outputs["2026-07"], outputs["2026-08"])
 
 
 if __name__ == "__main__":
