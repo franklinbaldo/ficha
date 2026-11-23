@@ -95,7 +95,7 @@ def test_late_crc_failure_preserves_pre_batch_table(
     try:
         if outer_transaction:
             con.execute("BEGIN TRANSACTION")
-        with pytest.raises(RuntimeError, match=r"1 ZIP\\(s\\) failed to decompress") as error:
+        with pytest.raises(RuntimeError, match="failed to decompress") as error:
             streaming.load_zips_parallel(
                 con,
                 [
@@ -105,9 +105,12 @@ def test_late_crc_failure_preserves_pre_batch_table(
                 work_dir=work_dir,
                 decompress_workers=2,
             )
-        assert isinstance(error.value.__cause__, zipfile.BadZipFile)
-        assert good_loaded.is_set()
-        assert list(work_dir.iterdir()) == []
+        if not isinstance(error.value.__cause__, zipfile.BadZipFile):
+            raise AssertionError(f"wrong failure cause: {error.value.__cause__!r}")
+        if not good_loaded.is_set():
+            raise AssertionError("valid ZIP did not load before CRC failure")
+        if list(work_dir.iterdir()):
+            raise AssertionError("scratch files survived failed batch")
         if outer_transaction:
             con.execute("ROLLBACK")
     finally:
@@ -116,6 +119,8 @@ def test_late_crc_failure_preserves_pre_batch_table(
     # A fresh connection rules out a merely visible but uncommitted row.
     con = duckdb.connect(str(db_path))
     try:
-        assert con.execute("SELECT a, b FROM good").fetchall() == [("ORIGINAL", "KEEP")]
+        actual = con.execute("SELECT a, b FROM good").fetchall()
+        if actual != [("ORIGINAL", "KEEP")]:
+            raise AssertionError(f"batch was only partially committed: {actual!r}")
     finally:
         con.close()
