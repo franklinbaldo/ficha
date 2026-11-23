@@ -17,6 +17,10 @@ import pytest
 from ficha_etl import streaming
 
 
+class PartialBatchCommit(AssertionError):
+    """Expected only when an earlier table persists after a later CRC failure."""
+
+
 def _zip(path: Path, payload: bytes) -> Path:
     with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_STORED) as archive:
         archive.writestr("rows.csv", payload)
@@ -44,6 +48,7 @@ def _break_member_crc(path: Path) -> None:
             False,
             marks=pytest.mark.xfail(
                 strict=True,
+                raises=PartialBatchCommit,
                 reason="batch has no all-or-nothing transaction: earlier table persists",
             ),
             id="default-batch-strict-xfail",
@@ -121,6 +126,8 @@ def test_late_crc_failure_preserves_pre_batch_table(
     try:
         actual = con.execute("SELECT a, b FROM good").fetchall()
         if actual != [("ORIGINAL", "KEEP")]:
-            raise AssertionError(f"batch was only partially committed: {actual!r}")
+            if not outer_transaction and actual == [("NEW", "VALUE")] * 9:
+                raise PartialBatchCommit(f"earlier table persisted after late CRC: {actual!r}")
+            raise AssertionError(f"unexpected post-batch table contents: {actual!r}")
     finally:
         con.close()
