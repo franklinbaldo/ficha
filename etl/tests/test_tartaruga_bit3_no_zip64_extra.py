@@ -26,10 +26,11 @@ class _NonSeekable(io.BytesIO):
 _NAME = "K3241.K03200Y2.D60808.EMPRECSV"
 _PAYLOAD = b"1;2\n"
 _GOOD_EXTRAS = (b"", b"\x34\x12\x01\x00x")
+# Orphan byte, partial TLV header, and declared-width overrun, respectively.
 _BAD_EXTRAS = (
-    b"\x01",  # orphan byte
-    b"\x01\x00\x10",  # partial TLV header
-    b"\x01\x00\x10\x00\x00\x00",  # data shorter than declared width
+    b"\x01",
+    b"\x01\x00\x10",
+    b"\x01\x00\x10\x00\x00\x00",
 )
 _METHODS = (zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED)
 
