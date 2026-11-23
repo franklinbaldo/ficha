@@ -44,11 +44,12 @@ def _fixture(method: int) -> bytes:
             member.write(_PAYLOAD)
     raw = sink.getvalue()
     _, flags, local_comp, local_uncomp, name_len, extra_len = _local_fields(raw)
+    local_extra = raw[30 + name_len : 30 + name_len + extra_len]
     if (
         not flags & 8
         or (local_comp, local_uncomp) != (0xFFFFFFFF, 0xFFFFFFFF)
         or extra_len != 20
-        or raw[30 + name_len : 30 + name_len + extra_len] != b"\x01\x00\x10\x00" + bytes(16)
+        or local_extra != b"\x01\x00\x10\x00" + bytes(16)
     ):
         raise AssertionError("ZIP64 descriptor fixture preconditions failed")
     return raw
@@ -120,7 +121,11 @@ def _verify_fixture(raw: bytes, *, malformed: bool) -> None:
         raise AssertionError("structural oracle misclassified fixture")
     with zipfile.ZipFile(io.BytesIO(raw)) as archive:
         entry = archive.infolist()[0]
-        if not entry.flag_bits & 8 or archive.testzip() is not None or archive.read(entry) != _PAYLOAD:
+        if (
+            not entry.flag_bits & 8
+            or archive.testzip() is not None
+            or archive.read(entry) != _PAYLOAD
+        ):
             raise AssertionError("invalid stdlib control")
 
 
