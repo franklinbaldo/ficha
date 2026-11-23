@@ -125,6 +125,11 @@ test('Acervo filtra sem GET/alteração da URL, anuncia X/Y e restaura foco ao l
     assert.equal(count.textContent,'108 de 108 arquivos exibidos');
     assert.equal(input.disabled,false);
     assert.equal(select.disabled,false,'competência liberada após carregar catálogo');
+    assert.deepEqual(select.options.map(item=>item.textContent),
+      ['2026-07 · referência','2026-06'],
+      'somente o Acervo abrevia as opções, sem alterar as datas selecionáveis');
+    assert.equal(doc.at('acervo-estado').textContent,
+      '2 competências declaradas no manifesto publicado.');
     assert.equal(clear.disabled,true);
     const originalUrl=globalThis.location.href;
     input.value='PARTNERS/0';
@@ -159,6 +164,18 @@ test('Acervo preserva estado sem arquivos e não confunde filtro com ausência d
   assert.deepEqual(renderArchiveSelection(doc,root,data,'2026-07','qualquer'),
     {shown:0,total:0});
   assert.ok(descendants(root).some(node=>node.textContent==='Nenhum arquivo listado nesta competência.'));
+});
+
+test('Acervo flexiona corretamente uma competência declarada',async()=>{
+  await withUrl(async()=>{
+    const doc=documentWith(ARCHIVE_IDS);
+    const data={current:'2026-07',snapshots:[{date:'2026-07',files:{}}]};
+    await mountArchive(doc,{loadManifest:async()=>data});
+    assert.equal(doc.at('acervo-estado').textContent,
+      '1 competência declarada no manifesto publicado.');
+    assert.equal(doc.at('acervo-competencia').options[0].textContent,
+      '2026-07 · referência');
+  });
 });
 
 test('Acervo falha fechado no carregamento: estado anunciado e controles desativados',async()=>{

@@ -35,6 +35,29 @@ try {
       const select=page.locator('#acervo-competencia');
       assert.ok(await select.locator('option').count()>=2);
       assert.equal(await select.isDisabled(),false,'competência ativa após manifesto');
+      // A native select may truncate its selected option without page overflow.
+      // Measure rendered label width and leave space for the platform arrow.
+      if(viewport.width<=375) {
+        const selectedLabel=await select.evaluate(element=>{
+          const style=getComputedStyle(element);
+          const canvas=document.createElement('canvas');
+          const context=canvas.getContext('2d');
+          context.font=style.font;
+          const label=element.selectedOptions[0]?.textContent.trim()??'';
+          const width=context.measureText(label).width;
+          const space=element.getBoundingClientRect().width-
+            parseFloat(style.paddingLeft)-parseFloat(style.paddingRight)-32;
+          return {label,width,space};
+        });
+        assert.match(selectedLabel.label,/^\d{4}-\d{2} · referência$/,
+          'opção de referência usa rótulo compacto específico do Acervo');
+        assert.ok(selectedLabel.width<=selectedLabel.space,
+          'texto selecionado precisa caber com reserva de 32px para seta nativa: '+
+            JSON.stringify(selectedLabel));
+        view.checks.push({page:'acervo-select',selectedLabel});
+      }
+      const competenceStatus=(await page.locator('#acervo-estado').textContent()).trim();
+      assert.match(competenceStatus,/^\d+ competências? declaradas? no manifesto publicado\.$/);
       assert.ok(await page.locator('#acervo-resultado').textContent());
       // Allow the initial SSG resources to settle before auditing local-only interactions.
       await page.waitForLoadState('networkidle');
