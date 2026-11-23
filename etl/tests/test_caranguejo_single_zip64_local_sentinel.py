@@ -107,9 +107,7 @@ def _mixed_sentinel(raw: bytes, sentinel: str, variant: str) -> bytes:
     else:
         raise AssertionError(variant)
 
-    forged = bytearray(
-        forged[:start] + new_extra + forged[start + old_extra_len :]
-    )
+    forged = bytearray(forged[:start] + new_extra + forged[start + old_extra_len :])
     struct.pack_into("<H", forged, 28, len(new_extra))
     eocd = forged.rfind(b"PK\x05\x06")
     _require(eocd > start, "end of central directory exists")
@@ -169,9 +167,7 @@ def _verify_fixture(raw: bytes, *, sentinel: str, variant: str) -> None:
 
 
 @pytest.mark.parametrize("method", _METHODS, ids=["stored", "deflated"])
-def test_canonical_two_local_zip64_sizes_accepted(
-    tmp_path: Path, method: int
-) -> None:
+def test_canonical_two_local_zip64_sizes_accepted(tmp_path: Path, method: int) -> None:
     source = tmp_path / "canonical.zip"
     source.write_bytes(_source_zip(method))
     result = _raw_zip_crc_and_budget(source, expanded=0, members=0)
