@@ -123,4 +123,3 @@ def test_optimized_central_disk32_replay() -> None:
     )
     if child.returncode:
         raise AssertionError(child.stdout + "\n" + child.stderr)
-
