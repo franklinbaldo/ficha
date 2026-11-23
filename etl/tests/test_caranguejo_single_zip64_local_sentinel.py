@@ -2,9 +2,11 @@
 
 Replays Lagarto R200 against the actual raw preflight. ZIPs are entirely
 synthetic; a successful stdlib read is not an APPNOTE conformance oracle.
-A one-sentinel ZIP64 extra with one 8-byte word is noncanonical under the
-local-size-pair reading of APPNOTE 6.3.10 §4.5.3. The decision whether
-Ficha must reject that layout is deliberately still open (#493).
+Under bit 3, profiles A (0/0, no ZIP64) and B (paired ZIP64 from stdlib)
+are separate interoperability baselines. C (single sentinel, 8-byte ZIP64),
+D (single sentinel, 16-byte ZIP64) and E (0/0, 16-byte ZIP64) are
+under investigation under APPNOTE 6.3.10; no layout is certified by
+zipfile.read(). Admission policy remains pending in #493.
 
 No producer, uploader, HTTP or manifest is modified by this test-only PR.
 """
@@ -37,6 +39,7 @@ _VARIANTS = (
         "framed",
         marks=pytest.mark.xfail(
             strict=True,
+            raises=pytest.fail.Exception,
             reason="#493: normative local ZIP64 pair policy pending",
         ),
     ),
@@ -58,26 +61,25 @@ def _require(ok: bool, message: str) -> None:
         raise AssertionError(message)
 
 
-def _source_zip(method: int) -> bytes:
+def _source_zip(method: int, *, force_zip64: bool = True) -> bytes:
     sink = _NonSeekable()
     info = zipfile.ZipInfo(_NAME, (2020, 1, 1, 0, 0, 0))
     info.compress_type = method
     with zipfile.ZipFile(sink, "w", allowZip64=True) as archive:
-        with archive.open(info, "w", force_zip64=True) as member:
+        with archive.open(info, "w", force_zip64=force_zip64) as member:
             member.write(_PAYLOAD)
     raw = sink.getvalue()
     _require(struct.unpack_from("<I", raw)[0] == 0x04034B50, "ZIP local signature")
     _require(bool(struct.unpack_from("<H", raw, 6)[0] & 8), "descriptor bit 3")
-    _require(
-        struct.unpack_from("<II", raw, 18) == (0xFFFFFFFF, 0xFFFFFFFF),
-        "canonical two-sentinel source",
-    )
+    sizes = struct.unpack_from("<II", raw, 18)
     name_len, extra_len = struct.unpack_from("<HH", raw, 26)
-    _require(extra_len == 20, "canonical ZIP64 extra width")
-    _require(
-        raw[30 + name_len : 30 + name_len + extra_len] == b"\x01\x00\x10\x00" + bytes(16),
-        "canonical ZIP64 size pair",
-    )
+    local_extra = raw[30 + name_len : 30 + name_len + extra_len]
+    if force_zip64:
+        _require(sizes == (0xFFFFFFFF, 0xFFFFFFFF), "stdlib paired ZIP64 sizes")
+        _require(local_extra == b"\x01\x00\x10\x00" + bytes(16), "paired ZIP64 extra")
+    else:
+        _require(sizes == (0, 0), "stdlib zero local sizes")
+        _require(extra_len == 0, "zero local sizes without ZIP64 extra")
     return raw
 
 
@@ -165,11 +167,23 @@ def _verify_fixture(raw: bytes, *, sentinel: str, variant: str) -> None:
 
 
 @pytest.mark.parametrize("method", _METHODS, ids=["stored", "deflated"])
-def test_canonical_two_local_zip64_sizes_accepted(tmp_path: Path, method: int) -> None:
-    source = tmp_path / "canonical.zip"
+def test_stdlib_paired_local_zip64_sizes_accepted(tmp_path: Path, method: int) -> None:
+    source = tmp_path / "paired.zip"
     source.write_bytes(_source_zip(method))
     result = _raw_zip_crc_and_budget(source, expanded=0, members=0)
-    _require(result == (len(_PAYLOAD), 1), "canonical ZIP64 refused")
+    _require(result == (len(_PAYLOAD), 1), "stdlib paired ZIP64 refused")
+
+
+@pytest.mark.parametrize("method", _METHODS, ids=["stored", "deflated"])
+def test_zero_local_sizes_without_zip64_extra_accepted(tmp_path: Path, method: int) -> None:
+    source = tmp_path / "zero.zip"
+    raw = _source_zip(method, force_zip64=False)
+    with zipfile.ZipFile(io.BytesIO(raw)) as archive:
+        _require(archive.testzip() is None, "zero baseline CRC")
+        _require(archive.read(_NAME) == _PAYLOAD, "zero baseline payload")
+    source.write_bytes(raw)
+    result = _raw_zip_crc_and_budget(source, expanded=0, members=0)
+    _require(result == (len(_PAYLOAD), 1), "zero baseline refused")
 
 
 @pytest.mark.parametrize("method", _METHODS, ids=["stored", "deflated"])
@@ -186,8 +200,82 @@ def test_single_local_zip64_sentinel_rejected_by_preflight(
     # parser accepts the structurally valid but noncanonical local layout.
     # Policy question remains open: strict APPNOTE rejection or documented
     # compatibility tolerance. Do not silently promote this to a PASS.
-    with pytest.raises(RuntimeError, match="ZIP64 local"):
+    if variant.startswith("framed"):
+        # Typed XFAIL must arise exclusively from *preflight accepting C*.
+        # Fixture failures, wrong rejection causes and CRC faults are FAIL.
+        try:
+            _raw_zip_crc_and_budget(source, expanded=0, members=0)
+        except RuntimeError as exc:
+            _require("ZIP64 local" in str(exc), "wrong ZIP64 rejection reason")
+        else:
+            pytest.fail("#493: single-sentinel ZIP64 local accepted")
+    else:
+        with pytest.raises(RuntimeError, match="ZIP64 local"):
+            _raw_zip_crc_and_budget(source, expanded=0, members=0)
+
+
+def _presence_variant(raw: bytes, case: str) -> bytes:
+    forged = bytearray(raw)
+    _require(
+        struct.unpack_from("<II", forged, 18) == (0xFFFFFFFF, 0xFFFFFFFF),
+        "paired baseline expected",
+    )
+    if case == "single_compressed_full_extra":
+        struct.pack_into("<I", forged, 18, 0)
+    elif case == "single_uncompressed_full_extra":
+        struct.pack_into("<I", forged, 22, 0)
+    elif case == "zero_with_zip64_extra":
+        struct.pack_into("<II", forged, 18, 0, 0)
+    else:
+        raise AssertionError(case)
+    return bytes(forged)
+
+
+def _verify_presence_fixture(raw: bytes, case: str) -> None:
+    expected = {
+        "single_compressed_full_extra": (0, 0xFFFFFFFF),
+        "single_uncompressed_full_extra": (0xFFFFFFFF, 0),
+        "zero_with_zip64_extra": (0, 0),
+    }
+    _require(bool(struct.unpack_from("<H", raw, 6)[0] & 8), "presence bit 3")
+    _require(struct.unpack_from("<II", raw, 18) == expected[case], "presence local sizes")
+    name_len, extra_len = struct.unpack_from("<HH", raw, 26)
+    _require(extra_len == 20, "presence ZIP64 extra width")
+    local_extra = raw[30 + name_len : 30 + name_len + extra_len]
+    _require(local_extra == b"\x01\x00\x10\x00" + bytes(16), "presence ZIP64 extra")
+    with zipfile.ZipFile(io.BytesIO(raw)) as archive:
+        _require(len(archive.infolist()) == 1, "presence member count")
+        _require(archive.testzip() is None, "presence CRC")
+        _require(archive.read(_NAME) == _PAYLOAD, "presence payload")
+
+
+@pytest.mark.parametrize("method", _METHODS, ids=["stored", "deflated"])
+@pytest.mark.parametrize(
+    "case",
+    (
+        "single_compressed_full_extra",
+        "single_uncompressed_full_extra",
+        "zero_with_zip64_extra",
+    ),
+)
+@pytest.mark.xfail(
+    strict=True,
+    raises=pytest.fail.Exception,
+    reason="#493: ZIP64 local presence policy for D/E pending",
+)
+def test_zip64_extra_presence_noncanonical_rejected(
+    tmp_path: Path, method: int, case: str
+) -> None:
+    raw = _presence_variant(_source_zip(method), case)
+    _verify_presence_fixture(raw, case)
+    source = tmp_path / "presence.zip"
+    source.write_bytes(raw)
+    try:
         _raw_zip_crc_and_budget(source, expanded=0, members=0)
+    except RuntimeError as exc:
+        _require("ZIP64 local" in str(exc), "wrong ZIP64 presence rejection reason")
+    else:
+        pytest.fail("#493: ZIP64 local extra presence accepted")
 
 
 def test_python_optimized_replays_single_sentinel_matrix() -> None:
@@ -198,7 +286,9 @@ def test_python_optimized_replays_single_sentinel_matrix() -> None:
             "-m",
             "pytest",
             "-q",
-            f"{__file__}::test_canonical_two_local_zip64_sizes_accepted",
+            f"{__file__}::test_stdlib_paired_local_zip64_sizes_accepted",
+            f"{__file__}::test_zero_local_sizes_without_zip64_extra_accepted",
+            f"{__file__}::test_zip64_extra_presence_noncanonical_rejected",
             f"{__file__}::test_single_local_zip64_sentinel_rejected_by_preflight",
         ],
         capture_output=True,
