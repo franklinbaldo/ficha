@@ -136,13 +136,15 @@ def _verify_fixture(raw: bytes, *, malformed: bool) -> None:
 
 
 @pytest.mark.parametrize("method", _METHODS, ids=["stored", "deflated"])
-def test_valid_local_zip64_extra_with_bit3(tmp_path: Path, method: int):
+def test_python_force_zip64_bit3_sentinels_rejected(tmp_path: Path, method: int):
+    # zipfile's force_zip64=True produces a structurally intact TLV, but
+    # Common ZIP does not allow nonempty local ZIP64 under descriptor bit 3.
     raw = _fixture(method)
     _verify_fixture(raw, malformed=False)
-    source = tmp_path / "valid.zip"
+    source = tmp_path / "nonconformant-bit3.zip"
     source.write_bytes(raw)
-    if _raw_zip_crc_and_budget(source, expanded=0, members=0) != (len(_PAYLOAD), 1):
-        raise AssertionError("valid local ZIP64 field rejected")
+    with pytest.raises(RuntimeError, match="ZIP64 local bit3"):
+        _raw_zip_crc_and_budget(source, expanded=0, members=0)
 
 
 @pytest.mark.parametrize("method", _METHODS, ids=["stored", "deflated"])
@@ -158,7 +160,7 @@ def test_malformed_local_zip64_extra_must_be_rejected(tmp_path: Path, method: in
 
 def test_optimized_python_replays_local_extra_matrix():
     selectors = [
-        f"{__file__}::test_valid_local_zip64_extra_with_bit3",
+        f"{__file__}::test_python_force_zip64_bit3_sentinels_rejected",
         f"{__file__}::test_malformed_local_zip64_extra_must_be_rejected",
     ]
     child = subprocess.run(
