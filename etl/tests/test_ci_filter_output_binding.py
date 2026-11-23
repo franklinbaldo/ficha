@@ -43,6 +43,10 @@ def assert_filter_output_binding(workflow: dict) -> None:
         tests = [step for step in steps if step.get("name") == "Test"]
         _require(len(tests) == 1, f"{job}: exactly one Test step required")
         _require(
+            steps.index(filter_step) < steps.index(tests[0]),
+            f"{job}: Test must follow its path-filter producer",
+        )
+        _require(
             tests[0].get("if") == f"steps.changes.outputs.{key} == 'true'",
             f"{job}: Test is not conditional on this producer",
         )
@@ -63,7 +67,7 @@ def test_real_workflow_binds_test_to_unconditional_filter_output() -> None:
 @pytest.mark.parametrize("job", JOBS)
 @pytest.mark.parametrize(
     "mutation",
-    ("drop-id", "rename-id", "skip-producer", "mask-producer", "wrong-output", "mask-test"),
+    ("drop-id", "rename-id", "skip-producer", "mask-producer", "wrong-output", "mask-test", "test-before-producer"),
 )
 def test_mismatched_or_skipped_filter_cannot_appear_green(job: str, mutation: str) -> None:
     workflow = deepcopy(_workflow())
@@ -82,5 +86,8 @@ def test_mismatched_or_skipped_filter_cannot_appear_green(job: str, mutation: st
         producer["with"]["filters"] = "other:\n  - 'etl/**'\n"
     elif mutation == "mask-test":
         consumer["continue-on-error"] = True
+    elif mutation == "test-before-producer":
+        steps.remove(consumer)
+        steps.insert(steps.index(producer), consumer)
     with pytest.raises((AssertionError, KeyError)):
         assert_filter_output_binding(workflow)
