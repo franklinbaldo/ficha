@@ -136,67 +136,89 @@ def test_upload_outputs_invalid_month(mock_upload, tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# upload_raw_zips
+# upload_raw_zips (legacy raw cache mirror is deliberately disabled)
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.parametrize("cache_state", ["empty", "one", "all", "zero_byte"])
 @patch("ficha_etl.upload.ia.upload")
-def test_upload_raw_zips_uses_raw_prefix(mock_upload, tmp_path):
+def test_upload_raw_zips_refuses_legacy_egress(mock_upload, tmp_path, cache_state):
+    """A partial, empty or full cache cannot bypass raw custody admission."""
     month = "2026-04"
-    _make_raw_zips(tmp_path, month)
-    mock_upload.return_value = [_make_response()]
+    if cache_state == "all":
+        _make_raw_zips(tmp_path, month)
+    elif cache_state in ("one", "zero_byte"):
+        local = tmp_path / month / next(iter(canonical_inventory())).name
+        local.parent.mkdir(parents=True)
+        with zipfile.ZipFile(local, "w") as archive:
+            archive.writestr("source.csv", b"cnpj;value\n1;A\n")
+        if cache_state == "zero_byte":
+            local.write_bytes(b"")
 
-    upload_mod.upload_raw_zips(month, tmp_path, access_key="A", secret_key="S")
-
-    files_arg = mock_upload.call_args[1].get("files") or mock_upload.call_args[0][1]
-    # Todos os remote names devem começar com "raw/"
-    assert all(k.startswith("raw/") for k in files_arg)
-
-
-@patch("ficha_etl.upload.ia.upload")
-def test_upload_raw_zips_uploads_all_37(mock_upload, tmp_path):
-    month = "2026-04"
-    _make_raw_zips(tmp_path, month)
-    mock_upload.return_value = [_make_response()]
-
-    upload_mod.upload_raw_zips(month, tmp_path, access_key="A", secret_key="S")
-
-    files_arg = mock_upload.call_args[1].get("files") or mock_upload.call_args[0][1]
-    assert len(files_arg) == 37
-
-
-@patch("ficha_etl.upload.ia.upload")
-def test_upload_raw_zips_raises_if_no_zips_found(mock_upload, tmp_path):
-    """Se o cache estiver vazio, levanta FileNotFoundError."""
-    with pytest.raises(FileNotFoundError, match="no raw ZIPs"):
-        upload_mod.upload_raw_zips("2026-04", tmp_path, access_key="A", secret_key="S")
+    with pytest.raises(RuntimeError, match="raw cache upload is disabled"):
+        upload_mod.upload_raw_zips(month, tmp_path, access_key="A", secret_key="S")
     mock_upload.assert_not_called()
 
 
 @patch("ficha_etl.upload.ia.upload")
-def test_upload_raw_zips_skips_zero_byte_files(mock_upload, tmp_path):
-    month = "2026-04"
-    _make_raw_zips(tmp_path, month)
-    # Torna um ZIP zero-byte
-    first_zip = tmp_path / month / next(iter(canonical_inventory())).name
-    first_zip.write_bytes(b"")
-
-    mock_upload.return_value = [_make_response()]
-    upload_mod.upload_raw_zips(month, tmp_path, access_key="A", secret_key="S")
-
-    files_arg = mock_upload.call_args[1].get("files") or mock_upload.call_args[0][1]
-    # Deve ter 36 (37 - 1 zero-byte)
-    assert len(files_arg) == 36
+def test_upload_raw_zips_invalid_month_remains_rejected(mock_upload, tmp_path):
+    with pytest.raises(ValueError, match="YYYY-MM"):
+        upload_mod.upload_raw_zips("2026-13", tmp_path, access_key="A", secret_key="S")
+    mock_upload.assert_not_called()
 
 
-@patch("ficha_etl.upload.ia.upload")
-def test_upload_raw_zips_raises_on_http_error(mock_upload, tmp_path):
-    month = "2026-04"
-    _make_raw_zips(tmp_path, month)
-    mock_upload.return_value = [_make_response(status=500)]
+def test_upload_raw_zips_rejects_before_cache_or_remote_io(monkeypatch):
+    """Refuse raw cache egress before accessing inventory, disk or IA."""
 
-    with pytest.raises(RuntimeError, match="500"):
-        upload_mod.upload_raw_zips(month, tmp_path, access_key="A", secret_key="S")
+    class ForbiddenCache:
+        def __truediv__(self, _part):
+            pytest.fail("raw cache pathname inspected")
+
+        def __fspath__(self):
+            pytest.fail("raw cache pathname materialized")
+
+    def forbid(*_args, **_kwargs):
+        pytest.fail("raw helper crossed an I/O boundary")
+
+    monkeypatch.setattr(upload_mod, "canonical_inventory", forbid)
+    monkeypatch.setattr(upload_mod, "item_id", forbid)
+    monkeypatch.setattr(upload_mod, "_existing_raw_files_on_ia", forbid)
+    monkeypatch.setattr(upload_mod, "_ia_s3_put", forbid)
+    monkeypatch.setattr(upload_mod.ia, "upload", forbid)
+    monkeypatch.setattr(upload_mod.httpx, "Client", forbid)
+    cache = ForbiddenCache()
+
+    with pytest.raises(RuntimeError, match="raw cache upload is disabled"):
+        upload_mod.upload_raw_zips("2026-04", cache, access_key="A", secret_key="S")
+
+
+def test_legacy_raw_guard_does_not_cover_distinct_stream_entrypoint(monkeypatch, tmp_path):
+    """Offline differential: legacy refusal is not a global raw writer fence."""
+    metadata_lookups: list[str] = []
+
+    def fake_inventory_lookup(identifier):
+        metadata_lookups.append(identifier)
+        return set()
+
+    def forbid_external_io(*_args, **_kwargs):
+        pytest.fail("external I/O crossed in differential writer test")
+
+    monkeypatch.setattr(upload_mod, "_existing_raw_files_on_ia", fake_inventory_lookup)
+    monkeypatch.setattr(upload_mod.upstream, "discover_token", forbid_external_io)
+    monkeypatch.setattr(upload_mod, "_ia_s3_put", forbid_external_io)
+    monkeypatch.setattr(upload_mod.ia, "upload", forbid_external_io)
+
+    with pytest.raises(RuntimeError, match="raw cache upload is disabled"):
+        upload_mod.upload_raw_zips("2026-04", tmp_path, access_key="A", secret_key="S")
+    if metadata_lookups:
+        raise AssertionError("legacy helper touched remote metadata before refusing")
+
+    # The streaming path is separately callable. It consults a synthetic
+    # catalog, then refuses without spool; this test never performs a PUT.
+    with pytest.raises(RuntimeError, match="requires an existing explicit spool_dir"):
+        upload_mod.stream_raw_zips_to_ia("2026-04", access_key="A", secret_key="S", spool_dir=None)
+    if metadata_lookups != [item_id("2026-04")]:
+        raise AssertionError("streaming entrypoint did not reach its independent admission")
 
 
 # ---------------------------------------------------------------------------
