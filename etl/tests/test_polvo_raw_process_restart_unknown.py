@@ -128,6 +128,7 @@ def _worker(scratch: Path, phase: str, failure: str) -> int:
     return 7
 
 
+# fmt: off
 def _child(scratch: Path, phase: str, failure: str) -> subprocess.CompletedProcess[str]:
     command = [
         sys.executable,
@@ -163,6 +164,7 @@ def _child(scratch: Path, phase: str, failure: str) -> subprocess.CompletedProce
     return subprocess.run(
         command, capture_output=True, text=True, check=False, timeout=90
     )
+# fmt: on
 
 
 @pytest.mark.parametrize(
