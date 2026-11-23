@@ -11,7 +11,8 @@ const reports=[];
 try {
   for(const viewport of [{width:320,height:720,name:'reflow-320'},
                          {width:375,height:812,name:'mobile'},
-                         {width:1440,height:900,name:'desktop'}]) {
+                         {width:1440,height:900,name:'desktop'},
+                         {width:320,height:720,name:'text-200-320',textScale:2}]) {
     const page=await browser.newPage({viewport:{width:viewport.width,height:viewport.height},
       serviceWorkers:'block'});
     const errors=[];
@@ -21,13 +22,24 @@ try {
     const view={viewport:viewport.name,checks:[]};
     try {
       await page.goto(base+'acervo/',{waitUntil:'domcontentloaded'});
+      if(viewport.textScale) {
+        // CSS text enlargement probes reflow, not native browser zoom.
+        const regular=await page.evaluate(()=>parseFloat(
+          getComputedStyle(document.documentElement).fontSize));
+        await page.addStyleTag({content:'html { font-size: 200% !important; }'});
+        const enlarged=await page.evaluate(()=>parseFloat(
+          getComputedStyle(document.documentElement).fontSize));
+        assert.ok(enlarged>=regular*1.99,
+          '200% text probe must actually enlarge the root font: '+regular+' to '+enlarged);
+        view.checks.push({page:'acervo-text-scale',regular,enlarged});
+      }
       await page.waitForFunction(()=>document.querySelectorAll('#acervo-resultado .archive-file').length>0);
       const files=await page.locator('#acervo-resultado .archive-file').count();
       assert.ok(files>=9,'catálogo precisa incluir arquivos da competência real');
       const archiveRegion=page.getByRole('region',{name:'Arquivos declarados no manifesto'});
       assert.equal(await archiveRegion.count(),1,'lista deve expor uma região nomeada');
       assert.equal(await archiveRegion.locator('details.archive-file').count(),files);
-      if(viewport.name==='reflow-320') {
+      if(viewport.width===320) {
         const dimensions=await page.evaluate(()=>({
           scrollWidth:document.documentElement.scrollWidth,
           viewportWidth:window.innerWidth,
@@ -100,7 +112,7 @@ try {
       await page.keyboard.press('Tab');
       assert.equal(await catalogLink.evaluate(el=>document.activeElement===el),true,
         'Tab a partir do summary deve alcançar o link do arquivo');
-      if(viewport.name==='reflow-320') {
+      if(viewport.width===320) {
         const dimensions=await page.evaluate(()=>({
           scrollWidth:document.documentElement.scrollWidth,
           viewportWidth:window.innerWidth,
