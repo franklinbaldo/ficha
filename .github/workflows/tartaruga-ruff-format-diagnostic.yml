@@ -1,0 +1,13 @@
+name: Tartaruga Ruff format diagnostic
+on:
+  pull_request:
+jobs:
+  show-ruff-diff:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - name: Ruff format diff
+        run: |
+          cd etl
+          uvx --from ruff==0.15.12 ruff format --diff tests/test_cervo_zip_unsigned_descriptor.py || true
