@@ -75,8 +75,7 @@ def _source_zip(method: int) -> bytes:
     name_len, extra_len = struct.unpack_from("<HH", raw, 26)
     _require(extra_len == 20, "canonical ZIP64 extra width")
     _require(
-        raw[30 + name_len : 30 + name_len + extra_len]
-        == b"\x01\x00\x10\x00" + bytes(16),
+        raw[30 + name_len : 30 + name_len + extra_len] == b"\x01\x00\x10\x00" + bytes(16),
         "canonical ZIP64 size pair",
     )
     return raw
@@ -149,8 +148,7 @@ def _verify_fixture(raw: bytes, *, sentinel: str, variant: str) -> None:
             width = length
         offset += length
     _require(
-        (zip64_count == 1 and width == 8) == variant.startswith("framed")
-        or variant == "duplicate",
+        (zip64_count == 1 and width == 8) == variant.startswith("framed") or variant == "duplicate",
         "independent framing oracle",
     )
     with zipfile.ZipFile(io.BytesIO(raw)) as archive:
@@ -211,12 +209,3 @@ def test_python_optimized_replays_single_sentinel_matrix() -> None:
     if child.returncode != 0:
         raise AssertionError(child.stdout + "\n" + child.stderr)
 
-
-def test_formatter_diagnostic_temp() -> None:
-    result = subprocess.run(
-        [sys.executable, "-m", "ruff", "format", "--diff", __file__],
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    raise AssertionError("TEMP FORMAT DIFF\n" + result.stdout + "\n" + result.stderr)
