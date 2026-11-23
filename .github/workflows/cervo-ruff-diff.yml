@@ -1,8 +1,8 @@
 name: Cervo Ruff formatting diagnosis
 on:
-  push:
+  pull_request:
     branches:
-      - cervo/477-unicode-path-crossreader-r190
+      - main
 permissions:
   contents: read
 jobs:
