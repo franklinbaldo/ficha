@@ -251,7 +251,6 @@ def test_raw_gate_refuses_missing_or_unbound_run_id_before_authority(
     assert calls == []
 
 
-
 def test_raw_gate_refuses_explicit_json_null_before_authority() -> None:
     # Unlike absent keys (which raised KeyError later), two explicit JSON nulls
     # reached the old synthetic authority; True would accept an unbound claim.
@@ -287,7 +286,7 @@ def test_raw_run_id_gate_remains_effective_under_python_o() -> None:
         "except ValueError:\n"
         "    pass\n"
         "else:\n"
-        "    raise SystemExit('FAIL: missing attempt ID accepted')\n"
+        "    raise SystemExit('FAIL: explicit null attempt ID accepted')\n"
     )
     result = subprocess.run(
         [sys.executable, "-O", "-c", snippet], capture_output=True, text=True, check=False
