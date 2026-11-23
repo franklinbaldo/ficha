@@ -344,9 +344,7 @@ def test_common_zip_zero_only_tail_per_boundary(
         local_extra=extra if placement == "local" else b"",
         central_extra=extra if placement == "central" else b"",
     )
-    _check_zipfile(
-        raw, extra if placement == "central" else b"", descriptor=descriptor
-    )
+    _check_zipfile(raw, extra if placement == "central" else b"", descriptor=descriptor)
     try:
         result = _preflight(tmp_path, raw)
     except RuntimeError as exc:
