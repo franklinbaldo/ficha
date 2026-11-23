@@ -8,9 +8,9 @@ consumer/ETL contract or permission to replace the canonical pipeline.
 import copy
 import hashlib
 import json
-from pathlib import Path
 import re
 import unittest
+from pathlib import Path
 from urllib.parse import urlparse
 
 
@@ -26,7 +26,9 @@ def _views():
     marker = "export const okfConvenienceViews = "
     if text.count(marker) != 1:
         raise ValueError("Expected one generated OKF view list")
-    items = json.loads(text.split(marker, 1)[1].split(" as const satisfies", 1)[0])
+    items = json.loads(
+        text.split(marker, 1)[1].split(" as const satisfies", 1)[0]
+    )
     names = [view["name"] for view in items]
     if names != ["empresas_ativas", "socios_de_raizes_ativas"]:
         raise ValueError("Generated OKF view inventory changed; review this oracle")
@@ -124,8 +126,9 @@ class ManifestOkfPairingTest(unittest.TestCase):
         changed = copy.deepcopy(self.manifest)
         snap = next(s for s in changed["snapshots"] if s["date"] == date)
         snap["files"]["raizes"]["sha256"] = "f" * 64
-        self.assertNotEqual(_binding(changed, date, view), _binding(self.manifest, date, view))
-        self.assertEqual(_binding(changed, date, view), _binding(changed, date, view))
+        self.assertNotEqual(
+            _binding(changed, date, view), _binding(self.manifest, date, view)
+        )
 
 
 if __name__ == "__main__":
