@@ -199,6 +199,17 @@ def _raw_zip_crc_and_budget(path: Path, *, expanded: int, members: int) -> tuple
                 for i, position in enumerate(positions)
             }
             for entry in entries:
+                # ZipFile accepts orphan/truncated central extra TLVs. Reject
+                # malformed framing before trusting its member metadata.
+                cursor = 0
+                while cursor < len(entry.extra):
+                    if len(entry.extra) - cursor < 4:
+                        raise RuntimeError("raw preflight: malformed ZIP central extra")
+                    _, width = struct.unpack_from("<HH", entry.extra, cursor)
+                    cursor += 4
+                    if width > len(entry.extra) - cursor:
+                        raise RuntimeError("raw preflight: malformed ZIP central extra")
+                    cursor += width
                 if entry.flag_bits & 1:
                     raise RuntimeError("raw preflight: encrypted ZIP member")
                 if entry.file_size < 0 or expanded + entry.file_size > _MAX_RAW_UNCOMPRESSED_BYTES:
