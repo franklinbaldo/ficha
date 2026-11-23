@@ -30,7 +30,8 @@ try {
       const counter=page.locator('#acervo-contagem');
       assert.equal((await counter.textContent()).trim(),files+' de '+files+' arquivos exibidos');
       const archiveUrl=page.url();
-      await filter.fill('companies/0');
+      await filter.focus();
+      await page.keyboard.type('companies/0');
       const matches=await page.locator('#acervo-resultado .archive-file').count();
       assert.ok(matches>0 && matches<files,'filtro deve reduzir a lista localmente');
       assert.equal((await counter.textContent()).trim(),matches+' de '+files+' arquivos exibidos');
@@ -38,7 +39,8 @@ try {
       await filter.fill('nenhum-arquivo-corresponde');
       assert.equal(await page.locator('#acervo-resultado .archive-file').count(),0);
       assert.match(await page.locator('#acervo-resultado').textContent(),/Nenhum arquivo corresponde ao filtro/);
-      await page.getByRole('button',{name:'Limpar filtro'}).click();
+      await page.getByRole('button',{name:'Limpar filtro'}).focus();
+      await page.keyboard.press('Enter');
       assert.equal(await page.locator('#acervo-resultado .archive-file').count(),files);
       assert.equal(await filter.inputValue(),'');
       assert.equal(await filter.evaluate(el=>document.activeElement===el),true,'limpar devolve foco');
