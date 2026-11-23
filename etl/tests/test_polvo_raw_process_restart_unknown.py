@@ -128,7 +128,6 @@ def _worker(scratch: Path, phase: str, failure: str) -> int:
     return 7
 
 
-# fmt: off
 def _child(scratch: Path, phase: str, failure: str) -> subprocess.CompletedProcess[str]:
     command = [
         sys.executable,
@@ -143,7 +142,10 @@ def _child(scratch: Path, phase: str, failure: str) -> subprocess.CompletedProce
         # handshake that the child is *inside* the fake partial PUT.
         # No timing assumption about child start-up or its Python imports.
         with subprocess.Popen(
-            command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
         ) as child:
             deadline = time.monotonic() + 30
             marker = scratch / "wire-ready.flag"
@@ -162,9 +164,12 @@ def _child(scratch: Path, phase: str, failure: str) -> subprocess.CompletedProce
                 out, err = child.communicate(timeout=15)
             return subprocess.CompletedProcess(command, child.returncode, out, err)
     return subprocess.run(
-        command, capture_output=True, text=True, check=False, timeout=90
+        command,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=90,
     )
-# fmt: on
 
 
 @pytest.mark.parametrize(
