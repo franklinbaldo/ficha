@@ -134,25 +134,27 @@ def _child(scratch: Path, phase: str, failure: str) -> subprocess.CompletedProce
         failure,
     ]
     if phase == "first" and failure == "kill-midput":
-        # Cross-platform parent-directed process kill, gated on a durable
-        # observation that the child is *inside* the fake partial PUT.
+        # Cross-platform parent-directed process kill, gated on a filesystem
+        # handshake that the child is *inside* the fake partial PUT.
         # No timing assumption about child start-up or its Python imports.
         with subprocess.Popen(
             command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
         ) as child:
             deadline = time.monotonic() + 30
             marker = scratch / "wire-ready.flag"
-            while not marker.exists() and time.monotonic() < deadline:
-                if child.poll() is not None:
-                    out, err = child.communicate(timeout=5)
-                    raise AssertionError(
-                        f"child exited before partial fake PUT: {child.returncode} {out} {err}"
-                    )
-                time.sleep(0.02)
-            if not marker.exists() or child.poll() is not None:
-                raise AssertionError("fake PUT never reached the kill barrier")
-            child.kill()  # SIGKILL on POSIX; hard termination on Windows.
-            out, err = child.communicate(timeout=15)
+            try:
+                while not marker.exists() and time.monotonic() < deadline:
+                    if child.poll() is not None:
+                        raise AssertionError(
+                            f"child exited before partial fake PUT: {child.returncode}"
+                        )
+                    time.sleep(0.02)
+                if not marker.exists() or child.poll() is not None:
+                    raise AssertionError("fake PUT never reached the kill barrier")
+            finally:
+                if child.poll() is None:
+                    child.kill()  # SIGKILL (POSIX); hard terminate (Windows).
+                out, err = child.communicate(timeout=15)
             return subprocess.CompletedProcess(command, child.returncode, out, err)
     return subprocess.run(
         command, capture_output=True, text=True, check=False, timeout=90
@@ -169,7 +171,9 @@ def _child(scratch: Path, phase: str, failure: str) -> subprocess.CompletedProce
     raises=AmbiguousReplay,
     reason="#433: true process restart must not replay an ambiguous raw PUT",
 )
-def test_unknown_after_real_process_restart(tmp_path: Path, failure: str, first_exit: int):
+def test_unknown_after_real_process_restart(
+    tmp_path: Path, failure: str, first_exit: int | None
+):
     specs = list(canonical_inventory())
     first = specs[0].name
     a = _payload(first, "A")
@@ -188,7 +192,11 @@ def test_unknown_after_real_process_restart(tmp_path: Path, failure: str, first_
             or first_wire.read_bytes() != a[: len(first_wire.read_bytes())]
         ):
             raise AssertionError(f"child was not killed inside partial fake PUT: {one}")
-    elif one.returncode != first_exit or not first_wire.exists() or first_wire.read_bytes() != a:
+    elif (
+        one.returncode != first_exit
+        or not first_wire.exists()
+        or first_wire.read_bytes() != a
+    ):
         raise AssertionError(f"first process did not send A then fail ambiguously: {one}")
     # The interpreter has exited. No in-memory UNKNOWN can survive this line.
     two = _child(tmp_path, "second", failure)
