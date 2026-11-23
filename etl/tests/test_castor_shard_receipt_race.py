@@ -62,11 +62,10 @@ def test_prepared_receipt_does_not_bind_rival_zip(
     for session in sessions.values():
         monkeypatch.setattr(session, "_require_open", lambda: (object(), lookups, urls))
 
-    monkeypatch.setattr(
-        sharded_pack, "_iter_rows_for_range", lambda *_args, **_kwargs: iter(
-            [{"payload": threading.current_thread().name.encode("ascii")}]
-        )
-    )
+    def fake_rows(*_args, **_kwargs):
+        return iter([{"payload": threading.current_thread().name.encode("ascii")}])
+
+    monkeypatch.setattr(sharded_pack, "_iter_rows_for_range", fake_rows)
     monkeypatch.setattr(
         sharded_pack, "row_to_company", lambda row: _SyntheticCompany(row["payload"])
     )
