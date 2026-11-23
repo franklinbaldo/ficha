@@ -56,9 +56,7 @@ def _make_zip(
         old_start = struct.unpack_from("<I", raw, eocd + 16)[0]
         struct.pack_into("<I", raw, eocd + 16, old_start + len(local_extra))
 
-    central_name, old_central_extra, comment = struct.unpack_from(
-        "<HHH", raw, central + 28
-    )
+    central_name, old_central_extra, comment = struct.unpack_from("<HHH", raw, central + 28)
     assert not old_central_extra and not comment
     compressed_size, uncompressed_size = struct.unpack_from("<II", raw, central + 20)
     assert uncompressed_size == len(_PAYLOAD)
@@ -104,9 +102,7 @@ def _preflight(tmp_path: Path, raw: bytes) -> tuple[int, int]:
 
 @pytest.mark.parametrize("method", _METHODS, ids=["stored", "deflated"])
 @pytest.mark.parametrize("descriptor", [False, True], ids=["no_bit3", "bit3"])
-def test_complete_unknown_tlv_and_zero_tail_control(
-    tmp_path: Path, method: int, descriptor: bool
-):
+def test_complete_unknown_tlv_and_zero_tail_control(tmp_path: Path, method: int, descriptor: bool):
     raw = _make_zip(method, descriptor=descriptor, central_extra=_UNKNOWN)
     _check_zipfile(raw, _UNKNOWN, descriptor=descriptor)
     assert _preflight(tmp_path, raw) == (len(_PAYLOAD), 1)
@@ -119,9 +115,7 @@ def test_complete_unknown_tlv_and_zero_tail_control(
 @pytest.mark.parametrize("method", _METHODS, ids=["stored", "deflated"])
 @pytest.mark.parametrize("descriptor", [False, True], ids=["no_bit3", "bit3"])
 @pytest.mark.parametrize("count", [1, 2, 3], ids=["pad1", "pad2", "pad3"])
-def test_common_zip_central_zero_padding(
-    tmp_path: Path, method: int, descriptor: bool, count: int
-):
+def test_common_zip_central_zero_padding(tmp_path: Path, method: int, descriptor: bool, count: int):
     extra = _UNKNOWN + bytes(count)
     raw = _make_zip(method, descriptor=descriptor, central_extra=extra)
     _check_zipfile(raw, extra, descriptor=descriptor)
@@ -130,9 +124,7 @@ def test_common_zip_central_zero_padding(
 
 @pytest.mark.parametrize("method", _METHODS, ids=["stored", "deflated"])
 @pytest.mark.parametrize("descriptor", [False, True], ids=["no_bit3", "bit3"])
-def test_nonzero_central_tail_is_rejected(
-    tmp_path: Path, method: int, descriptor: bool
-):
+def test_nonzero_central_tail_is_rejected(tmp_path: Path, method: int, descriptor: bool):
     extra = _UNKNOWN + b"Q"
     raw = _make_zip(method, descriptor=descriptor, central_extra=extra)
     _check_zipfile(raw, extra, descriptor=descriptor)
@@ -142,9 +134,7 @@ def test_nonzero_central_tail_is_rejected(
 
 @pytest.mark.parametrize("method", _METHODS, ids=["stored", "deflated"])
 @pytest.mark.parametrize("descriptor", [False, True], ids=["no_bit3", "bit3"])
-def test_single_zip64_central_with_sentinel(
-    tmp_path: Path, method: int, descriptor: bool
-):
+def test_single_zip64_central_with_sentinel(tmp_path: Path, method: int, descriptor: bool):
     raw = _make_zip(method, descriptor=descriptor, zip64_central="single")
     with zipfile.ZipFile(io.BytesIO(raw)) as archive:
         extra = archive.infolist()[0].extra
@@ -172,9 +162,7 @@ def test_common_zip_duplicate_zip64_central_is_rejected(
 
 @pytest.mark.parametrize("method", _METHODS, ids=["stored", "deflated"])
 @pytest.mark.parametrize("descriptor", [False, True], ids=["no_bit3", "bit3"])
-def test_duplicate_unknown_tags_are_allowed(
-    tmp_path: Path, method: int, descriptor: bool
-):
+def test_duplicate_unknown_tags_are_allowed(tmp_path: Path, method: int, descriptor: bool):
     extra = _UNKNOWN * 2
     raw = _make_zip(method, descriptor=descriptor, central_extra=extra)
     _check_zipfile(raw, extra, descriptor=descriptor)
