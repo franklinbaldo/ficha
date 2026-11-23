@@ -322,3 +322,12 @@ anterior continua cobrindo DuckDB/Parquet sintético, sem competência.
 Não houve acesso a RFB, Internet Archive, dados publicados, DuckDB-WASM
 ou site SSG. ADR #253 e PR #346 seguem DRAFT/HOLD; não há migração
 de contrato, ETL ou publicação autorizada.
+
+### Saída idêntica, competência distinta (R167)
+
+Teste SQLite sintético: Raiz de `2026-07` tem 1 ativo; de `2026-08`, 2.
+Hashes das tuplas diferem, mas a SQL gerada devolve os mesmos sócios.
+Chaves únicas, ausência de órfãos e paridade da saída **não provam**
+pareamento temporal: requer-se proveniência/competência de **cada input**.
+Não usa Parquet RFB, site publicado ou hashes de arquivos reais;
+nenhum contrato ou produto é alterado.
