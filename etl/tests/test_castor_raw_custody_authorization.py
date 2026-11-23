@@ -220,7 +220,7 @@ def test_forged_v2_references_need_independent_monotonic_authority() -> None:
 @pytest.mark.parametrize(
     ("parsed_run", "raw_run"),
     [
-        (None, None),  # both keys absent: old gate admitted None == None
+        (None, None),  # both keys absent: old gate compared equal, then raised KeyError
         ("", ""),
         ("   ", "   "),
         (17, 17),
@@ -251,9 +251,29 @@ def test_raw_gate_refuses_missing_or_unbound_run_id_before_authority(
     assert calls == []
 
 
+
+def test_raw_gate_refuses_explicit_json_null_before_authority() -> None:
+    # Unlike absent keys (which raised KeyError later), two explicit JSON nulls
+    # reached the old synthetic authority; True would accept an unbound claim.
+    descriptor = {
+        "source_attestation": {"run_id": None},
+        "raw_custody": {**_claimed_raw(), "run_id": None},
+    }
+    calls: list[dict] = []
+
+    class AlwaysAccept:
+        def confirm(self, **kwargs) -> bool:
+            calls.append(kwargs)
+            return True
+
+    with pytest.raises(ValueError, match="nonempty run_id"):
+        _require_raw_custody_authorization(MONTH, descriptor, authority=AlwaysAccept())
+    assert calls == []
+
+
 def test_raw_run_id_gate_remains_effective_under_python_o() -> None:
     raw = _claimed_raw()
-    raw.pop("run_id")
+    raw["run_id"] = None  # explicit JSON null, not an absent key
     snippet = (
         "from ficha_etl.monthly_raw_custody_authorization import "
         "_require_raw_custody_authorization as gate\n"
@@ -262,7 +282,7 @@ def test_raw_run_id_gate_remains_effective_under_python_o() -> None:
         "        return True\n"
         f"claim = {raw!r}\n"
         "try:\n"
-        "    gate('2026-07', {'source_attestation': {}, 'raw_custody': claim}, "
+        "    gate('2026-07', {'source_attestation': {'run_id': None}, 'raw_custody': claim}, "
         "authority=AlwaysAccept())\n"
         "except ValueError:\n"
         "    pass\n"
