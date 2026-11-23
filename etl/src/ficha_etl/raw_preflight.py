@@ -115,9 +115,7 @@ def _check_raw_zip64_sizes(
     return compressed, uncompressed
 
 
-def _check_raw_central_zip64(
-    archive: zipfile.ZipFile, entries: list[zipfile.ZipInfo]
-) -> None:
+def _check_raw_central_zip64(archive: zipfile.ZipFile, entries: list[zipfile.ZipInfo]) -> None:
     """Inspect original central 32-bit fields before trusting ZipInfo decoding."""
     handle = archive.fp
     if handle is None:
@@ -128,18 +126,12 @@ def _check_raw_central_zip64(
         if len(header) != 46 or header[:4] != b"PK\x01\x02":
             raise RuntimeError("raw preflight: invalid ZIP central header")
         compressed32, uncompressed32 = struct.unpack_from("<II", header, 20)
-        name_len, extra_len, comment_len, disk16 = struct.unpack_from(
-            "<HHHH", header, 28
-        )
+        name_len, extra_len, comment_len, disk16 = struct.unpack_from("<HHHH", header, 28)
         offset32 = struct.unpack_from("<I", header, 42)[0]
         name = handle.read(name_len)
         extra = handle.read(extra_len)
         comment = handle.read(comment_len)
-        if (
-            len(name) != name_len
-            or len(extra) != extra_len
-            or len(comment) != comment_len
-        ):
+        if len(name) != name_len or len(extra) != extra_len or len(comment) != comment_len:
             raise RuntimeError("raw preflight: truncated ZIP central header")
         if extra != entry.extra:
             raise RuntimeError("raw preflight: ZIP central extra mismatch")
