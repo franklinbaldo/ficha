@@ -225,8 +225,12 @@ def _presence_variant(raw: bytes, case: str) -> bytes:
         struct.pack_into("<I", forged, 18, 0)
     elif case == "single_uncompressed_full_extra":
         struct.pack_into("<I", forged, 22, 0)
-    elif case == "zero_with_zip64_extra":
+    elif case in ("zero_with_zip64_extra", "zero_with_zip64_nonzero_extra"):
         struct.pack_into("<II", forged, 18, 0, 0)
+        if case == "zero_with_zip64_nonzero_extra":
+            name_len, extra_len = struct.unpack_from("<HH", forged, 26)
+            _require(extra_len == 20, "expected paired local ZIP64 extra")
+            struct.pack_into("<QQ", forged, 30 + name_len + 4, 42, 24)
     else:
         raise AssertionError(case)
     return bytes(forged)
@@ -237,6 +241,7 @@ def _verify_presence_fixture(raw: bytes, case: str) -> None:
         "single_compressed_full_extra": (0, 0xFFFFFFFF),
         "single_uncompressed_full_extra": (0xFFFFFFFF, 0),
         "zero_with_zip64_extra": (0, 0),
+        "zero_with_zip64_nonzero_extra": (0, 0),
     }
     _require(bool(struct.unpack_from("<H", raw, 6)[0] & 8), "presence bit 3")
     _require(
@@ -246,9 +251,20 @@ def _verify_presence_fixture(raw: bytes, case: str) -> None:
     name_len, extra_len = struct.unpack_from("<HH", raw, 26)
     _require(extra_len == 20, "presence ZIP64 extra width")
     local_extra = raw[30 + name_len : 30 + name_len + extra_len]
-    _require(local_extra == b"\x01\x00\x10\x00" + bytes(16), "presence ZIP64 extra")
+    expected_extra = (
+        struct.pack("<HHQQ", 1, 16, 42, 24)
+        if case == "zero_with_zip64_nonzero_extra"
+        else b"\x01\x00\x10\x00" + bytes(16)
+    )
+    _require(local_extra == expected_extra, "presence ZIP64 extra values")
     with zipfile.ZipFile(io.BytesIO(raw)) as archive:
         _require(len(archive.infolist()) == 1, "presence member count")
+        if case == "zero_with_zip64_nonzero_extra":
+            entry = archive.infolist()[0]
+            _require(
+                entry.compress_size != 42 and entry.file_size != 24,
+                "unused ZIP64 values must contradict central directory sizes",
+            )
         _require(archive.testzip() is None, "presence CRC")
         _require(archive.read(_NAME) == _PAYLOAD, "presence payload")
 
@@ -260,6 +276,7 @@ def _verify_presence_fixture(raw: bytes, case: str) -> None:
         "single_compressed_full_extra",
         "single_uncompressed_full_extra",
         "zero_with_zip64_extra",
+        "zero_with_zip64_nonzero_extra",
     ),
 )
 @pytest.mark.xfail(
