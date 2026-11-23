@@ -13,6 +13,7 @@ import struct
 import subprocess
 import sys
 import zipfile
+import zlib
 from pathlib import Path
 
 import pytest
@@ -29,6 +30,15 @@ _NAME = "K3241.K03200Y2.D60808.EMPRECSV"
 _PAYLOAD = b"1;2\n"
 _METHODS = (zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED)
 _UNKNOWN = struct.pack("<HH", 0x1234, 0)
+_ZERO_TLV = struct.pack("<HH", 0x0000, 0)
+_CRITICAL = (
+    struct.pack("<HHIHHQQQ", 0x000A, 32, 0, 1, 24, 1, 2, 3),
+    struct.pack("<HHBI", 0x5455, 5, 1, 1_500_000_000),
+    struct.pack(
+        "<HHBI", 0x7075, 5 + len(_NAME), 1, zlib.crc32(_NAME.encode("ascii"))
+    )
+    + _NAME.encode("ascii"),
+)
 
 
 def _make_zip(
@@ -192,10 +202,11 @@ def test_duplicate_unknown_tags_are_allowed(tmp_path: Path, method: int, descrip
 @pytest.mark.parametrize("method", _METHODS, ids=["stored", "deflated"])
 @pytest.mark.parametrize("descriptor", [False, True], ids=["no_bit3", "bit3"])
 @pytest.mark.parametrize("placement", ["local", "both"])
+@pytest.mark.parametrize("count", [1, 2, 3], ids=["pad1", "pad2", "pad3"])
 def test_common_zip_zero_padding_local_boundary(
-    tmp_path: Path, method: int, descriptor: bool, placement: str
+    tmp_path: Path, method: int, descriptor: bool, placement: str, count: int
 ):
-    extra = _UNKNOWN + b"\x00"
+    extra = _UNKNOWN + bytes(count)
     raw = _make_zip(
         method,
         descriptor=descriptor,
@@ -215,6 +226,93 @@ def test_common_zip_zero_padding_local_boundary(
     assert result == (len(_PAYLOAD), 1)
 
 
+
+@pytest.mark.parametrize("method", _METHODS, ids=["stored", "deflated"])
+@pytest.mark.parametrize("descriptor", [False, True], ids=["no_bit3", "bit3"])
+@pytest.mark.parametrize("placement", ["central", "local", "both"])
+def test_repeated_zero_width_padding_tlvs_are_allowed(
+    tmp_path: Path, method: int, descriptor: bool, placement: str
+):
+    extra = _UNKNOWN + _ZERO_TLV * 2
+    raw = _make_zip(
+        method,
+        descriptor=descriptor,
+        local_extra=extra if placement in ("local", "both") else b"",
+        central_extra=extra if placement in ("central", "both") else b"",
+    )
+    _check_zipfile(
+        raw, extra if placement in ("central", "both") else b"", descriptor=descriptor
+    )
+    assert _preflight(tmp_path, raw) == (len(_PAYLOAD), 1)
+
+
+@pytest.mark.xfail(
+    strict=True,
+    raises=pytest.fail.Exception,
+    reason="Common ZIP padding tag 0x0000 requires zero data length",
+)
+@pytest.mark.parametrize("method", _METHODS, ids=["stored", "deflated"])
+@pytest.mark.parametrize("descriptor", [False, True], ids=["no_bit3", "bit3"])
+@pytest.mark.parametrize("placement", ["local", "central"])
+def test_nonempty_zero_tag_padding_must_be_rejected(
+    tmp_path: Path, method: int, descriptor: bool, placement: str
+):
+    invalid = _UNKNOWN + struct.pack("<HHB", 0, 1, 0)
+    raw = _make_zip(
+        method,
+        descriptor=descriptor,
+        local_extra=invalid if placement == "local" else b"",
+        central_extra=invalid if placement == "central" else b"",
+    )
+    _check_zipfile(raw, invalid if placement == "central" else b"", descriptor=descriptor)
+    try:
+        _preflight(tmp_path, raw)
+    except RuntimeError as exc:
+        if not (
+            str(exc).startswith("raw preflight:")
+            and "padding" in str(exc)
+            and placement in str(exc)
+        ):
+            raise
+        return
+    pytest.fail("nonempty 0x0000 padding TLV accepted by preflight")
+
+
+@pytest.mark.xfail(
+    strict=True,
+    raises=pytest.fail.Exception,
+    reason="Common ZIP prohibits repeated NTFS/UT/Unicode critical extras",
+)
+@pytest.mark.parametrize("method", _METHODS, ids=["stored", "deflated"])
+@pytest.mark.parametrize("descriptor", [False, True], ids=["no_bit3", "bit3"])
+@pytest.mark.parametrize("placement", ["local", "central"])
+@pytest.mark.parametrize("extra", _CRITICAL, ids=["ntfs", "ut", "unicode_path"])
+def test_repeated_critical_metadata_tags_must_be_rejected(
+    tmp_path: Path, method: int, descriptor: bool, placement: str, extra: bytes
+):
+    twice = extra * 2
+    raw = _make_zip(
+        method,
+        descriptor=descriptor,
+        local_extra=twice if placement == "local" else b"",
+        central_extra=twice if placement == "central" else b"",
+    )
+    _check_zipfile(raw, twice if placement == "central" else b"", descriptor=descriptor)
+    try:
+        _preflight(tmp_path, raw)
+    except RuntimeError as exc:
+        message = str(exc)
+        if not (
+            message.startswith("raw preflight:")
+            and "duplicate" in message
+            and placement in message
+            and "extra" in message
+        ):
+            raise
+        return
+    pytest.fail("repeated critical extra tag admitted by preflight")
+
+
 def test_optimized_python_replays_common_zip_contract_matrix():
     """Re-run all three typed XFAIL families and positive controls under -O."""
     selectors = [
@@ -225,6 +323,9 @@ def test_optimized_python_replays_common_zip_contract_matrix():
         f"{__file__}::test_common_zip_duplicate_zip64_central_is_rejected",
         f"{__file__}::test_duplicate_unknown_tags_are_allowed",
         f"{__file__}::test_common_zip_zero_padding_local_boundary",
+        f"{__file__}::test_repeated_zero_width_padding_tlvs_are_allowed",
+        f"{__file__}::test_nonempty_zero_tag_padding_must_be_rejected",
+        f"{__file__}::test_repeated_critical_metadata_tags_must_be_rejected",
     ]
     child = subprocess.run(
         [sys.executable, "-O", "-m", "pytest", "-q", *selectors],
