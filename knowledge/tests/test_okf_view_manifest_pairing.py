@@ -255,5 +255,107 @@ class ManifestOkfPairingTest(unittest.TestCase):
         self.assertFalse(matching_receipts(snap, full_prior_receipt))
 
 
+    def test_frozen_complete_input_receipts_reject_coordinated_byte_rewrites(self):
+        # Synthetic local bytes stand in for *both* physical JOIN inputs.
+        # The frozen receipt is a test fixture, not a real custody authority.
+        date = self.manifest["current"]
+        view = self.views["socios_de_raizes_ativas"]
+        required = {RELATION[name] for name in view["inputs"]}
+        self.assertEqual(required, {"raizes", "socios"})
+        baseline_bytes = {"raizes": b"raiz,001\n", "socios": b"soci,001\n"}
+
+        def candidate_for(payloads):
+            candidate = copy.deepcopy(self.manifest)
+            snapshot = next(
+                item for item in candidate["snapshots"] if item["date"] == date
+            )
+            for relation, data in payloads.items():
+                entry = snapshot["files"][relation]
+                entry["size"] = len(data)
+                entry["sha256"] = hashlib.sha256(data).hexdigest()
+            return candidate
+
+        original = candidate_for(baseline_bytes)
+        snapshot = next(s for s in original["snapshots"] if s["date"] == date)
+        prior = {
+            relation: {
+                "competence": date,
+                "schema_version": snapshot["schema_version"],
+                **copy.deepcopy(snapshot["files"][relation]),
+            }
+            for relation in required
+        }
+
+        def matches_prior(candidate, payloads, receipts):
+            # Validate declared metadata *and* independent byte-level pins.
+            # A newly recomputed receipt must not replace the frozen one.
+            if set(payloads) != required or set(receipts) != required:
+                return False
+            try:
+                _binding(candidate, date, view)
+            except (ValueError, KeyError, TypeError):
+                return False
+            selected = [s for s in candidate["snapshots"] if s["date"] == date]
+            if len(selected) != 1:
+                return False
+            snap = selected[0]
+            for relation in required:
+                entry = snap["files"][relation]
+                data = payloads[relation]
+                receipt = receipts[relation]
+                if (
+                    receipt["competence"] != date
+                    or receipt["schema_version"] != snap["schema_version"]
+                    or any(
+                        entry[key] != receipt[key]
+                        for key in ("url", "size", "sha256")
+                    )
+                    or entry["size"] != len(data)
+                    or entry["sha256"] != hashlib.sha256(data).hexdigest()
+                ):
+                    return False
+            return True
+
+        self.assertTrue(matches_prior(original, baseline_bytes, prior))
+        old_identity = _binding(original, date, view)
+
+        # Same-length content substitution, without touching declarations.
+        changed_bytes = dict(baseline_bytes)
+        changed_bytes["socios"] = b"soci,002\n"
+        self.assertEqual(len(changed_bytes["socios"]), len(baseline_bytes["socios"]))
+        self.assertFalse(matches_prior(original, changed_bytes, prior))
+
+        # A synchronized forgery of physical bytes AND manifest still passes
+        # its own metadata binding, but not the earlier complete receipt.
+        forged = candidate_for(changed_bytes)
+        self.assertRegex(_binding(forged, date, view), SHA256)
+        self.assertNotEqual(_binding(forged, date, view), old_identity)
+        self.assertFalse(matches_prior(forged, changed_bytes, prior))
+
+        # Replacing BOTH relations likewise cannot escape a frozen receipt.
+        both_changed = {"raizes": b"raiz,002\n", "socios": b"soci,002\n"}
+        self.assertFalse(
+            matches_prior(candidate_for(both_changed), both_changed, prior)
+        )
+
+        # A receipt missing one input, or assigned to another competence,
+        # cannot certify the complete source set, even with intact bytes.
+        self.assertFalse(
+            matches_prior(original, baseline_bytes, {"raizes": prior["raizes"]})
+        )
+        wrong_competence = copy.deepcopy(prior)
+        wrong_competence["socios"]["competence"] = "1900-01"
+        self.assertFalse(
+            matches_prior(original, baseline_bytes, wrong_competence)
+        )
+
+        # A syntactically valid alternate URL also breaks a pinned source ID.
+        alternate = copy.deepcopy(original)
+        target = next(s for s in alternate["snapshots"] if s["date"] == date)
+        target["files"]["socios"]["url"] = "https://example.org/alternate.parquet"
+        self.assertRegex(_binding(alternate, date, view), SHA256)
+        self.assertFalse(matches_prior(alternate, baseline_bytes, prior))
+
+
 if __name__ == "__main__":
     unittest.main()
