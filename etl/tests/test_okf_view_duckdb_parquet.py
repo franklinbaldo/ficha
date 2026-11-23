@@ -155,7 +155,7 @@ def test_parquet_snapshot_output_collision(parquet_views, tmp_path: Path):
     alternative = tmp_path / "raizes-alternative.parquet"
     baseline = parquet_views.execute(sql).fetchall()
 
-    parquet_views.execute("""
+    revised_query = """
         CREATE TABLE revised_raizes AS
         SELECT cnpj_base,
             CASE WHEN cnpj_base = '11111111'
@@ -163,7 +163,8 @@ def test_parquet_snapshot_output_collision(parquet_views, tmp_path: Path):
                 ELSE qtd_estabelecimentos_ativos
             END AS qtd_estabelecimentos_ativos
         FROM raizes
-    """)
+    """
+    parquet_views.execute(revised_query)
     target = str(alternative).replace("\\", "/").replace("'", "''")
     parquet_views.execute(f"COPY revised_raizes TO '{target}' (FORMAT PARQUET)")
     parquet_views.execute(
@@ -172,13 +173,14 @@ def test_parquet_snapshot_output_collision(parquet_views, tmp_path: Path):
     )
 
     changed = parquet_views.execute(sql).fetchall()
-    active_count = parquet_views.execute("""
+    count_query = """
         SELECT qtd_estabelecimentos_ativos FROM raizes
         WHERE cnpj_base = '11111111'
-    """).fetchone()[0]
+    """
+    active_count = parquet_views.execute(count_query).fetchone()[0]
     assert active_count == 2
     assert Counter(changed) == Counter(baseline)
-    assert hashlib.sha256(original.read_bytes()).digest() != hashlib.sha256(
-        alternative.read_bytes()
-    ).digest()
+    old_digest = hashlib.sha256(original.read_bytes()).digest()
+    new_digest = hashlib.sha256(alternative.read_bytes()).digest()
+    assert old_digest != new_digest
     # Fixture hashes prove a byte difference, not a trusted monthly receipt.
