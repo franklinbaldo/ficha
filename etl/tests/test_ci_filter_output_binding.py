@@ -25,7 +25,13 @@ def _require(predicate: bool, message: str) -> None:
 def assert_filter_output_binding(workflow: dict) -> None:
     """Check that every Test uses a live, fail-closed path-filter output."""
     for job, key in JOBS.items():
-        steps = workflow["jobs"][job]["steps"]
+        job_config = workflow["jobs"][job]
+        _require("if" not in job_config, f"{job}: CI job must not be conditional")
+        _require(
+            job_config.get("continue-on-error") in (None, False),
+            f"{job}: CI job failure must not be masked",
+        )
+        steps = job_config["steps"]
         filters = [step for step in steps if step.get("uses") == "dorny/paths-filter@v3"]
         _require(len(filters) == 1, f"{job}: exactly one path-filter step required")
         filter_step = filters[0]
@@ -75,6 +81,8 @@ def test_real_workflow_binds_test_to_unconditional_filter_output() -> None:
         "wrong-output",
         "mask-test",
         "test-before-producer",
+        "skip-job",
+        "mask-job",
     ),
 )
 def test_mismatched_or_skipped_filter_cannot_appear_green(job: str, mutation: str) -> None:
@@ -82,7 +90,11 @@ def test_mismatched_or_skipped_filter_cannot_appear_green(job: str, mutation: st
     steps = workflow["jobs"][job]["steps"]
     producer = next(step for step in steps if step.get("uses") == "dorny/paths-filter@v3")
     consumer = next(step for step in steps if step.get("name") == "Test")
-    if mutation == "drop-id":
+    if mutation == "skip-job":
+        workflow["jobs"][job]["if"] = "${{ false }}"
+    elif mutation == "mask-job":
+        workflow["jobs"][job]["continue-on-error"] = True
+    elif mutation == "drop-id":
         producer.pop("id")
     elif mutation == "rename-id":
         producer["id"] = "changed"
