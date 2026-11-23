@@ -26,6 +26,11 @@ test('copy pública distingue manifesto de custódia de arquivos', () => {
   assert.match(readme, /custódia de cada objeto exige conferência independente/);
   assert.doesNotMatch(pages, /snapshot arquivado|O registro corresponde à competência indicada/);
   assert.match(pages, /A consulta se refere à competência indicada/);
+  assert.match(pages, /Arquivo indicado no catálogo/);
+  assert.doesNotMatch(pages, /Arquivo de origem/);
+  const empresa = read('../content/empresa.md');
+  assert.doesNotMatch(empresa, /competência arquivada/i);
+  assert.match(empresa, /competência declarada no catálogo/i);
   assert.match(historyJS, /Protobuf v1 declarado no manifesto/);
   assert.doesNotMatch(historyJS, /Protobuf v1 arquivado/);
 });

@@ -91,14 +91,24 @@ def _decompress_zip(
 
     with zipfile.ZipFile(zip_path) as zf:
         members = [m for m in zf.infolist() if not m.is_dir()]
-        if not members or members[0].file_size == 0:
-            return None
+        # Reject ambiguous archives before the empty-CSV shortcut: otherwise
+        # a zero-length first member hides a nonempty second member and turns
+        # a malformed input into a silently empty table.
         if len(members) > 1:
             raise RuntimeError(
                 f"{zip_path.name}: expected 1 CSV, got {len(members)}: "
                 f"{[m.filename for m in members]}"
             )
+        if not members:
+            return None
         member_name = members[0].filename
+        if members[0].file_size == 0:
+            # A central-directory zero length is not proof of a valid member.
+            # Decompress even an empty CSV to check stream integrity and CRC.
+            with zf.open(member_name) as src:
+                if src.read(1):
+                    raise RuntimeError(f"{zip_path.name}: invalid empty CSV payload")
+            return None
 
         # Single-pass: sniff first _SNIFF_BYTES while streaming to tmpfs.
         tmp_path = tmp_dir / f"_ficha_{table}_{zip_path.stem}.csv"

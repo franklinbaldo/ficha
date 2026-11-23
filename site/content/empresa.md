@@ -2,7 +2,7 @@
 type: Page
 name: Ficha da empresa
 title: Ficha da empresa — FICHA
-description: Ficha cadastral em competência arquivada; consulta remota por CNPJ ainda experimental.
+description: Ficha cadastral em competência declarada no catálogo; consulta remota por CNPJ ainda experimental.
 language: pt-BR
 permalink: https://franklinbaldo.github.io/ficha/empresa/
 layout: product
@@ -11,7 +11,7 @@ layout: product
 <section class="page-lead">
   <p class="eyebrow">01 / FICHA CADASTRAL</p>
   <h1>Uma empresa, uma ficha.</h1>
-  <p class="lede">Uma ficha reúne informações públicas de uma competência arquivada quando a origem pode ser lida no navegador. A consulta numérica por CNPJ completo usa o membro Protobuf da competência, sem baixar o Parquet inteiro. A consulta remota ainda é experimental: erro de leitura não significa que a empresa esteja ausente do acervo.</p>
+  <p class="lede">Uma ficha reúne informações públicas de uma competência declarada no catálogo quando a origem pode ser lida no navegador. A consulta numérica por CNPJ completo usa o membro Protobuf da competência, sem baixar o Parquet inteiro. A consulta remota ainda é experimental: erro de leitura não significa que a empresa esteja ausente do acervo.</p>
   <p class="fineprint notice"><strong>Consulta sujeita a indisponibilidade.</strong> Em <a href="https://github.com/franklinbaldo/ficha/issues/269#issuecomment-7032628482">ensaio independente no site público em 20/11/2026</a>, quatro fichas por CNPJ numérico (Banco do Brasil, Petrobras, Caixa e Correios) foram abertas na competência 2026-07, sem requisições Parquet/WASM. Essa amostra de uma competência não garante acesso contínuo, resultado para outros CNPJs nem disponibilidade de todos os arquivos. Uma falha de leitura, inclusive HTTP 404, não comprova ausência cadastral. A busca por nome ainda usa Parquet sujeito a CORS. Já a comparação de CNPJ numérico nas competências Protobuf v1 usa registros menores; CNPJs alfanuméricos e competências sem essa camada não são comparáveis pela página História. Não há fallback para Parquet. Se precisar, <a href="/ficha/acervo/">consulte os arquivos do acervo</a>. <a href="https://github.com/franklinbaldo/ficha/issues/208">Veja os testes e limites</a>.</p>
 </section>
 <section class="workspace" aria-labelledby="consulta-empresa">
