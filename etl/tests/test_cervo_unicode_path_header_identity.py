@@ -1,10 +1,9 @@
 """Synthetic 0x7075 ZIP Unicode Path cross-reader identity regression (#477).
 
-The central raw name can differ from a local raw name while a CRC-valid
-Unicode Path alias makes ZipInfo.filename match the local name. The ZIP
-consumer's zipfile.open still checks the original central name, so a raw
-preflight accepting the same bytes is a differential error. This test makes no
-claim about RFB original archives or their naming convention.
+The central raw name can differ from the local name. On Python runtimes that
+interpret a CRC-valid Unicode Path alias, ZipInfo.filename may instead match
+the local name and hide that difference from preflight. Older runtimes ignore
+the alias and correctly reject the mismatch. No claim about RFB original ZIPs.
 """
 
 from __future__ import annotations
@@ -64,6 +63,20 @@ def _make_zip(method: int, bit3: bool, alias: str, *, change_local: bool) -> byt
     return bytes(raw)
 
 
+def _runtime_selects_unicode_path_alias() -> bool:
+    """Detect zipfile 0x7075 behavior without assuming a Python version."""
+    alias = "Z" * len(_NAME)
+    fixture = _make_zip(zipfile.ZIP_STORED, False, alias, change_local=False)
+    with zipfile.ZipFile(io.BytesIO(fixture)) as archive:
+        info = archive.infolist()[0]
+        if info.orig_filename != _NAME or info.filename not in (_NAME, alias):
+            raise AssertionError("unexpected stdlib ZIP Unicode Path interpretation")
+        return info.filename == alias
+
+
+_UNICODE_PATH_ALIAS_SELECTED = _runtime_selects_unicode_path_alias()
+
+
 @pytest.mark.parametrize(
     "method", [zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED], ids=["stored", "deflated"]
 )
@@ -89,6 +102,7 @@ def test_matching_central_and_local_name_with_unicode_path_is_valid(
 @pytest.mark.parametrize("bit3", [False, True], ids=["no-descriptor", "descriptor"])
 @pytest.mark.parametrize("alias_kind", ["benign", "traversal"])
 @pytest.mark.xfail(
+    _UNICODE_PATH_ALIAS_SELECTED,
     strict=True,
     raises=pytest.fail.Exception,
     reason="#477: raw central/local filename disagreement obscured by 0x7075 alias",
@@ -105,8 +119,9 @@ def test_alias_cannot_hide_raw_central_local_name_disagreement(
     path.write_bytes(_make_zip(method, bit3, alias, change_local=True))
     with zipfile.ZipFile(path) as archive:
         info = archive.infolist()[0]
-        if info.filename != alias or info.orig_filename != _NAME:
-            raise AssertionError("Unicode Path alias fixture was not selected")
+        expected = alias if _UNICODE_PATH_ALIAS_SELECTED else _NAME
+        if info.filename != expected or info.orig_filename != _NAME:
+            raise AssertionError("unexpected Unicode Path runtime behavior")
         try:
             archive.read(info)
         except zipfile.BadZipFile as exc:
