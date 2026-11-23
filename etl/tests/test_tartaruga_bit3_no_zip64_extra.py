@@ -27,9 +27,9 @@ _NAME = "K3241.K03200Y2.D60808.EMPRECSV"
 _PAYLOAD = b"1;2\n"
 _GOOD_EXTRAS = (b"", b"\x34\x12\x01\x00x")
 _BAD_EXTRAS = (
-    b"\x01",                       # orphan byte
-    b"\x01\x00\x10",             # partial TLV header
-    b"\x01\x00\x10\x00\x00\x00", # data shorter than declared width
+    b"\x01",  # orphan byte
+    b"\x01\x00\x10",  # partial TLV header
+    b"\x01\x00\x10\x00\x00\x00",  # data shorter than declared width
 )
 _METHODS = (zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED)
 
@@ -97,7 +97,9 @@ def test_valid_bit3_extra_without_sentinels(tmp_path: Path, method: int, extra: 
     raises=pytest.fail.Exception,
     reason="Known gap: bit-3 local TLV framing is not checked without ZIP64 (#433)",
 )
-def test_malformed_bit3_extra_without_sentinels(tmp_path: Path, method: int, extra: bytes):
+def test_malformed_bit3_extra_without_sentinels(
+    tmp_path: Path, method: int, extra: bytes
+):
     raw = _fixture(method, extra)
     if _complete_tlvs(extra):
         raise AssertionError("negative control is structurally valid")
