@@ -29,8 +29,8 @@ def test_legacy_cache_helper_refuses_partial_raw_without_any_ia_egress(
 ) -> None:
     """One well-formed ZIP out of 37 cannot authorize any raw write."""
     specs = list(canonical_inventory())
-    assert len(specs) == 37
-    assert len({spec.name for spec in specs}) == 37
+    if len(specs) != 37 or len({spec.name for spec in specs}) != 37:
+        raise AssertionError("canonical inventory fixture changed")
     source = tmp_path / "2026-07" / specs[0].name
     source.parent.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(source, "w") as archive:
@@ -38,8 +38,8 @@ def test_legacy_cache_helper_refuses_partial_raw_without_any_ia_egress(
 
     def reject_sink(_identifier: str, **kwargs: object) -> None:
         files = kwargs.get("files")
-        assert isinstance(files, dict)
-        assert list(files) == [f"raw/{specs[0].name}"]
+        if not isinstance(files, dict) or list(files) != [f"raw/{specs[0].name}"]:
+            raise AssertionError("unexpected fake sink arguments")
         raise LegacyRawEgressReached("legacy helper reached ia.upload with just 1/37 raw ZIPs")
 
     monkeypatch.setattr(upload.ia, "upload", reject_sink)
