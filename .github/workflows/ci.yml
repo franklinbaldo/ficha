@@ -124,7 +124,6 @@ jobs:
       - name: Lint
         if: steps.changes.outputs.etl == 'true'
         run: |
-          uv run ruff format --diff tests/test_caranguejo_single_zip64_local_sentinel.py || true
           uv run ruff check src tests bench
           uv run ruff format --check src tests bench
 
