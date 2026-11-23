@@ -39,6 +39,21 @@ try {
       const archiveRegion=page.getByRole('region',{name:'Arquivos declarados no manifesto'});
       assert.equal(await archiveRegion.count(),1,'lista deve expor uma região nomeada');
       assert.equal(await archiveRegion.locator('details.archive-file').count(),files);
+      // Capture evidence from the unfiltered DOM. Filtering must not rewrite the
+      // selected member's declared size, digest or destination URL.
+      const beforeFilter=await page.evaluate(()=>{
+        const item=[...document.querySelectorAll('#acervo-resultado .archive-file')]
+          .find(el=>el.querySelector('summary strong')?.textContent.trim().startsWith('companies/0'));
+        if(!item) return null;
+        return {
+          key:item.querySelector('summary strong')?.textContent.trim(),
+          size:item.querySelector('summary span')?.textContent.trim(),
+          digest:item.querySelector('.archive-detail code')?.textContent.trim()??null,
+          url:item.querySelector('.archive-detail a')?.getAttribute('href')??null,
+        };
+      });
+      assert.ok(beforeFilter?.key,'controle não filtrado precisa conter companies/0');
+      const declaredSummary=await page.locator('#acervo-resultado .stat-strip').textContent();
       if(viewport.width===320) {
         const dimensions=await page.evaluate(()=>({
           scrollWidth:document.documentElement.scrollWidth,
@@ -110,6 +125,16 @@ try {
         'destino externo deve abrir em nova aba');
       assert.equal(await catalogLink.getAttribute('rel'),'noopener noreferrer',
         'nova aba externa precisa impedir acesso a window.opener');
+      const afterFilter=await firstFiltered.evaluate(item=>({
+        key:item.querySelector('summary strong')?.textContent.trim(),
+        size:item.querySelector('summary span')?.textContent.trim(),
+        digest:item.querySelector('.archive-detail code')?.textContent.trim()??null,
+        url:item.querySelector('.archive-detail a')?.getAttribute('href')??null,
+      }));
+      assert.deepEqual(afterFilter,beforeFilter,
+        'filtro não pode alterar chave, tamanho, digest ou URL declarados do arquivo');
+      assert.equal(await page.locator('#acervo-resultado .stat-strip').textContent(),
+        declaredSummary,'filtrar não pode alterar totais declarados do catálogo');
       // Opening <details> via Enter must permit natural keyboard traversal.
       // Programmatic .focus() would conceal a broken Tab order.
       await page.keyboard.press('Tab');
@@ -143,7 +168,7 @@ try {
       assert.deepEqual(filterRequests,[],
         'filtro, limpeza e troca de competência não podem criar requisições de rede');
       view.checks.push({page:'acervo',files,filterKeyboard:true,filtered:matches,
-        requestsDuringFilter:filterRequests.length});
+        preservesCatalogIdentity:true,requestsDuringFilter:filterRequests.length});
       await page.screenshot({path:out+'/greenfield-acervo-'+viewport.name+'.png',fullPage:true});
 
       // Failure-mode regression: the SSG must not expose an inert, enabled filter.
