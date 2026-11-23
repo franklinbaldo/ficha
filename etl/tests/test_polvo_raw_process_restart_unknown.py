@@ -182,9 +182,7 @@ def _child(scratch: Path, phase: str, failure: str) -> subprocess.CompletedProce
     raises=AmbiguousReplay,
     reason="#433: true process restart must not replay an ambiguous raw PUT",
 )
-def test_unknown_after_real_process_restart(
-    tmp_path: Path, failure: str, first_exit: int | None
-):
+def test_unknown_after_real_process_restart(tmp_path: Path, failure: str, first_exit: int | None):
     specs = list(canonical_inventory())
     first = specs[0].name
     a = _payload(first, "A")
@@ -203,11 +201,7 @@ def test_unknown_after_real_process_restart(
             or first_wire.read_bytes() != a[: len(first_wire.read_bytes())]
         ):
             raise AssertionError(f"child was not killed inside partial fake PUT: {one}")
-    elif (
-        one.returncode != first_exit
-        or not first_wire.exists()
-        or first_wire.read_bytes() != a
-    ):
+    elif one.returncode != first_exit or not first_wire.exists() or first_wire.read_bytes() != a:
         raise AssertionError(f"first process did not send A then fail ambiguously: {one}")
     # The interpreter has exited. No in-memory UNKNOWN can survive this line.
     two = _child(tmp_path, "second", failure)
