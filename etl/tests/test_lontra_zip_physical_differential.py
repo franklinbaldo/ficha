@@ -149,9 +149,9 @@ def test_invalid_empty_member_preflight_vs_consumer(
     ("name", "payload", "expected_rows"),
     [
         ("folder/", b"", 0),
-        ("folder/", b"1;2\\n", 0),
+        ("folder/", b"1;2\n", 0),
         ("notes.txt", b"", 0),
-        ("notes.txt", b"1;2\\n", 1),
+        ("notes.txt", b"1;2\n", 1),
     ],
 )
 @pytest.mark.parametrize("parallel", [False, True])
@@ -189,7 +189,9 @@ def test_member_semantics_characterization_pending_primary_rfb_contract(
             create_table_from_zip_streaming(
                 con, "source_rows", source, ("a", "b"), work_dir=work
             )
-        _require_equal(con.execute("SELECT COUNT(*) FROM source_rows").fetchone()[0], expected_rows)
+        _require_equal(
+            con.execute("SELECT COUNT(*) FROM source_rows").fetchone()[0], expected_rows
+        )
         if expected_rows:
             _require_equal(con.execute("SELECT a, b FROM source_rows").fetchall(), [("1", "2")])
     finally:
