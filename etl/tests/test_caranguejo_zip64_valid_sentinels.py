@@ -37,7 +37,10 @@ def make_zip(method: int, boundary: str, sentinels: str) -> bytes:
     compressed, uncompressed = struct.unpack_from("<II", raw, cd + 20)
     require(uncompressed == len(PAYLOAD), "original uncompressed size")
     require(compressed not in (0, 0xFFFFFFFF), "original compressed size")
-    require(struct.unpack_from("<II", raw, 18) == (compressed, uncompressed), "local sizes")
+    require(
+        struct.unpack_from("<II", raw, 18) == (compressed, uncompressed),
+        "local sizes",
+    )
     require(struct.unpack_from("<H", raw, 28)[0] == 0, "no original local extra")
     require(struct.unpack_from("<H", raw, cd + 30)[0] == 0, "no original central extra")
 
@@ -82,9 +85,13 @@ def verify_fixture(raw: bytes, boundary: str, sentinels: str) -> None:
         require(entry.file_size == len(PAYLOAD), "decoded size")
         require(archive.read(entry) == PAYLOAD, "unmodified member")
         require(archive.testzip() is None, "CRC intact")
-        at = 30 + len(NAME) if boundary == "local" else archive.start_dir + 46 + len(NAME)
+        if boundary == "local":
+            at = 30 + len(NAME)
+        else:
+            at = archive.start_dir + 46 + len(NAME)
         kind, width = struct.unpack_from("<HH", raw, at)
-        expected_width = {"none": 0, "compressed": 8, "uncompressed": 8, "both": 16}[sentinels]
+        widths = {"none": 0, "compressed": 8, "uncompressed": 8, "both": 16}
+        expected_width = widths[sentinels]
         require((kind, width) == (1, expected_width), "exact ZIP64 payload width")
         payload = raw[at + 4 : at + 4 + width]
         expected_values = []
@@ -99,16 +106,21 @@ def verify_fixture(raw: bytes, boundary: str, sentinels: str) -> None:
         local_sizes = struct.unpack_from("<II", raw, 18)
         central_sizes = struct.unpack_from("<II", raw, archive.start_dir + 20)
         chosen = local_sizes if boundary == "local" else central_sizes
+        expected_compressed = (
+            0xFFFFFFFF if sentinels in ("compressed", "both") else entry.compress_size
+        )
+        expected_uncompressed = (
+            0xFFFFFFFF if sentinels in ("uncompressed", "both") else entry.file_size
+        )
         require(
-            chosen
-            == (
-                0xFFFFFFFF if sentinels in ("compressed", "both") else entry.compress_size,
-                0xFFFFFFFF if sentinels in ("uncompressed", "both") else entry.file_size,
-            ),
+            chosen == (expected_compressed, expected_uncompressed),
             "sentinels must match nonempty ZIP64 values",
         )
         other = central_sizes if boundary == "local" else local_sizes
-        require(other == (entry.compress_size, entry.file_size), "other boundary unchanged")
+        require(
+            other == (entry.compress_size, entry.file_size),
+            "other boundary unchanged",
+        )
         require(
             len(entry.extra) == (4 + width if boundary == "central" else 0),
             "central extra presence",
@@ -133,7 +145,14 @@ def test_valid_zip64_local_or_central(
 
 def test_valid_zip64_optimized_replay() -> None:
     child = subprocess.run(
-        [sys.executable, "-O", "-m", "pytest", "-q", f"{__file__}::test_valid_zip64_local_or_central"],
+        [
+            sys.executable,
+            "-O",
+            "-m",
+            "pytest",
+            "-q",
+            f"{__file__}::test_valid_zip64_local_or_central",
+        ],
         capture_output=True,
         text=True,
         check=False,
