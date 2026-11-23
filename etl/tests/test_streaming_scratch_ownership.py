@@ -56,8 +56,16 @@ def empty_scratch(work_dir: Path) -> None:
     equal(list(work_dir.iterdir()), [])
 
 
-@pytest.mark.parametrize("corrupt_rival", [False, True], ids=["valid-rival", "crc-rival"])
-def test_concurrent_same_stem_isolated_with_real_duckdb(tmp_path, monkeypatch, corrupt_rival):
+@pytest.mark.parametrize(
+    "corrupt_rival",
+    [False, True],
+    ids=["valid-rival", "crc-rival"],
+)
+def test_concurrent_same_stem_isolated_with_real_duckdb(
+    tmp_path,
+    monkeypatch,
+    corrupt_rival,
+):
     """A must consume its own CSV even when B stages later or fails CRC."""
     monkeypatch.setattr(streaming, "_SHM_DIR", None)
     original_decompress = streaming._decompress_zip
@@ -124,7 +132,10 @@ def test_concurrent_same_stem_isolated_with_real_duckdb(tmp_path, monkeypatch, c
                 future_b.result(timeout=30)
         equal(ca.execute("SELECT DISTINCT a, b FROM rows").fetchall(), [("A", "SAFE")])
         if not corrupt_rival:
-            equal(cb.execute("SELECT DISTINCT a, b FROM rows").fetchall(), [("B", "OTHER")])
+            equal(
+                cb.execute("SELECT DISTINCT a, b FROM rows").fetchall(),
+                [("B", "OTHER")],
+            )
         empty_scratch(work)
     finally:
         ca.close()
