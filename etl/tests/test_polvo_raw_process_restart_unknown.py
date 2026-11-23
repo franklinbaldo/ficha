@@ -181,5 +181,7 @@ def test_unknown_process_restart_in_optimized_python():
 
 if __name__ == "__main__":
     if len(sys.argv) != 5 or sys.argv[1] != "--offline-worker":
-        raise SystemExit("offline worker only: --offline-worker SCRATCH first|second http503|timeout")
+        raise SystemExit(
+            "offline worker only: --offline-worker SCRATCH first|second http503|timeout"
+        )
     raise SystemExit(_worker(Path(sys.argv[2]), sys.argv[3], sys.argv[4]))
