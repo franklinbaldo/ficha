@@ -24,6 +24,9 @@ try {
       await page.waitForFunction(()=>document.querySelectorAll('#acervo-resultado .archive-file').length>0);
       const files=await page.locator('#acervo-resultado .archive-file').count();
       assert.ok(files>=9,'catálogo precisa incluir arquivos da competência real');
+      const archiveRegion=page.getByRole('region',{name:'Arquivos declarados no manifesto'});
+      assert.equal(await archiveRegion.count(),1,'lista deve expor uma região nomeada');
+      assert.equal(await archiveRegion.locator('details.archive-file').count(),files);
       if(viewport.name==='reflow-320') {
         const dimensions=await page.evaluate(()=>({
           scrollWidth:document.documentElement.scrollWidth,
@@ -72,6 +75,8 @@ try {
       await page.keyboard.type('companies/0');
       const matches=await page.locator('#acervo-resultado .archive-file').count();
       assert.ok(matches>0 && matches<files,'filtro deve reduzir a lista localmente');
+      assert.equal(await archiveRegion.locator('details.archive-file').count(),matches,
+        'região acessível deve acompanhar os resultados filtrados');
       assert.equal((await counter.textContent()).trim(),matches+' de '+files+' arquivos exibidos');
       assert.equal(page.url(),archiveUrl,'filtro não altera URL de competência');
       const firstFiltered=page.locator('#acervo-resultado .archive-file').first();
@@ -82,6 +87,9 @@ try {
       });
       assert.equal(await catalogLink.count(),1,
         'arquivo filtrado deve conservar nome acessível único e proveniência cautelosa');
+      assert.equal(await archiveRegion.getByRole('link',{
+        name:'Abrir arquivo indicado no catálogo: '+firstKey,
+      }).count(),1,'link filtrado deve pertencer à região nomeada');
       assert.ok((await catalogLink.getAttribute('href')).startsWith('https://'));
       assert.equal(await catalogLink.getAttribute('target'),'_blank',
         'destino externo deve abrir em nova aba');
