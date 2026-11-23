@@ -176,9 +176,7 @@ def test_stdlib_paired_local_zip64_sizes_accepted(tmp_path: Path, method: int) -
 
 
 @pytest.mark.parametrize("method", _METHODS, ids=["stored", "deflated"])
-def test_zero_local_sizes_without_zip64_extra_accepted(
-    tmp_path: Path, method: int
-) -> None:
+def test_zero_local_sizes_without_zip64_extra_accepted(tmp_path: Path, method: int) -> None:
     source = tmp_path / "zero.zip"
     raw = _source_zip(method, force_zip64=False)
     with zipfile.ZipFile(io.BytesIO(raw)) as archive:
@@ -269,9 +267,7 @@ def _verify_presence_fixture(raw: bytes, case: str) -> None:
     raises=pytest.fail.Exception,
     reason="#493: ZIP64 local presence policy for D/E pending",
 )
-def test_zip64_extra_presence_noncanonical_rejected(
-    tmp_path: Path, method: int, case: str
-) -> None:
+def test_zip64_extra_presence_noncanonical_rejected(tmp_path: Path, method: int, case: str) -> None:
     raw = _presence_variant(_source_zip(method), case)
     _verify_presence_fixture(raw, case)
     source = tmp_path / "presence.zip"
