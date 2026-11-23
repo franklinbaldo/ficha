@@ -180,7 +180,12 @@ def test_upload_raw_zips_rejects_before_cache_or_remote_io(monkeypatch):
     def forbid(*_args, **_kwargs):
         pytest.fail("legacy raw helper crossed a forbidden I/O boundary")
 
-    for name in ("canonical_inventory", "item_id", "_existing_raw_files_on_ia", "_ia_s3_put"):
+    for name in (
+        "canonical_inventory",
+        "item_id",
+        "_existing_raw_files_on_ia",
+        "_ia_s3_put",
+    ):
         monkeypatch.setattr(upload_mod, name, forbid)
     monkeypatch.setattr(upload_mod.ia, "upload", forbid)
     monkeypatch.setattr(upload_mod.httpx, "Client", forbid)
