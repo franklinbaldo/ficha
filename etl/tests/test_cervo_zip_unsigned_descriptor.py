@@ -123,9 +123,7 @@ def test_corrupted_signed_descriptor_marker_is_rejected(tmp_path: Path, method: 
 @pytest.mark.parametrize("method", [zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED])
 @pytest.mark.parametrize("unsigned", [False, True])
 @pytest.mark.parametrize("payload", [b"a;b\n", b"\xac\x0a\x7a\xd5"])
-def test_zip64_descriptor_valid(
-    tmp_path: Path, method: int, unsigned: bool, payload: bytes
-):
+def test_zip64_descriptor_valid(tmp_path: Path, method: int, unsigned: bool, payload: bytes):
     # force_zip64=True exercises the 20/24-byte forms even for tiny payloads.
     raw = _zip_with_descriptor(payload, method=method, unsigned=unsigned, zip64=True)
     start, gap = _descriptor_frame(raw)
@@ -149,9 +147,7 @@ def test_zip64_descriptor_valid(
 def test_zip64_descriptor_corruption_rejected(
     tmp_path: Path, method: int, unsigned: bool, payload: bytes
 ):
-    raw = bytearray(
-        _zip_with_descriptor(payload, method=method, unsigned=unsigned, zip64=True)
-    )
+    raw = bytearray(_zip_with_descriptor(payload, method=method, unsigned=unsigned, zip64=True))
     start, gap = _descriptor_frame(raw)
     if gap != (20 if unsigned else 24):
         raise AssertionError("incorrect ZIP64 descriptor fixture")
