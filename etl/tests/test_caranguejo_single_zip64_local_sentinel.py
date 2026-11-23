@@ -47,6 +47,7 @@ _VARIANTS = (
         "framed_prefixed",
         marks=pytest.mark.xfail(
             strict=True,
+            raises=pytest.fail.Exception,
             reason="#493: normative local ZIP64 pair policy pending",
         ),
     ),
@@ -241,7 +242,8 @@ def _verify_presence_fixture(raw: bytes, case: str) -> None:
     }
     _require(bool(struct.unpack_from("<H", raw, 6)[0] & 8), "presence bit 3")
     _require(
-        struct.unpack_from("<II", raw, 18) == expected[case], "presence local sizes"
+        struct.unpack_from("<II", raw, 18) == expected[case],
+        "presence local sizes",
     )
     name_len, extra_len = struct.unpack_from("<HH", raw, 26)
     _require(extra_len == 20, "presence ZIP64 extra width")
