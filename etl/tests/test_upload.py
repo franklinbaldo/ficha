@@ -216,9 +216,7 @@ def test_legacy_raw_guard_does_not_cover_distinct_stream_entrypoint(monkeypatch,
     # The streaming path is separately callable. It consults a synthetic
     # catalog, then refuses without spool; this test never performs a PUT.
     with pytest.raises(RuntimeError, match="requires an existing explicit spool_dir"):
-        upload_mod.stream_raw_zips_to_ia(
-            "2026-04", access_key="A", secret_key="S", spool_dir=None
-        )
+        upload_mod.stream_raw_zips_to_ia("2026-04", access_key="A", secret_key="S", spool_dir=None)
     if metadata_lookups != [item_id("2026-04")]:
         raise AssertionError("streaming entrypoint did not reach its independent admission")
 
