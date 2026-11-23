@@ -122,7 +122,7 @@ def test_corrupted_signed_descriptor_marker_is_rejected(tmp_path: Path, method: 
 
 @pytest.mark.parametrize("method", [zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED])
 @pytest.mark.parametrize("unsigned", [False, True])
-@pytest.mark.parametrize("payload", [b"a;b\\n", b"\\xac\\x0a\\x7a\\xd5"])
+@pytest.mark.parametrize("payload", [b"a;b\n", b"\xac\x0a\x7a\xd5"])
 def test_zip64_descriptor_valid(
     tmp_path: Path, method: int, unsigned: bool, payload: bytes
 ):
@@ -132,7 +132,7 @@ def test_zip64_descriptor_valid(
     if gap != (20 if unsigned else 24):
         raise AssertionError("incorrect ZIP64 descriptor fixture")
     if unsigned and zlib.crc32(payload) == 0x08074B50:
-        if raw[start : start + 4] != b"PK\\x07\\x08":
+        if raw[start : start + 4] != b"PK\x07\x08":
             raise AssertionError("unsigned ZIP64 CRC collision fixture missing")
     with zipfile.ZipFile(io.BytesIO(raw)) as archive:
         if archive.testzip() is not None or archive.read(archive.infolist()[0]) != payload:
@@ -145,7 +145,7 @@ def test_zip64_descriptor_valid(
 
 @pytest.mark.parametrize("method", [zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED])
 @pytest.mark.parametrize("unsigned", [False, True])
-@pytest.mark.parametrize("payload", [b"a;b\\n", b"\\xac\\x0a\\x7a\\xd5"])
+@pytest.mark.parametrize("payload", [b"a;b\n", b"\xac\x0a\x7a\xd5"])
 def test_zip64_descriptor_corruption_rejected(
     tmp_path: Path, method: int, unsigned: bool, payload: bytes
 ):
