@@ -50,9 +50,7 @@ def _make_zip(method: int, bit3: bool, alias: str, *, change_local: bool) -> byt
     eocd = raw.rfind(b"PK\x05\x06")
     if central <= 0 or eocd <= central:
         raise RuntimeError("cannot locate ZIP directory")
-    central_name_len, central_extra_len, comment_len = struct.unpack_from(
-        "<HHH", raw, central + 28
-    )
+    central_name_len, central_extra_len, comment_len = struct.unpack_from("<HHH", raw, central + 28)
     if central_name_len != len(original) or central_extra_len or comment_len:
         raise RuntimeError("unexpected central filename/extra layout")
     value = b"\x01" + struct.pack("<I", zlib.crc32(original)) + alternative
@@ -122,9 +120,7 @@ def test_alias_cannot_hide_raw_central_local_name_disagreement(
         if "name mismatch" not in str(exc) and "name disagreement" not in str(exc):
             raise AssertionError("preflight rejected for an unrelated reason") from exc
         return
-    pytest.fail(
-        "preflight accepted raw local/central filename disagreement hidden by 0x7075"
-    )
+    pytest.fail("preflight accepted raw local/central filename disagreement hidden by 0x7075")
 
 
 def test_optimized_python_replays_unicode_path_identity() -> None:
