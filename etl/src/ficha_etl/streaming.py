@@ -20,6 +20,7 @@ v2 (this module) — two improvements
 
 import concurrent.futures
 import logging
+import tempfile
 import shutil
 import sys
 import zipfile
@@ -91,26 +92,45 @@ def _decompress_zip(
 
     with zipfile.ZipFile(zip_path) as zf:
         members = [m for m in zf.infolist() if not m.is_dir()]
-        if not members or members[0].file_size == 0:
-            return None
+        # Reject ambiguous archives before the empty-CSV shortcut: otherwise
+        # a zero-length first member hides a nonempty second member and turns
+        # a malformed input into a silently empty table.
         if len(members) > 1:
             raise RuntimeError(
                 f"{zip_path.name}: expected 1 CSV, got {len(members)}: "
                 f"{[m.filename for m in members]}"
             )
+        if not members:
+            return None
         member_name = members[0].filename
+        if members[0].file_size == 0:
+            # A central-directory zero length is not proof of a valid member.
+            # Decompress even an empty CSV to check stream integrity and CRC.
+            with zf.open(member_name) as src:
+                if src.read(1):
+                    raise RuntimeError(f"{zip_path.name}: invalid empty CSV payload")
+            return None
 
-        # Single-pass: sniff first _SNIFF_BYTES while streaming to tmpfs.
-        tmp_path = tmp_dir / f"_ficha_{table}_{zip_path.stem}.csv"
+        # Exclusive per-attempt file: never overwrite a rival's staged CSV.
+        tmp_path = None
         head = b""
-        with zf.open(member_name) as src, open(tmp_path, "wb") as dst:
-            # Read first chunk for encoding sniff, write it too.
-            head = src.read(_SNIFF_BYTES)
-            if not head:
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="wb", prefix="_ficha_", suffix=".csv", dir=tmp_dir, delete=False
+            ) as dst:
+                tmp_path = Path(dst.name)
+                with zf.open(member_name) as src:
+                    head = src.read(_SNIFF_BYTES)
+                    if head:
+                        dst.write(head)
+                        shutil.copyfileobj(src, dst, length=_CHUNK)
+        except BaseException:
+            if tmp_path is not None:
                 tmp_path.unlink(missing_ok=True)
-                return None
-            dst.write(head)
-            shutil.copyfileobj(src, dst, length=_CHUNK)
+            raise
+        if not head:
+            tmp_path.unlink(missing_ok=True)
+            return None
 
     encoding, ignore_errors = _sniff_encoding(head)
     return _DecompressResult(
@@ -183,11 +203,12 @@ def create_table_from_zip_streaming(
     work_dir.mkdir(parents=True, exist_ok=True)
     tmp_dir = _tmpfs_dir(work_dir)
 
-    result = _decompress_zip(zip_path, table, columns, tmp_dir=tmp_dir)
-    if result is None:
-        _empty_table(con, table, columns)
-        return
-    _load_from_result(con, result)
+    with tempfile.TemporaryDirectory(prefix="ficha_zip_", dir=tmp_dir) as scratch:
+        result = _decompress_zip(zip_path, table, columns, tmp_dir=Path(scratch))
+        if result is None:
+            _empty_table(con, table, columns)
+            return
+        _load_from_result(con, result)
 
 
 def load_zips_parallel(
@@ -212,28 +233,32 @@ def load_zips_parallel(
     work_dir.mkdir(parents=True, exist_ok=True)
     tmp_dir = _tmpfs_dir(work_dir)
 
-    errors: list[BaseException] = []
+    # Retain ownership until all worker futures have joined, including after
+    # a DuckDB exception. The directory removes unconsumed staged results.
+    with tempfile.TemporaryDirectory(prefix="ficha_zip_", dir=tmp_dir) as scratch:
+        tmp_dir = Path(scratch)
+        errors: list[BaseException] = []
 
-    def _decompress(spec: tuple[str, Path, tuple[str, ...]]) -> _DecompressResult | None:
-        table, zip_path, columns = spec
-        return _decompress_zip(zip_path, table, columns, tmp_dir=tmp_dir)
+        def _decompress(spec: tuple[str, Path, tuple[str, ...]]) -> _DecompressResult | None:
+            table, zip_path, columns = spec
+            return _decompress_zip(zip_path, table, columns, tmp_dir=tmp_dir)
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=decompress_workers) as pool:
-        future_to_spec = {pool.submit(_decompress, spec): spec for spec in specs}
-        for fut in concurrent.futures.as_completed(future_to_spec):
-            table, _, columns = future_to_spec[fut]
-            try:
-                result = fut.result()
-            except Exception as exc:  # noqa: BLE001
-                errors.append(exc)
-                log.error("failed to decompress ZIP for table %s: %s", table, exc)
-                continue
-            if result is None:
-                _empty_table(con, table, columns)
-            else:
-                _load_from_result(con, result)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=decompress_workers) as pool:
+            future_to_spec = {pool.submit(_decompress, spec): spec for spec in specs}
+            for fut in concurrent.futures.as_completed(future_to_spec):
+                table, _, columns = future_to_spec[fut]
+                try:
+                    result = fut.result()
+                except Exception as exc:  # noqa: BLE001
+                    errors.append(exc)
+                    log.error("failed to decompress ZIP for table %s: %s", table, exc)
+                    continue
+                if result is None:
+                    _empty_table(con, table, columns)
+                else:
+                    _load_from_result(con, result)
 
-    if errors:
-        for i, exc in enumerate(errors[1:], start=2):
-            log.error("ZIP failure %d/%d: %s", i, len(errors), exc)
-        raise RuntimeError(f"{len(errors)} ZIP(s) failed to decompress") from errors[0]
+        if errors:
+            for i, exc in enumerate(errors[1:], start=2):
+                log.error("ZIP failure %d/%d: %s", i, len(errors), exc)
+            raise RuntimeError(f"{len(errors)} ZIP(s) failed to decompress") from errors[0]

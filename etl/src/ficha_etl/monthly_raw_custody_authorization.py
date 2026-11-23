@@ -40,11 +40,22 @@ def _require_raw_custody_authorization(
     raw = descriptor.get("raw_custody")
     if not isinstance(parsed, dict) or not isinstance(raw, dict):
         raise ValueError("raw custody v2 required; legacy v1 descriptor is historical/read-only")
+    # Explicitly bind the custody claim to a nonempty, typed source attempt.
+    # Equality alone is not sufficient: missing == missing (None == None).
+    parsed_run = parsed.get("run_id")
+    raw_run = raw.get("run_id")
+    if (
+        type(parsed_run) is not str
+        or not parsed_run.strip()
+        or type(raw_run) is not str
+        or not raw_run.strip()
+        or parsed_run != raw_run
+    ):
+        raise ValueError("raw custody v2 requires a matching nonempty run_id")
     if (
         raw.get("schema") != RAW_CUSTODY_SCHEMA
         or raw.get("status") != RAW_CONFIRMED
         or raw.get("month") != month
-        or raw.get("run_id") != parsed.get("run_id")
         or type(raw.get("inventory_count")) is not int
         or raw["inventory_count"] != 37
     ):
