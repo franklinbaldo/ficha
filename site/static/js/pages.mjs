@@ -143,8 +143,10 @@ export async function mountCompany(doc, {loadManifest = fetchManifest, lookup = 
   if (initial) { input.value = initial; await lookupSubmit(); }
 }
 
-export function renderArchiveSelection(doc, parent, manifest, date) {
+export function renderArchiveSelection(doc, parent, manifest, date, filter='') {
   const {selected,entries,totals}=archiveView(manifest,date);
+  const term=filter.trim().toLocaleLowerCase('pt-BR');
+  const shown=entries.filter(file=>file.key.toLocaleLowerCase('pt-BR').includes(term));
   parent.replaceChildren();
   add(doc,parent,'h2',competenceLabel(selected.date)+' · '+selected.date,'section-title');
   const summary=add(doc,parent,'div','','stat-strip');
@@ -153,7 +155,7 @@ export function renderArchiveSelection(doc, parent, manifest, date) {
   if(selected.date===manifest.current) add(doc,parent,'p','Esta é a competência de referência declarada no manifesto.','fineprint');
   add(doc,parent,'p','Os links abaixo são declarados pelo manifesto. A existência de uma URL não comprova acessibilidade nem valida o conteúdo remoto.','fineprint');
   const table=add(doc,parent,'div','','archive-list');
-  for (const file of entries) {
+  for (const file of shown) {
     const detail=add(doc,table,'details','','archive-file');
     const head=add(doc,detail,'summary');
     add(doc,head,'strong',file.key);
@@ -166,11 +168,15 @@ export function renderArchiveSelection(doc, parent, manifest, date) {
     else add(doc,body,'p','URL HTTPS não declarada.');
   }
   if(!entries.length) add(doc,parent,'p','Nenhum arquivo listado nesta competência.');
+  else if(!shown.length) add(doc,parent,'p','Nenhum arquivo corresponde ao filtro nesta competência.');
+  return {shown:shown.length,total:entries.length};
 }
 
 export async function mountArchive(doc,{loadManifest=fetchManifest}={}) {
   const select=byId(doc,'acervo-competencia'), output=byId(doc,'acervo-resultado');
   const state=byId(doc,'acervo-estado'), list=byId(doc,'acervo-competencias');
+  const filter=byId(doc,'acervo-filtro'), count=byId(doc,'acervo-contagem');
+  const clear=byId(doc,'acervo-limpar');
   if(![select,output,state,list].every(Boolean)) return;
   try{
     const manifest=await loadManifest();
@@ -185,11 +191,23 @@ export async function mountArchive(doc,{loadManifest=fetchManifest}={}) {
       add(doc,row,'span',formatBytes(total.bytes));
       if(snap.date===manifest.current) add(doc,row,'small','Referência');
     }
-    const paint=()=>{
-      renderArchiveSelection(doc,output,manifest,select.value);
-      setParams({competencia:select.value});
+    const paint=(updateUrl=true)=>{
+      const {shown,total}=renderArchiveSelection(doc,output,manifest,select.value,filter?.value||'');
+      if(count) status(count,shown+' de '+total+' arquivos exibidos');
+      if(clear) clear.disabled=!(filter?.value||'');
+      if(updateUrl) setParams({competencia:select.value});
     };
-    select.addEventListener('change',paint);
+    select.addEventListener('change',()=>{
+      if(filter) filter.value='';
+      paint();
+    });
+    filter?.addEventListener('input',()=>paint(false));
+    clear?.addEventListener('click',()=>{
+      if(!filter) return;
+      filter.value='';
+      paint(false);
+      filter.focus();
+    });
     paint();
     status(state, snaps.length+' competência(s) declarada(s) no manifesto publicado.');
   }catch(error){status(state,'Não foi possível abrir o acervo: '+error.message,true);}
