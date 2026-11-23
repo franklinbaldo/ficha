@@ -147,11 +147,6 @@ def test_valid_local_zip64_extra_with_bit3(tmp_path: Path, method: int):
 
 @pytest.mark.parametrize("method", _METHODS, ids=["stored", "deflated"])
 @pytest.mark.parametrize("mutation", _MUTATIONS)
-@pytest.mark.xfail(
-    strict=True,
-    raises=pytest.fail.Exception,
-    reason="Known gap: bit 3 bypasses local ZIP64/TLV structure validation (#433)",
-)
 def test_malformed_local_zip64_extra_must_be_rejected(tmp_path: Path, method: int, mutation: str):
     raw = _mutant(_fixture(method), mutation)
     _verify_fixture(raw, malformed=True)

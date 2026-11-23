@@ -93,11 +93,6 @@ def test_valid_bit3_extra_without_sentinels(tmp_path: Path, method: int, extra: 
 
 @pytest.mark.parametrize("method", _METHODS, ids=["stored", "deflated"])
 @pytest.mark.parametrize("extra", _BAD_EXTRAS)
-@pytest.mark.xfail(
-    strict=True,
-    raises=pytest.fail.Exception,
-    reason="Known gap: bit-3 local TLV framing is not checked without ZIP64 (#433)",
-)
 def test_malformed_bit3_extra_without_sentinels(tmp_path: Path, method: int, extra: bytes):
     raw = _fixture(method, extra)
     if _complete_tlvs(extra):
