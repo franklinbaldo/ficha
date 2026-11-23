@@ -126,7 +126,6 @@ def test_declared_central_width_overrun_rejected_by_zipfile(tmp_path: Path, meth
         _raw_zip_crc_and_budget(path, expanded=0, members=0)
 
 
-
 @pytest.mark.parametrize("method", _METHODS, ids=["stored", "deflated"])
 @pytest.mark.parametrize("extra", (b"", b"\x34\x12\x00\x00"))
 def test_well_framed_central_extra_without_descriptor(tmp_path: Path, method: int, extra: bytes):
