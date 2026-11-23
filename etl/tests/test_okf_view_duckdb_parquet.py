@@ -147,6 +147,7 @@ def test_explicit_primary_and_foreign_keys_restore_semijoin_parity():
         ]
         assert Counter(actual) == Counter(expected)
 
+
 def test_parquet_snapshot_output_collision(parquet_views, tmp_path: Path):
     """Different Parquet bytes can yield the same generated JOIN output."""
     sql = generated_sql()["socios_de_raizes_ativas"]
