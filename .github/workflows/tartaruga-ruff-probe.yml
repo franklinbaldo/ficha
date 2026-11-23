@@ -1,0 +1,14 @@
+name: Tartaruga temporary Ruff format probe
+on:
+  push:
+    branches:
+      - tartaruga/433-central-extra-tlv-fail-closed
+jobs:
+  format-diff:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - run: uvx --from ruff==0.15.12 ruff format --diff etl/tests/test_tartaruga_central_extra_contract.py
