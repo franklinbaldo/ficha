@@ -213,7 +213,6 @@ def test_parallel_pending_futures_cleaned_after_duckdb_error(
         con.close()
 
 
-
 @pytest.mark.parametrize("payload", [b"", b"A;SAFE\n"], ids=["empty", "nonempty"])
 def test_single_loader_duckdb_error_cleans_owned_scratch(tmp_path, monkeypatch, payload):
     """A consumer SQL failure must remove scratch but preserve unrelated files."""
