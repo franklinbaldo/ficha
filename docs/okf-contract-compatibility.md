@@ -299,29 +299,15 @@ o gate OKF Python stdlib continua separadamente. A ADR #253 e a
 decisão de contrato/versão permanecem em HOLD.
 
 
-### Competência sintética: pareamento de snapshots em SQLite (R166)
+### Competência sintética: pareamento em SQLite (R166)
 
-`knowledge/tests/test_okf_view_sql_semantics.py` agora executa a SQL
-gerada existente sobre dois conjuntos **sintéticos** de Cnpj, Socio
-e Raiz rotulados `2026-07` e `2026-08`. Os rótulos são apenas
-identificadores de fixtures; não afirmam versões RFB publicadas.
-Em cada competência, o teste audita unicidade da chave Raiz e
-ausência de sócio órfão, comparando as duas views com um oráculo Python
-independente construído das tuplas literais de origem.
-
-Uma contraprova troca somente as linhas Raiz pela competência vizinha.
-Cada conjunto isolado preserva unicidade de chave e existência dos pais,
-mas o resultado do JOIN deixa de coincidir com o oráculo do mês pedido.
-**Validação individual de chave/FK não garante pareamento temporal**:
-é preciso um contrato explícito de versão, competência e proveniência
-de todos os inputs. Este teste não escolhe política de versionamento.
-
-Esta regressão é **SQLite em memória**, não um teste DuckDB de
-snapshot físico nem dos Parquets publicados. O experimento R165
-anterior continua cobrindo DuckDB/Parquet sintético, sem competência.
-Não houve acesso a RFB, Internet Archive, dados publicados, DuckDB-WASM
-ou site SSG. ADR #253 e PR #346 seguem DRAFT/HOLD; não há migração
-de contrato, ETL ou publicação autorizada.
+A SQL OKF gerada roda em SQLite sobre Cnpj, Socio e Raiz sintéticas de
+`2026-07` e `2026-08`. Ambos os conjuntos passam na unicidade de Raiz e
+ausência de sócios órfãos; um oráculo Python literal confirma as duas
+views. Trocar somente Raiz entre meses altera o JOIN: PK/FK de cada
+snapshot não certificam pareamento temporal. Rótulos não são evidência
+RFB. O teste R165 cobre DuckDB/Parquet sintético separadamente;
+sem bytes publicados, site, ETL ou decisão de contrato (ADR #253 HOLD).
 
 ### Saída idêntica, competência distinta (R167)
 
@@ -332,10 +318,15 @@ pareamento temporal: requer-se proveniência/competência de **cada input**.
 Não usa Parquet RFB, site publicado ou hashes de arquivos reais;
 nenhum contrato ou produto é alterado.
 
-### Recibo de entrada declarado no manifesto local (R169)
+### Identidade declarada e recibos incompletos (R169–R171)
 
-`knowledge/tests/test_okf_view_manifest_pairing.py` cruza as views OKF com
-competência, `schema_version`, URL, tamanho e SHA-256 **declarados** no
-`manifest.json` versionado. A troca sintética de Raiz por outra competência
-altera a identidade composta, sem alterar código produtivo. Hash declarado
-não autentica bytes remotos nem origem RFB. Teste sem rede; ADR #253 em HOLD.
+`knowledge/tests/test_okf_view_manifest_pairing.py` cruza as duas views
+geradas com quatro competências, `schema_version`, URL, tamanho e
+SHA-256 declarados no manifesto versionado. Trocar Raiz entre meses
+muda a identidade composta (R169); alterar bytes e digest declarados
+conjuntamente só é detectado por recibo anterior **simulado** (R170).
+A regressão R171 recusa URLs HTTPS sem autoridade e com userinfo; um
+recibo apenas para Raiz não cobre o input Socio do mesmo JOIN.
+Mesmo uma URL bem formada, um hash declarado e recibos hipotéticos
+não autenticam bytes físicos nem origem RFB. Sem rede, publicação ou
+aprovação da ADR #253; PR #346 DRAFT/HOLD.
