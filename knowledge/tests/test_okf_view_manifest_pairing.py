@@ -56,7 +56,16 @@ def _binding(manifest, date, view):
             raise ValueError(f"Invalid declared SHA-256: {relation}")
         if type(size) is not int or size < 1:
             raise ValueError(f"Invalid declared size: {relation}")
-        if not isinstance(url, str) or urlparse(url).scheme != "https":
+        if not isinstance(url, str):
+            raise ValueError(f"Invalid declared URL: {relation}")
+        parsed = urlparse(url)
+        if (
+            parsed.scheme != "https"
+            or not parsed.netloc
+            or not parsed.hostname
+            or parsed.username is not None
+            or parsed.password is not None
+        ):
             raise ValueError(f"Invalid declared URL: {relation}")
         inputs[relation] = {"sha256": digest, "size": size, "url": url}
 
@@ -182,6 +191,64 @@ class ManifestOkfPairingTest(unittest.TestCase):
         self.assertRegex(_binding(forged, date, view), SHA256)
         self.assertEqual(forged_raiz["sha256"], hashlib.sha256(rewritten).hexdigest())
         self.assertFalse(matches_prior_receipt(forged, rewritten))
+
+
+    def test_https_scheme_without_authority_is_not_a_valid_source_url(self):
+        # Syntactically plausible-looking strings must not silently become
+        # source identities. Even a valid hostname is not source custody.
+        date = self.manifest["current"]
+        view = self.views["socios_de_raizes_ativas"]
+        self.assertRegex(_binding(self.manifest, date, view), SHA256)
+        for invalid in (
+            "https:relative/raizes.parquet",
+            "https:///no-host/raizes.parquet",
+            "https://user:password@example.org/raizes.parquet",
+            "http://example.org/raizes.parquet",
+        ):
+            with self.subTest(url=invalid):
+                changed = copy.deepcopy(self.manifest)
+                snap = next(s for s in changed["snapshots"] if s["date"] == date)
+                snap["files"]["raizes"]["url"] = invalid
+                with self.assertRaisesRegex(ValueError, "Invalid declared URL"):
+                    _binding(changed, date, view)
+
+    def test_raiz_only_receipt_does_not_cover_every_join_input(self):
+        # All receipts here are hypothetical, frozen copies of declarations,
+        # not third-party attestations. A Raiz-only pin cannot authenticate
+        # the Socio input consumed by the same generated JOIN.
+        date = self.manifest["current"]
+        view = self.views["socios_de_raizes_ativas"]
+        baseline = _binding(self.manifest, date, view)
+        original = next(s for s in self.manifest["snapshots"] if s["date"] == date)
+        required = {RELATION[name] for name in view["inputs"]}
+        self.assertEqual(required, {"socios", "raizes"})
+        full_prior_receipt = {
+            relation: copy.deepcopy(original["files"][relation])
+            for relation in required
+        }
+        raiz_only_receipt = {"raizes": full_prior_receipt["raizes"]}
+        self.assertNotEqual(set(raiz_only_receipt), required)
+
+        changed = copy.deepcopy(self.manifest)
+        snap = next(s for s in changed["snapshots"] if s["date"] == date)
+        # Same declared size and URL; changed hypothetical Socio digest.
+        previous_digest = snap["files"]["socios"]["sha256"]
+        replacement = "a" * 64 if previous_digest != "a" * 64 else "b" * 64
+        snap["files"]["socios"]["sha256"] = replacement
+        self.assertEqual(snap["files"]["raizes"], raiz_only_receipt["raizes"])
+        self.assertEqual(snap["files"]["socios"]["size"], full_prior_receipt["socios"]["size"])
+        self.assertEqual(snap["files"]["socios"]["url"], full_prior_receipt["socios"]["url"])
+        self.assertNotEqual(_binding(changed, date, view), baseline)
+
+        def matching_receipts(snapshot, receipts):
+            return set(receipts) == required and all(
+                snapshot["files"][relation] == receipts[relation]
+                for relation in required
+            )
+
+        self.assertTrue(matching_receipts(original, full_prior_receipt))
+        self.assertFalse(matching_receipts(snap, raiz_only_receipt))
+        self.assertFalse(matching_receipts(snap, full_prior_receipt))
 
 
 if __name__ == "__main__":
