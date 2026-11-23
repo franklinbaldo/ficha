@@ -31,13 +31,12 @@ _PAYLOAD = b"1;2\n"
 _METHODS = (zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED)
 _UNKNOWN = struct.pack("<HH", 0x1234, 0)
 _ZERO_TLV = struct.pack("<HH", 0x0000, 0)
+_UTF8_NAME = _NAME.encode("ascii")
+_UTF8_PATH_DATA = b"\x01" + struct.pack("<I", zlib.crc32(_UTF8_NAME)) + _UTF8_NAME
 _CRITICAL = (
     struct.pack("<HHIHHQQQ", 0x000A, 32, 0, 1, 24, 1, 2, 3),
     struct.pack("<HHBI", 0x5455, 5, 1, 1_500_000_000),
-    struct.pack(
-        "<HHBI", 0x7075, 5 + len(_NAME), 1, zlib.crc32(_NAME.encode("ascii"))
-    )
-    + _NAME.encode("ascii"),
+    struct.pack("<HH", 0x7075, len(_UTF8_PATH_DATA)) + _UTF8_PATH_DATA,
 )
 
 
@@ -264,7 +263,9 @@ def test_nonempty_zero_tag_padding_must_be_rejected(
         local_extra=invalid if placement == "local" else b"",
         central_extra=invalid if placement == "central" else b"",
     )
-    _check_zipfile(raw, invalid if placement == "central" else b"", descriptor=descriptor)
+    _check_zipfile(
+        raw, invalid if placement == "central" else b"", descriptor=descriptor
+    )
     try:
         _preflight(tmp_path, raw)
     except RuntimeError as exc:
