@@ -20,7 +20,9 @@ class _NonSeekable(io.BytesIO):
         raise OSError("unseekable")
 
 
-def _zip_with_descriptor(payload: bytes, *, method: int, unsigned: bool, zip64: bool = False) -> bytes:
+def _zip_with_descriptor(
+    payload: bytes, *, method: int, unsigned: bool, zip64: bool = False
+) -> bytes:
     sink = _NonSeekable()
     with zipfile.ZipFile(sink, mode="w", compression=method, allowZip64=True) as archive:
         if zip64:
