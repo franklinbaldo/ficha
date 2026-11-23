@@ -1,0 +1,17 @@
+name: Cervo Ruff formatting diagnosis
+on:
+  push:
+    branches:
+      - cervo/477-unicode-path-crossreader-r190
+permissions:
+  contents: read
+jobs:
+  diff:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - name: Print Ruff formatting diff
+        run: |
+          cd etl
+          uv run --with ruff==0.15.12 ruff format --diff tests/test_cervo_unicode_path_header_identity.py
