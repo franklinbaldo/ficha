@@ -152,8 +152,9 @@ def test_different_pins_refused_before_effect(journal):
     seen = []
     changed = (replace(PINS[0], size=11), *PINS[1:])
     with pytest.raises(AuthorityRefused):
-        authority.perform_for_test(MONTH, DEST, INTENT, GENERATION, changed, PINS[1].name,
-                                   seen.append)
+        authority.perform_for_test(
+            MONTH, DEST, INTENT, GENERATION, changed, PINS[1].name, seen.append
+        )
     assert seen == []
     assert rows(path, "SELECT * FROM claim") == []
 
@@ -182,6 +183,7 @@ import os
 import sys
 import time
 from pathlib import Path
+from contextlib import contextmanager
 from ficha_etl.raw_authority import AuthorityRefused, LocalAuthority, Pin
 from ficha_etl.sources import canonical_inventory
 
@@ -197,6 +199,15 @@ def effect(claim):
         out.write(claim.pin.name + ' ' + claim.token)
     if crash == '1':
         os._exit(79)
+
+if crash == '2':
+    original = authority._transaction
+    @contextmanager
+    def die_after_commit():
+        with original() as db:
+            yield db
+        os._exit(78)
+    authority._transaction = die_after_commit
 
 try:
     authority.perform_for_test('2026-11', 'ficha-2026-11', 'a'*32, 'b'*32,
@@ -239,9 +250,7 @@ def test_process_race(journal, tmp_path, same_pin, optimized):
         effects = [m.read_text() for m in markers if m.exists()]
         assert len(effects) == 1
         name, token = effects[0].split()
-        assert rows(path, "SELECT name,token,state FROM claim") == [
-            (name, token, "UNKNOWN")
-        ]
+        assert rows(path, "SELECT name,token,state FROM claim") == [(name, token, "UNKNOWN")]
     finally:
         for worker in workers:
             if worker.poll() is None:
@@ -249,21 +258,37 @@ def test_process_race(journal, tmp_path, same_pin, optimized):
                 worker.communicate(timeout=10)
 
 
-def test_process_death_after_effect(journal, tmp_path):
+@pytest.mark.parametrize("crash", ["1", "2"])
+def test_process_death_around_effect(journal, tmp_path, crash):
     path, _ = journal
     gate = tmp_path / "gate"
     gate.touch()
     marker = tmp_path / "effect"
     result = subprocess.run(
-        [sys.executable, "-O", "-c", _WORKER, str(path), str(gate), str(marker),
-         PINS[0].name, "1"],
+        [
+            sys.executable,
+            "-O",
+            "-c",
+            _WORKER,
+            str(path),
+            str(gate),
+            str(marker),
+            PINS[0].name,
+            crash,
+        ],
         capture_output=True,
         timeout=20,
         check=False,
     )
-    assert result.returncode == 79, result.stderr
-    name, token = marker.read_text().split()
-    assert rows(path, "SELECT name,token,state FROM claim") == [(name, token, "UNKNOWN")]
+    assert result.returncode == (79 if crash == "1" else 78), result.stderr
+    persisted = rows(path, "SELECT name,token,state FROM claim")
+    assert len(persisted) == 1
+    name, token, state = persisted[0]
+    assert (name, state) == (PINS[0].name, "UNKNOWN")
+    if crash == "1":
+        assert marker.read_text().split() == [name, token]
+    else:
+        assert not marker.exists()
     authority = LocalAuthority.reopen_for_test(path, current_unique_authority=True)
     seen = []
     with pytest.raises(AuthorityRefused):
