@@ -84,6 +84,7 @@ def _offline(
     def forbid(*args, **kwargs):
         pytest.fail("preflight crossed the publication boundary")
 
+    monkeypatch.setattr(httpx.HTTPTransport, "handle_request", forbid)
     monkeypatch.setattr(upload.upstream, "discover_token", forbid)
     monkeypatch.setattr(upload, "_existing_raw_files_on_ia", forbid)
     monkeypatch.setattr(upload, "_ia_s3_put", forbid)
