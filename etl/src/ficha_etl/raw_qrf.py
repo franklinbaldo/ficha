@@ -3,6 +3,8 @@
 One live synthetic sink, one current database, cooperating threads only.
 No arbitrary SQL, database replacement/rollback, cross-process sink, remote
 transport, uploader or publication capability is covered by this module.
+Loss of the live sink (including after admit commits but before grant creation)
+fails closed; historical receipts cannot restore continuity.
 """
 
 from __future__ import annotations
@@ -73,6 +75,8 @@ class Grant:
 
 @dataclass(frozen=True)
 class Receipt:
+    """Reconciled synthetic state, not authorship or a count of mutations."""
+
     token: str
     epoch: str
     cut: int
@@ -282,9 +286,10 @@ class OfflineReconciler:
                     "SELECT token FROM qrf_claim WHERE month=? AND name=? AND state='UNKNOWN'",
                     (claim.month, claim.pin.name),
                 ).fetchone()
-                if row != (claim.token,) or self._identity(
-                    db, claim.month, claim.pin.name, claim.token
-                ) != claim:
+                if (
+                    row != (claim.token,)
+                    or self._identity(db, claim.month, claim.pin.name, claim.token) != claim
+                ):
                     raise AuthorityRefused("claim not current")
             cut = self._sink._cut(claim)
             observation = self._sink._read(claim)
@@ -303,8 +308,15 @@ class OfflineReconciler:
                     raise AuthorityRefused("stale CAS")
                 db.execute(
                     "INSERT INTO qrf_receipt VALUES (?,?,?,?,?,?,?)",
-                    (receipt.token, receipt.epoch, receipt.cut, receipt.observed,
-                     receipt.digest, receipt.size, receipt.url),
+                    (
+                        receipt.token,
+                        receipt.epoch,
+                        receipt.cut,
+                        receipt.observed,
+                        receipt.digest,
+                        receipt.size,
+                        receipt.url,
+                    ),
                 )
             return receipt
 
