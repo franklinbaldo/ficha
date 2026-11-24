@@ -4,12 +4,13 @@ One live synthetic sink, one current database, cooperating threads only.
 No arbitrary SQL, database replacement/rollback, cross-process sink, remote
 transport, uploader or publication capability is covered by this module.
 """
+
 from __future__ import annotations
 
 import os
 import sqlite3
 from collections.abc import Iterable, Iterator
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from threading import Lock
@@ -25,7 +26,7 @@ from .raw_authority import (
     _validate_month,
     _validate_pins,
 )
-from .raw_readback import RawPin, readback_raw_pin
+from .raw_readback import RawPin, RawPinObservation, readback_raw_pin
 
 _SCHEMA = """
 CREATE TABLE qrf_domain (epoch TEXT NOT NULL PRIMARY KEY) STRICT;
@@ -126,7 +127,7 @@ class SyntheticSink:
         self._grants[claim.token] = (current[0], "revoked")
         return self._tick()
 
-    def _read(self, claim: Claim):
+    def _read(self, claim: Claim) -> RawPinObservation:
         def handler(request: httpx.Request) -> httpx.Response:
             expected = f"https://archive.org/download/{claim.destination}/raw/{claim.pin.name}"
             if request.method != "GET" or str(request.url) != expected:
@@ -164,8 +165,9 @@ class OfflineReconciler:
                 fd = os.open(self._path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
                 os.close(fd)
                 with self._connection() as db:
-                    db.executescript("BEGIN IMMEDIATE;\n" + _SCHEMA + "\nCOMMIT;")
+                    db.executescript("BEGIN IMMEDIATE;\n" + _SCHEMA)
                     db.execute("INSERT INTO qrf_domain VALUES (?)", (sink._epoch,))
+                    db.execute("COMMIT")
                 sink._path = self._path
             else:
                 # The live binding is required, not just a matching label.
@@ -262,6 +264,17 @@ class OfflineReconciler:
     def reconcile(self, claim: Claim) -> Receipt:
         if type(claim) is not Claim or type(claim.pin) is not Pin:
             raise AuthorityRefused("invalid claim")
+        _validate_month(claim.month, claim.destination)
+        if (
+            not _hex_id(claim.intent)
+            or not _hex_id(claim.generation)
+            or not _hex_id(claim.token)
+            or type(claim.pin.name) is not str
+            or type(claim.pin.sha256) is not str
+            or type(claim.pin.size) is not int
+            or not 0 < claim.pin.size < 2**63
+        ):
+            raise AuthorityRefused("invalid claim identity")
         with self._sink._lock:
             # Never accept a caller-supplied observation or quiescence boolean.
             with self._transaction() as db:
@@ -298,10 +311,10 @@ class OfflineReconciler:
 
 def historical_receipts(path: Path) -> tuple[Receipt, ...]:
     """Read-only synthetic history; no authority or continuity is conferred."""
-    with sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True) as db:
-        try:
-            return tuple(Receipt(*row) for row in db.execute(
+    with closing(sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True)) as db:
+        return tuple(
+            Receipt(*row)
+            for row in db.execute(
                 "SELECT token,epoch,cut,observed,digest,size,url FROM qrf_receipt ORDER BY observed"
-            ))
-        finally:
-            db.close()
+            )
+        )
