@@ -46,7 +46,11 @@ CREATE TABLE intent (
     destination TEXT NOT NULL UNIQUE,
     intent TEXT NOT NULL UNIQUE,
     generation TEXT NOT NULL,
-    CHECK(destination = 'ficha-' || month)
+    CHECK(month GLOB '[0-9][0-9][0-9][0-9]-[0-1][0-9]'
+          AND substr(month,6,2) BETWEEN '01' AND '12'),
+    CHECK(destination = 'ficha-' || month),
+    CHECK(length(intent)=32 AND intent NOT GLOB '*[^0-9a-f]*'),
+    CHECK(length(generation)=32 AND generation NOT GLOB '*[^0-9a-f]*')
 ) STRICT;
 CREATE TABLE pin (
     month TEXT NOT NULL REFERENCES intent(month),
@@ -58,7 +62,7 @@ CREATE TABLE pin (
 CREATE TABLE claim (
     month TEXT NOT NULL,
     name TEXT NOT NULL,
-    token TEXT NOT NULL UNIQUE,
+    token TEXT NOT NULL UNIQUE CHECK(length(token)=32 AND token NOT GLOB '*[^0-9a-f]*'),
     state TEXT NOT NULL CHECK(state IN ('UNKNOWN','TEST_MATCHED')),
     PRIMARY KEY(month,name),
     FOREIGN KEY(month,name) REFERENCES pin(month,name)
@@ -107,14 +111,20 @@ class LocalAuthority:
     """
 
     def __init__(self, path: Path) -> None:
+        raise AuthorityRefused("use explicit creation or test recovery")
+
+    @classmethod
+    def _open(cls, path: Path) -> LocalAuthority:
         if not path.is_absolute():
             raise AuthorityRefused("absolute database path required")
-        self._path = path
+        authority = object.__new__(cls)
+        authority._path = path
+        return authority
 
     @classmethod
     def create(cls, path: Path) -> LocalAuthority:
         """Exclusive creation. Existing or partially created files are refused."""
-        authority = cls(path)
+        authority = cls._open(path)
         try:
             fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
         except OSError as exc:
@@ -129,7 +139,7 @@ class LocalAuthority:
         """Synthetic precondition only; no implementation of antirollback or F."""
         if current_unique_authority is not True:
             raise AuthorityRefused("freshness and unique authority not established")
-        authority = cls(path)
+        authority = cls._open(path)
         with authority._connection() as db:
             db.execute("SELECT month FROM intent LIMIT 1").fetchall()
         return authority
