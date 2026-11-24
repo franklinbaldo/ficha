@@ -8,6 +8,7 @@ import subprocess
 import sys
 from dataclasses import replace
 from pathlib import Path
+from xml.etree import ElementTree
 
 import httpx
 import pytest
@@ -67,6 +68,25 @@ def test_single_pin_without_rest_of_cohort():
         require(len(seen) == 3)
 
 
+@pytest.mark.parametrize("month", ["2026-07", "2026-08"])
+def test_pin_observes_exact_month_key(month):
+    body = b"identical bytes across months"
+    pin = RawPin("Cnaes.zip", len(body), hashlib.sha256(body).hexdigest())
+    expected = f"https://archive.org/download/ficha-{month}/raw/Cnaes.zip"
+    seen = []
+
+    def handler(request):
+        seen.append((request.method, str(request.url)))
+        return httpx.Response(200, stream=httpx.ByteStream(body))
+
+    with httpx.Client(transport=httpx.MockTransport(handler), trust_env=False) as client:
+        result = readback_raw_pin(client, month=month, pin=pin)
+    require(seen == [("GET", expected)])
+    require(result.month == month)
+    require(result.object.request_url == expected and result.object.final_url == expected)
+    require(result.object.sha256 == pin.sha256 and result.object.size == pin.size)
+
+
 @pytest.mark.parametrize(
     "month, changes, error",
     [
@@ -82,6 +102,20 @@ def test_single_pin_without_rest_of_cohort():
         ("2026-07", {"size": "1" * 64, "sha256": 42}, "invalid pinned size"),
         ("2026-07", {"sha256": "A" * 64}, "lowercase SHA-256"),
         ("2026-07", {"sha256": "a" * 63}, "lowercase SHA-256"),
+    ],
+    ids=[
+        "fullwidth-month",
+        "arabic-month",
+        "invalid-month",
+        "traversal",
+        "wrong-case",
+        "list-name",
+        "bool-size",
+        "zero-size",
+        "oversize",
+        "wrong-types",
+        "uppercase-sha",
+        "short-sha",
     ],
 )
 def test_pin_identity_rejected_before_io(month, changes, error):
@@ -161,19 +195,91 @@ def test_pin_requires_normal_eof_and_cleanup(mode):
     require(len(seen) == 1)
 
 
-def test_pin_optimized_contract_subprocess():
+# Independent of the child's collection and any selection inherited from the parent.
+_EXPECTED_OPTIMIZED = {
+    "test_single_pin_without_rest_of_cohort",
+    "test_pin_observes_exact_month_key[2026-07]",
+    "test_pin_observes_exact_month_key[2026-08]",
+    "test_pin_reuses_client_gate",
+    "test_pin_reuses_cross_key_redirect_gate",
+    *(
+        f"test_pin_identity_rejected_before_io[{case}]"
+        for case in (
+            "fullwidth-month",
+            "arabic-month",
+            "invalid-month",
+            "traversal",
+            "wrong-case",
+            "list-name",
+            "bool-size",
+            "zero-size",
+            "oversize",
+            "wrong-types",
+            "uppercase-sha",
+            "short-sha",
+        )
+    ),
+    *(
+        f"test_pin_requires_normal_eof_and_cleanup[{mode}]"
+        for mode in ("normal", "truncated", "eof-error", "close-error")
+    ),
+}
+
+
+def _require_pass_report(report: Path, expected: set[str]) -> None:
+    cases = ElementTree.parse(report).findall(".//testcase")
+    names = [case.get("name") for case in cases]
+    if len(names) != len(expected) or set(names) != expected:
+        raise AssertionError(f"unexpected optimized cases: {names!r}")
+    for case in cases:
+        if (
+            case.get("classname", "").split(".")[-1] != Path(__file__).stem
+            or any(case.find(tag) is not None for tag in ("skipped", "failure", "error"))
+        ):
+            raise AssertionError(f"optimized case did not pass: {case.get('name')}")
+
+
+def test_pin_optimized_contract_subprocess(tmp_path):
     if os.environ.get("FICHA_PIN_READBACK_OPTIMIZED_CHILD") == "1":
         require(sys.flags.optimize >= 1)
         return
+
+    def run_child(env, report, *selection):
+        require(not report.exists())
+        proc = subprocess.run(
+            [
+                sys.executable,
+                "-O",
+                "-m",
+                "pytest",
+                "-q",
+                "-o",
+                "addopts=",
+                f"--junitxml={report}",
+                str(Path(__file__).resolve()),
+                *selection,
+            ],
+            env=env,
+            text=True,
+            capture_output=True,
+            timeout=180,
+            check=False,
+        )
+        if proc.returncode:
+            raise AssertionError(proc.stdout[-2000:] + proc.stderr[-2000:])
+
     env = dict(os.environ)
     env["FICHA_PIN_READBACK_OPTIMIZED_CHILD"] = "1"
-    proc = subprocess.run(
-        [sys.executable, "-O", "-m", "pytest", "-q", str(Path(__file__).resolve())],
-        env=env,
-        text=True,
-        capture_output=True,
-        timeout=180,
-        check=False,
-    )
-    if proc.returncode:
-        raise AssertionError(proc.stdout[-2000:] + proc.stderr[-2000:])
+    # Negative control: the old harness accepted this exit 0 despite no readback tests.
+    env["PYTEST_ADDOPTS"] = "-k test_pin_optimized_contract_subprocess"
+    filtered = tmp_path / "filtered.xml"
+    run_child(env, filtered)
+    _require_pass_report(filtered, {"test_pin_optimized_contract_subprocess"})
+    with pytest.raises(AssertionError, match="unexpected optimized cases"):
+        _require_pass_report(filtered, _EXPECTED_OPTIMIZED)
+
+    # The actual replay must be immune to the inherited selection.
+    env.pop("PYTEST_ADDOPTS", None)
+    complete = tmp_path / "complete.xml"
+    run_child(env, complete, "-k", "not test_pin_optimized_contract_subprocess")
+    _require_pass_report(complete, _EXPECTED_OPTIMIZED)
