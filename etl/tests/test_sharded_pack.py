@@ -227,3 +227,266 @@ def test_real_v11_shard_session_selects_alpha_root_and_plans_versioned_name(tmp_
         assert meta["count"] == 2
         assert meta["schema_version"] == "1.1.0"
         assert meta["materialization"]["id"] == planned.materialization_id
+
+
+@pytest.fixture
+def local_prepare(tmp_path, monkeypatch):
+    """Real command/session/SQL/ZIP; replace only the remote Parquet location."""
+    import argparse
+
+    from ficha_etl import monthly_sharded
+    from test_monthly_sharded import _descriptor
+
+    source = tmp_path / "source"
+    source.mkdir()
+    _write_fixture(source, ["42000001", "43000001"])
+    descriptor = tmp_path / "descriptor.json"
+    descriptor.write_text(json.dumps(_descriptor()), encoding="utf-8")
+    out = tmp_path / "out"
+
+    def local_session(month, geometry, **kwargs):
+        return ShardPackSession(month, geometry, parquets_base=str(source), **kwargs)
+
+    monkeypatch.setattr(monthly_sharded, "ShardPackSession", local_session)
+
+    def prepare(prefix, receipt):
+        monthly_sharded.command_prepare_shard(
+            argparse.Namespace(
+                month="2026-06",
+                prefix=prefix,
+                descriptor=str(descriptor),
+                output_dir=str(out),
+                receipt=str(receipt),
+            )
+        )
+
+    return out, prepare
+
+
+def _check_shard_receipt(out, prefix, receipt):
+    import hashlib
+
+    from ficha_etl.monthly_sharded import _load_receipt
+
+    path = out / f"companies-{prefix}.zip"
+    data = path.read_bytes()
+    payload = _load_receipt(receipt, "2026-06", prefix)
+    if payload["size"] != len(data) or payload["sha1"] != hashlib.sha1(
+        data, usedforsecurity=False
+    ).hexdigest():
+        pytest.fail("receipt does not describe final ZIP bytes")
+    with zipfile.ZipFile(path) as archive:
+        if archive.testzip() is not None:
+            pytest.fail("ZIP CRC mismatch")
+        meta = json.loads(archive.read("_meta.json"))
+        if meta["materialization"]["id"] != payload["materialization_id"]:
+            pytest.fail("receipt materialization mismatch")
+        if f"{prefix}/000/001.pb" not in archive.namelist() or meta["count"] != 1:
+            pytest.fail("unexpected shard content")
+    return data
+
+
+@pytest.mark.parametrize(
+    "relative",
+    [
+        "companies-43.zip",
+        "companies-42.zip.part/receipt.json",
+        "companies-43.zip.part/receipt.json",
+        "sub/../companies-43.zip",
+    ],
+)
+def test_prepare_refuses_reserved_receipt_before_pack(local_prepare, relative):
+    out, prepare = local_prepare
+    with pytest.raises(ValueError, match="reserved shard namespace"):
+        prepare("42", out / relative)
+    if out.exists():
+        pytest.fail("reserved receipt rejection wrote to output")
+
+
+def test_prepare_windows_case_alias(local_prepare):
+    import os
+
+    if os.name != "nt":
+        pytest.skip("Win32 pathname semantics")
+    out, prepare = local_prepare
+    with pytest.raises(ValueError, match="reserved shard namespace"):
+        prepare("42", out / "COMPANIES-43.ZIP")
+    if out.exists():
+        pytest.fail("alias rejection wrote to output")
+
+
+def test_prepare_competing_same_and_other_prefix(local_prepare, tmp_path, monkeypatch):
+    from ficha_etl import sharded_pack
+
+    out, prepare = local_prepare
+    original = sharded_pack._iter_rows_for_range
+    entered = False
+    a = tmp_path / "a.json"
+    b = tmp_path / "b.json"
+    rival = tmp_path / "rival.json"
+
+    def interleave(*args, **kwargs):
+        nonlocal entered
+        if not entered:
+            entered = True
+            with pytest.raises(FileExistsError):
+                prepare("42", rival)
+            with pytest.raises(ValueError, match="reserved shard namespace"):
+                prepare("43", out / "companies-42.zip")
+            prepare("43", b)
+        yield from original(*args, **kwargs)
+
+    monkeypatch.setattr(sharded_pack, "_iter_rows_for_range", interleave)
+    prepare("42", a)
+    frozen_a = _check_shard_receipt(out, "42", a)
+    frozen_b = _check_shard_receipt(out, "43", b)
+    receipt_a = a.read_bytes()
+    with pytest.raises(FileExistsError):
+        prepare("42", rival)
+    with pytest.raises(FileExistsError):
+        prepare("42", a)
+    if not entered or rival.exists() or a.read_bytes() != receipt_a:
+        pytest.fail("rival attempt changed receipt state")
+    if frozen_a != _check_shard_receipt(out, "42", a):
+        pytest.fail("retry replaced A")
+    if frozen_b != _check_shard_receipt(out, "43", b):
+        pytest.fail("retry replaced B")
+    if list(out.glob("*.part")):
+        pytest.fail("owned staging was not cleaned")
+
+
+@pytest.mark.parametrize("legacy", ["file", "directory", "dangling-final"])
+def test_prepare_preserves_existing_stage_or_final(local_prepare, tmp_path, legacy):
+    out, prepare = local_prepare
+    out.mkdir()
+    stage = out / "companies-42.zip.part"
+    marker = stage
+    if legacy == "directory":
+        stage.mkdir()
+        marker = stage / "owner"
+    elif legacy == "dangling-final":
+        marker = out / "companies-42.zip"
+        try:
+            marker.symlink_to(tmp_path / "missing")
+        except (OSError, NotImplementedError):
+            pytest.skip("symlink unavailable")
+    if legacy != "dangling-final":
+        marker.write_bytes(b"other producer")
+    with pytest.raises(FileExistsError):
+        prepare("42", tmp_path / "receipt.json")
+    if legacy == "dangling-final":
+        if not marker.is_symlink() or stage.exists():
+            pytest.fail("dangling final or owned stage mishandled")
+    elif marker.read_bytes() != b"other producer":
+        pytest.fail("pre-existing staging was modified")
+
+
+def test_prepare_failure_before_publish_allows_retry(local_prepare, tmp_path, monkeypatch):
+    from ficha_etl import sharded_pack
+
+    out, prepare = local_prepare
+    a = tmp_path / "a.json"
+    receipt = tmp_path / "b.json"
+    prepare("42", a)
+    frozen_a = _check_shard_receipt(out, "42", a)
+    original = sharded_pack._iter_rows_for_range
+
+    def broken(*args, **kwargs):
+        yield from ()
+        raise OSError("injected pack failure")
+
+    monkeypatch.setattr(sharded_pack, "_iter_rows_for_range", broken)
+    with pytest.raises(OSError, match="injected pack failure"):
+        prepare("43", receipt)
+    if receipt.exists() or (out / "companies-43.zip").exists() or list(out.glob("*.part")):
+        pytest.fail("failed pack exposed artifacts")
+    if frozen_a != _check_shard_receipt(out, "42", a):
+        pytest.fail("failure of B changed A")
+    monkeypatch.setattr(sharded_pack, "_iter_rows_for_range", original)
+    prepare("43", receipt)
+    _check_shard_receipt(out, "43", receipt)
+    if frozen_a != _check_shard_receipt(out, "42", a):
+        pytest.fail("retry of B changed A")
+
+
+@pytest.mark.parametrize("state", ["absent", "partial", "complete"])
+def test_prepare_receipt_failure_preserves_final_zip(
+    local_prepare, tmp_path, monkeypatch, state
+):
+    from pathlib import Path
+
+    out, prepare = local_prepare
+    receipt = tmp_path / "a.json"
+    original = Path.open
+    frozen = []
+
+    class FailingWriter:
+        def __enter__(self):
+            if state == "absent":
+                raise OSError("injected receipt failure")
+            self.stream = original(receipt, "x", encoding="utf-8")
+            return self
+
+        def write(self, text):
+            self.stream.write(text if state == "complete" else text[: len(text) // 2])
+            self.stream.flush()
+            raise OSError("injected receipt failure")
+
+        def __exit__(self, *exc):
+            self.stream.close()
+
+    def open_with_failure(path, mode="r", *args, **kwargs):
+        if path == receipt and mode == "x":
+            frozen.append((out / "companies-42.zip").read_bytes())
+            return FailingWriter()
+        return original(path, mode, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", open_with_failure)
+    with pytest.raises(OSError, match="injected receipt failure"):
+        prepare("42", receipt)
+    monkeypatch.setattr(Path, "open", original)
+    final = out / "companies-42.zip"
+    if len(frozen) != 1 or final.read_bytes() != frozen[0]:
+        pytest.fail("receipt failure changed final ZIP")
+    if state == "absent":
+        if receipt.exists():
+            pytest.fail("receipt unexpectedly exists")
+    elif state == "partial":
+        with pytest.raises(json.JSONDecodeError):
+            json.loads(receipt.read_text(encoding="utf-8"))
+    else:
+        _check_shard_receipt(out, "42", receipt)
+    if list(out.glob("*.part")):
+        pytest.fail("owned staging was not cleaned")
+    before = receipt.read_bytes() if receipt.exists() else None
+    with pytest.raises(FileExistsError):
+        prepare("42", tmp_path / "new.json")
+    if final.read_bytes() != frozen[0]:
+        pytest.fail("retry changed final ZIP")
+    after = receipt.read_bytes() if receipt.exists() else None
+    if before != after:
+        pytest.fail("retry changed residual receipt")
+
+
+def test_prepare_existing_receipt_does_not_pack(local_prepare, tmp_path):
+    out, prepare = local_prepare
+    receipt = tmp_path / "existing.json"
+    receipt.write_bytes(b"other producer")
+    with pytest.raises(FileExistsError, match="receipt already exists"):
+        prepare("42", receipt)
+    if out.exists() or receipt.read_bytes() != b"other producer":
+        pytest.fail("preflight changed artifacts")
+
+
+def test_prepare_resolved_alias_does_not_pack(local_prepare, tmp_path):
+    out, prepare = local_prepare
+    out.mkdir()
+    alias = tmp_path / "alias"
+    try:
+        alias.symlink_to(out, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("directory symlink unavailable")
+    with pytest.raises(ValueError, match="reserved shard namespace"):
+        prepare("42", alias / "companies-43.zip")
+    if list(out.iterdir()):
+        pytest.fail("resolved alias rejection wrote to output")
