@@ -9,6 +9,7 @@ The sink may retain previous cohorts; use a fresh domain for a memory budget.
 from __future__ import annotations
 
 import hashlib
+from io import BytesIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -63,6 +64,7 @@ def run_offline_raw_upload(
         total = sum(size for _, size, _ in staged.values())
         if total > max_bytes:
             raise AuthorityRefused("synthetic aggregate byte cap")
+        expanded = members = 0
         for spec in specs:
             path, size, digest = staged[spec.name]
             if not 0 < size <= max_bytes:
@@ -71,6 +73,10 @@ def run_offline_raw_upload(
                 body = handle.read(size + 1)
             if len(body) != size or hashlib.sha256(body).hexdigest() != digest:
                 raise AuthorityRefused("staged identity changed")
+            # Recheck the exact immutable bytes, not the mutable staging path.
+            expanded, members = raw_preflight._raw_zip_crc_and_budget(
+                BytesIO(body), expanded=expanded, members=members
+            )
             bodies[spec.name] = body
             pins.append(Pin(spec.name, digest, size))
     authority.reserve(month, destination, intent, generation, pins)

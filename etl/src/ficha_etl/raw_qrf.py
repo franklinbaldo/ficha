@@ -339,7 +339,6 @@ class OfflineReconciler:
                 )
             return receipt
 
-
     def receipt_for_claim(self, claim: Claim) -> Receipt | None:
         """Recover a terminal synthetic receipt only for this exact identity."""
         with self._sink._lock, self._transaction() as db:

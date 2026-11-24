@@ -7,6 +7,7 @@ import io
 import sqlite3
 import zipfile
 from dataclasses import replace
+from pathlib import Path
 
 import httpx
 import pytest
@@ -239,3 +240,112 @@ def test_36_current_plus_one_other_month_not_success(setup):
     require(claim.pin.name == last and authority.receipt_for_claim(claim) is None)
     require(authority.receipt_for_claim(old.claim) == historical)
     require(authority.receipt_for_claim(replace(old.claim, month=MONTH)) is None)
+
+
+@pytest.mark.parametrize("aba", [False, True])
+def test_immutable_parser_and_cumulative_budget(setup, monkeypatch, aba):
+    path, sink, _, bodies = setup
+
+    def compressed(data):
+        output = io.BytesIO()
+        with zipfile.ZipFile(output, "w") as archive:
+            archive.writestr(
+                zipfile.ZipInfo("fixture.txt"),
+                data,
+                compress_type=zipfile.ZIP_DEFLATED,
+                compresslevel=9,
+            )
+        return output.getvalue()
+
+    last = list(bodies)[-1]
+    for i, name in enumerate(bodies):
+        bodies[name] = compressed(bytes([i]) * 100)
+    small = compressed(b"A" * 100)
+    large = compressed(b"A" * 200)
+    require(len(small) == len(large) and small != large)
+    bodies[last] = large if aba else small
+    monkeypatch.setattr(raw_preflight, "_MAX_RAW_UNCOMPRESSED_BYTES", 3700)
+    parser = raw_preflight._raw_zip_crc_and_budget
+    swaps = []
+
+    def observe_small(source, *, expanded, members):
+        if aba and isinstance(source, Path) and source.name == last:
+            require(source.read_bytes() == large)
+            source.write_bytes(small)
+            try:
+                result = parser(source, expanded=expanded, members=members)
+                swaps.append(result)
+                return result
+            finally:
+                source.write_bytes(large)
+        return parser(source, expanded=expanded, members=members)
+
+    monkeypatch.setattr(raw_preflight, "_raw_zip_crc_and_budget", observe_small)
+    if aba:
+        with pytest.raises(RuntimeError, match="global uncompressed limit"):
+            run(setup)
+        require(swaps == [(3700, 37)])
+        require(counts(path) == (0, 0, 0, 0))
+        require(sink._sequence == 0 and not sink._grants and not sink._objects)
+    else:
+        require(len(run(setup)) == 37)
+        require(counts(path) == (1, 37, 37, 37))
+        require(sink._objects == {(MONTH, name): body for name, body in bodies.items()})
+
+
+def test_penultimate_cookie_refused_before_last_get(setup):
+    path, sink, _, bodies = setup
+    requests = []
+    penultimate = list(bodies)[-2]
+
+    def handler(request):
+        require("cookie" not in request.headers)
+        name = request.url.path.rsplit("/", 1)[-1]
+        requests.append(name)
+        body = bodies[name]
+        headers = {"Content-Length": str(len(body))}
+        if name == penultimate:
+            headers["Set-Cookie"] = "synthetic=1; Path=/"
+        return httpx.Response(200, headers=headers, stream=httpx.ByteStream(body))
+
+    with pytest.raises(RuntimeError, match="synthetic session cookies forbidden"):
+        run(setup, transport=httpx.MockTransport(handler))
+    require(requests == list(bodies)[:-1])
+    require(counts(path) == (0, 0, 0, 0))
+    require(sink._sequence == 0 and not sink._grants and not sink._objects)
+
+
+def test_error_before_second_apply_preserves_prefix(setup, monkeypatch):
+    path, sink, authority, bodies = setup
+    apply = sink.apply_if_absent
+    grants = []
+    first, second = list(bodies)[:2]
+
+    def fail_before_apply(grant, body):
+        grants.append(grant)
+        if len(grants) == 2:
+            raise httpx.ReadError("synthetic response lost before apply")
+        return apply(grant, body)
+
+    monkeypatch.setattr(sink, "apply_if_absent", fail_before_apply)
+    with pytest.raises(RawReadbackError):
+        run(setup)
+    require([grant.claim.pin.name for grant in grants] == [first, second])
+    require(counts(path) == (1, 37, 2, 1))
+    with sqlite3.connect(path) as db:
+        require(
+            dict(db.execute("SELECT name,state FROM qrf_claim"))
+            == {first: "TEST_MATCHED", second: "UNKNOWN"}
+        )
+    require(authority.receipt_for_claim(grants[0].claim) is not None)
+    require(authority.lookup_unknown(MONTH) == grants[1].claim)
+    require(authority.receipt_for_claim(grants[1].claim) is None)
+    require(sink._objects == {(MONTH, first): bodies[first]})
+    require(len(sink._grants) == 2)
+    with pytest.raises(AuthorityRefused, match="grant not active"):
+        apply(grants[1], bodies[second])
+    with pytest.raises(sqlite3.IntegrityError):
+        run(setup)
+    require(counts(path) == (1, 37, 2, 1))
+    require(len(grants) == len(sink._grants) == 2)
+    require(sink._objects == {(MONTH, first): bodies[first]})
