@@ -1,19 +1,42 @@
-"""Pre-PUT 37/37 RFB raw admission: HTTP and S3 are strictly offline."""
+"""37/37 RFB preflight component with synthetic HTTP; no publication."""
 
 from __future__ import annotations
 
+import hashlib
 import io
 import os
 import struct
+import tempfile
 import zipfile
 import zlib
+from collections import Counter
 from pathlib import Path
+from xml.etree import ElementTree
 
 import httpx
 import pytest
 
 from ficha_etl import raw_preflight, upload
 from ficha_etl.sources import canonical_inventory
+
+
+def require_replay(report: Path, cases: list[tuple[str, str, str]]) -> None:
+    expected = Counter((Path(file).stem, node, status) for file, node, status in cases)
+    if not report.is_file():
+        pytest.fail("optimized replay did not produce JUnit XML")
+    observed = Counter()
+    for case in ElementTree.parse(report).iter("testcase"):
+        module = case.attrib.get("classname", "").rsplit(".", 1)[-1]
+        name = case.attrib.get("name", "")
+        skipped = case.find("skipped")
+        status = "PASSED"
+        if case.find("failure") is not None or case.find("error") is not None:
+            status = "FAILED"
+        elif skipped is not None:
+            status = "XFAIL" if skipped.get("type") == "pytest.xfail" else "SKIPPED"
+        observed[module, name, status] += 1
+    if observed != expected:
+        pytest.fail(f"optimized replay expected {expected!r}, got {observed!r}")
 
 
 def _equal(actual, expected) -> None:
@@ -41,6 +64,7 @@ def _offline(
     content_range_37=None,
     length_text_37=None,
 ):
+    monkeypatch.setenv("FICHA_RFB_BASE_URL", "https://rfb.example")
     specs = canonical_inventory()
     _equal(len(specs), 37)
     streams = [_source_zip(i) for i in range(37)]
@@ -51,13 +75,16 @@ def _offline(
         offset = source.index(b"DATA-36")
         source[offset] ^= 1  # same byte length and ZIP directory, invalid CRC
         streams[-1] = bytes(source)
-    seen: dict[str, object] = {"gets": [], "puts": [], "received": []}
-    original_client = httpx.Client
+    seen: dict[str, object] = {"gets": [], "puts": [], "received": [], "staged": []}
     names = {spec.name: i for i, spec in enumerate(specs)}
 
     def respond(request: httpx.Request):
         name = request.url.path.rsplit("/", 1)[-1]
         index = names[name]
+        _equal(request.method, "GET")
+        _equal(str(request.url), f"https://rfb.example/public.php/webdav/2026-07/{name}")
+        _equal(request.headers.get("Accept-Encoding"), "identity")
+        _equal(name, specs[len(seen["gets"])].name)
         seen["gets"].append(name)
         if index == 36 and redirect_37 is not None and len(seen["gets"]) == 37:
             return httpx.Response(302, headers={"Location": redirect_37}, request=request)
@@ -78,80 +105,79 @@ def _offline(
             request=request,
         )
 
-    transport = httpx.MockTransport(respond)
+    seen["transport"] = httpx.MockTransport(respond)
 
-    def client_factory(**kwargs):
-        return original_client(transport=transport, **kwargs)
+    def forbid(*args, **kwargs):
+        pytest.fail("preflight crossed the publication boundary")
 
-    def put_spy(identifier, remote_name, chunks, *, content_length, **kwargs):
-        data = b"".join(chunks)
-        _equal(identifier, "ficha-2026-07")
-        _equal(len(data), int(content_length))
-        # A successful final count alone would not prove temporal ordering.
-        _equal(len(seen["gets"]), 37)
-        seen["puts"].append(remote_name)
-        seen["received"].append(data)
-
-    monkeypatch.setattr(upload.httpx, "Client", client_factory)
-    monkeypatch.setattr(upload.upstream, "discover_token", lambda: "fake-token")
-    monkeypatch.setattr(upload, "_existing_raw_files_on_ia", lambda _: set())
-    monkeypatch.setattr(upload, "_ia_s3_put", put_spy)
+    monkeypatch.setattr(httpx.HTTPTransport, "handle_request", forbid)
+    monkeypatch.setattr(upload.upstream, "discover_token", forbid)
+    monkeypatch.setattr(upload, "_existing_raw_files_on_ia", forbid)
+    monkeypatch.setattr(upload, "_ia_s3_put", forbid)
     return seen, streams
 
 
-def _run(tmp_path: Path):
-    upload.stream_raw_zips_to_ia(
-        "2026-07", access_key="fake", secret_key="fake", workers=1, spool_dir=tmp_path
-    )
+def _run(tmp_path: Path, seen, *, specs=None):
+    # Exercise the real parser, not the now-inaccessible historical streamer.
+    # This owns scratch cleanup; it does not certify a sealed inode or PUT.
+    if specs is None:
+        specs = list(canonical_inventory())
+    with tempfile.TemporaryDirectory(dir=tmp_path) as scratch:
+        staged = raw_preflight.stage_all(
+            specs,
+            "2026-07",
+            "fake-token",
+            Path(scratch),
+            synthetic_transport=seen["transport"],
+        )
+        _equal(len(seen["gets"]), 37)
+        for name, (path, size, digest) in staged.items():
+            data = path.read_bytes()
+            _equal(len(data), size)
+            _equal(hashlib.sha256(data).hexdigest(), digest)
+            seen["staged"].append(name)
+            seen["received"].append(data)
 
 
 def test_preflight_admits_exact_37_before_any_put(monkeypatch, tmp_path):
     seen, sources = _offline(monkeypatch)
-    _run(tmp_path)
+    _run(tmp_path, seen)
     _equal(len(seen["gets"]), 37)
-    _equal(seen["puts"], [f"raw/{s.name}" for s in canonical_inventory()])
+    _equal(seen["staged"], [s.name for s in canonical_inventory()])
+    _equal(seen["puts"], [])
     _equal(seen["received"], sources)
     _equal(list(tmp_path.iterdir()), [])
 
 
 @pytest.mark.skipif(os.name == "nt", reason="replacing an open file is POSIX-specific")
 @pytest.mark.parametrize("position", [0, 36], ids=["first-zip", "last-zip"])
-def test_raw_put_uses_verified_fd_after_pathname_swap(monkeypatch, tmp_path, position):
-    """Replacing a validated pathname just before the PUT must not change bytes.
-
-    Only the fake IA PUT performs os.replace; no network calls are made.
-    It does not simulate in-place writes via a pre-existing writable FD.
-    """
+def test_file_chunks_preserves_open_descriptor_after_pathname_swap(monkeypatch, tmp_path, position):
+    """Lower-level descriptor property; not the former integrated PUT proof."""
     seen, sources = _offline(monkeypatch)
-    names = [spec.name for spec in canonical_inventory()]
-    pinned_paths = {}
-    actual_stage_all = raw_preflight.stage_all
-
-    def capture_stage(*args, **kwargs):
-        result = actual_stage_all(*args, **kwargs)
-        pinned_paths.update(result)
-        return result
-
-    monkeypatch.setattr(raw_preflight, "stage_all", capture_stage)
-    original_put = upload._ia_s3_put
-    swapped = []
-
-    def swap_before_read(identifier, remote_name, chunks, **kwargs):
-        name = names[position]
-        if remote_name == f"raw/{name}":
-            path = pinned_paths[name][0]
+    specs = list(canonical_inventory())
+    with tempfile.TemporaryDirectory(dir=tmp_path) as scratch:
+        staged = raw_preflight.stage_all(
+            specs,
+            "2026-07",
+            "fake-token",
+            Path(scratch),
+            synthetic_transport=seen["transport"],
+        )
+        _equal(len(seen["gets"]), 37)
+        path, size, digest = staged[specs[position].name]
+        with path.open("rb") as handle:
+            _equal(hashlib.file_digest(handle, "sha256").hexdigest(), digest)
+            handle.seek(0)
             candidate = path.with_name(path.name + ".replacement")
             different = bytearray(sources[position])
             different[0] ^= 1
             candidate.write_bytes(different)
             candidate.replace(path)
-            swapped.append(name)
-        return original_put(identifier, remote_name, chunks, **kwargs)
-
-    monkeypatch.setattr(upload, "_ia_s3_put", swap_before_read)
-    _run(tmp_path)
-    _equal(swapped, [names[position]])
-    _equal(seen["received"], sources)
+            _equal(path.read_bytes(), bytes(different))
+            transmitted = b"".join(raw_preflight.file_chunks(handle))
+            _equal(len(transmitted), size)
+            _equal(transmitted, sources[position])
+    _equal(seen["puts"], [])
     _equal(list(tmp_path.iterdir()), [])
 
 
@@ -163,7 +189,7 @@ def test_final_zip_failure_cannot_partial_publish(monkeypatch, tmp_path, case, r
     options = {case: 404 if case == "status_37" else True}
     seen, _ = _offline(monkeypatch, **options)
     with pytest.raises((RuntimeError, httpx.HTTPStatusError), match=reason):
-        _run(tmp_path)
+        _run(tmp_path, seen)
     _equal(len(seen["gets"]), 37)
     _equal(seen["puts"], [])
     _equal(list(tmp_path.iterdir()), [])
@@ -183,7 +209,7 @@ def test_redirected_final_rfb_zip_is_not_admitted(monkeypatch, tmp_path, origin)
     target = f"{origin}/public.php/webdav/2026-07/{last_name}"
     seen, _ = _offline(monkeypatch, redirect_37=target)
     with pytest.raises(RuntimeError, match="redirected RFB source"):
-        _run(tmp_path)
+        _run(tmp_path, seen)
     _equal(len(seen["gets"]), 37)  # The redirect target must not be requested.
     _equal(seen["puts"], [])
     _equal(list(tmp_path.iterdir()), [])
@@ -195,6 +221,7 @@ def test_redirected_final_rfb_zip_is_not_admitted(monkeypatch, tmp_path, origin)
         ("content_range_37", "bytes 1-10/500", "unexpected RFB Content-Range"),
         ("length_text_37", "9" * 5000, "invalid RFB length"),
     ],
+    ids=["range", "overlong-length"],
 )
 def test_final_zip_ambiguous_http_headers_cannot_publish(
     monkeypatch, tmp_path, field, value, reason
@@ -203,7 +230,7 @@ def test_final_zip_ambiguous_http_headers_cannot_publish(
     # Neither case should reach an S3 PUT; the length case must be contextual.
     seen, _ = _offline(monkeypatch, **{field: value})
     with pytest.raises(RuntimeError, match=reason):
-        _run(tmp_path)
+        _run(tmp_path, seen)
     _equal(len(seen["gets"]), 37)
     _equal(seen["puts"], [])
     _equal(list(tmp_path.iterdir()), [])
@@ -239,7 +266,7 @@ def test_underreported_final_zip_cannot_partial_publish(monkeypatch, tmp_path, m
     monkeypatch.setattr(raw_preflight, "_MAX_RAW_UNCOMPRESSED_BYTES", 36 * 7 + 1)
     seen, _ = _offline(monkeypatch, source_37=forged)
     with pytest.raises(RuntimeError, match="global uncompressed limit"):
-        _run(tmp_path)
+        _run(tmp_path, seen)
     _equal(len(seen["gets"]), 37)
     _equal(seen["puts"], [])
     _equal(list(tmp_path.iterdir()), [])
@@ -250,9 +277,9 @@ def test_complete_final_zip_at_actual_expansion_limit(monkeypatch, tmp_path, met
     valid = _oversized_source_37(method, forge_header=False)
     monkeypatch.setattr(raw_preflight, "_MAX_RAW_UNCOMPRESSED_BYTES", 36 * 7 + 65536)
     seen, sources = _offline(monkeypatch, source_37=valid)
-    _run(tmp_path)
+    _run(tmp_path, seen)
     _equal(len(seen["gets"]), 37)
-    _equal(len(seen["puts"]), 37)
+    _equal(len(seen["staged"]), 37)
     _equal(seen["received"], sources)
 
 
@@ -262,7 +289,7 @@ def test_double_underreport_cannot_hide_unclaimed_zip_bytes(monkeypatch, tmp_pat
     monkeypatch.setattr(raw_preflight, "_MAX_RAW_UNCOMPRESSED_BYTES", 36 * 7 + 1)
     seen, _ = _offline(monkeypatch, source_37=forged)
     with pytest.raises(RuntimeError, match="unclaimed ZIP payload bytes"):
-        _run(tmp_path)
+        _run(tmp_path, seen)
     _equal(len(seen["gets"]), 37)
     _equal(seen["puts"], [])
     _equal(list(tmp_path.iterdir()), [])
@@ -281,9 +308,9 @@ def test_deflate_data_descriptor_remains_valid(monkeypatch, tmp_path):
     with zipfile.ZipFile(sink, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         archive.writestr("source-36.csv", b"DATA-36")
     seen, sources = _offline(monkeypatch, source_37=sink.getvalue())
-    _run(tmp_path)
+    _run(tmp_path, seen)
     _equal(len(seen["gets"]), 37)
-    _equal(len(seen["puts"]), 37)
+    _equal(len(seen["staged"]), 37)
     _equal(seen["received"], sources)
 
 
@@ -307,7 +334,7 @@ def test_final_zip_local_header_conflict_cannot_publish(
     struct.pack_into("<I", forged, local_offset, 0)
     seen, _ = _offline(monkeypatch, source_37=bytes(forged))
     with pytest.raises(RuntimeError, match="ZIP local CRC/size mismatch"):
-        _run(tmp_path)
+        _run(tmp_path, seen)
     _equal(len(seen["gets"]), 37)
     _equal(seen["puts"], [])
     _equal(list(tmp_path.iterdir()), [])
@@ -323,16 +350,16 @@ def test_valid_zip64_local_sizes_without_descriptor_remain_admissible(monkeypatc
     _equal(struct.unpack_from("<I", source, 18)[0], 0xFFFFFFFF)
     _equal(struct.unpack_from("<I", source, 22)[0], 0xFFFFFFFF)
     seen, sources = _offline(monkeypatch, source_37=source)
-    _run(tmp_path)
+    _run(tmp_path, seen)
     _equal(len(seen["gets"]), 37)
-    _equal(len(seen["puts"]), 37)
+    _equal(len(seen["staged"]), 37)
     _equal(seen["received"], sources)
 
 
 def test_duplicate_zip_bytes_under_two_source_names_cannot_publish(monkeypatch, tmp_path):
     seen, _ = _offline(monkeypatch, source_37=_source_zip(0))
     with pytest.raises(RuntimeError, match="duplicate source SHA-256"):
-        _run(tmp_path)
+        _run(tmp_path, seen)
     _equal(len(seen["gets"]), 37)
     _equal(seen["puts"], [])
     _equal(list(tmp_path.iterdir()), [])
@@ -342,7 +369,7 @@ def test_expansion_cap_global_not_per_zip(monkeypatch, tmp_path):
     seen, _ = _offline(monkeypatch)
     monkeypatch.setattr(raw_preflight, "_MAX_RAW_UNCOMPRESSED_BYTES", 35)
     with pytest.raises(RuntimeError, match="global uncompressed limit"):
-        _run(tmp_path)
+        _run(tmp_path, seen)
     _equal(seen["puts"], [])
 
 
@@ -350,48 +377,70 @@ def test_compressed_cap_global_not_per_zip(monkeypatch, tmp_path):
     seen, _ = _offline(monkeypatch)
     monkeypatch.setattr(raw_preflight, "_MAX_RAW_COMPRESSED_BYTES", 2 * len(_source_zip(0)))
     with pytest.raises(RuntimeError, match="global compressed limit"):
-        _run(tmp_path)
+        _run(tmp_path, seen)
     _equal(seen["puts"], [])
 
 
 def test_canonical_duplicate_is_rejected_before_get(monkeypatch, tmp_path):
     seen, _ = _offline(monkeypatch)
     expected = canonical_inventory()
-    monkeypatch.setattr(upload, "canonical_inventory", lambda: expected[:-1] + expected[:1])
     with pytest.raises(RuntimeError, match="canonical inventory"):
-        _run(tmp_path)
+        _run(tmp_path, seen, specs=list(expected[:-1] + expected[:1]))
     _equal(seen["gets"], [])
     _equal(seen["puts"], [])
 
 
 def test_no_explicit_spool_denies_get_and_put(monkeypatch):
     seen, _ = _offline(monkeypatch)
-    with pytest.raises(RuntimeError, match="explicit spool_dir"):
+    with pytest.raises(upload.RawCustodyCapabilityUnproven):
         upload.stream_raw_zips_to_ia("2026-07", access_key="x", secret_key="x")
     _equal(seen["gets"], [])
     _equal(seen["puts"], [])
 
 
-def test_optimized_python_replays_zip37_local_guard():
+def test_optimized_python_replays_zip37_local_guard(tmp_path):
     """Replay the six local-header negatives and positive controls with -O.
 
     A normal pytest run must not be mistaken for a test of optimized Python.
     Run the exact tests from this checkout in a child interpreter with -O,
-    keeping the same fake HTTP transport and fake IA PUT assertions.
+    keeping the synthetic HTTP transport and specific lower-level oracles.
     """
     import subprocess
     import sys
 
     source = str(Path(__file__).resolve())
-    selectors = [
-        f"{source}::test_final_zip_local_header_conflict_cannot_publish",
-        f"{source}::test_valid_zip64_local_sizes_without_descriptor_remain_admissible",
-        f"{source}::test_deflate_data_descriptor_remains_valid",
-        f"{source}::test_final_zip_ambiguous_http_headers_cannot_publish",
-        f"{source}::test_raw_put_uses_verified_fd_after_pathname_swap",
+    cases = [
+        (f"test_final_zip_local_header_conflict_cannot_publish[{field}-{method}]", "PASSED")
+        for field in ("local-crc", "local-compressed-size", "local-uncompressed-size")
+        for method in (zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED)
     ]
+    cases += [
+        ("test_valid_zip64_local_sizes_without_descriptor_remain_admissible", "PASSED"),
+        ("test_deflate_data_descriptor_remains_valid", "PASSED"),
+        ("test_final_zip_ambiguous_http_headers_cannot_publish[range]", "PASSED"),
+        ("test_final_zip_ambiguous_http_headers_cannot_publish[overlong-length]", "PASSED"),
+    ]
+    cases += [
+        (
+            f"test_file_chunks_preserves_open_descriptor_after_pathname_swap[{position}]",
+            "SKIPPED" if os.name == "nt" else "PASSED",
+        )
+        for position in ("first-zip", "last-zip")
+    ]
+    report = tmp_path / "optimized.xml"
     replay = subprocess.run(
-        [sys.executable, "-O", "-m", "pytest", "-q", *selectors],
+        [
+            sys.executable,
+            "-O",
+            "-m",
+            "pytest",
+            "-vv",
+            f"--junitxml={report}",
+            "-o",
+            "xfail_strict=true",
+            *(f"{source}::{node}" for node, _ in cases),
+        ],
+        env={k: v for k, v in os.environ.items() if k not in ("PYTEST_ADDOPTS", "PYTEST_PLUGINS")},
         capture_output=True,
         text=True,
         check=False,
@@ -399,3 +448,4 @@ def test_optimized_python_replays_zip37_local_guard():
     )
     if replay.returncode != 0:
         raise AssertionError(replay.stdout + "\n" + replay.stderr)
+    require_replay(report, [(Path(source).name, node, status) for node, status in cases])
