@@ -202,27 +202,22 @@ _EXPECTED_OPTIMIZED = {
     "test_pin_observes_exact_month_key[2026-08]",
     "test_pin_reuses_client_gate",
     "test_pin_reuses_cross_key_redirect_gate",
-    *(
-        f"test_pin_identity_rejected_before_io[{case}]"
-        for case in (
-            "fullwidth-month",
-            "arabic-month",
-            "invalid-month",
-            "traversal",
-            "wrong-case",
-            "list-name",
-            "bool-size",
-            "zero-size",
-            "oversize",
-            "wrong-types",
-            "uppercase-sha",
-            "short-sha",
-        )
-    ),
-    *(
-        f"test_pin_requires_normal_eof_and_cleanup[{mode}]"
-        for mode in ("normal", "truncated", "eof-error", "close-error")
-    ),
+    "test_pin_identity_rejected_before_io[fullwidth-month]",
+    "test_pin_identity_rejected_before_io[arabic-month]",
+    "test_pin_identity_rejected_before_io[invalid-month]",
+    "test_pin_identity_rejected_before_io[traversal]",
+    "test_pin_identity_rejected_before_io[wrong-case]",
+    "test_pin_identity_rejected_before_io[list-name]",
+    "test_pin_identity_rejected_before_io[bool-size]",
+    "test_pin_identity_rejected_before_io[zero-size]",
+    "test_pin_identity_rejected_before_io[oversize]",
+    "test_pin_identity_rejected_before_io[wrong-types]",
+    "test_pin_identity_rejected_before_io[uppercase-sha]",
+    "test_pin_identity_rejected_before_io[short-sha]",
+    "test_pin_requires_normal_eof_and_cleanup[normal]",
+    "test_pin_requires_normal_eof_and_cleanup[truncated]",
+    "test_pin_requires_normal_eof_and_cleanup[eof-error]",
+    "test_pin_requires_normal_eof_and_cleanup[close-error]",
 }
 
 
@@ -232,10 +227,9 @@ def _require_pass_report(report: Path, expected: set[str]) -> None:
     if len(names) != len(expected) or set(names) != expected:
         raise AssertionError(f"unexpected optimized cases: {names!r}")
     for case in cases:
-        if (
-            case.get("classname", "").split(".")[-1] != Path(__file__).stem
-            or any(case.find(tag) is not None for tag in ("skipped", "failure", "error"))
-        ):
+        wrong_class = case.get("classname", "").split(".")[-1] != Path(__file__).stem
+        not_passed = any(case.find(tag) is not None for tag in ("skipped", "failure", "error"))
+        if wrong_class or not_passed:
             raise AssertionError(f"optimized case did not pass: {case.get('name')}")
 
 
