@@ -175,23 +175,22 @@ def test_raw_transport_state_never_becomes_authorization(
     assert observed == []
 
 
-def test_raw_catalog_complete_returns_unproven_not_verified(
+def test_raw_catalog_complete_cannot_grant_admission(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     names = {f"raw/{spec.name}" for spec in canonical_inventory()}
-    assert len(names) == 37
-    monkeypatch.setattr(upload, "_existing_raw_files_on_ia", lambda *_a: names)
-    monkeypatch.setattr(
-        upload.upstream, "discover_token", lambda: pytest.fail("upstream GET forbidden")
-    )
-    monkeypatch.setattr(upload, "_ia_s3_put", lambda *_a, **_kw: pytest.fail("PUT forbidden"))
-    monkeypatch.setattr(
-        upload.raw_preflight, "stage_all", lambda *_a: pytest.fail("spool forbidden")
-    )
-    assert (
+    if len(names) != 37:
+        pytest.fail("expected complete nominal catalog")
+
+    def forbid(*args, **kwargs):
+        pytest.fail("real admission reached an effect boundary")
+
+    monkeypatch.setattr(upload, "_existing_raw_files_on_ia", forbid)
+    monkeypatch.setattr(upload.upstream, "discover_token", forbid)
+    monkeypatch.setattr(upload, "_ia_s3_put", forbid)
+    monkeypatch.setattr(upload.raw_preflight, "stage_all", forbid)
+    with pytest.raises(upload.RawCustodyCapabilityUnproven):
         upload.stream_raw_zips_to_ia(MONTH, access_key="test", secret_key="test")
-        is upload.RawStreamOutcome.ALL_NAMES_PRESENT_UNPROVEN
-    )
 
 
 def test_forged_v2_references_need_independent_monotonic_authority() -> None:

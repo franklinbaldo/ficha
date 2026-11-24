@@ -349,3 +349,36 @@ def test_error_before_second_apply_preserves_prefix(setup, monkeypatch):
     require(counts(path) == (1, 37, 2, 1))
     require(len(grants) == len(sink._grants) == 2)
     require(sink._objects == {(MONTH, first): bodies[first]})
+
+
+@pytest.mark.parametrize("stale_count", [1, 18], ids=["one-stale", "eighteen-stale"])
+def test_stale_generation_refused_without_overwrite(setup, monkeypatch, stale_count):
+    """Synthetic counterpart, not proof of a real remote catalog or atomic creation."""
+    path, sink, authority, bodies = setup
+    stale = {}
+    for i, name in enumerate(list(bodies)[:stale_count]):
+        output = io.BytesIO()
+        with zipfile.ZipFile(output, "w") as archive:
+            archive.writestr(zipfile.ZipInfo("fixture.txt"), bytes([255 - i]))
+        old = output.getvalue()
+        require(len(old) == len(bodies[name]) and old != bodies[name])
+        stale[MONTH, name] = old
+    sink._objects.update(stale)
+    apply = sink.apply_if_absent
+    effects = []
+
+    def tracked(grant, body):
+        result = apply(grant, body)
+        effects.append((grant.claim.pin.name, result))
+        return result
+
+    monkeypatch.setattr(sink, "apply_if_absent", tracked)
+    with pytest.raises(RawReadbackError, match="differs"):
+        run(setup)
+    first = next(iter(bodies))
+    require(effects == [(first, False)])
+    require(sink._objects == stale)
+    require(counts(path) == (1, 37, 1, 0))
+    claim = authority.lookup_unknown(MONTH)
+    require(claim is not None and claim.pin.name == first)
+    require(authority.receipt_for_claim(claim) is None)
