@@ -72,3 +72,32 @@ def test_strict_ia_json_preserves_http_status_contract(monkeypatch, status, expe
     else:
         with pytest.raises(RuntimeError, match=expected):
             upload._existing_raw_files_on_ia("ficha-2026-07")
+
+
+@pytest.mark.parametrize(
+    "error_type", [upload.httpx.ConnectError, upload.httpx.ReadTimeout]
+)
+def test_catalog_rejects_metadata_transport_failure(monkeypatch, error_type):
+    """Transport failure gives no evidence that an IA item is absent."""
+
+    class _FakeClient:
+        def __init__(self, *a, **kw):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def get(self, url):
+            raise error_type("boom")
+
+    def forbid(*args, **kwargs):
+        pytest.fail("RFB GET or IA PUT after IA metadata transport failure")
+
+    monkeypatch.setattr(upload.httpx, "Client", _FakeClient)
+    monkeypatch.setattr(upload.upstream, "discover_token", forbid)
+    monkeypatch.setattr(upload_mod, "_stream_one_zip_with_retry", forbid)
+    with pytest.raises(RuntimeError, match="IA raw metadata: fetch failed"):
+        upload._existing_raw_files_on_ia("ficha-2026-04")
