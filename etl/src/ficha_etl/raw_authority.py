@@ -224,6 +224,8 @@ class LocalAuthority:
         values = _validate_pins(pins)
         if not _hex_id(intent) or not _hex_id(generation):
             raise AuthorityRefused("invalid intent or generation")
+        if type(name) is not str:
+            raise AuthorityRefused("invalid pin name")
         pin = next((p for p in values if p.name == name), None)
         if pin is None:
             raise AuthorityRefused("unknown pin")
@@ -241,6 +243,19 @@ class LocalAuthority:
 
     def record_test_match(self, claim: Claim) -> None:
         """Synthetic receipt only; never evidence of remote content or promotion."""
+        if type(claim) is not Claim or type(claim.pin) is not Pin:
+            raise AuthorityRefused("invalid receipt identity")
+        _validate_month(claim.month, claim.destination)
+        if (
+            not _hex_id(claim.intent)
+            or not _hex_id(claim.generation)
+            or not _hex_id(claim.token)
+            or type(claim.pin.name) is not str
+            or type(claim.pin.sha256) is not str
+            or type(claim.pin.size) is not int
+            or not 0 < claim.pin.size < 2**63
+        ):
+            raise AuthorityRefused("invalid receipt identity")
         with self._transaction() as db:
             cursor = db.execute(
                 """UPDATE claim SET state='TEST_MATCHED'
