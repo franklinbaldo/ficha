@@ -194,6 +194,7 @@ def test_redirected_final_rfb_zip_is_not_admitted(monkeypatch, tmp_path, origin)
         ("content_range_37", "bytes 1-10/500", "unexpected RFB Content-Range"),
         ("length_text_37", "9" * 5000, "invalid RFB length"),
     ],
+    ids=["range", "overlong-length"],
 )
 def test_final_zip_ambiguous_http_headers_cannot_publish(
     monkeypatch, tmp_path, field, value, reason
@@ -381,15 +382,26 @@ def test_optimized_python_replays_zip37_local_guard():
     import sys
 
     source = str(Path(__file__).resolve())
-    selectors = [
-        f"{source}::test_final_zip_local_header_conflict_cannot_publish",
-        f"{source}::test_valid_zip64_local_sizes_without_descriptor_remain_admissible",
-        f"{source}::test_deflate_data_descriptor_remains_valid",
-        f"{source}::test_final_zip_ambiguous_http_headers_cannot_publish",
-        f"{source}::test_file_chunks_preserves_open_descriptor_after_pathname_swap",
+    cases = [
+        (f"test_final_zip_local_header_conflict_cannot_publish[{field}-{method}]", "PASSED")
+        for field in ("local-crc", "local-compressed-size", "local-uncompressed-size")
+        for method in (zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED)
+    ]
+    cases += [
+        ("test_valid_zip64_local_sizes_without_descriptor_remain_admissible", "PASSED"),
+        ("test_deflate_data_descriptor_remains_valid", "PASSED"),
+        ("test_final_zip_ambiguous_http_headers_cannot_publish[range]", "PASSED"),
+        ("test_final_zip_ambiguous_http_headers_cannot_publish[overlong-length]", "PASSED"),
+    ]
+    cases += [
+        (
+            f"test_file_chunks_preserves_open_descriptor_after_pathname_swap[{position}]",
+            "SKIPPED" if os.name == "nt" else "PASSED",
+        )
+        for position in ("first-zip", "last-zip")
     ]
     replay = subprocess.run(
-        [sys.executable, "-O", "-m", "pytest", "-vv", *selectors],
+        [sys.executable, "-O", "-m", "pytest", "-vv", *(f"{source}::{node}" for node, _ in cases)],
         env={k: v for k, v in os.environ.items() if k not in ("PYTEST_ADDOPTS", "PYTEST_PLUGINS")},
         capture_output=True,
         text=True,
@@ -398,9 +410,7 @@ def test_optimized_python_replays_zip37_local_guard():
     )
     if replay.returncode != 0:
         raise AssertionError(replay.stdout + "\n" + replay.stderr)
-    for selector in selectors:
-        name = selector.split("::")[-1]
-        expected = "SKIPPED" if os.name == "nt" and "pathname_swap" in name else "PASSED"
-        lines = [line for line in replay.stdout.splitlines() if f"::{name}" in line]
-        if not lines or any(expected not in line for line in lines):
-            pytest.fail(f"missing expected optimized result for {name}: {lines}")
+    for node, expected in cases:
+        matches = [line for line in replay.stdout.splitlines() if f"::{node} {expected}" in line]
+        if len(matches) != 1:
+            pytest.fail(f"missing unique optimized {expected} for {node}: {replay.stdout}")
