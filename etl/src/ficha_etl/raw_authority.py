@@ -1,7 +1,8 @@
 """U-local: isolated SQLite authority for synthetic raw custody tests.
 
 No transport integration. A local database is not a remote fence or proof of
-freshness; the caller must establish exclusive, current authority separately.
+freshness; the caller must establish an intact schema and exclusive, current
+file authority separately, including schema and file identity at deployment.
 Never restore a backup and assume that its absence of UNKNOWN is evidence.
 """
 
@@ -238,13 +239,47 @@ class LocalAuthority:
                 db.execute("INSERT INTO claim VALUES (?,?,?,'UNKNOWN')", (month, name, claim.token))
             except sqlite3.IntegrityError as exc:
                 raise AuthorityRefused("claim already exists or cohort has UNKNOWN") from exc
-        # No caller-held grant can be fed back into this path. An exception or
-        # process death from here onward leaves UNKNOWN, even with zero effects.
+        # No caller-held grant can be fed back into this path. UNKNOWN remains
+        # until a trusted receipt resolves it; an exception alone is not evidence.
         effect(claim)
         return claim
 
-    def record_test_match(self, claim: Claim) -> None:
-        """Synthetic receipt only; never evidence of remote content or promotion."""
+    def lookup_unknown_for_test(
+        self, month: str, destination: str, intent: str, generation: str, pins: Iterable[Pin]
+    ) -> Claim | None:
+        """Read one snapshot of UNKNOWN identity, never grant or perform an effect.
+
+        Absence is not evidence that no effect occurred. The returned identity
+        is only for reconciliation, under the same external trust preconditions.
+        """
+        _validate_month(month, destination)
+        if not _hex_id(intent) or not _hex_id(generation):
+            raise AuthorityRefused("invalid intent or generation")
+        values = _validate_pins(pins)
+        with self._connection() as db:
+            db.execute("BEGIN")
+            try:
+                self._verify(db, month, destination, intent, generation, values)
+                row = db.execute(
+                    "SELECT name,token FROM claim WHERE month=? AND state='UNKNOWN'", (month,)
+                ).fetchone()
+                if row is None:
+                    return None
+                name, token = row
+                pin = next(p for p in values if p.name == name)
+                return Claim(month, destination, intent, generation, pin, token)
+            finally:
+                db.execute("ROLLBACK")
+
+    def record_test_match(self, claim: Claim, *, quiescent_and_matched: bool) -> None:
+        """Accept a trusted synthetic attestation, not merely possession of a claim.
+
+        The caller attests irrevocable quiescence of the effect and identity match.
+        This boolean cannot authenticate either. A dishonest caller is outside
+        the local guarantee; real integration requires independent R/F evidence.
+        """
+        if quiescent_and_matched is not True:
+            raise AuthorityRefused("quiescence and match not attested")
         if type(claim) is not Claim or type(claim.pin) is not Pin:
             raise AuthorityRefused("invalid receipt identity")
         _validate_month(claim.month, claim.destination)
