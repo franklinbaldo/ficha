@@ -16,6 +16,7 @@ import pytest
 
 from ficha_etl import raw_preflight, upload
 from ficha_etl.sources import canonical_inventory
+from replay_junit import require_replay
 
 
 def _equal(actual, expected) -> None:
@@ -43,6 +44,7 @@ def _offline(
     content_range_37=None,
     length_text_37=None,
 ):
+    monkeypatch.setenv("FICHA_RFB_BASE_URL", "https://rfb.example")
     specs = canonical_inventory()
     _equal(len(specs), 37)
     streams = [_source_zip(i) for i in range(37)]
@@ -59,6 +61,10 @@ def _offline(
     def respond(request: httpx.Request):
         name = request.url.path.rsplit("/", 1)[-1]
         index = names[name]
+        _equal(request.method, "GET")
+        _equal(str(request.url), f"https://rfb.example/public.php/webdav/2026-07/{name}")
+        _equal(request.headers.get("Accept-Encoding"), "identity")
+        _equal(name, specs[len(seen["gets"])].name)
         seen["gets"].append(name)
         if index == 36 and redirect_37 is not None and len(seen["gets"]) == 37:
             return httpx.Response(302, headers={"Location": redirect_37}, request=request)
@@ -372,7 +378,7 @@ def test_no_explicit_spool_denies_get_and_put(monkeypatch):
     _equal(seen["puts"], [])
 
 
-def test_optimized_python_replays_zip37_local_guard():
+def test_optimized_python_replays_zip37_local_guard(tmp_path):
     """Replay the six local-header negatives and positive controls with -O.
 
     A normal pytest run must not be mistaken for a test of optimized Python.
@@ -401,8 +407,19 @@ def test_optimized_python_replays_zip37_local_guard():
         )
         for position in ("first-zip", "last-zip")
     ]
+    report = tmp_path / "optimized.xml"
     replay = subprocess.run(
-        [sys.executable, "-O", "-m", "pytest", "-vv", *(f"{source}::{node}" for node, _ in cases)],
+        [
+            sys.executable,
+            "-O",
+            "-m",
+            "pytest",
+            "-vv",
+            f"--junitxml={report}",
+            "-o",
+            "xfail_strict=true",
+            *(f"{source}::{node}" for node, _ in cases),
+        ],
         env={k: v for k, v in os.environ.items() if k not in ("PYTEST_ADDOPTS", "PYTEST_PLUGINS")},
         capture_output=True,
         text=True,
@@ -411,7 +428,4 @@ def test_optimized_python_replays_zip37_local_guard():
     )
     if replay.returncode != 0:
         raise AssertionError(replay.stdout + "\n" + replay.stderr)
-    for node, expected in cases:
-        matches = [line for line in replay.stdout.splitlines() if f"::{node} {expected}" in line]
-        if len(matches) != 1:
-            pytest.fail(f"missing unique optimized {expected} for {node}: {replay.stdout}")
+    require_replay(report, [(Path(source).name, node, status) for node, status in cases])

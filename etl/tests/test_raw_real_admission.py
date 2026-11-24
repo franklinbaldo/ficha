@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 from ficha_etl import raw_qrf, upload
+from replay_junit import require_replay
 
 
 @pytest.mark.parametrize("month", ["2026-07", "2026-08"])
@@ -81,7 +82,8 @@ def test_invalid_month_keeps_value_error_precedence(monkeypatch):
         upload.stream_raw_zips_to_ia("invalid", access_key="A", secret_key="S")
 
 
-def _replay_exact(cases):
+def _replay_exact(cases, tmp_path):
+    report = tmp_path / "optimized.xml"
     here = Path(__file__).resolve().parent
     result = subprocess.run(
         [
@@ -90,6 +92,9 @@ def _replay_exact(cases):
             "-m",
             "pytest",
             "-vv",
+            f"--junitxml={report}",
+            "-o",
+            "xfail_strict=true",
             *(f"{here / file}::{node}" for file, node in cases),
         ],
         env={k: v for k, v in os.environ.items() if k not in ("PYTEST_ADDOPTS", "PYTEST_PLUGINS")},
@@ -100,13 +105,10 @@ def _replay_exact(cases):
     )
     if result.returncode:
         pytest.fail(result.stdout + "\n" + result.stderr)
-    for file, node in cases:
-        matches = [line for line in result.stdout.splitlines() if f"{file}::{node} PASSED" in line]
-        if len(matches) != 1:
-            pytest.fail(f"missing unique optimized PASS for {file}::{node}: {result.stdout}")
+    require_replay(report, [(file, node, "PASSED") for file, node in cases])
 
 
-def test_admission_oracles_under_optimized_python():
+def test_admission_oracles_under_optimized_python(tmp_path):
     """Check each expected nodeid, not merely a successful subprocess exit."""
     cases = [
         (
@@ -118,10 +120,10 @@ def test_admission_oracles_under_optimized_python():
         for month in ("2026-07", "2026-08")
     ]
     cases.append(("test_raw_real_admission.py", "test_invalid_month_keeps_value_error_precedence"))
-    _replay_exact(cases)
+    _replay_exact(cases, tmp_path)
 
 
-def test_offline_effect_witnesses_under_optimized_python():
+def test_offline_effect_witnesses_under_optimized_python(tmp_path):
     """Distinct QRF witnesses, not a reenactment of remote process death or HTTP 503."""
     qrf = [
         "test_qrf02_one_shot_two_threads",
@@ -141,5 +143,6 @@ def test_offline_effect_witnesses_under_optimized_python():
     ]
     _replay_exact(
         [("test_raw_qrf.py", node) for node in qrf]
-        + [("test_raw_offline_upload.py", node) for node in offline]
+        + [("test_raw_offline_upload.py", node) for node in offline],
+        tmp_path,
     )

@@ -349,6 +349,8 @@ def test_existing_raw_files_on_ia_parses_metadata(monkeypatch):
         ]
     }
 
+    seen = []
+
     class _FakeClient:
         def __init__(self, *a, **kw):
             pass
@@ -360,11 +362,14 @@ def test_existing_raw_files_on_ia_parses_metadata(monkeypatch):
             return False
 
         def get(self, url):
+            seen.append(url)
             return httpx.Response(200, json=payload)
 
     monkeypatch.setattr(upload_mod.httpx, "Client", _FakeClient)
     out = upload_mod._existing_raw_files_on_ia("ficha-2026-04")
     assert out == {"raw/Empresas0.zip", "raw/Empresas1.zip"}
+    if seen != ["https://archive.org/metadata/ficha-2026-04"]:
+        pytest.fail(f"unexpected catalog GETs: {seen!r}")
 
 
 @pytest.mark.parametrize(
@@ -385,6 +390,8 @@ def test_existing_raw_files_on_ia_parses_metadata(monkeypatch):
 def test_catalog_rejects_ambiguous_catalog_before_get_or_put(monkeypatch, files):
     """A malformed IA inventory cannot authorize skipping or any remote write."""
 
+    seen = []
+
     class _FakeClient:
         def __init__(self, *args, **kwargs):
             pass
@@ -396,6 +403,7 @@ def test_catalog_rejects_ambiguous_catalog_before_get_or_put(monkeypatch, files)
             return False
 
         def get(self, url):
+            seen.append(url)
             return httpx.Response(200, json={"files": files})
 
     monkeypatch.setattr(upload_mod.httpx, "Client", _FakeClient)
@@ -406,12 +414,17 @@ def test_catalog_rejects_ambiguous_catalog_before_get_or_put(monkeypatch, files)
     monkeypatch.setattr(upload_mod.upstream, "discover_token", forbid_network)
     monkeypatch.setattr(upload_mod, "_stream_one_zip_with_retry", forbid_network)
 
-    with pytest.raises(RuntimeError, match="IA raw metadata"):
+    reason = "duplicate file entry" if len(files) == 2 else "invalid size"
+    with pytest.raises(RuntimeError, match=f"IA raw metadata: {reason}"):
         upload_mod._existing_raw_files_on_ia("ficha-2026-04")
+    if seen != ["https://archive.org/metadata/ficha-2026-04"]:
+        pytest.fail(f"unexpected catalog GETs: {seen!r}")
 
 
 def test_catalog_rejects_non_list_catalog_before_get_or_put(monkeypatch):
     """A 200 with a malformed catalog is not equivalent to a new IA item."""
+
+    seen = []
 
     class _FakeClient:
         def __init__(self, *args, **kwargs):
@@ -424,6 +437,7 @@ def test_catalog_rejects_non_list_catalog_before_get_or_put(monkeypatch):
             return False
 
         def get(self, url):
+            seen.append(url)
             return httpx.Response(200, json={"files": {"raw/Empresas0.zip": {"size": "1"}}})
 
     monkeypatch.setattr(upload_mod.httpx, "Client", _FakeClient)
@@ -432,12 +446,16 @@ def test_catalog_rejects_non_list_catalog_before_get_or_put(monkeypatch):
         "discover_token",
         lambda: pytest.fail("upstream touched with malformed IA catalog"),
     )
-    with pytest.raises(RuntimeError, match="IA raw metadata"):
+    with pytest.raises(RuntimeError, match="IA raw metadata: invalid file catalog"):
         upload_mod._existing_raw_files_on_ia("ficha-2026-04")
+    if seen != ["https://archive.org/metadata/ficha-2026-04"]:
+        pytest.fail(f"unexpected catalog GETs: {seen!r}")
 
 
 def test_catalog_rejects_http_200_invalid_json_before_get_or_put(monkeypatch):
     """HTTP 200 with broken JSON is not a transient metadata outage."""
+
+    seen = []
 
     class _FakeClient:
         def __init__(self, *args, **kwargs):
@@ -450,6 +468,7 @@ def test_catalog_rejects_http_200_invalid_json_before_get_or_put(monkeypatch):
             return False
 
         def get(self, url):
+            seen.append(url)
             return httpx.Response(200, content=b"<html>malformed JSON</html>")
 
     monkeypatch.setattr(upload_mod.httpx, "Client", _FakeClient)
@@ -462,6 +481,8 @@ def test_catalog_rejects_http_200_invalid_json_before_get_or_put(monkeypatch):
 
     with pytest.raises(RuntimeError, match="IA raw metadata: invalid JSON"):
         upload_mod._existing_raw_files_on_ia("ficha-2026-04")
+    if seen != ["https://archive.org/metadata/ficha-2026-04"]:
+        pytest.fail(f"unexpected catalog GETs: {seen!r}")
 
 
 @pytest.mark.parametrize("status", [401, 403, 429, 500, 502, 503, 504])
@@ -470,6 +491,8 @@ def test_catalog_denies_metadata_errors_before_get_or_put(monkeypatch, status):
 
     class _FakeResp:
         status_code = status
+
+    seen = []
 
     class _FakeClient:
         def __init__(self, *args, **kwargs):
@@ -482,6 +505,7 @@ def test_catalog_denies_metadata_errors_before_get_or_put(monkeypatch, status):
             return False
 
         def get(self, url):
+            seen.append(url)
             return _FakeResp()
 
     monkeypatch.setattr(upload_mod.httpx, "Client", _FakeClient)
@@ -499,9 +523,13 @@ def test_catalog_denies_metadata_errors_before_get_or_put(monkeypatch, status):
     )
     with pytest.raises(RuntimeError, match=f"{reason} HTTP {status}"):
         upload_mod._existing_raw_files_on_ia("ficha-2026-04")
+    if seen != ["https://archive.org/metadata/ficha-2026-04"]:
+        pytest.fail(f"unexpected catalog GETs: {seen!r}")
 
 
 def test_existing_raw_files_on_ia_returns_empty_on_404(monkeypatch):
+    seen = []
+
     class _FakeClient:
         def __init__(self, *a, **kw):
             pass
@@ -513,10 +541,13 @@ def test_existing_raw_files_on_ia_returns_empty_on_404(monkeypatch):
             return False
 
         def get(self, url):
+            seen.append(url)
             return httpx.Response(404, json={})
 
     monkeypatch.setattr(upload_mod.httpx, "Client", _FakeClient)
     assert upload_mod._existing_raw_files_on_ia("ficha-2099-01") == set()
+    if seen != ["https://archive.org/metadata/ficha-2099-01"]:
+        pytest.fail(f"unexpected catalog GETs: {seen!r}")
 
 
 def test_complete_catalog_cannot_admit_streaming(monkeypatch):
