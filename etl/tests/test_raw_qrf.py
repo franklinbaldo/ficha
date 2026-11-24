@@ -1,4 +1,5 @@
 """QRF-01/02/03/04/05/06/09/10 controls on the actual offline composition."""
+
 from __future__ import annotations
 
 import hashlib
@@ -83,6 +84,26 @@ def test_qrf03_unpresented_grant_is_revoked_before_read(setup):
     require(historical_receipts(path) == ())
 
 
+def test_qrf03_preexisting_bytes_reconcile_without_apply(setup):
+    path, sink, authority, bodies = setup
+    first, second = list(bodies)[:2]
+    # Trusted fixture seeds bytes before this grant exists, not via apply.
+    sink._objects[MONTH, first] = bodies[first]
+    before = dict(sink._objects)
+    grant = authority.admit(MONTH, first)
+    require(sink._sequence == 0)
+    receipt = authority.reconcile(grant.claim)
+    require(receipt.cut == 1 and receipt.observed == 2)
+    require(receipt.digest == grant.claim.pin.sha256)
+    require(not receipt.publication_authorized)
+    require(sink._objects == before)
+    require(historical_receipts(path) == (receipt,))
+    with pytest.raises(AuthorityRefused, match="not active"):
+        sink.apply(grant, bodies[first])
+    require(sink._sequence == 2 and sink._objects == before)
+    require(authority.admit(MONTH, second).claim.pin.name == second)
+
+
 def test_qrf01_identity_is_not_grant_and_wrong_claim_refused(setup):
     path, sink, authority, bodies = setup
     name = next(iter(bodies))
@@ -155,6 +176,60 @@ def test_qrf09_atomic_receipt_failure_and_stale_claim(setup):
         authority.reconcile(grant.claim)
     require(authority.lookup_unknown(MONTH) == next_grant.claim)
     require(historical_receipts(path) == (receipt,))
+
+
+def test_qrf09_terminal_commit_busy_after_real_readback(setup, monkeypatch):
+    path, sink, authority, bodies = setup
+    first, second = list(bodies)[:2]
+    grant = authority.admit(MONTH, first)
+    sink.apply(grant, bodies[first])
+    connect = sqlite3.connect
+    read = sink._read
+    trace = []
+    reader = connect(path, isolation_level=None, timeout=0)
+
+    def traced_connect(*args, **kwargs):
+        kwargs["timeout"] = 0
+        db = connect(*args, **kwargs)
+        db.set_trace_callback(trace.append)
+        return db
+
+    def read_then_lock(claim):
+        observation = read(claim)
+        # Acquire a SHARED lock only after the real read returns. An earlier
+        # lock would fail the initial identity transaction, not terminal CAS.
+        reader.execute("BEGIN")
+        require(reader.execute("SELECT state FROM qrf_claim").fetchall() == [("UNKNOWN",)])
+        return observation
+
+    try:
+        require(reader.execute("PRAGMA journal_mode").fetchone() == ("delete",))
+        with monkeypatch.context() as patch:
+            patch.setattr(sqlite3, "connect", traced_connect)
+            patch.setattr(sink, "_read", read_then_lock)
+            with pytest.raises(sqlite3.OperationalError) as error:
+                authority.reconcile(grant.claim)
+            require(error.value.sqlite_errorcode == sqlite3.SQLITE_BUSY)
+            require(sink._sequence == 3)
+            terminal = [sql.strip().upper() for sql in trace[-4:]]
+            require(len(terminal) == 4)
+            require(terminal[0].startswith("UPDATE QRF_CLAIM"))
+            require(terminal[1].startswith("INSERT INTO QRF_RECEIPT"))
+            require(terminal[2:] == ["COMMIT", "ROLLBACK"])
+    finally:
+        reader.close()
+
+    require(authority.lookup_unknown(MONTH) == grant.claim)
+    require(historical_receipts(path) == ())
+    with pytest.raises(AuthorityRefused, match="not active"):
+        sink.apply(grant, bodies[first])
+    with pytest.raises(AuthorityRefused, match="UNKNOWN"):
+        authority.admit(MONTH, second)
+    require(sink._sequence == 3)
+    receipt = authority.reconcile(grant.claim)
+    require(receipt.cut == 4 and receipt.observed == 5)
+    require(historical_receipts(path) == (receipt,))
+    require(authority.admit(MONTH, second).claim.pin.name == second)
 
 
 def test_qrf09_legacy_api_cannot_resolve(setup):
