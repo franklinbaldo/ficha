@@ -4,7 +4,7 @@ Instrumento opt-in, sem alteração de ETL, schema, publicação ou site. Ele se
 
 ## Execução em sandbox
 
-Fornecer CSV UTF-8 com colunas `tipo_logradouro,logradouro,numero,cep,bairro,municipio,uf` e, opcionalmente, `id`. Os dados originais nunca são reescritos.
+Fornecer CSV UTF-8 com colunas `tipo_logradouro,logradouro,numero,cep,bairro,municipio,uf` e, opcionalmente, `id`. A opção `--output` cria exclusivamente um arquivo novo; recusa qualquer caminho já existente, inclusive links para a entrada.
 
 ```bash
 cd etl/experiments/ipea_geocode
@@ -14,6 +14,8 @@ python experiment.py /caminho/amostra.csv --output /caminho/relatorio.json
 ```
 
 Para geocodificar, criar ambiente isolado e instalar `geocodebr` e `polars`; executar `--geocode` **somente após aprovação do download do CNEFE**. O cache inicial pode chegar a aproximadamente 1,2 GB e a API do pacote está em evolução. O experimento usa `definir_campos` e `geocode`, conforme a documentação Python do Ipea. Não incluir essa execução no CI nem despachar ETL mensal.
+
+O CI existente (`pytest tests` em `etl/`) coleta `tests/test_caranguejo_ipea_output.py`: 12 casos de CLI (normal e `-O`) e dois replays da suíte original de cinco testes. Nenhuma mudança de workflow ou dependência adicional.
 
 ## Interpretação e limitações
 
