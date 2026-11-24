@@ -41,7 +41,7 @@ def _mock_catalog(monkeypatch: pytest.MonkeyPatch, payload: bytes, status: int =
         b'{"files":[{"name":"raw/Empresas0.zip","size":"151"}],"nested":{"flag":1,"flag":1}}',
     ],
 )
-def test_ambiguous_ia_json_cannot_authorize_any_egress(monkeypatch, payload):
+def test_ambiguous_ia_json_is_refused_by_observational_catalog(monkeypatch, payload):
     _mock_catalog(monkeypatch, payload)
 
     def forbid(*args, **kwargs):
@@ -51,7 +51,7 @@ def test_ambiguous_ia_json_cannot_authorize_any_egress(monkeypatch, payload):
     monkeypatch.setattr(upload, "_stream_one_zip_with_retry", forbid)
 
     with pytest.raises(RuntimeError, match="IA raw metadata: invalid JSON"):
-        upload.stream_raw_zips_to_ia("2026-07", access_key="A", secret_key="S")
+        upload._existing_raw_files_on_ia("ficha-2026-07")
 
 
 def test_unambiguous_ia_json_preserves_skip_observation(monkeypatch):
