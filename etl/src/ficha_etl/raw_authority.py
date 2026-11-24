@@ -135,7 +135,9 @@ class LocalAuthority:
         return authority
 
     @classmethod
-    def reopen_for_test(cls, path: Path, *, current_unique_authority: bool = False) -> LocalAuthority:
+    def reopen_for_test(
+        cls, path: Path, *, current_unique_authority: bool = False
+    ) -> LocalAuthority:
         """Synthetic precondition only; no implementation of antirollback or F."""
         if current_unique_authority is not True:
             raise AuthorityRefused("freshness and unique authority not established")
