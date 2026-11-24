@@ -14,6 +14,7 @@ def test_unproven_real_route_refuses_before_any_effect(
     monkeypatch, tmp_path, month, spool_exists, workers
 ):
     calls = []
+    before = sorted(tmp_path.iterdir())
 
     def forbid(*args, **kwargs):
         calls.append("effect")
@@ -29,6 +30,7 @@ def test_unproven_real_route_refuses_before_any_effect(
         monkeypatch.setattr(upload, name, forbid)
     monkeypatch.setattr(upload.upstream, "discover_token", forbid)
     monkeypatch.setattr(upload.raw_preflight, "stage_all", forbid)
+    monkeypatch.setattr(upload.tempfile, "TemporaryDirectory", forbid)
     monkeypatch.setattr(upload.httpx, "Client", forbid)
     monkeypatch.setattr(upload.ia, "upload", forbid)
     monkeypatch.setattr(raw_qrf.OfflineReconciler, "reserve", forbid)
@@ -52,6 +54,7 @@ def test_unproven_real_route_refuses_before_any_effect(
         or "offline-secret" in str(error)
         or "offline-access" in str(error)
         or calls
+        or sorted(tmp_path.iterdir()) != before
     ):
         pytest.fail("wrong admission refusal or an effect escaped")
 
