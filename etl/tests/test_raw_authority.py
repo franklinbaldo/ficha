@@ -247,9 +247,8 @@ def test_process_race(journal, tmp_path, same_pin, optimized):
         gate.touch()
         results = [w.communicate(timeout=20) for w in workers]
         assert [w.returncode for w in workers] == [0, 0], results
-        assert [Path(str(m) + ".ready").read_text() for m in markers] == [
-            str(not optimized)
-        ] * 2
+        debug_values = [Path(str(m) + ".ready").read_text() for m in markers]
+        assert debug_values == [str(not optimized)] * 2
         outcomes = [out.strip() for out, _ in results]
         assert sorted(outcomes) == ["DONE", "REFUSED"]
         winner = outcomes.index("DONE")
@@ -307,6 +306,8 @@ def test_process_death_around_effect(journal, tmp_path, crash):
             authority.perform_for_test(*ARGS, candidate, seen.append)
     assert seen == []
     assert authority.lookup_unknown_for_test(*ARGS) == identity
+    # Independent synthetic attestation supplied by this fixture, not inferred
+    # from presence or absence of the crash marker or from lookup alone.
     authority.record_test_match(identity, quiescent_and_matched=True)
     assert authority.lookup_unknown_for_test(*ARGS) is None
     next_claim = authority.perform_for_test(*ARGS, PINS[1].name, seen.append)
