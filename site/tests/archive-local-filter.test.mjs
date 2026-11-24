@@ -87,7 +87,12 @@ test('Acervo filtra somente chave, sem perder totais, digest ou URL segura',()=>
   const nodes=descendants(root);
   const summaries=nodes.filter(node=>node.tag==='summary');
   assert.equal(summaries.length,1);
-  assert.equal(summaries[0].children[0].textContent,'companies/00');
+  const row=summaries[0].children[0];
+  assert.equal(row.className,'archive-summary-row');
+  assert.equal(row.children[0].tag,'strong');
+  assert.equal(row.children[0].textContent,'companies/00');
+  assert.equal(row.children[1].className,'archive-summary-size');
+  assert.equal(row.children[1].textContent,'500 B');
   assert.equal(nodes.filter(node=>node.tag==='code').length,1);
   assert.match(nodes.find(node=>node.tag==='code').textContent,/^SHA-256 declarado: a{64}$/);
   assert.equal(nodes.find(node=>node.tag==='a').href,

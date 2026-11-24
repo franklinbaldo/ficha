@@ -158,8 +158,9 @@ export function renderArchiveSelection(doc, parent, manifest, date, filter='') {
   for (const file of shown) {
     const detail=add(doc,table,'details','','archive-file');
     const head=add(doc,detail,'summary');
-    add(doc,head,'strong',file.key);
-    add(doc,head,'span',formatBytes(file.size));
+    const row=add(doc,head,'span','','archive-summary-row');
+    add(doc,row,'strong',file.key);
+    add(doc,row,'span',formatBytes(file.size),'archive-summary-size');
     const body=add(doc,detail,'div','','archive-detail');
     if(file.sha256) add(doc,body,'code','SHA-256 declarado: '+file.sha256);
     else if(file.sha1) add(doc,body,'code','SHA-1 declarado: '+file.sha1);

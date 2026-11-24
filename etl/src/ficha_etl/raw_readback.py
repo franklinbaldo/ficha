@@ -71,6 +71,33 @@ class RawObjectObservation:
 
 
 @dataclass(frozen=True)
+class RawPinObservation:
+    """One physical body observed at GET time; not a batch or U receipt.
+
+    No claim, generation, quiescence, remote version, or fence is attested.
+    """
+
+    month: str
+    object: RawObjectObservation
+
+    @property
+    def status(self) -> str:
+        return "R_MATCH_AT_T_ONLY"
+
+    @property
+    def publication_authorized(self) -> bool:
+        return False
+
+    @property
+    def source_cohort_proven(self) -> bool:
+        return False
+
+    @property
+    def future_writes_fenced(self) -> bool:
+        return False
+
+
+@dataclass(frozen=True)
 class RawBatchObservation:
     month: str
     objects: tuple[RawObjectObservation, ...]
@@ -288,3 +315,24 @@ def readback_raw_batch(
         objects=observations,
         total_size=sum(observation.size for observation in observations),
     )
+
+
+def readback_raw_pin(client: httpx.Client, *, month: str, pin: RawPin) -> RawPinObservation:
+    """Read one canonical pin from a sealed source, without proving its cohort.
+
+    This observation is not a U receipt or permission to write or publish.
+    Q/F and a global deadline remain separate obligations. No retries or PUTs.
+    """
+    if type(month) is not str or not month.isascii() or not is_valid_month(month):
+        raise RawReadbackError("raw readback invalid month")
+    if type(pin) is not RawPin or type(pin.name) is not str:
+        raise RawReadbackError("raw readback requires a canonical ZIP pin")
+    if pin.name not in {spec.name for spec in canonical_inventory()}:
+        raise RawReadbackError("raw readback requires a canonical ZIP pin")
+    if type(pin.size) is not int or not 0 < pin.size < 2**63:
+        raise RawReadbackError("raw readback invalid pinned size")
+    if type(pin.sha256) is not str or _SHA256.fullmatch(pin.sha256) is None:
+        raise RawReadbackError("raw readback requires lowercase SHA-256 pins")
+    _check_client(client)
+    observation = _read_one(client, f"ficha-{month}", pin)
+    return RawPinObservation(month=month, object=observation)

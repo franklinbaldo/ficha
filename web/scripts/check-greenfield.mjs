@@ -68,7 +68,7 @@ try {
         if(!item) return null;
         return {
           key:item.querySelector('summary strong')?.textContent.trim(),
-          size:item.querySelector('summary span')?.textContent.trim(),
+          size:item.querySelector('summary .archive-summary-size')?.textContent.trim(),
           digest:item.querySelector('.archive-detail code')?.textContent.trim()??null,
           url:item.querySelector('.archive-detail a')?.getAttribute('href')??null,
         };
@@ -165,7 +165,11 @@ try {
       assert.equal(page.url(),archiveUrl,'filtro não altera URL de competência');
       const firstFiltered=page.locator('#acervo-resultado .archive-file').first();
       const firstKey=(await firstFiltered.locator('summary strong').textContent()).trim();
-      await firstFiltered.locator('summary').press('Enter');
+      const disclosure=firstFiltered.locator('summary');
+      assert.equal(await disclosure.evaluate(el=>getComputedStyle(el).display),'list-item');
+      assert.equal(await firstFiltered.evaluate(el=>el.open),false);
+      await disclosure.press('Enter');
+      assert.equal(await firstFiltered.evaluate(el=>el.open),true);
       const catalogLink=firstFiltered.getByRole('link',{
         name:'Abrir arquivo indicado no catálogo: '+firstKey,
       });
@@ -181,7 +185,7 @@ try {
         'nova aba externa precisa impedir acesso a window.opener');
       const afterFilter=await firstFiltered.evaluate(item=>({
         key:item.querySelector('summary strong')?.textContent.trim(),
-        size:item.querySelector('summary span')?.textContent.trim(),
+        size:item.querySelector('summary .archive-summary-size')?.textContent.trim(),
         digest:item.querySelector('.archive-detail code')?.textContent.trim()??null,
         url:item.querySelector('.archive-detail a')?.getAttribute('href')??null,
       }));

@@ -11,6 +11,7 @@ import os
 import struct
 import zipfile
 import zlib
+from io import BytesIO
 from pathlib import Path
 
 import httpx
@@ -279,7 +280,9 @@ def _check_member_exact(
     return expanded
 
 
-def _raw_zip_crc_and_budget(path: Path, *, expanded: int, members: int) -> tuple[int, int]:
+def _raw_zip_crc_and_budget(
+    path: Path | BytesIO, *, expanded: int, members: int
+) -> tuple[int, int]:
     """Check all compressed bytes and actual expansion before any IA PUT."""
     try:
         with zipfile.ZipFile(path) as archive:
@@ -319,11 +322,17 @@ def _raw_zip_crc_and_budget(path: Path, *, expanded: int, members: int) -> tuple
         zlib.error,
         struct.error,
     ) as exc:
-        raise RuntimeError(f"raw preflight: invalid ZIP {path.name}") from exc
+        name = path.name if isinstance(path, Path) else "immutable body"
+        raise RuntimeError(f"raw preflight: invalid ZIP {name}") from exc
 
 
 def stage_all(
-    specs: list, month: str, token: str, target: Path
+    specs: list,
+    month: str,
+    token: str,
+    target: Path,
+    *,
+    synthetic_transport: httpx.MockTransport | None = None,
 ) -> dict[str, tuple[Path, int, str]]:
     """Stage all 37 RFB octet streams, even when some names exist in IA.
 
@@ -336,15 +345,33 @@ def stage_all(
     total_compressed = 0
     expanded = 0
     members = 0
+    # The optional test seam never accepts a real transport or a caller's client.
+    client_options = {}
+    request_options = {}
+    if synthetic_transport is not None:
+        if type(synthetic_transport) is not httpx.MockTransport:
+            raise RuntimeError("raw preflight: synthetic transport required")
+        client_options = {"transport": synthetic_transport, "trust_env": False}
+        request_options = {"follow_redirects": False}
     with httpx.Client(
-        timeout=httpx.Timeout(connect=30, read=600, write=600, pool=30), follow_redirects=False
+        timeout=httpx.Timeout(connect=30, read=600, write=600, pool=30),
+        follow_redirects=False,
+        **client_options,
     ) as client:
         for spec in specs:
             url = upstream.file_url(token, month, spec.name)
             target_file = target / spec.name
             with client.stream(
-                "GET", url, auth=(token, ""), headers={"Accept-Encoding": "identity"}
+                "GET",
+                url,
+                auth=(token, ""),
+                headers={"Accept-Encoding": "identity"},
+                **request_options,
             ) as response:
+                if synthetic_transport is not None and (
+                    "set-cookie" in response.headers or "cookie" in response.request.headers
+                ):
+                    raise RuntimeError("raw preflight: synthetic session cookies forbidden")
                 # No implicit HTTP redirects: only the requested RFB source is admitted.
                 # Even a valid ZIP on another host (or downgraded to HTTP) is untrusted.
                 if response.is_redirect:
