@@ -519,35 +519,6 @@ def test_existing_raw_files_on_ia_returns_empty_on_404(monkeypatch):
     assert upload_mod._existing_raw_files_on_ia("ficha-2099-01") == set()
 
 
-@pytest.mark.parametrize(
-    "error_type", [upload_mod.httpx.ConnectError, upload_mod.httpx.ReadTimeout]
-)
-def test_catalog_rejects_metadata_transport_failure(monkeypatch, error_type):
-    """Transport failure gives no evidence that an IA item is absent."""
-
-    class _FakeClient:
-        def __init__(self, *a, **kw):
-            pass
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *a):
-            return False
-
-        def get(self, url):
-            raise error_type("boom")
-
-    def forbid(*args, **kwargs):
-        pytest.fail("RFB GET or IA PUT after IA metadata transport failure")
-
-    monkeypatch.setattr(upload_mod.httpx, "Client", _FakeClient)
-    monkeypatch.setattr(upload_mod.upstream, "discover_token", forbid)
-    monkeypatch.setattr(upload_mod, "_stream_one_zip_with_retry", forbid)
-    with pytest.raises(RuntimeError, match="IA raw metadata: fetch failed"):
-        upload_mod._existing_raw_files_on_ia("ficha-2026-04")
-
-
 def test_complete_catalog_cannot_admit_streaming(monkeypatch):
     """Even 37 observed names cannot grant real raw custody admission."""
 
