@@ -9,14 +9,34 @@ import struct
 import tempfile
 import zipfile
 import zlib
+from collections import Counter
 from pathlib import Path
+from xml.etree import ElementTree
 
 import httpx
 import pytest
 
 from ficha_etl import raw_preflight, upload
 from ficha_etl.sources import canonical_inventory
-from replay_junit import require_replay
+
+
+def require_replay(report: Path, cases: list[tuple[str, str, str]]) -> None:
+    expected = Counter((Path(file).stem, node, status) for file, node, status in cases)
+    if not report.is_file():
+        pytest.fail("optimized replay did not produce JUnit XML")
+    observed = Counter()
+    for case in ElementTree.parse(report).iter("testcase"):
+        module = case.attrib.get("classname", "").rsplit(".", 1)[-1]
+        name = case.attrib.get("name", "")
+        skipped = case.find("skipped")
+        status = "PASSED"
+        if case.find("failure") is not None or case.find("error") is not None:
+            status = "FAILED"
+        elif skipped is not None:
+            status = "XFAIL" if skipped.get("type") == "pytest.xfail" else "SKIPPED"
+        observed[module, name, status] += 1
+    if observed != expected:
+        pytest.fail(f"optimized replay expected {expected!r}, got {observed!r}")
 
 
 def _equal(actual, expected) -> None:
