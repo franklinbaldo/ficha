@@ -80,6 +80,7 @@ def test_invalid_month_keeps_value_error_precedence(monkeypatch):
     with pytest.raises(ValueError, match="month must be YYYY-MM"):
         upload.stream_raw_zips_to_ia("invalid", access_key="A", secret_key="S")
 
+
 def _replay_exact(cases):
     here = Path(__file__).resolve().parent
     result = subprocess.run(
