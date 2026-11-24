@@ -124,6 +124,25 @@ class SyntheticSink:
             claim = grant.claim
             self._objects[claim.month, claim.pin.name] = body
 
+    def apply_if_absent(self, grant: Grant, body: bytes) -> bool:
+        """Consume once; test and insert under the same protection lock.
+
+        False means present, not verified or attributable to this attempt.
+        """
+        if type(grant) is not Grant or type(body) is not bytes:
+            raise AuthorityRefused("invalid synthetic effect")
+        with self._lock:
+            current = self._grants.get(grant.claim.token)
+            if current is None or current[0] is not grant or current[1] != "active":
+                raise AuthorityRefused("grant not active")
+            self._grants[grant.claim.token] = (grant, "consumed")
+            self._tick()
+            key = (grant.claim.month, grant.claim.pin.name)
+            if key in self._objects:
+                return False
+            self._objects[key] = body
+            return True
+
     def _cut(self, claim: Claim) -> int:
         current = self._grants.get(claim.token)
         if current is None or current[0].claim != claim:
@@ -319,6 +338,35 @@ class OfflineReconciler:
                     ),
                 )
             return receipt
+
+    def receipt_for_claim(self, claim: Claim) -> Receipt | None:
+        """Recover a terminal synthetic receipt only for this exact identity."""
+        with self._sink._lock, self._transaction() as db:
+            row = db.execute(
+                "SELECT token,state FROM qrf_claim WHERE month=? AND name=?",
+                (claim.month, claim.pin.name),
+            ).fetchone()
+            if (
+                row != (claim.token, "TEST_MATCHED")
+                or self._identity(db, claim.month, claim.pin.name, claim.token) != claim
+            ):
+                return None
+            receipt = db.execute(
+                """SELECT token,epoch,cut,observed,digest,size,url
+                   FROM qrf_receipt WHERE token=? AND epoch=?""",
+                (claim.token, self._sink._epoch),
+            ).fetchone()
+            if receipt is None:
+                raise AuthorityRefused("terminal claim without receipt")
+            result = Receipt(*receipt)
+            expected_url = f"https://archive.org/download/{claim.destination}/raw/{claim.pin.name}"
+            if (result.digest, result.size, result.url) != (
+                claim.pin.sha256,
+                claim.pin.size,
+                expected_url,
+            ):
+                raise AuthorityRefused("receipt identity mismatch")
+            return result
 
 
 def historical_receipts(path: Path) -> tuple[Receipt, ...]:
