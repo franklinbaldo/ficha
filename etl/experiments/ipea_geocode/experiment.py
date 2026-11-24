@@ -111,7 +111,12 @@ def main():
     output = json.dumps(run(args.input_csv, geocode=args.geocode),
                         ensure_ascii=False, indent=2, default=str) + "\n"
     if args.output:
-        args.output.write_text(output, encoding="utf-8")
+        # Exclusive creation rejects existing paths, including hardlinks and symlinks.
+        try:
+            with args.output.open("x", encoding="utf-8") as handle:
+                handle.write(output)
+        except FileExistsError:
+            parser.error("--output must be a new file; existing paths are not overwritten")
     else:
         print(output, end="")
 
