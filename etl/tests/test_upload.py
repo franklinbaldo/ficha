@@ -416,7 +416,9 @@ def test_catalog_rejects_ambiguous_catalog_before_get_or_put(monkeypatch, files)
 def test_catalog_rejects_non_list_catalog_before_get_or_put(monkeypatch):
     """A 200 with a malformed catalog is not equivalent to a new IA item."""
 
-    seen = _mock_catalog_response(monkeypatch, httpx.Response(200, json={"files": {"raw/Empresas0.zip": {"size": "1"}}}))
+    seen = _mock_catalog_response(
+        monkeypatch, httpx.Response(200, json={"files": {"raw/Empresas0.zip": {"size": "1"}}})
+    )
     monkeypatch.setattr(
         upload_mod.upstream,
         "discover_token",
@@ -430,7 +432,9 @@ def test_catalog_rejects_non_list_catalog_before_get_or_put(monkeypatch):
 def test_catalog_rejects_http_200_invalid_json_before_get_or_put(monkeypatch):
     """HTTP 200 with broken JSON is not a transient metadata outage."""
 
-    seen = _mock_catalog_response(monkeypatch, httpx.Response(200, content=b"<html>malformed JSON</html>"))
+    seen = _mock_catalog_response(
+        monkeypatch, httpx.Response(200, content=b"<html>malformed JSON</html>")
+    )
 
     def forbid_network(*args, **kwargs):
         pytest.fail("upstream GET or IA PUT attempted after invalid JSON")
