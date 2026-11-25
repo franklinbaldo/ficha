@@ -279,3 +279,57 @@ test('datas impossíveis são rejeitadas, ausência preserva null',async()=>{
   const result=await lookup(manifest,DATE,CNPJ,{decodeCompany:()=>noDate});
   assert.equal(result.data.data_opcao_mei,null);
 });
+
+test('declaração da camada e perfil do decoder permanecem distintos em todos os estados',async()=>{
+  for (const [label,version] of [['ausente',undefined],['null',null],['v1','1.0.0']]) {
+    const m=structuredClone(manifest);
+    const layer=m.snapshots[0].files.companies;
+    if(version===undefined) delete layer.schema_version; else layer.schema_version=version;
+    const expected={declaredWire:version??null,decoderProfile:'1.0.0',
+      wireProvenance:version==='1.0.0'?'declared':'legacy-assumed',producerSemantics:'unattested'};
+    for(const [state,opts] of [
+      ['found',{}],
+      ['absent-in-snapshot',{decodeCompany:()=>({...company,estabelecimentos:[{cnpj_ordem:2,cnpj_dv:92}]})}],
+      ['artifact-unavailable',{fetchImpl:mock(404),decodeCompany:()=>assert.fail('404 não decodifica')}],
+    ]) {
+      const result=await lookup(m,DATE,CNPJ,opts);
+      assert.equal(result.state,state,label);
+      for(const [key,value] of Object.entries(expected)) assert.equal(result[key],value,label+' '+state);
+      if(state==='found') assert.equal(result.data.porte_empresa,null);
+    }
+  }
+});
+
+test('qualquer declaração própria por shard, selecionado ou não, impede GET e decoder',async()=>{
+  for (const layerVersion of [undefined,null,'1.0.0']) {
+    for (const index of [0,1]) {
+      for (const shardVersion of [null,'1.0.0','1.1.0','9.0.0',undefined]) {
+        const m=structuredClone(manifest);
+        const layer=m.snapshots[0].files.companies;
+        if(layerVersion===undefined) delete layer.schema_version; else layer.schema_version=layerVersion;
+        layer.shards.push({shard:'34',url:archive.replace('33.zip','34.zip')});
+        layer.shards[index].schema_version=shardVersion;
+        let fetched=0,decoded=0;
+        await assert.rejects(lookup(m,DATE,CNPJ,{
+          fetchImpl:async()=>{fetched++;return mock()();},
+          decodeCompany:()=>{decoded++;return company;},
+        }),/v1 não declarada/);
+        assert.equal(fetched,0);
+        assert.equal(decoded,0);
+      }
+    }
+  }
+});
+
+test('versão incompatível da camada não é substituída pela versão do snapshot ou ZIP legado',async()=>{
+  for(const version of ['1.1.0','9.0.0','',1]) {
+    const m=structuredClone(manifest);
+    m.snapshots[0].schema_version='1.0.0';
+    m.snapshots[0].files.companies_zip={schema_version:'1.0.0'};
+    m.snapshots[0].files.companies.schema_version=version;
+    await assert.rejects(lookup(m,DATE,CNPJ,{
+      fetchImpl:()=>assert.fail('GET indevido'),
+      decodeCompany:()=>assert.fail('decoder indevido'),
+    }),/v1 não declarada/);
+  }
+});
