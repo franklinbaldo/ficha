@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
 import {MAX_COMPANY_BYTES, planAtomicRecord, readBoundedMember,
   fetchAtomicRecord} from '../static/js/atomic-record.mjs';
 
@@ -332,4 +333,26 @@ test('versão incompatível da camada não é substituída pela versão do snaps
       decodeCompany:()=>assert.fail('decoder indevido'),
     }),/v1 não declarada/);
   }
+});
+
+test('manifesto histórico publicado continua consultável sem atribuir versão declarada',async()=>{
+  const published=JSON.parse(readFileSync(new URL('../../web/public/manifest.json',import.meta.url),'utf8'));
+  for(const date of ['2026-05','2026-06','2026-07']){
+    let calls=0;
+    const outcome=await lookup(published,date,CNPJ,{
+      fetchImpl:async(url)=>{
+        calls++;
+        assert.equal(url,'https://archive.org/download/ficha-'+date+'/companies-33.zip/33/000/167.pb');
+        return mock(404)();
+      },
+      decodeCompany:()=>assert.fail('404 não decodifica'),
+    });
+    assert.equal(calls,1);
+    assert.equal(outcome.state,'artifact-unavailable');
+    assert.equal(outcome.declaredWire,null);
+    assert.equal(outcome.decoderProfile,'1.0.0');
+    assert.equal(outcome.wireProvenance,'legacy-assumed');
+    assert.equal(outcome.producerSemantics,'unattested');
+  }
+  assert.throws(()=>planAtomicRecord(published,'2026-04',CNPJ),/v1 não declarada/);
 });
