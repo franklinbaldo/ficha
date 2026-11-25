@@ -69,7 +69,16 @@ def test_report_never_overwrites(tmp_path, optimized, alias):
 def test_experiment_suite_is_collected(optimized):
     flags = ["-O"] if optimized else []
     result = subprocess.run(
-        [sys.executable, *flags, "-m", "unittest", "-v", "test_experiment.py", "test_cohort.py", "test_lexical.py"],
+        [
+            sys.executable,
+            *flags,
+            "-m",
+            "unittest",
+            "-v",
+            "test_experiment.py",
+            "test_cohort.py",
+            "test_lexical.py",
+        ],
         cwd=SCRIPT.parent,
         capture_output=True,
         text=True,
