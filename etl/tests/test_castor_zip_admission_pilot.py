@@ -5,6 +5,8 @@ import json
 import tempfile
 import zipfile
 from contextlib import ExitStack, closing
+from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
 
 import duckdb
@@ -26,8 +28,16 @@ def _write_exact(handle, chunk):
         raise OSError("short write in provisional ZIP sink")
 
 
-def _extract_b(zip_path, dest_dir, *, open_sink=lambda path: path.open("xb")):
+@dataclass
+class _PilotBudget:
+    expanded: int = 0
+    members: int = 0
+
+
+def _extract_b(zip_path, dest_dir, *, open_sink=lambda path: path.open("xb"), budget=None):
     """Pilot for flat, non-aliased fixture names, not a new name policy."""
+    if budget is None:
+        budget = _PilotBudget()
     dest_dir.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(dir=dest_dir.parent) as temporary:
         staging = Path(temporary) / "admitted"
@@ -52,9 +62,12 @@ def _extract_b(zip_path, dest_dir, *, open_sink=lambda path: path.open("xb")):
                 handle = sinks.enter_context(closing(open_sink(staging / name)))
                 return lambda chunk: _write_exact(handle, chunk)
 
-            raw_preflight._check_zip_members(archive, expanded=0, members=0, sink_for=sink_for)
+            totals = raw_preflight._check_zip_members(
+                archive, expanded=budget.expanded, members=budget.members, sink_for=sink_for
+            )
         # No sink or archive handle remains open; close failure cannot publish.
         staging.rename(dest_dir)
+        budget.expanded, budget.members = totals
         return [dest_dir / name for name in names]
 
 
@@ -69,6 +82,7 @@ def _witness_extract(extract, expected, calls):
         zip_sha, members = expected[name]
         assert _sha(zip_path) == zip_sha
         paths = extract(zip_path, dest_dir)
+        assert paths == [dest_dir / name for name, _, _ in members]
         actual = [(p.name, p.stat().st_size, _sha(p)) for p in paths]
         assert actual == members
         return paths
@@ -117,12 +131,7 @@ def test_monthly_real_transform_and_source_bag(tmp_path, monkeypatch):
     assert len(frozen) == 37
     print("monthly fixture SHA256:", json.dumps(frozen, sort_keys=True))
 
-    extract_a = transform.extract_zip
-    for arm, extract in (("a", extract_a), ("b", _extract_b)):
-        calls = []
-
-        monkeypatch.setattr(transform, "extract_zip", _witness_extract(extract, expected, calls))
-        root = tmp_path / arm
+    def run(root):
         transform.transform_snapshot(
             "2026-04",
             cache_dir=root / "cache",
@@ -131,8 +140,62 @@ def test_monthly_real_transform_and_source_bag(tmp_path, monkeypatch):
             skip_unimplemented=False,
             reject_empty_estabelecimentos=True,
         )
-        assert {p.name: _sha(p) for p in source.glob("*.zip")} == frozen
-        assert sorted(calls) == sorted(frozen)
+
+    def tree_sha(root):
+        return {p.relative_to(root): _sha(p) for p in root.rglob("*") if p.is_file()}
+
+    extract_a = transform.extract_zip
+    calls_a = []
+    monkeypatch.setattr(transform, "extract_zip", _witness_extract(extract_a, expected, calls_a))
+    a_root = tmp_path / "a"
+    run(a_root)
+    assert sorted(calls_a) == sorted(frozen)
+    assert {p.name: _sha(p) for p in source.glob("*.zip")} == frozen
+    a_frozen = tree_sha(a_root)
+
+    # The limit is reached across ZIPs, not inside the first ZIP. Keep this
+    # failed attempt private and retry in a fresh root with a fresh budget.
+    failed_root = tmp_path / "b-failed"
+    failed_budget = _PilotBudget()
+    failed_calls = []
+
+    def forbidden_connect(*args, **kwargs):
+        pytest.fail("DuckDB must not be opened after a failed admission")
+
+    with monkeypatch.context() as scoped:
+        scoped.setattr(raw_preflight, "_MAX_RAW_MEMBERS", 1)
+        scoped.setattr(duckdb, "connect", forbidden_connect)
+        scoped.setattr(
+            transform,
+            "extract_zip",
+            _witness_extract(partial(_extract_b, budget=failed_budget), expected, failed_calls),
+        )
+        with pytest.raises(RuntimeError, match="invalid ZIP member count"):
+            run(failed_root)
+    assert len(failed_calls) == 2
+    assert failed_budget.members == 1
+    assert not (failed_root / "output").exists()
+    assert not (failed_root / "evidence" / "monthly-estabelecimento-source-bag.json").exists()
+    assert (failed_root / "cache" / "2026-04" / "metrics" / "transform_metrics.json").is_file()
+    assert tree_sha(a_root) == a_frozen
+    failed_frozen = tree_sha(failed_root)
+
+    budget_b = _PilotBudget()
+    calls_b = []
+    monkeypatch.setattr(
+        transform,
+        "extract_zip",
+        _witness_extract(partial(_extract_b, budget=budget_b), expected, calls_b),
+    )
+    run(tmp_path / "b")
+    assert sorted(calls_b) == sorted(frozen)
+    assert budget_b.members == 37
+    assert budget_b.expanded == sum(
+        size for _, entries in expected.values() for _, size, _ in entries
+    )
+    assert {p.name: _sha(p) for p in source.glob("*.zip")} == frozen
+    assert tree_sha(a_root) == a_frozen
+    assert tree_sha(failed_root) == failed_frozen
 
     a, b = (tmp_path / arm / "output" for arm in ("a", "b"))
     files = sorted(p.relative_to(a) for p in a.rglob("*.parquet"))
@@ -157,14 +220,15 @@ def test_monthly_real_transform_and_source_bag(tmp_path, monkeypatch):
             rows = con.execute(
                 "SELECT cnpj, numero FROM read_parquet(?)", [str(root / "enderecos.parquet")]
             ).fetchall()
-            expected = {
+            expected_rows = [("".join(row[:3]), row[15]) for row in ESTABELECIMENTO_ROWS]
+            expected_rows.extend(
                 (
                     ESTABELECIMENTO_ROWS[0][0] + f"{1000 + part:04}" + ESTABELECIMENTO_ROWS[0][2],
                     str(100 + part),
                 )
                 for part in range(1, 10)
-            }
-            assert expected <= set(rows)
+            )
+            assert sorted(rows) == sorted(expected_rows)
     assert json.loads((a / "lookups.json").read_text()) == json.loads(
         (b / "lookups.json").read_text()
     )
