@@ -274,3 +274,40 @@ def test_verify_all_shards_reports_incomplete_catalog_without_downloading():
             fetch_metadata=remote.metadata,
             fetch_meta=meta,
         )
+
+
+def test_old_producer_receipt_refused_before_file_or_remote(tmp_path, monkeypatch):
+    from dataclasses import replace
+
+    from ficha_etl.shard_transfer import PreparedShard, submit_prepared_shard
+
+    session = _Session()
+    pinned = pin_materialization_inputs(_Remote().metadata)
+    current = _spec(session, pinned)
+    old = replace(current, packer_format_version=2)
+    prepared = PreparedShard(
+        prefix="07",
+        name="companies-07.zip",
+        path=tmp_path / "not-read.zip",
+        materialization_id=old.materialization_id(),
+        size=123,
+        sha1="a" * 40,
+    )
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("obsolete receipt reached file or remote I/O")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(Path, "exists", forbidden)
+        with pytest.raises(ShardPublishError, match="prepared materialization_id"):
+            submit_prepared_shard(
+                session,
+                prepared,
+                pinned_inputs=pinned,
+                fetch_metadata=forbidden,
+                fetch_meta=forbidden,
+                upload=forbidden,
+                fetch_direct=forbidden,
+            )
+    if session.pack_calls:
+        pytest.fail("obsolete receipt caused repack")

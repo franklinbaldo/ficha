@@ -12,10 +12,11 @@ from ficha_etl.sharded_pack import ShardGeometry, ShardPackSession
 LOOKUP_KINDS = ("cnaes", "motivos", "municipios", "naturezas", "paises", "qualificacoes")
 
 
-def _write_fixture(root, bases: list[str]) -> None:
+def _write_fixture(root, bases: list[str], *, porte_codes: list[str | None] | None = None) -> None:
     con = duckdb.connect()
-    values = ", ".join(f"('{base}')" for base in bases)
-    con.execute(f"CREATE TABLE bases AS SELECT * FROM (VALUES {values}) t(cnpj_base)")
+    con.execute("CREATE TABLE bases (cnpj_base VARCHAR, porte_empresa VARCHAR)")
+    codes = ["01"] * len(bases) if porte_codes is None else porte_codes
+    con.executemany("INSERT INTO bases VALUES (?, ?)", list(zip(bases, codes, strict=True)))
 
     con.execute(f"""
         COPY (
@@ -24,7 +25,7 @@ def _write_fixture(root, bases: list[str]) -> None:
                 'RAZAO ' || cnpj_base AS razao_social,
                 'RAZAO ' || cnpj_base AS razao_social_normalizada,
                 '2062' AS natureza_juridica_codigo,
-                '01' AS porte_empresa,
+                porte_empresa,
                 1000.0 AS capital_social,
                 NULL::VARCHAR AS ente_federativo_responsavel,
                 1 AS qtd_estabelecimentos,
@@ -189,9 +190,13 @@ def test_materialization_must_match_the_exact_shard(tmp_path):
             session.pack("07", tmp_path / "out", materialization=wrong)
 
 
-def test_real_v11_shard_session_selects_alpha_root_and_plans_versioned_name(tmp_path):
+def test_real_v11_shard_session_selects_alpha_root_and_plans_versioned_name(tmp_path, monkeypatch):
     """Full local DuckDB -> pack -> receipt -> opt-in plan, no network or upload."""
+    from dataclasses import replace
+    from pathlib import Path
+
     from ficha_etl.proto.ficha.v1.company_pb2 import Company
+    from ficha_etl.shard_publish import ShardPublishError
     from ficha_etl.shard_transfer import prepare_one_shard, plan_opt_in_v11_shard
 
     _write_fixture(tmp_path, ["42000001", "CA000001"])
@@ -206,6 +211,22 @@ def test_real_v11_shard_session_selects_alpha_root_and_plans_versioned_name(tmp_
     with ShardPackSession("2026-08", geometry, parquets_base=str(tmp_path)) as session:
         prepared = prepare_one_shard(session, "42", tmp_path / "out", pinned_inputs=pins)
         planned = plan_opt_in_v11_shard(session, prepared, pinned_inputs=pins)
+        current = session.materialization_spec("42", input_sha1s=pins)
+        old = replace(current, packer_format_version=2)
+        obsolete = replace(prepared, materialization_id=old.materialization_id())
+        if (
+            current.packer_format_version != 3
+            or obsolete.materialization_id == planned.materialization_id
+        ):
+            pytest.fail("test requires distinct producer v2 and v3 identities")
+
+        def forbidden(*args, **kwargs):
+            pytest.fail("obsolete wire-1.1 receipt reached local file I/O")
+
+        with monkeypatch.context() as patch:
+            patch.setattr(Path, "exists", forbidden)
+            with pytest.raises(ShardPublishError, match="prepared materialization_id"):
+                plan_opt_in_v11_shard(session, obsolete, pinned_inputs=pins)
 
     assert planned.name == "wire-1.1/companies-42.zip"
     assert prepared.path.name == "companies-42.zip"
@@ -543,3 +564,83 @@ def test_prepare_resolved_alias_does_not_pack(local_prepare, tmp_path):
         prepare("42", alias / "companies-43.zip")
     if list(out.iterdir()):
         pytest.fail("resolved alias rejection wrote to output")
+
+
+def test_both_packers_decode_same_rfb_porte_from_local_parquet(tmp_path):
+    """Both public pack paths read the same synthetic VARCHAR Parquets."""
+    import hashlib
+
+    from ficha_etl.pack import pack_from_parquets
+    from ficha_etl.proto.ficha.v1.company_pb2 import Company
+
+    codes = ["00", "01", "03", "05", "02", None, "1", "99"]
+    expected = dict(zip(range(42000001, 42000009), [1, 2, 3, 5, 0, 0, 0, 0], strict=True))
+    _write_fixture(tmp_path, [str(root) for root in expected], porte_codes=codes)
+    with duckdb.connect() as con:
+        column_type = con.execute(
+            "SELECT typeof(porte_empresa) FROM read_parquet(?) LIMIT 1",
+            [str(tmp_path / "raizes.parquet")],
+        ).fetchone()[0]
+    if column_type != "VARCHAR":
+        pytest.fail("fixture must exercise lexical RFB values")
+    pins = {}
+    for path in sorted(tmp_path.rglob("*.parquet")):
+        digest = hashlib.sha1(path.read_bytes(), usedforsecurity=False).hexdigest()
+        pins[path.relative_to(tmp_path).as_posix()] = digest
+    mono = tmp_path / "companies.zip"
+    pack_from_parquets("2026-08", mono, parquets_base=str(tmp_path))
+    with ShardPackSession("2026-08", ShardGeometry(2), parquets_base=str(tmp_path)) as session:
+        spec = session.materialization_spec("42", input_sha1s=pins)
+        packed = session.pack("42", tmp_path / "out", materialization=spec)
+    descriptors = []
+    for path in (mono, packed.path):
+        with zipfile.ZipFile(path) as archive:
+            if archive.testzip() is not None:
+                pytest.fail("invalid ZIP CRC")
+            descriptor = archive.read("_schema.desc")
+            descriptors.append(descriptor)
+            meta = json.loads(archive.read("_meta.json"))
+            if meta["count"] != len(expected) or meta["schema_version"] != "1.1.0":
+                pytest.fail("unexpected metadata")
+            if meta["schema_sha256"] != hashlib.sha256(descriptor).hexdigest():
+                pytest.fail("descriptor hash mismatch")
+            members = [n for n in archive.namelist() if n.endswith(".pb") and not n.startswith("_")]
+            expected_members = {f"42/000/{root % 1000:03d}.pb": root for root in expected}
+            if len(members) != len(expected) or set(members) != set(expected_members):
+                pytest.fail("unexpected member names or multiplicity")
+            actual = {}
+            for name in members:
+                company = Company.FromString(archive.read(name))
+                if company.cnpj_base != expected_members[name]:
+                    pytest.fail(f"{name}: wrong decoded root {company.cnpj_base}")
+                if company.snapshot_yyyymm != 202608:
+                    pytest.fail("unexpected snapshot")
+                if company.cnpj_base in actual:
+                    pytest.fail("duplicate company")
+                actual[company.cnpj_base] = company.porte_empresa
+            if actual != expected:
+                pytest.fail(f"{path.name}: {actual!r} != {expected!r}")
+            if path == packed.path:
+                if meta["materialization"] != spec.meta_payload()["materialization"]:
+                    pytest.fail("shard materialization differs from expected spec")
+                if spec.packer_format_version != 3:
+                    pytest.fail("producer semantic version must be 3")
+            elif "materialization" in meta:
+                pytest.fail("monolithic metadata must not attest shard materialization")
+    if descriptors[0] != descriptors[1]:
+        pytest.fail("packers disagree on wire descriptor")
+
+
+@pytest.mark.parametrize("version", [2, 3.0, 4])
+def test_pack_rejects_wrong_producer_version_before_output(tmp_path, version):
+    from dataclasses import replace
+
+    _write_fixture(tmp_path, ["42000001"])
+    out = tmp_path / "out"
+    with ShardPackSession("2026-08", ShardGeometry(2), parquets_base=str(tmp_path)) as session:
+        current = session.materialization_spec("42", input_sha1s={})
+        wrong = replace(current, packer_format_version=version)
+        with pytest.raises(ValueError, match="packer_format_version"):
+            session.pack("42", out, materialization=wrong)
+    if out.exists():
+        pytest.fail("wrong producer version wrote output")
