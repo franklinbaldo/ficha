@@ -11,8 +11,8 @@ import duckdb
 import pytest
 
 from ficha_etl import canonical_history, fetcher, raw_preflight, transform
-from test_canonical_history import _row, _write_zip
-from test_transform import (
+from .test_canonical_history import _row, _write_zip
+from .test_transform import (
     ESTABELECIMENTO_ROWS,
     _build_full_fixture_zips,
     _ZipDirFetcher,
@@ -48,9 +48,7 @@ def _extract_b(zip_path, dest_dir, *, open_sink=lambda path: path.open("xb")):
                 handle = sinks.enter_context(open_sink(staging / name))
                 return lambda chunk: _write_exact(handle, chunk)
 
-            raw_preflight._check_zip_members(
-                archive, expanded=0, members=0, sink_for=sink_for
-            )
+            raw_preflight._check_zip_members(archive, expanded=0, members=0, sink_for=sink_for)
         # No sink or archive handle remains open; close failure cannot publish.
         staging.rename(dest_dir)
         return [dest_dir / name for name in names]
@@ -79,6 +77,7 @@ def test_monthly_real_transform_and_source_bag(tmp_path, monkeypatch):
     for part in range(1, 10):
         row = list(ESTABELECIMENTO_ROWS[0])
         row[1] = f"{1000 + part:04}"
+        row[15] = str(100 + part)
         _zip_with_csv(source / f"Estabelecimentos{part}.zip", "shared.csv", [tuple(row)])
     # Freeze identical bytes before both arms. Re-encode with fixed timestamp
     # and STORED to make fixture hashes independent of runtime zlib version.
@@ -87,7 +86,9 @@ def test_monthly_real_transform_and_source_bag(tmp_path, monkeypatch):
             entries = [(entry.filename, archive.read(entry)) for entry in archive.infolist()]
         with zipfile.ZipFile(path, "w") as archive:
             for name, data in entries:
-                archive.writestr(zipfile.ZipInfo(name), data)
+                info = zipfile.ZipInfo(name)
+                info.create_system = 3
+                archive.writestr(info, data)
     frozen = {p.name: _sha(p) for p in source.glob("*.zip")}
     assert len(frozen) == 37
     print("monthly fixture SHA256:", json.dumps(frozen, sort_keys=True))
@@ -108,11 +109,25 @@ def test_monthly_real_transform_and_source_bag(tmp_path, monkeypatch):
 
     a, b = (tmp_path / arm / "output" for arm in ("a", "b"))
     files = sorted(p.relative_to(a) for p in a.rglob("*.parquet"))
-    assert files
+    assert Path("enderecos.parquet") in files
     assert files == sorted(p.relative_to(b) for p in b.rglob("*.parquet"))
     with duckdb.connect() as con:
         for relative in files:
             _parquet_bag_equal(con, a / relative, b / relative)
+        for root in (a, b):
+            rows = con.execute(
+                "SELECT cnpj, numero FROM read_parquet(?)", [str(root / "enderecos.parquet")]
+            ).fetchall()
+            expected = {
+                (
+                    ESTABELECIMENTO_ROWS[0][0]
+                    + f"{1000 + part:04}"
+                    + ESTABELECIMENTO_ROWS[0][2],
+                    str(100 + part),
+                )
+                for part in range(1, 10)
+            }
+            assert expected <= set(rows)
     assert json.loads((a / "lookups.json").read_text()) == json.loads(
         (b / "lookups.json").read_text()
     )
@@ -131,6 +146,8 @@ def test_historical_real_transform_fresh_roots(tmp_path, monkeypatch):
     source = tmp_path / "fixture.zip"
     _write_zip(source, [_row(nome_fantasia="Linha 1\nLinha 2")])
     frozen = _sha(source)
+    with zipfile.ZipFile(source) as archive:
+        payload = archive.read(archive.infolist()[0])
     print("historical fixture SHA256:", frozen)
     outputs = []
     for arm in ("a", "b"):
@@ -141,6 +158,8 @@ def test_historical_real_transform_fresh_roots(tmp_path, monkeypatch):
         )
         assert result.reused is False
         assert result.manifest["source"]["zip"]["sha256"] == frozen
+        assert result.manifest["source"]["csv"]["sha256"] == hashlib.sha256(payload).hexdigest()
+        assert result.manifest["source"]["csv"]["bytes"] == len(payload)
         assert _sha(source) == frozen
         outputs.append(result.output_path)
     with duckdb.connect() as con:
