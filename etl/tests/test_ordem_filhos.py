@@ -92,9 +92,9 @@ def test_empate_total_preserva_a_ordem_de_entrada():
     menos previsível *dada* a entrada; a entrada em si vem do agregado do
     DuckDB e não é determinística sob paralelismo.
 
-    Isto está registrado como risco aberto em #147: a reprodutibilidade do
-    sha256 de `companies.zip` depende de não haver empate total, que é o que
-    2026-05 mede (zero casos), não o que o cadastro garante.
+    A issue #152 distingue estabilidade semântica de reprodutibilidade do
+    contêiner ZIP. O censo histórico de 2026-05 não encontrou esses empates;
+    isso não garante que entradas futuras tenham chaves naturais únicas.
     """
     a = {"cnpj_ordem": "0001", "cnpj_dv": "11", "marca": "a"}
     b = {"cnpj_ordem": "0001", "cnpj_dv": "11", "marca": "b"}
@@ -171,3 +171,49 @@ def test_bate_com_o_order_by_do_duckdb(valores):
     assert [(d["cnpj_ordem"], d["cnpj_dv"]) for d in obtido] == [
         (d["cnpj_ordem"], d["cnpj_dv"]) for d in esperado
     ]
+
+
+class _SocioReads(dict):
+    """Track direct field reads on the singleton path, before any sorting."""
+
+    def __init__(self, values):
+        super().__init__(values)
+        self.reads = set()
+
+    def get(self, key, default=None):
+        self.reads.add(key)
+        return super().get(key, default)
+
+    def __getitem__(self, key):
+        self.reads.add(key)
+        return super().__getitem__(key)
+
+
+@pytest.mark.parametrize("partner", [None, "12345678000195", "AB123456000195"])
+def test_socio_wire_reads_are_covered_by_order_keys(partner):
+    """A singleton bypasses em_ordem's key reads; track serialization only."""
+    socio = _SocioReads(
+        {**dict.fromkeys(ORDEM_SOCIOS), "cnpj_socio": partner, "nome_socio_razao_social": "ANA"}
+    )
+    company = row_to_company({"cnpj_base": "12345678", "socios": [socio]})
+    assert len(company.socios) == 1
+    assert company.socios[0].nome_socio_razao_social == "ANA"
+    assert socio.reads == set(ORDEM_SOCIOS)
+
+
+@pytest.mark.parametrize("partner", [None, "12345678000195", "AB123456000195"])
+def test_total_socio_tie_with_distinct_unused_fields_has_same_wire(partner):
+    """Distinct source rows can still be indistinguishable in the current PB."""
+    base = {
+        **dict.fromkeys(ORDEM_SOCIOS),
+        "cnpj_socio": partner,
+        "nome_socio_razao_social": "ANA",
+    }
+    a = {**base, "unserialized_marker": "a"}
+    b = {**base, "unserialized_marker": "b"}
+    assert a != b
+    ab = row_to_company({"cnpj_base": "12345678", "socios": [a, b]})
+    ba = row_to_company({"cnpj_base": "12345678", "socios": [b, a]})
+    assert len(ab.socios) == len(ba.socios) == 2
+    assert ab.socios[0] == ab.socios[1]
+    assert ab.SerializeToString() == ba.SerializeToString()

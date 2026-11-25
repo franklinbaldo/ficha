@@ -194,7 +194,7 @@ describe('Lagarto P0-D: manifest v1/v1.1 and reader contract', () => {
     expect(() => companyArchiveUrl('A0000000', {
       identifier: 'ficha-2026-07',
       files: legacy.files,
-    })).toThrow(/shard A0/);
+    })).toThrow(/alphanumeric root requires v1\.1 shard mapping/);
     const current = SnapshotEntrySchema.parse(snapshot11());
     expect(companyArchiveUrl('A0000000', {
       identifier: 'ficha-2026-08',

@@ -14,6 +14,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterator, Mapping
@@ -22,7 +23,7 @@ import duckdb
 
 from ficha_etl import mirror
 from ficha_etl.cnpj import SHARD_BY, SHARD_RANGE_KIND, shard_of, source_prefixes
-from ficha_etl.materialization import MaterializationSpec, ShardRange
+from ficha_etl.materialization import PACKER_FORMAT_VERSION, MaterializationSpec, ShardRange
 from ficha_etl.pack import (  # noqa: PLC2701 -- composição interna do mesmo pacote
     LOOKUP_KINDS,
     SCHEMA_VERSION,
@@ -242,6 +243,14 @@ class ShardPackSession:
         return self._con, self._lookups, self._urls
 
     def _validate_materialization(self, prefix: str, spec: MaterializationSpec) -> None:
+        if (
+            type(spec.packer_format_version) is not int
+            or spec.packer_format_version != PACKER_FORMAT_VERSION
+        ):
+            raise ValueError(
+                f"materialization packer_format_version {spec.packer_format_version!r} "
+                f"must be the current integer {PACKER_FORMAT_VERSION}"
+            )
         if spec.snapshot != self.month:
             raise ValueError(
                 f"materialization snapshot {spec.snapshot!r} != session month {self.month!r}"
@@ -309,44 +318,56 @@ def _pack_rows(
     previous: str | None = None
     count = 0
 
-    partial = output_path.with_name(output_path.name + ".part")
-    partial.unlink(missing_ok=True)
+    # mkdir is the exclusive ownership boundary for cooperating producers.
+    # Never delete a pre-existing stage (including a legacy .part file).
+    stage = output_path.with_name(output_path.name + ".part")
+    stage.mkdir()
+    try:
+        try:
+            output_path.lstat()
+        except FileNotFoundError:
+            pass
+        else:
+            raise FileExistsError(f"shard already exists: {output_path}")
+        partial = stage / "shard.zip"
 
-    with SpoolingZipFile(partial, "w", compression=8, compresslevel=6, allowZip64=True) as zf:
-        zf.writestr(_membro(zf, "_schema.desc", zip_date), schema_desc)
-        zf.writestr(_membro(zf, "_schema.proto", zip_date), _schema_proto_text())
-        for kind, lookup in lookup_rows.items():
+        with SpoolingZipFile(partial, "w", compression=8, compresslevel=6, allowZip64=True) as zf:
+            zf.writestr(_membro(zf, "_schema.desc", zip_date), schema_desc)
+            zf.writestr(_membro(zf, "_schema.proto", zip_date), _schema_proto_text())
+            for kind, lookup in lookup_rows.items():
+                zf.writestr(
+                    _membro(zf, f"_lookups/{kind}.pb", zip_date),
+                    build_lookup_pb(kind, lookup),
+                )
+
+            for row in rows:
+                company = row_to_company(row)
+                base = company_root(company)
+                if previous is not None and base <= previous:
+                    if base == previous:
+                        raise ValueError(f"duplicate cnpj_base in shard input: {base}")
+                    raise ValueError(f"unsorted shard input: {base} < {previous}")
+                previous = base
+                company.snapshot_yyyymm = snapshot_yyyymm
+                zf.writestr(
+                    _membro(zf, cnpjpath(base), zip_date),
+                    company.SerializeToString(),
+                )
+                count += 1
+
+            meta = {
+                "schema_version": SCHEMA_VERSION,
+                "schema_sha256": schema_sha256,
+                "snapshot_month": snapshot_month,
+                "count": count,
+                **materialization.meta_payload(),
+            }
             zf.writestr(
-                _membro(zf, f"_lookups/{kind}.pb", zip_date),
-                build_lookup_pb(kind, lookup),
+                _membro(zf, "_meta.json", zip_date),
+                json.dumps(meta, indent=2, sort_keys=True),
             )
 
-        for row in rows:
-            company = row_to_company(row)
-            base = company_root(company)
-            if previous is not None and base <= previous:
-                if base == previous:
-                    raise ValueError(f"duplicate cnpj_base in shard input: {base}")
-                raise ValueError(f"unsorted shard input: {base} < {previous}")
-            previous = base
-            company.snapshot_yyyymm = snapshot_yyyymm
-            zf.writestr(
-                _membro(zf, cnpjpath(base), zip_date),
-                company.SerializeToString(),
-            )
-            count += 1
-
-        meta = {
-            "schema_version": SCHEMA_VERSION,
-            "schema_sha256": schema_sha256,
-            "snapshot_month": snapshot_month,
-            "count": count,
-            **materialization.meta_payload(),
-        }
-        zf.writestr(
-            _membro(zf, "_meta.json", zip_date),
-            json.dumps(meta, indent=2, sort_keys=True),
-        )
-
-    partial.replace(output_path)
+        partial.replace(output_path)
+    finally:
+        shutil.rmtree(stage)
     return count, output_path.stat().st_size

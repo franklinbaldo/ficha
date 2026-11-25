@@ -31,18 +31,29 @@ const LookupEntrySchema = z.union([
   z.object({ url: z.string().url() }),
 ]);
 
-const CompanyShardSchema = z.object({
+// Reject a shard-level declaration before Zod strips unknown keys.
+const CompanyShardSchema = z.preprocess((entry, ctx) => {
+  if (entry !== null && typeof entry === 'object' &&
+      Object.prototype.hasOwnProperty.call(entry, 'schema_version')) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['schema_version'],
+      message: 'company shard cannot declare schema_version; declare wire on the layer',
+    });
+  }
+  return entry;
+}, z.object({
   shard: z.string().regex(/^\d{2}$/),
   url: z.string().url(),
   // Checksum operacional do IA; autenticidade semântica é validada no ETL.
   sha1: z.string().regex(/^[0-9a-f]{40}$/),
   size: z.number().int().positive(),
-});
+}));
 
 export const CompaniesShardedSchema = z
   .object({
     shard_by: z.enum(['cnpj_base_prefix_2', 'cnpj_base_prefix_or_base36_mod_100_v1']),
-    schema_version: z.enum(['1.0.0', '1.1.0']).optional(),
+    schema_version: z.enum(['1.0.0', '1.1.0']).nullish(),
     shards: z.array(CompanyShardSchema).length(100),
   })
   .superRefine(({ shard_by, schema_version, shards }, ctx) => {

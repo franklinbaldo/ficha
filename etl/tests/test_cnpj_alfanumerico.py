@@ -39,7 +39,7 @@ def test_real_rfb_identifier_survives_gate_and_published_shard(tmp_path):
     assert evidence["status"] == "ok"
     with ShardPackSession("2026-08", ShardGeometry(2), parquets_base=str(tmp_path)) as session:
         spec = session.materialization_spec("00", input_sha1s={})
-        assert spec.packer_format_version == PACKER_FORMAT_VERSION == 2
+        assert spec.packer_format_version == PACKER_FORMAT_VERSION == 3
         result = session.pack("00", tmp_path / "out", materialization=spec)
     with zipfile.ZipFile(result.path) as z:
         c = Company.FromString(z.read("00/000/000.pb"))

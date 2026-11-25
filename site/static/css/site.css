@@ -120,11 +120,19 @@ button[aria-disabled="true"] { background:var(--green-deep); opacity:1; cursor:p
 .archive-snapshot small { color:var(--green); }
 .compact-select { max-width:22rem; margin:1rem 0; }
 .compact-select select { width:100%; }
+#acervo-filtro { font:inherit; min-width:0; background:var(--white); border:1px solid #6b8175;
+  border-radius:.2rem; padding:.82rem 1rem; color:var(--ink); }
+#acervo-competencia { border-color:#6b8175; }
+#acervo-limpar { margin-top:.65rem; cursor:pointer; font-size:1rem; font-family:inherit; }
+#acervo-limpar:disabled { cursor:not-allowed; }
 .stat-strip { display:flex; gap:2rem; flex-wrap:wrap; padding:1rem 0; font-weight:700; }
 .archive-list { border-top:1px solid var(--line); margin:1.5rem 0; }
 .archive-file { border-bottom:1px solid var(--line); }
-.archive-file summary { display:flex; gap:1rem; flex-wrap:wrap; justify-content:space-between;
+.archive-file summary { display:list-item; list-style-position:outside; margin-inline-start:1.25em;
   cursor:pointer; padding:1rem 0; }
+.archive-summary-row { display:inline-flex; vertical-align:top; gap:.25rem 1rem; flex-wrap:wrap;
+  justify-content:space-between; width:100%; min-width:0; }
+.archive-summary-row strong { overflow-wrap:anywhere; min-width:0; }
 .archive-detail { padding:0 0 1.3rem; }
 .archive-detail code { display:block; max-width:100%; overflow-wrap:anywhere; font-size:.8rem; margin-bottom:1rem; }
 .filter-row { display:flex; gap:1rem; flex-wrap:wrap; }

@@ -4,7 +4,7 @@ import { archiveView, archivalFileEntries, catalogueTotals, competenceLabel,
 import { canonicalCnpj, displayValue, RECORD_FIELDS } from './record.mjs';
 import { fetchCompanyByCnpj } from './atomic-browser.mjs';
 import { CnpjInputError } from './atomic-record.mjs';
-import {BASE,byId,create,add,anchor,option,status,setParams,params,watchSelection,populateDateSelect} from './page-helpers.mjs';
+import {BASE,byId,create,add,anchor,option,status,setParams,params,watchSelection,populateDateSelect,renderWireProvenance} from './page-helpers.mjs';
 import {mountHistory} from './history.mjs';
 export {mountHistory,renderHistoryComparison,fetchHistoryRecordAt} from './history.mjs';
 
@@ -47,6 +47,7 @@ export function renderCompanyRecord(doc, parent, result) {
   if (result.state === 'artifact-unavailable') {
     add(doc,parent,'h2','Arquivo indisponível nesta competência');
     add(doc,parent,'p','O arquivo do registro não respondeu (HTTP 404). Consulta inconclusiva: isso não comprova ausência da empresa.');
+    renderWireProvenance(doc,parent,result);
     showProvenance(doc,parent,result.date,result.archiveUrl || result.source);
     return;
   }
@@ -55,6 +56,7 @@ export function renderCompanyRecord(doc, parent, result) {
       ? 'CNPJ não localizado no registro Protobuf desta competência'
       : 'Nenhum registro encontrado nesta competência');
     add(doc,parent,'p','A ausência nesta consulta não comprova encerramento, inexistência histórica ou mudança cadastral.');
+    renderWireProvenance(doc,parent,result);
     showProvenance(doc,parent,result.date,result.archiveUrl || result.source);
     return;
   }
@@ -67,6 +69,7 @@ export function renderCompanyRecord(doc, parent, result) {
   if (result.partial) {
     add(doc,parent,'p','Porte empresarial: Não determinado. O código Protobuf legado não permite afirmar o porte RFB. Simples/MEI não informados também permanecem indeterminados.','fineprint');
   }
+  renderWireProvenance(doc,parent,result);
   showProvenance(doc,parent,result.date,result.archiveUrl || result.source);
 }
 
@@ -143,8 +146,10 @@ export async function mountCompany(doc, {loadManifest = fetchManifest, lookup = 
   if (initial) { input.value = initial; await lookupSubmit(); }
 }
 
-export function renderArchiveSelection(doc, parent, manifest, date) {
+export function renderArchiveSelection(doc, parent, manifest, date, filter='') {
   const {selected,entries,totals}=archiveView(manifest,date);
+  const term=filter.trim().toLocaleLowerCase('pt-BR');
+  const shown=entries.filter(file=>file.key.toLocaleLowerCase('pt-BR').includes(term));
   parent.replaceChildren();
   add(doc,parent,'h2',competenceLabel(selected.date)+' · '+selected.date,'section-title');
   const summary=add(doc,parent,'div','','stat-strip');
@@ -153,29 +158,43 @@ export function renderArchiveSelection(doc, parent, manifest, date) {
   if(selected.date===manifest.current) add(doc,parent,'p','Esta é a competência de referência declarada no manifesto.','fineprint');
   add(doc,parent,'p','Os links abaixo são declarados pelo manifesto. A existência de uma URL não comprova acessibilidade nem valida o conteúdo remoto.','fineprint');
   const table=add(doc,parent,'div','','archive-list');
-  for (const file of entries) {
+  for (const file of shown) {
     const detail=add(doc,table,'details','','archive-file');
     const head=add(doc,detail,'summary');
-    add(doc,head,'strong',file.key);
-    add(doc,head,'span',formatBytes(file.size));
+    const row=add(doc,head,'span','','archive-summary-row');
+    add(doc,row,'strong',file.key);
+    add(doc,row,'span',formatBytes(file.size),'archive-summary-size');
     const body=add(doc,detail,'div','','archive-detail');
     if(file.sha256) add(doc,body,'code','SHA-256 declarado: '+file.sha256);
     else if(file.sha1) add(doc,body,'code','SHA-1 declarado: '+file.sha1);
     else add(doc,body,'p','Digest não declarado.');
-    if(file.url) anchor(doc,body,'Abrir arquivo no repositório de origem',file.url,true);
+    if(file.url) anchor(doc,body,'Abrir arquivo indicado no catálogo: '+file.key,file.url,true);
     else add(doc,body,'p','URL HTTPS não declarada.');
   }
   if(!entries.length) add(doc,parent,'p','Nenhum arquivo listado nesta competência.');
+  else if(!shown.length) add(doc,parent,'p','Nenhum arquivo corresponde ao filtro nesta competência.');
+  return {shown:shown.length,total:entries.length};
 }
 
 export async function mountArchive(doc,{loadManifest=fetchManifest}={}) {
   const select=byId(doc,'acervo-competencia'), output=byId(doc,'acervo-resultado');
   const state=byId(doc,'acervo-estado'), list=byId(doc,'acervo-competencias');
+  const filter=byId(doc,'acervo-filtro'), count=byId(doc,'acervo-contagem');
+  const clear=byId(doc,'acervo-limpar');
   if(![select,output,state,list].every(Boolean)) return;
+  // All archive controls stay inert until the catalogue has loaded successfully.
+  select.disabled=true;
+  if(filter) filter.disabled=true;
+  if(clear) clear.disabled=true;
   try{
     const manifest=await loadManifest();
     const snaps=snapshotsDescending(manifest);
     populateDateSelect(doc,select,manifest,params().get('competencia') || manifest.current);
+    // Native options show only the date so they stay legible at 200% CSS text
+    // in a 320px viewport. The catalogue list separately marks the reference.
+    for(const item of select.options) {
+      item.textContent=item.value;
+    }
     list.replaceChildren();
     for(const snap of snaps){
       const total=catalogueTotals(snap);
@@ -185,14 +204,35 @@ export async function mountArchive(doc,{loadManifest=fetchManifest}={}) {
       add(doc,row,'span',formatBytes(total.bytes));
       if(snap.date===manifest.current) add(doc,row,'small','Referência');
     }
-    const paint=()=>{
-      renderArchiveSelection(doc,output,manifest,select.value);
-      setParams({competencia:select.value});
+    select.disabled=false;
+    if(filter) filter.disabled=false;
+    const paint=(updateUrl=true)=>{
+      const {shown,total}=renderArchiveSelection(doc,output,manifest,select.value,filter?.value||'');
+      if(count) status(count,shown+' de '+total+' arquivo'+(total===1?'':'s')+' exibido'+(total===1?'':'s'));
+      if(clear) clear.disabled=!(filter?.value||'');
+      if(updateUrl) setParams({competencia:select.value});
     };
-    select.addEventListener('change',paint);
+    select.addEventListener('change',()=>{
+      if(filter) filter.value='';
+      paint();
+    });
+    filter?.addEventListener('input',()=>paint(false));
+    clear?.addEventListener('click',()=>{
+      if(!filter) return;
+      filter.value='';
+      paint(false);
+      filter.focus();
+    });
     paint();
-    status(state, snaps.length+' competência(s) declarada(s) no manifesto publicado.');
-  }catch(error){status(state,'Não foi possível abrir o acervo: '+error.message,true);}
+    status(state, snaps.length+' competência'+(snaps.length===1?'':'s')+
+      ' declarada'+(snaps.length===1?'':'s')+' no manifesto publicado.');
+  }catch(error){
+    select.disabled=true;
+    if(filter) filter.disabled=true;
+    if(clear) clear.disabled=true;
+    if(count) status(count,'Lista de arquivos indisponível: filtro desativado.',true);
+    status(state,'Não foi possível abrir o acervo: '+error.message,true);
+  }
 }
 
 export function renderExploreAssets(doc,parent,manifest,date,filter='') {

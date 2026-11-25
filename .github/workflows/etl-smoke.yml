@@ -89,12 +89,16 @@ jobs:
         working-directory: .
         run: |
           python3 - <<'EOF'
-          import datetime, json, sys
+          import datetime, json, re, sys
 
           manifest = json.load(open("web/public/manifest.json"))
           current = manifest.get("current", "")
           if not current:
               print("::error::manifest.json sem campo 'current'")
+              sys.exit(1)
+
+          if not isinstance(current, str) or not re.fullmatch(r"[0-9]{4}-(0[1-9]|1[0-2])", current) or current.startswith("0000-"):
+              print("::error::manifest.json com 'current' fora do formato YYYY-MM válido")
               sys.exit(1)
 
           year, month = map(int, current.split("-"))

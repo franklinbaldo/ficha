@@ -246,3 +246,27 @@ def test_transparent_unzip_retries_503_without_waiting_for_pending_tasks():
     assert payload == {"ok": True}
     assert sleeps == [10, 20]
     assert all(url.endswith("/ficha-2026-05/companies-07.zip/_meta.json") for url in client.urls)
+
+
+@pytest.mark.parametrize("version", [2, 3])
+def test_same_wire_and_inputs_require_current_producer_version(version):
+    from dataclasses import replace
+
+    expected = _spec()
+    if expected.packer_format_version != 3:
+        pytest.fail("producer version must be 3")
+    observed = replace(expected, packer_format_version=version)
+    verdict = classify_remote_shard(
+        "07",
+        expected,
+        _metadata(_entry("companies-07.zip")),
+        fetch_meta=lambda _: {
+            "materialization": {
+                "id": observed.materialization_id(),
+                "spec": observed.as_document(),
+            },
+        },
+    )
+    wanted = ShardReuseState.REUSABLE if version == 3 else ShardReuseState.MISMATCH
+    if verdict.state is not wanted or verdict.may_skip != (version == 3):
+        pytest.fail(f"producer {version}: unexpected reuse verdict {verdict.state}")
