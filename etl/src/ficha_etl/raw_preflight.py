@@ -11,6 +11,7 @@ import os
 import struct
 import zipfile
 import zlib
+from collections.abc import Callable
 from io import BytesIO
 from pathlib import Path
 
@@ -152,7 +153,12 @@ def _check_raw_central_zip64(archive: zipfile.ZipFile, entries: list[zipfile.Zip
 
 
 def _check_member_exact(
-    archive: zipfile.ZipFile, entry: zipfile.ZipInfo, budget: int, next_offset: int
+    archive: zipfile.ZipFile,
+    entry: zipfile.ZipInfo,
+    budget: int,
+    next_offset: int,
+    *,
+    sink: Callable[[bytes], None] | None = None,
 ) -> int:
     """Count actual inflated bytes, independently of ZIP header size claims.
 
@@ -253,6 +259,8 @@ def _check_member_exact(
             if expanded > budget:
                 raise RuntimeError("raw preflight: global uncompressed limit")
             crc = zlib.crc32(raw, crc)
+            if sink is not None:
+                sink(raw)
         else:
             while raw:
                 available = min(_CHUNK, budget - expanded + 1)
@@ -263,6 +271,8 @@ def _check_member_exact(
                 if expanded > budget:
                     raise RuntimeError("raw preflight: global uncompressed limit")
                 crc = zlib.crc32(chunk, crc)
+                if sink is not None:
+                    sink(chunk)
                 tail = inflater.unconsumed_tail
                 if inflater.eof:
                     if tail or inflater.unused_data or remaining:
@@ -280,39 +290,51 @@ def _check_member_exact(
     return expanded
 
 
+def _check_zip_members(
+    archive: zipfile.ZipFile,
+    *,
+    expanded: int,
+    members: int,
+    sink_for: Callable[[zipfile.ZipInfo], Callable[[bytes], None] | None] | None = None,
+) -> tuple[int, int]:
+    """Shared physical traversal; caller owns sinks and their close boundary."""
+    entries = archive.infolist()
+    if not entries or len(entries) + members > _MAX_RAW_MEMBERS:
+        raise RuntimeError("raw preflight: invalid ZIP member count")
+    names = [entry.filename for entry in entries]
+    if len(names) != len(set(names)):
+        raise RuntimeError("raw preflight: duplicate ZIP member")
+    positions = sorted(entry.header_offset for entry in entries)
+    if len(positions) != len(set(positions)):
+        raise RuntimeError("raw preflight: duplicate ZIP local header")
+    next_offsets = {
+        position: (positions[i + 1] if i + 1 < len(positions) else archive.start_dir)
+        for i, position in enumerate(positions)
+    }
+    # Match raw central sentinel bits to the exact ZIP64 payload.
+    _check_raw_central_zip64(archive, entries)
+    for entry in entries:
+        if entry.flag_bits & 1:
+            raise RuntimeError("raw preflight: encrypted ZIP member")
+        if entry.file_size < 0 or expanded + entry.file_size > _MAX_RAW_UNCOMPRESSED_BYTES:
+            raise RuntimeError("raw preflight: global uncompressed limit")
+        expanded += _check_member_exact(
+            archive,
+            entry,
+            _MAX_RAW_UNCOMPRESSED_BYTES - expanded,
+            next_offsets[entry.header_offset],
+            sink=sink_for(entry) if sink_for is not None else None,
+        )
+    return expanded, members + len(entries)
+
+
 def _raw_zip_crc_and_budget(
     path: Path | BytesIO, *, expanded: int, members: int
 ) -> tuple[int, int]:
     """Check all compressed bytes and actual expansion before any IA PUT."""
     try:
         with zipfile.ZipFile(path) as archive:
-            entries = archive.infolist()
-            if not entries or len(entries) + members > _MAX_RAW_MEMBERS:
-                raise RuntimeError("raw preflight: invalid ZIP member count")
-            names = [entry.filename for entry in entries]
-            if len(names) != len(set(names)):
-                raise RuntimeError("raw preflight: duplicate ZIP member")
-            positions = sorted(entry.header_offset for entry in entries)
-            if len(positions) != len(set(positions)):
-                raise RuntimeError("raw preflight: duplicate ZIP local header")
-            next_offsets = {
-                position: (positions[i + 1] if i + 1 < len(positions) else archive.start_dir)
-                for i, position in enumerate(positions)
-            }
-            # Match raw central sentinel bits to the exact ZIP64 payload.
-            _check_raw_central_zip64(archive, entries)
-            for entry in entries:
-                if entry.flag_bits & 1:
-                    raise RuntimeError("raw preflight: encrypted ZIP member")
-                if entry.file_size < 0 or expanded + entry.file_size > _MAX_RAW_UNCOMPRESSED_BYTES:
-                    raise RuntimeError("raw preflight: global uncompressed limit")
-                expanded += _check_member_exact(
-                    archive,
-                    entry,
-                    _MAX_RAW_UNCOMPRESSED_BYTES - expanded,
-                    next_offsets[entry.header_offset],
-                )
-            return expanded, members + len(entries)
+            return _check_zip_members(archive, expanded=expanded, members=members)
     except (
         zipfile.BadZipFile,
         zipfile.LargeZipFile,
