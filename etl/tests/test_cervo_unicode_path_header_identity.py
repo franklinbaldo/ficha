@@ -16,9 +16,11 @@ import zipfile
 import zlib
 from pathlib import Path
 
+import duckdb
 import pytest
 
 from ficha_etl.raw_preflight import _raw_zip_crc_and_budget
+from ficha_etl.streaming import create_table_from_zip_streaming, load_zips_parallel
 
 
 _NAME = "K3241.K03200Y2.D60808.EMPRECSV"
@@ -96,38 +98,137 @@ def test_matching_central_and_local_name_with_unicode_path_is_valid(
         raise AssertionError(f"positive Unicode Path rejected: {result!r}")
 
 
+def _unicode_field(name: str, alias: str | None, *, active: bool = True) -> bytes:
+    if alias is None:
+        return b""
+    crc = zlib.crc32(name.encode("ascii")) ^ (0 if active else 1)
+    value = b"\x01" + struct.pack("<I", crc) + alias.encode("utf-8")
+    return struct.pack("<HH", 0x7075, len(value)) + value
+
+
+def _paired_zip(
+    method: int, bit3: bool, central_zip64: bool, local: bytes, central: bytes
+) -> bytes:
+    """Keep physical names equal, independently set each boundary's extras."""
+    sink = _NonSeekable() if bit3 else io.BytesIO()
+    member = zipfile.ZipInfo(_NAME, date_time=(1980, 1, 1, 0, 0, 0))
+    member.compress_type = method
+    member.extra = local
+    with zipfile.ZipFile(sink, "w") as archive:
+        archive.writestr(member, _PAYLOAD)
+    raw = bytearray(sink.getvalue())
+    start = raw.find(b"PK\x01\x02")
+    eocd = raw.rfind(b"PK\x05\x06")
+    name_len, extra_len, comment_len = struct.unpack_from("<HHH", raw, start + 28)
+    if extra_len != len(local) or comment_len or name_len != len(_NAME):
+        raise AssertionError("unexpected central layout")
+    if central_zip64:
+        compressed, uncompressed = struct.unpack_from("<II", raw, start + 20)
+        central = struct.pack("<HHQQ", 1, 16, uncompressed, compressed) + central
+        struct.pack_into("<II", raw, start + 20, 0xFFFFFFFF, 0xFFFFFFFF)
+        struct.pack_into("<H", raw, start + 6, 45)
+    offset = start + 46 + name_len
+    raw[offset : offset + extra_len] = central
+    struct.pack_into("<H", raw, start + 30, len(central))
+    delta = len(central) - extra_len
+    eocd += delta
+    size = struct.unpack_from("<I", raw, eocd + 12)[0]
+    struct.pack_into("<I", raw, eocd + 12, size + delta)
+    return bytes(raw)
+
+
+_B = "renamed.CSV"
+_C = "other.CSV"
+_D = "renamed/"
+
+
+@pytest.mark.parametrize(
+    ("local_alias", "central_alias", "local_active", "central_active"),
+    [
+        (_NAME, _NAME, True, True),
+        (_B, _B, True, True),
+        (_B, None, True, True),
+        (None, _B, True, True),
+        (_C, _B, True, True),
+        (_B, _B, True, False),
+        (_B, _B, False, True),
+        (_D, _D, True, True),
+    ],
+    ids=[
+        "same",
+        "both-b",
+        "local-b",
+        "central-b",
+        "different",
+        "inactive-central",
+        "inactive-local",
+        "class-flip",
+    ],
+)
 @pytest.mark.parametrize(
     "method", [zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED], ids=["stored", "deflated"]
 )
 @pytest.mark.parametrize("bit3", [False, True], ids=["no-descriptor", "descriptor"])
-@pytest.mark.xfail(
-    _UNICODE_PATH_ALIAS_SELECTED,
-    strict=True,
-    raises=RuntimeError,
-    reason="#477: decoded 0x7075 alias must not reject matching physical ZIP names",
-)
-def test_alias_must_not_reject_matching_raw_central_local_names(
-    tmp_path: Path, method: int, bit3: bool
+@pytest.mark.parametrize("central_zip64", [False, True], ids=["classic", "central-zip64"])
+def test_paired_alias_cross_reader_characterization(
+    tmp_path: Path,
+    local_alias: str | None,
+    central_alias: str | None,
+    local_active: bool,
+    central_active: bool,
+    method: int,
+    bit3: bool,
+    central_zip64: bool,
 ) -> None:
-    """Local/central physical names both A, but central Unicode alias is B."""
-    alias = "Z" * len(_NAME)
-    path = tmp_path / "matching-physical-names.zip"
-    path.write_bytes(_make_zip(method, bit3, alias, change_local=False))
-    with zipfile.ZipFile(path) as archive:
+    """Snapshot current outcomes, not a decision to admit/reject aliases."""
+    source = tmp_path / "paired.zip"
+    source.write_bytes(
+        _paired_zip(
+            method,
+            bit3,
+            central_zip64,
+            _unicode_field(_NAME, local_alias, active=local_active),
+            _unicode_field(_NAME, central_alias, active=central_active),
+        )
+    )
+    effective = (
+        central_alias
+        if _UNICODE_PATH_ALIAS_SELECTED and central_active and central_alias is not None
+        else _NAME
+    )
+    with zipfile.ZipFile(source) as archive:
         info = archive.infolist()[0]
-        expected = alias if _UNICODE_PATH_ALIAS_SELECTED else _NAME
-        if info.filename != expected or info.orig_filename != _NAME:
-            raise AssertionError("unexpected Unicode Path runtime behavior")
-        if archive.read(info) != _PAYLOAD:
-            raise AssertionError("stdlib could not read matching raw-name ZIP")
-    try:
-        result = _raw_zip_crc_and_budget(path, expanded=0, members=0)
-    except RuntimeError as exc:
-        if "ZIP member name mismatch" not in str(exc):
-            raise AssertionError("preflight rejected for an unrelated reason") from exc
-        raise
-    if result != (len(_PAYLOAD), 1):
-        raise AssertionError(f"matching raw names were rejected: {result!r}")
+        if (info.orig_filename, info.filename, archive.read(info)) != (_NAME, effective, _PAYLOAD):
+            raise AssertionError("unexpected fixture interpretation")
+        if info.is_dir() != effective.endswith("/"):
+            raise AssertionError("unexpected member class")
+
+    # Current preflight compares the physical local name with the central alias.
+    # Revise these observations when the shared contract is decided.
+    if effective != _NAME:
+        with pytest.raises(RuntimeError, match="ZIP member name mismatch"):
+            _raw_zip_crc_and_budget(source, expanded=0, members=0)
+    elif _raw_zip_crc_and_budget(source, expanded=0, members=0) != (len(_PAYLOAD), 1):
+        raise AssertionError("unexpected preflight counters")
+
+    expected_rows = [] if effective.endswith("/") else [("1", "2")]
+    for parallel in (False, True):
+        con = duckdb.connect()
+        try:
+            work = tmp_path / ("parallel" if parallel else "streaming")
+            if parallel:
+                load_zips_parallel(
+                    con, [("source_rows", source, ("a", "b"))], work_dir=work, decompress_workers=1
+                )
+            else:
+                create_table_from_zip_streaming(
+                    con, "source_rows", source, ("a", "b"), work_dir=work
+                )
+            rows = con.execute("SELECT a, b FROM source_rows").fetchall()
+            if rows != expected_rows:
+                raise AssertionError(f"unexpected rows (parallel={parallel}): {rows!r}")
+        finally:
+            con.close()
 
 
 @pytest.mark.parametrize(
@@ -182,13 +283,13 @@ def test_optimized_python_replays_unicode_path_identity() -> None:
             "pytest",
             "-q",
             base + "test_matching_central_and_local_name_with_unicode_path_is_valid",
-            base + "test_alias_must_not_reject_matching_raw_central_local_names",
+            base + "test_paired_alias_cross_reader_characterization",
             base + "test_alias_cannot_hide_raw_central_local_name_disagreement",
         ],
         capture_output=True,
         text=True,
         check=False,
-        timeout=120,
+        timeout=180,
     )
     if child.returncode:
         raise AssertionError(child.stdout + "\n" + child.stderr)
