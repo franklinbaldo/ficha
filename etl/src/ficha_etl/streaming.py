@@ -229,6 +229,12 @@ def load_zips_parallel(
 
     This overlaps CPU-bound ZIP decompression with DuckDB's parallel CSV parsing,
     giving ~decompress_workers× speedup on the loading phase compared to sequential.
+
+    Transaction ownership belongs to the caller. This function does not issue
+    BEGIN, COMMIT or ROLLBACK. In autocommit mode, a later ZIP or SQL failure
+    can leave earlier table replacements committed. For all-or-nothing SQL
+    changes, start a transaction before calling, commit on success, and roll
+    back on failure. Scratch cleanup is independent of SQL rollback.
     """
     work_dir.mkdir(parents=True, exist_ok=True)
     tmp_dir = _tmpfs_dir(work_dir)

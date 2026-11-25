@@ -136,67 +136,88 @@ def test_upload_outputs_invalid_month(mock_upload, tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# upload_raw_zips
+# upload_raw_zips (legacy raw cache mirror is deliberately disabled)
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.parametrize("cache_state", ["empty", "one", "all", "zero_byte"])
 @patch("ficha_etl.upload.ia.upload")
-def test_upload_raw_zips_uses_raw_prefix(mock_upload, tmp_path):
+def test_upload_raw_zips_refuses_legacy_egress(mock_upload, tmp_path, cache_state):
+    """A partial, empty or full cache cannot bypass raw custody admission."""
     month = "2026-04"
-    _make_raw_zips(tmp_path, month)
-    mock_upload.return_value = [_make_response()]
+    if cache_state == "all":
+        _make_raw_zips(tmp_path, month)
+    elif cache_state in ("one", "zero_byte"):
+        local = tmp_path / month / next(iter(canonical_inventory())).name
+        local.parent.mkdir(parents=True)
+        with zipfile.ZipFile(local, "w") as archive:
+            archive.writestr("source.csv", b"cnpj;value\n1;A\n")
+        if cache_state == "zero_byte":
+            local.write_bytes(b"")
 
-    upload_mod.upload_raw_zips(month, tmp_path, access_key="A", secret_key="S")
-
-    files_arg = mock_upload.call_args[1].get("files") or mock_upload.call_args[0][1]
-    # Todos os remote names devem começar com "raw/"
-    assert all(k.startswith("raw/") for k in files_arg)
-
-
-@patch("ficha_etl.upload.ia.upload")
-def test_upload_raw_zips_uploads_all_37(mock_upload, tmp_path):
-    month = "2026-04"
-    _make_raw_zips(tmp_path, month)
-    mock_upload.return_value = [_make_response()]
-
-    upload_mod.upload_raw_zips(month, tmp_path, access_key="A", secret_key="S")
-
-    files_arg = mock_upload.call_args[1].get("files") or mock_upload.call_args[0][1]
-    assert len(files_arg) == 37
-
-
-@patch("ficha_etl.upload.ia.upload")
-def test_upload_raw_zips_raises_if_no_zips_found(mock_upload, tmp_path):
-    """Se o cache estiver vazio, levanta FileNotFoundError."""
-    with pytest.raises(FileNotFoundError, match="no raw ZIPs"):
-        upload_mod.upload_raw_zips("2026-04", tmp_path, access_key="A", secret_key="S")
+    with pytest.raises(RuntimeError, match="raw cache upload is disabled"):
+        upload_mod.upload_raw_zips(month, tmp_path, access_key="A", secret_key="S")
     mock_upload.assert_not_called()
 
 
 @patch("ficha_etl.upload.ia.upload")
-def test_upload_raw_zips_skips_zero_byte_files(mock_upload, tmp_path):
-    month = "2026-04"
-    _make_raw_zips(tmp_path, month)
-    # Torna um ZIP zero-byte
-    first_zip = tmp_path / month / next(iter(canonical_inventory())).name
-    first_zip.write_bytes(b"")
-
-    mock_upload.return_value = [_make_response()]
-    upload_mod.upload_raw_zips(month, tmp_path, access_key="A", secret_key="S")
-
-    files_arg = mock_upload.call_args[1].get("files") or mock_upload.call_args[0][1]
-    # Deve ter 36 (37 - 1 zero-byte)
-    assert len(files_arg) == 36
+def test_upload_raw_zips_invalid_month_remains_rejected(mock_upload, tmp_path):
+    with pytest.raises(ValueError, match="YYYY-MM"):
+        upload_mod.upload_raw_zips("2026-13", tmp_path, access_key="A", secret_key="S")
+    mock_upload.assert_not_called()
 
 
-@patch("ficha_etl.upload.ia.upload")
-def test_upload_raw_zips_raises_on_http_error(mock_upload, tmp_path):
-    month = "2026-04"
-    _make_raw_zips(tmp_path, month)
-    mock_upload.return_value = [_make_response(status=500)]
+def test_upload_raw_zips_rejects_before_cache_or_remote_io(monkeypatch):
+    """Refuse raw cache egress before accessing inventory, disk or IA."""
 
-    with pytest.raises(RuntimeError, match="500"):
-        upload_mod.upload_raw_zips(month, tmp_path, access_key="A", secret_key="S")
+    class ForbiddenCache:
+        def __truediv__(self, _part):
+            pytest.fail("raw cache pathname inspected")
+
+        def __fspath__(self):
+            pytest.fail("raw cache pathname materialized")
+
+    def forbid(*_args, **_kwargs):
+        pytest.fail("raw helper crossed an I/O boundary")
+
+    monkeypatch.setattr(upload_mod, "canonical_inventory", forbid)
+    monkeypatch.setattr(upload_mod, "item_id", forbid)
+    monkeypatch.setattr(upload_mod, "_existing_raw_files_on_ia", forbid)
+    monkeypatch.setattr(upload_mod, "_ia_s3_put", forbid)
+    monkeypatch.setattr(upload_mod.ia, "upload", forbid)
+    monkeypatch.setattr(upload_mod.httpx, "Client", forbid)
+    cache = ForbiddenCache()
+
+    with pytest.raises(RuntimeError, match="raw cache upload is disabled"):
+        upload_mod.upload_raw_zips("2026-04", cache, access_key="A", secret_key="S")
+
+
+def test_legacy_and_stream_entrypoints_refuse_independently(monkeypatch, tmp_path):
+    """Both raw entrypoints refuse independently, without remote metadata."""
+    metadata_lookups: list[str] = []
+
+    def fake_inventory_lookup(identifier):
+        metadata_lookups.append(identifier)
+        return set()
+
+    def forbid_external_io(*_args, **_kwargs):
+        pytest.fail("external I/O crossed in differential writer test")
+
+    monkeypatch.setattr(upload_mod, "_existing_raw_files_on_ia", fake_inventory_lookup)
+    monkeypatch.setattr(upload_mod.upstream, "discover_token", forbid_external_io)
+    monkeypatch.setattr(upload_mod, "_ia_s3_put", forbid_external_io)
+    monkeypatch.setattr(upload_mod.ia, "upload", forbid_external_io)
+
+    with pytest.raises(RuntimeError, match="raw cache upload is disabled"):
+        upload_mod.upload_raw_zips("2026-04", tmp_path, access_key="A", secret_key="S")
+    if metadata_lookups:
+        raise AssertionError("legacy helper touched remote metadata before refusing")
+
+    # The streaming path now has its own admission door, before metadata.
+    with pytest.raises(upload_mod.RawCustodyCapabilityUnproven):
+        upload_mod.stream_raw_zips_to_ia("2026-04", access_key="A", secret_key="S", spool_dir=None)
+    if metadata_lookups:
+        pytest.fail("streaming entrypoint inspected remote metadata before refusing")
 
 
 # ---------------------------------------------------------------------------
@@ -315,6 +336,32 @@ def test_stream_one_zip_with_retry_does_not_retry_non_transient(monkeypatch):
     assert calls["n"] == 1
 
 
+def _mock_catalog_response(monkeypatch, response):
+    seen = []
+
+    class _FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def get(self, url):
+            seen.append(url)
+            return response
+
+    monkeypatch.setattr(upload_mod.httpx, "Client", _FakeClient)
+    return seen
+
+
+def _require_catalog_get(seen, item):
+    if seen != [f"https://archive.org/metadata/{item}"]:
+        pytest.fail(f"unexpected catalog GETs: {seen!r}")
+
+
 def test_existing_raw_files_on_ia_parses_metadata(monkeypatch):
     """Existence check should return only `raw/*` names with non-zero size."""
 
@@ -328,22 +375,10 @@ def test_existing_raw_files_on_ia_parses_metadata(monkeypatch):
         ]
     }
 
-    class _FakeClient:
-        def __init__(self, *a, **kw):
-            pass
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *a):
-            return False
-
-        def get(self, url):
-            return httpx.Response(200, json=payload)
-
-    monkeypatch.setattr(upload_mod.httpx, "Client", _FakeClient)
+    seen = _mock_catalog_response(monkeypatch, httpx.Response(200, json=payload))
     out = upload_mod._existing_raw_files_on_ia("ficha-2026-04")
     assert out == {"raw/Empresas0.zip", "raw/Empresas1.zip"}
+    _require_catalog_get(seen, "ficha-2026-04")
 
 
 @pytest.mark.parametrize(
@@ -361,23 +396,10 @@ def test_existing_raw_files_on_ia_parses_metadata(monkeypatch):
         ],
     ],
 )
-def test_stream_raw_rejects_ambiguous_catalog_before_get_or_put(monkeypatch, files):
+def test_catalog_rejects_ambiguous_catalog_before_get_or_put(monkeypatch, files):
     """A malformed IA inventory cannot authorize skipping or any remote write."""
 
-    class _FakeClient:
-        def __init__(self, *args, **kwargs):
-            pass
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *args):
-            return False
-
-        def get(self, url):
-            return httpx.Response(200, json={"files": files})
-
-    monkeypatch.setattr(upload_mod.httpx, "Client", _FakeClient)
+    seen = _mock_catalog_response(monkeypatch, httpx.Response(200, json={"files": files}))
 
     def forbid_network(*args, **kwargs):
         pytest.fail("GET/PUT attempted before validating IA raw metadata")
@@ -385,53 +407,34 @@ def test_stream_raw_rejects_ambiguous_catalog_before_get_or_put(monkeypatch, fil
     monkeypatch.setattr(upload_mod.upstream, "discover_token", forbid_network)
     monkeypatch.setattr(upload_mod, "_stream_one_zip_with_retry", forbid_network)
 
-    with pytest.raises(RuntimeError, match="IA raw metadata"):
-        upload_mod.stream_raw_zips_to_ia("2026-04", access_key="A", secret_key="S")
+    reason = "duplicate file entry" if len(files) == 2 else "invalid size"
+    with pytest.raises(RuntimeError, match=f"IA raw metadata: {reason}"):
+        upload_mod._existing_raw_files_on_ia("ficha-2026-04")
+    _require_catalog_get(seen, "ficha-2026-04")
 
 
-def test_stream_raw_rejects_non_list_catalog_before_get_or_put(monkeypatch):
+def test_catalog_rejects_non_list_catalog_before_get_or_put(monkeypatch):
     """A 200 with a malformed catalog is not equivalent to a new IA item."""
 
-    class _FakeClient:
-        def __init__(self, *args, **kwargs):
-            pass
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *args):
-            return False
-
-        def get(self, url):
-            return httpx.Response(200, json={"files": {"raw/Empresas0.zip": {"size": "1"}}})
-
-    monkeypatch.setattr(upload_mod.httpx, "Client", _FakeClient)
+    seen = _mock_catalog_response(
+        monkeypatch, httpx.Response(200, json={"files": {"raw/Empresas0.zip": {"size": "1"}}})
+    )
     monkeypatch.setattr(
         upload_mod.upstream,
         "discover_token",
         lambda: pytest.fail("upstream touched with malformed IA catalog"),
     )
-    with pytest.raises(RuntimeError, match="IA raw metadata"):
-        upload_mod.stream_raw_zips_to_ia("2026-04", access_key="A", secret_key="S")
+    with pytest.raises(RuntimeError, match="IA raw metadata: invalid file catalog"):
+        upload_mod._existing_raw_files_on_ia("ficha-2026-04")
+    _require_catalog_get(seen, "ficha-2026-04")
 
 
-def test_stream_raw_rejects_http_200_invalid_json_before_get_or_put(monkeypatch):
+def test_catalog_rejects_http_200_invalid_json_before_get_or_put(monkeypatch):
     """HTTP 200 with broken JSON is not a transient metadata outage."""
 
-    class _FakeClient:
-        def __init__(self, *args, **kwargs):
-            pass
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *args):
-            return False
-
-        def get(self, url):
-            return httpx.Response(200, content=b"<html>malformed JSON</html>")
-
-    monkeypatch.setattr(upload_mod.httpx, "Client", _FakeClient)
+    seen = _mock_catalog_response(
+        monkeypatch, httpx.Response(200, content=b"<html>malformed JSON</html>")
+    )
 
     def forbid_network(*args, **kwargs):
         pytest.fail("upstream GET or IA PUT attempted after invalid JSON")
@@ -440,30 +443,18 @@ def test_stream_raw_rejects_http_200_invalid_json_before_get_or_put(monkeypatch)
     monkeypatch.setattr(upload_mod, "_stream_one_zip_with_retry", forbid_network)
 
     with pytest.raises(RuntimeError, match="IA raw metadata: invalid JSON"):
-        upload_mod.stream_raw_zips_to_ia("2026-04", access_key="A", secret_key="S")
+        upload_mod._existing_raw_files_on_ia("ficha-2026-04")
+    _require_catalog_get(seen, "ficha-2026-04")
 
 
 @pytest.mark.parametrize("status", [401, 403, 429, 500, 502, 503, 504])
-def test_stream_raw_denies_metadata_errors_before_get_or_put(monkeypatch, status):
+def test_catalog_denies_metadata_errors_before_get_or_put(monkeypatch, status):
     """Denied or throttled metadata must not authorize RFB GET or IA PUT."""
 
     class _FakeResp:
         status_code = status
 
-    class _FakeClient:
-        def __init__(self, *args, **kwargs):
-            pass
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *args):
-            return False
-
-        def get(self, url):
-            return _FakeResp()
-
-    monkeypatch.setattr(upload_mod.httpx, "Client", _FakeClient)
+    seen = _mock_catalog_response(monkeypatch, _FakeResp())
 
     def forbid_network(*args, **kwargs):
         pytest.fail("RFB GET or IA PUT after IA metadata access denial")
@@ -477,85 +468,40 @@ def test_stream_raw_denies_metadata_errors_before_get_or_put(monkeypatch, status
         else ("rate limited" if status == 429 else "unavailable")
     )
     with pytest.raises(RuntimeError, match=f"{reason} HTTP {status}"):
-        upload_mod.stream_raw_zips_to_ia("2026-04", access_key="A", secret_key="S")
+        upload_mod._existing_raw_files_on_ia("ficha-2026-04")
+    _require_catalog_get(seen, "ficha-2026-04")
 
 
 def test_existing_raw_files_on_ia_returns_empty_on_404(monkeypatch):
-    class _FakeClient:
-        def __init__(self, *a, **kw):
-            pass
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *a):
-            return False
-
-        def get(self, url):
-            return httpx.Response(404, json={})
-
-    monkeypatch.setattr(upload_mod.httpx, "Client", _FakeClient)
+    seen = _mock_catalog_response(monkeypatch, httpx.Response(404, json={}))
     assert upload_mod._existing_raw_files_on_ia("ficha-2099-01") == set()
+    _require_catalog_get(seen, "ficha-2099-01")
 
 
-@pytest.mark.parametrize(
-    "error_type", [upload_mod.httpx.ConnectError, upload_mod.httpx.ReadTimeout]
-)
-def test_stream_raw_rejects_metadata_transport_failure(monkeypatch, error_type):
-    """Transport failure gives no evidence that an IA item is absent."""
-
-    class _FakeClient:
-        def __init__(self, *a, **kw):
-            pass
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *a):
-            return False
-
-        def get(self, url):
-            raise error_type("boom")
-
-    def forbid(*args, **kwargs):
-        pytest.fail("RFB GET or IA PUT after IA metadata transport failure")
-
-    monkeypatch.setattr(upload_mod.httpx, "Client", _FakeClient)
-    monkeypatch.setattr(upload_mod.upstream, "discover_token", forbid)
-    monkeypatch.setattr(upload_mod, "_stream_one_zip_with_retry", forbid)
-    with pytest.raises(RuntimeError, match="IA raw metadata: fetch failed"):
-        upload_mod.stream_raw_zips_to_ia("2026-04", access_key="A", secret_key="S")
-
-
-def test_stream_raw_zips_to_ia_skips_existing(monkeypatch):
-    """When all ZIPs are already on IA, stream returns immediately AND does
-    not contact RFB for a token. Recovery from a transform/upload failure
-    must succeed even when RFB upstream is down or has rotated its token.
-    """
+def test_complete_catalog_cannot_admit_streaming(monkeypatch):
+    """Even 37 observed names cannot grant real raw custody admission."""
 
     all_names = {f"raw/{spec.name}" for spec in canonical_inventory()}
-    monkeypatch.setattr(upload_mod, "_existing_raw_files_on_ia", lambda _id: all_names)
+    if len(all_names) != 37:
+        pytest.fail("expected the complete nominal inventory")
+    calls = []
 
-    token_calls = {"n": 0}
+    def observe(identifier):
+        calls.append(identifier)
+        return all_names
 
-    def fake_discover_token():
-        token_calls["n"] += 1
-        raise upload_mod.upstream.NoTokenError("RFB is hypothetically down")
+    def forbid(*args, **kwargs):
+        pytest.fail("complete nominal catalog authorized an effect")
 
-    monkeypatch.setattr(upload_mod.upstream, "discover_token", fake_discover_token)
+    monkeypatch.setattr(upload_mod, "_existing_raw_files_on_ia", observe)
+    monkeypatch.setattr(upload_mod.upstream, "discover_token", forbid)
+    monkeypatch.setattr(upload_mod, "_stream_one_zip_with_retry", forbid)
+    monkeypatch.setattr(upload_mod, "_ia_s3_put", forbid)
 
-    streamed = {"n": 0}
-
-    def fake_stream(*a, **kw):
-        streamed["n"] += 1
-        return "x"
-
-    monkeypatch.setattr(upload_mod, "_stream_one_zip_with_retry", fake_stream)
-
-    # Should be a no-op -- no streaming, no token lookup, no exception.
-    upload_mod.stream_raw_zips_to_ia("2026-04", access_key="A", secret_key="S")
-    assert streamed["n"] == 0
-    assert token_calls["n"] == 0, "should not contact RFB when nothing to stream"
+    with pytest.raises(upload_mod.RawCustodyCapabilityUnproven):
+        upload_mod.stream_raw_zips_to_ia("2026-04", access_key="A", secret_key="S")
+    if calls:
+        pytest.fail("admission consulted the nominal catalog")
 
 
 def test_stream_one_zip_with_retry_gives_up_after_max_attempts(monkeypatch):

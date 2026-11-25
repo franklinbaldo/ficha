@@ -6,7 +6,10 @@ transaction is a positive control. No production ZIP, network, or IA operations.
 
 from __future__ import annotations
 
+import os
 import struct
+import subprocess
+import sys
 import threading
 import zipfile
 from pathlib import Path
@@ -61,7 +64,7 @@ def test_late_crc_failure_preserves_pre_batch_table(
     monkeypatch: pytest.MonkeyPatch,
     outer_transaction: bool,
 ) -> None:
-    """A CRC failure after a successful load must not commit a partial batch.
+    """Characterize a late CRC failure with and without caller rollback.
 
     A caller-managed DuckDB transaction is the positive rollback control.
     The default API currently violates this desired guarantee (strict XFAIL).
@@ -92,6 +95,10 @@ def test_late_crc_failure_preserves_pre_batch_table(
     try:
         con.execute("CREATE TABLE good (a VARCHAR, b VARCHAR)")
         con.execute("INSERT INTO good VALUES ('ORIGINAL', 'KEEP')")
+        con.execute("CREATE TABLE caller_state (v INTEGER)")
+        con.execute("INSERT INTO caller_state VALUES (1)")
+        con.execute("CREATE TABLE bad (a VARCHAR, b VARCHAR)")
+        con.execute("INSERT INTO bad VALUES ('OLD', 'BAD')")
     finally:
         con.close()
 
@@ -100,6 +107,7 @@ def test_late_crc_failure_preserves_pre_batch_table(
     try:
         if outer_transaction:
             con.execute("BEGIN TRANSACTION")
+            con.execute("INSERT INTO caller_state VALUES (2)")
         with pytest.raises(RuntimeError, match="failed to decompress") as error:
             streaming.load_zips_parallel(
                 con,
@@ -124,6 +132,10 @@ def test_late_crc_failure_preserves_pre_batch_table(
     # A fresh connection rules out a merely visible but uncommitted row.
     con = duckdb.connect(str(db_path))
     try:
+        if con.execute("SELECT v FROM caller_state ORDER BY v").fetchall() != [(1,)]:
+            raise AssertionError("caller transaction was committed by the loader")
+        if con.execute("SELECT a, b FROM bad").fetchall() != [("OLD", "BAD")]:
+            raise AssertionError("CRC-invalid table was replaced")
         actual = con.execute("SELECT a, b FROM good").fetchall()
         if actual != [("ORIGINAL", "KEEP")]:
             if not outer_transaction and actual == [("NEW", "VALUE")] * 9:
@@ -131,3 +143,112 @@ def test_late_crc_failure_preserves_pre_batch_table(
             raise AssertionError(f"unexpected post-batch table contents: {actual!r}")
     finally:
         con.close()
+
+
+def _equal(actual: object, expected: object) -> None:
+    if actual != expected:
+        raise AssertionError(f"expected {expected!r}, got {actual!r}")
+
+
+def test_late_sql_failure_preserves_caller_rollback(tmp_path, monkeypatch):
+    """The real SQL consumer fails only after the first replacement succeeds."""
+    monkeypatch.setattr(streaming, "_SHM_DIR", None)
+    good = _zip(tmp_path / "good.zip", b"NEW;VALUE\n" * 9)
+    bad = _zip(tmp_path / "bad.zip", b"VALID;CSV\n")
+    good_loaded = threading.Event()
+    original_decompress = streaming._decompress_zip
+    original_load = streaming._load_from_result
+
+    def ordered_decompress(zip_path, table, columns, *, tmp_dir):
+        if zip_path == bad and not good_loaded.wait(15):
+            raise AssertionError("good table was not loaded before SQL failure")
+        return original_decompress(zip_path, table, columns, tmp_dir=tmp_dir)
+
+    def signal_after_load(con, result):
+        original_load(con, result)
+        if result.table == "good":
+            good_loaded.set()
+
+    monkeypatch.setattr(streaming, "_decompress_zip", ordered_decompress)
+    monkeypatch.setattr(streaming, "_load_from_result", signal_after_load)
+    db_path = tmp_path / "sql.duckdb"
+    work = tmp_path / "scratch"
+    con = duckdb.connect(str(db_path))
+    try:
+        con.execute("CREATE TABLE good (a VARCHAR, b VARCHAR)")
+        con.execute("INSERT INTO good VALUES ('ORIGINAL', 'KEEP')")
+        con.execute("CREATE TABLE caller_state (v INTEGER)")
+        con.execute("INSERT INTO caller_state VALUES (1)")
+        con.execute("BEGIN TRANSACTION")
+        con.execute("INSERT INTO caller_state VALUES (2)")
+        with pytest.raises(duckdb.ParserException):
+            streaming.load_zips_parallel(
+                con,
+                [("good", good, ("a", "b")), ("bad-name", bad, ("a", "b"))],
+                work_dir=work,
+                decompress_workers=2,
+            )
+        _equal(good_loaded.is_set(), True)
+        _equal(list(work.iterdir()), [])
+        con.execute("ROLLBACK")
+    finally:
+        con.close()
+
+    con = duckdb.connect(str(db_path))
+    try:
+        _equal(con.execute("SELECT a, b FROM good").fetchall(), [("ORIGINAL", "KEEP")])
+        _equal(con.execute("SELECT v FROM caller_state ORDER BY v").fetchall(), [(1,)])
+    finally:
+        con.close()
+
+
+@pytest.mark.parametrize("finish", ["COMMIT", "ROLLBACK"])
+def test_success_leaves_transaction_decision_to_caller(tmp_path, monkeypatch, finish):
+    monkeypatch.setattr(streaming, "_SHM_DIR", None)
+    good = _zip(tmp_path / "good.zip", b"NEW;VALUE\n" * 9)
+    db_path = tmp_path / "success.duckdb"
+    work = tmp_path / "scratch"
+    con = duckdb.connect(str(db_path))
+    try:
+        con.execute("CREATE TABLE good (a VARCHAR, b VARCHAR)")
+        con.execute("INSERT INTO good VALUES ('ORIGINAL', 'KEEP')")
+        con.execute("CREATE TABLE caller_state (v INTEGER)")
+        con.execute("INSERT INTO caller_state VALUES (1)")
+        con.execute("BEGIN TRANSACTION")
+        con.execute("INSERT INTO caller_state VALUES (2)")
+        streaming.load_zips_parallel(
+            con,
+            [("good", good, ("a", "b"))],
+            work_dir=work,
+        )
+        _equal(con.execute("SELECT a, b FROM good").fetchall(), [("NEW", "VALUE")] * 9)
+        _equal(con.execute("SELECT v FROM caller_state ORDER BY v").fetchall(), [(1,), (2,)])
+        _equal(list(work.iterdir()), [])
+        con.execute(finish)
+    finally:
+        con.close()
+
+    con = duckdb.connect(str(db_path))
+    try:
+        expected = [("NEW", "VALUE")] * 9 if finish == "COMMIT" else [("ORIGINAL", "KEEP")]
+        caller_expected = [(1,), (2,)] if finish == "COMMIT" else [(1,)]
+        _equal(con.execute("SELECT a, b FROM good").fetchall(), expected)
+        _equal(con.execute("SELECT v FROM caller_state ORDER BY v").fetchall(), caller_expected)
+    finally:
+        con.close()
+
+
+def test_optimized_python_replays_atomicity():
+    if not __debug__:
+        return
+    result = subprocess.run(
+        [sys.executable, "-O", "-m", "pytest", "-q", __file__, "-k", "not optimized_python"],
+        cwd=Path(__file__).parent,
+        env=os.environ.copy(),
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
+    )
+    if result.returncode:
+        raise AssertionError(result.stdout[-2000:] + "\n" + result.stderr[-2000:])
