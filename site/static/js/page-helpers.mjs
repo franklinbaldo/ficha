@@ -81,3 +81,17 @@ export function populateDateSelect(doc, select, manifest, selected) {
   }
   if ([...select.options].some(o => o.value === selected)) select.value = selected;
 }
+
+/** Describe the selected reading profile, not a certification of producer bytes. */
+export function renderWireProvenance(doc, parent, result) {
+  const valid = result.decoderProfile === '1.0.0';
+  const declared = valid && result.declaredWire === '1.0.0' && result.wireProvenance === 'declared';
+  const assumed = valid && result.declaredWire === null && result.wireProvenance === 'legacy-assumed';
+  const declaration = declared ? 'versão 1.0.0 declarada no manifesto' :
+    assumed ? 'versão não declarada no manifesto (legado assumido)' : 'declaração de versão não confirmada';
+  const profile = valid ? 'perfil de leitura ' +
+    (result.state === 'artifact-unavailable' ? 'previsto ' : '') + '1.0.0' : 'perfil de leitura não confirmado';
+  const outcome = result.state === 'artifact-unavailable' ? ' (consulta inconclusiva)' : '';
+  add(doc,parent,'p',result.date + ': ' + declaration + '; ' + profile + outcome +
+    '; semântica do produtor não atestada.','fineprint');
+}

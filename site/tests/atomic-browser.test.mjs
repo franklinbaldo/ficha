@@ -195,3 +195,17 @@ test('lookup exige HTTP 200 mesmo quando 201/206 trazem bytes e SHA-256 corretos
     assert.equal(calls,2);
   }
 });
+
+test('declaração própria em shard não selecionado impede GET, decoder e lookup',async()=>{
+  for(const value of [null,'1.0.0','1.1.0']){
+    const data=structuredClone(manifest);
+    data.snapshots[0].files.companies.shards.push({shard:'99',url:archive+'companies-99.zip',schema_version:value});
+    const calls={fetch:0,decoder:0,lookups:0};
+    await assert.rejects(fetchCompanyByCnpj(data,date,cnpj,{
+      fetchImpl:async()=>{calls.fetch++;throw Error('GET indevido');},
+      loadDecoder:async()=>{calls.decoder++;return decoder();},
+      loadLookups:async()=>{calls.lookups++;return lookups;},
+    }),/Camada Protobuf numérica v1/);
+    assert.deepEqual(calls,{fetch:0,decoder:0,lookups:0});
+  }
+});

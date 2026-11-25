@@ -31,7 +31,9 @@ test('copy pública distingue manifesto de custódia de arquivos', () => {
   const empresa = read('../content/empresa.md');
   assert.doesNotMatch(empresa, /competência arquivada/i);
   assert.match(empresa, /competência declarada no catálogo/i);
-  assert.match(historyJS, /Protobuf v1 declarado no manifesto/);
+  assert.match(historyJS, /perfil de leitura compatível com Protobuf v1/);
+  assert.doesNotMatch(historyJS, /Protobuf v1 declarado no manifesto/);
+  assert.match(read('../static/js/page-helpers.mjs'), /semântica do produtor não atestada/);
   assert.doesNotMatch(historyJS, /Protobuf v1 arquivado/);
 });
 

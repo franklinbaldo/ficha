@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as pages from '../static/js/pages.mjs';
+import {fetchCompanyByCnpj} from '../static/js/atomic-browser.mjs';
 import {CnpjInputError} from '../static/js/atomic-record.mjs';
 
 class Element {
@@ -20,7 +21,7 @@ const ids=['historia-competencias','historia-inicio','historia-fim','historia-fo
 const numeric='33000167000101';
 const manifest={current:'2026-07',snapshots:['2026-07','2026-06','2026-05','2026-04']
   .map(date=>({date,files:{...(date==='2026-04'?{}:
-    {companies:{shard_by:'cnpj_base_prefix_2',shards:[{shard:'33',url:'https://archive.org/33'}]}})}}))};
+    {companies:{shard_by:'cnpj_base_prefix_2',...(date==='2026-07'?{schema_version:'1.0.0'}:{}),shards:[{shard:'33',url:'https://archive.org/download/ficha-'+date+'/companies-33.zip'}]}})}}))};
 const treeText=node=>[node.textContent,...node.children.map(treeText)].join(' ');
 function docFor() {
   const elements=new Map(ids.map(id=>[id,new Element(id.includes('inicio')||id.includes('fim')?'select':'div')]));
@@ -37,6 +38,8 @@ async function withUrl(fn) {
   }
 }
 const observe=(date,state='found')=>({date,cnpj:numeric,state,partial:true,
+  decoderProfile:'1.0.0',declaredWire:date==='2026-07'?'1.0.0':null,
+  wireProvenance:date==='2026-07'?'declared':'legacy-assumed',producerSemantics:'unattested',
   source:'https://archive.org/download/ficha-'+date+'/companies-33.zip/33/000/167.pb',
   data:state==='found'?{cnpj:numeric,razao_social:'PETROLEO BRASILEIRO',opcao_mei:null}:null});
 async function mount(doc, lookup) {
@@ -62,7 +65,9 @@ test('404 do membro é inconclusivo: interrompe segundo GET e não declara compa
     assert.equal(calls,1);
     assert.match(doc.at('historia-estado').textContent,/inconclusiva/i);
     assert.doesNotMatch(doc.at('historia-estado').textContent,/concluída/i);
-    assert.equal(doc.at('historia-resultado').children.length,1,'somente link para catálogo');
+    const output=doc.at('historia-resultado');
+    assert.match(treeText(output),/2026-06: versão não declarada.*perfil de leitura previsto 1\.0\.0/);
+    assert.equal(output.children.length,2,'proveniência e link para catálogo');
   });
 });
 test('ausência PB íntegra é condicional à competência, nunca nascimento/encerramento',async()=>{
@@ -103,6 +108,9 @@ test('dispatcher rejeita alfa antes de acionar qualquer transporte',async()=>{
 test('tabela histórica tem legenda, cabeçalhos com scope e região rolável por teclado',()=> {
   const doc=docFor(), parent=new Element('div');
   pages.renderHistoryComparison(doc,parent,observe('2026-06'),observe('2026-07'));
+  assert.match(treeText(parent),/2026-06: versão não declarada/);
+  assert.match(treeText(parent),/2026-07: versão 1\.0\.0 declarada/);
+  assert.doesNotMatch(treeText(parent),/Protobuf v1 declarado no manifesto/);
   assert.match(treeText(parent),/Pelo teclado, pressione Tab até a tabela e use as setas/);
   const region=parent.children.find(node=>node.attributes.role==='region');
   assert.ok(region,'a tabela está em região navegável');
@@ -118,4 +126,87 @@ test('tabela histórica tem legenda, cabeçalhos com scope e região rolável po
   const body=table.children.find(node=>node.tag==='tbody');
   assert.ok(body.children.length>0,'a tabela mantém as linhas de comparação');
   assert.ok(body.children.every(row=>row.children[0].attributes.scope==='row'));
+});
+
+test('404 final mantém a proveniência das duas observações sem tabela comparativa',async()=>{
+  await withUrl(async()=>{
+    const doc=docFor(), calls=[];
+    await mount(doc,async(_m,date)=>{calls.push(date);return observe(date,date==='2026-07'?'artifact-unavailable':'found');});
+    await submit(doc);
+    assert.deepEqual(calls,['2026-06','2026-07']);
+    const output=doc.at('historia-resultado');
+    assert.match(treeText(output),/2026-06: versão não declarada.*perfil de leitura 1\.0\.0/);
+    assert.match(treeText(output),/2026-07: versão 1\.0\.0 declarada.*perfil de leitura previsto 1\.0\.0/);
+    assert.doesNotMatch(treeText(output),/Comparação de registros observados/);
+    const containsTable=node=>node.tag==='table'||node.children.some(containsTable);
+    assert.equal(containsTable(output),false);
+    assert.match(doc.at('historia-estado').textContent,/inconclusiva.*404/i);
+  });
+});
+test('shard não selecionado com versão própria exclui competência dos seletores, não da cronologia',async()=>{
+  await withUrl(async()=>{
+    const doc=docFor(), data=structuredClone(manifest);
+    data.snapshots.find(s=>s.date==='2026-05').files.companies.shards.push({shard:'99',schema_version:null});
+    await pages.mountHistory(doc,{loadManifest:async()=>data});
+    assert.deepEqual(doc.at('historia-inicio').options.map(o=>o.value),['2026-07','2026-06']);
+    const item=doc.at('historia-competencias').children.find(n=>treeText(n).includes('2026-05'));
+    assert.match(treeText(item),/Sem índice para comparação numérica/);
+  });
+});
+
+test('SSG selected competence remains readable despite another invalid layer',async()=>{
+  const {planAtomicRecord}=await import('../static/js/atomic-record.mjs');
+  const data=structuredClone(manifest);
+  data.snapshots.find(s=>s.date==='2026-06').files.companies.shards.push({shard:'99',schema_version:null});
+  assert.equal(planAtomicRecord(data,'2026-07',numeric).wireProvenance,'declared');
+  assert.throws(()=>planAtomicRecord(data,'2026-06',numeric),/Camada Protobuf numérica v1/);
+});
+
+test('História mount→dispatcher→bridge preserva observação inicial se o membro final retorna 404',async()=>{
+  for (const found of [true,false]) {
+    await withUrl(async()=>{
+      const doc=docFor(), urls=[], calls={decoder:0,decode:0,lookup:0};
+      await mount(doc,(m,date,cnpj)=>pages.fetchHistoryRecordAt(m,date,cnpj,{
+        atomic:(data,month,value)=>fetchCompanyByCnpj(data,month,value,{
+          fetchImpl:async url=>{
+            urls.push(url);
+            return new Response(month==='2026-06'?Uint8Array.of(1):null,
+              {status:month==='2026-06'?200:404});
+          },
+          loadDecoder:async()=>{
+            calls.decoder++;
+            return {decodeCompany:()=>{
+              calls.decode++;
+              return {cnpj_base:33000167,snapshot_yyyymm:202606,
+                qtd_estabelecimentos:found?1:0,
+                estabelecimentos:found?[{cnpj_ordem:1,cnpj_dv:1}]:[]};
+            }};
+          },
+          loadLookups:async(_m,d)=>{
+            calls.lookup++;
+            assert.equal(d,'2026-06');
+            return {municipios:{},cnaes:{}};
+          },
+        }),
+      }));
+      await submit(doc);
+      assert.deepEqual(urls,[
+        'https://archive.org/download/ficha-2026-06/companies-33.zip/33/000/167.pb',
+        'https://archive.org/download/ficha-2026-07/companies-33.zip/33/000/167.pb',
+      ]);
+      assert.deepEqual(calls,{decoder:2,decode:1,lookup:found?1:0});
+      const output=doc.at('historia-resultado'), content=treeText(output);
+      assert.match(content,/2026-06: versão não declarada.*perfil de leitura 1\.0\.0/);
+      assert.match(content,/2026-07: versão 1\.0\.0 declarada.*perfil de leitura previsto 1\.0\.0/);
+      assert.match(content,found?/CNPJ localizado no registro Protobuf de 2026-06/:
+        /CNPJ não localizado no registro Protobuf de 2026-06/);
+      assert.doesNotMatch(content,found?/CNPJ não localizado/:/CNPJ localizado/);
+      assert.doesNotMatch(content,/CNPJ (?:não )?localizado no registro Protobuf de 2026-07/);
+      const containsTable=node=>node.tag==='table'||node.children.some(containsTable);
+      assert.equal(containsTable(output),false);
+      assert.match(doc.at('historia-estado').textContent,/inconclusiva.*404.*ausência não comprovada/i);
+      assert.doesNotMatch(doc.at('historia-estado').textContent,/concluída/i);
+      assert.equal(doc.at('historia-enviar').attributes['aria-disabled'],undefined);
+    });
+  }
 });
