@@ -11,7 +11,9 @@ import subprocess
 import sys
 import zipfile
 import zlib
+from collections import Counter
 from pathlib import Path
+from xml.etree import ElementTree
 
 import duckdb
 import pytest
@@ -24,6 +26,35 @@ def _require_equal(actual: object, expected: object) -> None:
     # Do not rely on assert: this test must also run under python -O.
     if actual != expected:
         raise AssertionError(f"expected {expected!r}, got {actual!r}")
+
+
+@pytest.fixture(autouse=True)
+def _require_xfail_enabled(request: pytest.FixtureRequest) -> None:
+    if request.config.getoption("runxfail"):
+        pytest.fail("ZIP differential controls require XFAIL semantics")
+
+
+def _load(con: duckdb.DuckDBPyConnection, source: Path, work: Path, parallel: bool) -> None:
+    if parallel:
+        load_zips_parallel(
+            con, [("source_rows", source, ("a", "b"))], work_dir=work, decompress_workers=1
+        )
+    else:
+        create_table_from_zip_streaming(con, "source_rows", source, ("a", "b"), work_dir=work)
+
+
+def _require_physical_rejection(exc: Exception, message: str, parallel: bool) -> None:
+    # Only unwrap the actual single-worker aggregate, not arbitrary chained errors.
+    cause = exc
+    if parallel and isinstance(exc, RuntimeError) and str(exc) == "1 ZIP(s) failed to decompress":
+        if not isinstance(exc.__cause__, Exception):
+            raise exc
+        cause = exc.__cause__
+    if isinstance(cause, (zipfile.BadZipFile, zlib.error)):
+        return
+    if isinstance(cause, RuntimeError) and message in str(cause):
+        return
+    raise exc
 
 
 def _make_empty_zip(path: Path, compression: int) -> None:
@@ -90,21 +121,23 @@ def _fixture(path: Path, kind: str) -> None:
             raise AssertionError(f"unexpected ZIP fixture structure: {kind}")
 
 
+@pytest.mark.parametrize("parallel", [False, True])
 @pytest.mark.parametrize("kind", ["stored_clean", "deflate_clean"])
-def test_integral_empty_member_is_accepted_in_both_paths(tmp_path: Path, kind: str) -> None:
+def test_integral_empty_member_is_accepted_in_both_paths(
+    tmp_path: Path, kind: str, parallel: bool
+) -> None:
     source = tmp_path / "empty.zip"
     _fixture(source, kind)
     _require_equal(_raw_zip_crc_and_budget(source, expanded=0, members=0), (0, 1))
     con = duckdb.connect()
     try:
-        create_table_from_zip_streaming(
-            con, "source_rows", source, ("a", "b"), work_dir=tmp_path / "work"
-        )
+        _load(con, source, tmp_path / "work", parallel)
         _require_equal(con.execute("SELECT COUNT(*) FROM source_rows").fetchone()[0], 0)
     finally:
         con.close()
 
 
+@pytest.mark.parametrize("parallel", [False, True])
 @pytest.mark.parametrize(
     ("kind", "preflight_message"),
     [
@@ -112,9 +145,10 @@ def test_integral_empty_member_is_accepted_in_both_paths(tmp_path: Path, kind: s
         ("deflate_truncated", "truncated ZIP deflate stream"),
         ("deflate_trailing", "trailing ZIP deflate bytes"),
     ],
+    ids=["stored_gap", "deflate_truncated", "deflate_trailing"],
 )
 def test_invalid_empty_member_preflight_vs_consumer(
-    tmp_path: Path, kind: str, preflight_message: str
+    tmp_path: Path, kind: str, preflight_message: str, parallel: bool
 ) -> None:
     """The same fixture must be rejected on both paths, not silently emptied.
 
@@ -130,10 +164,9 @@ def test_invalid_empty_member_preflight_vs_consumer(
     con = duckdb.connect()
     try:
         try:
-            create_table_from_zip_streaming(
-                con, "source_rows", source, ("a", "b"), work_dir=tmp_path / "work"
-            )
-        except (RuntimeError, zipfile.BadZipFile, zlib.error):
+            _load(con, source, tmp_path / "work", parallel)
+        except (RuntimeError, zipfile.BadZipFile, zlib.error) as exc:
+            _require_physical_rejection(exc, preflight_message, parallel)
             _require_equal(
                 con.execute(
                     "SELECT COUNT(*) FROM duckdb_tables() WHERE table_name = 'source_rows'"
@@ -155,6 +188,7 @@ def test_invalid_empty_member_preflight_vs_consumer(
         ("notes.txt", b"", 0),
         ("notes.txt", b"1;2\n", 1),
     ],
+    ids=["dir-empty", "dir-data", "text-empty", "text-data"],
 )
 @pytest.mark.parametrize("parallel", [False, True])
 def test_member_semantics_characterization_pending_primary_rfb_contract(
@@ -177,14 +211,7 @@ def test_member_semantics_characterization_pending_primary_rfb_contract(
     _require_equal(physical, (len(payload), 1))
     con = duckdb.connect()
     try:
-        work = tmp_path / "work"
-        table = "source_rows"
-        columns = ("a", "b")
-        if parallel:
-            specs = [(table, source, columns)]
-            load_zips_parallel(con, specs, work_dir=work, decompress_workers=1)
-        else:
-            create_table_from_zip_streaming(con, table, source, columns, work_dir=work)
+        _load(con, source, tmp_path / "work", parallel)
         count = con.execute("SELECT COUNT(*) FROM source_rows").fetchone()[0]
         _require_equal(count, expected_rows)
         if expected_rows:
@@ -204,6 +231,7 @@ def test_member_semantics_characterization_pending_primary_rfb_contract(
         ("deflate_truncated", "truncated ZIP deflate stream"),
         ("deflate_trailing", "trailing ZIP deflate bytes"),
     ],
+    ids=["stored_clean", "deflate_clean", "stored_gap", "deflate_truncated", "deflate_trailing"],
 )
 def test_nonempty_member_physical_differential(
     tmp_path: Path, kind: str, preflight_message: str | None, parallel: bool
@@ -246,20 +274,11 @@ def test_nonempty_member_physical_differential(
     con = duckdb.connect()
     try:
         try:
-            if parallel:
-                load_zips_parallel(
-                    con,
-                    [("source_rows", source, ("a", "b"))],
-                    work_dir=tmp_path / "work",
-                    decompress_workers=1,
-                )
-            else:
-                create_table_from_zip_streaming(
-                    con, "source_rows", source, ("a", "b"), work_dir=tmp_path / "work"
-                )
-        except (RuntimeError, zipfile.BadZipFile, zlib.error):
+            _load(con, source, tmp_path / "work", parallel)
+        except (RuntimeError, zipfile.BadZipFile, zlib.error) as exc:
             if preflight_message is None:
                 raise
+            _require_physical_rejection(exc, preflight_message, parallel)
             _require_equal(
                 con.execute(
                     "SELECT COUNT(*) FROM duckdb_tables() WHERE table_name = 'source_rows'"
@@ -277,7 +296,7 @@ def test_nonempty_member_physical_differential(
         con.close()
 
 
-def test_optimized_python_replays_zip_controls() -> None:
+def test_optimized_python_replays_zip_controls(tmp_path: Path) -> None:
     """Run the real ETL differential tests under Python -O, without recursion."""
     tests = (
         "test_integral_empty_member_is_accepted_in_both_paths",
@@ -286,8 +305,9 @@ def test_optimized_python_replays_zip_controls() -> None:
         "test_nonempty_member_physical_differential",
     )
     selectors = [f"{__file__}::{name}" for name in tests]
+    report = tmp_path / "optimized.xml"
     child = subprocess.run(
-        [sys.executable, "-O", "-m", "pytest", "-q", *selectors],
+        [sys.executable, "-O", "-m", "pytest", "-q", f"--junitxml={report}", *selectors],
         capture_output=True,
         text=True,
         check=False,
@@ -295,3 +315,39 @@ def test_optimized_python_replays_zip_controls() -> None:
     )
     if child.returncode:
         raise AssertionError(child.stdout + "\n" + child.stderr)
+
+    clean = ("stored_clean", "deflate_clean")
+    invalid = ("stored_gap", "deflate_truncated", "deflate_trailing")
+    semantic = ("dir-empty", "dir-data", "text-empty", "text-data")
+    expected = Counter(
+        f"{name}[{case}-{parallel}]"
+        for name, cases in (
+            (tests[0], clean),
+            (tests[1], invalid),
+            (tests[3], clean + invalid),
+        )
+        for case in cases
+        for parallel in (False, True)
+    )
+    expected.update(
+        f"{tests[2]}[{parallel}-{case}]"
+        for parallel in (False, True)
+        for case in semantic
+    )
+    allowed_xfail = {
+        f"{name}[{case}-{parallel}]"
+        for name in (tests[1], tests[3])
+        for case in invalid
+        for parallel in (False, True)
+    }
+    # The report must contain precisely the selected child cases, not just exit 0.
+    cases = ElementTree.parse(report).findall(".//testcase")
+    _require_equal(Counter(case.attrib["name"] for case in cases), expected)
+    for case in cases:
+        if case.find("failure") is not None or case.find("error") is not None:
+            raise AssertionError(f"child failure: {case.attrib['name']}")
+        skipped = case.find("skipped")
+        if skipped is not None:
+            _require_equal(skipped.get("type"), "pytest.xfail")
+            if case.attrib["name"] not in allowed_xfail:
+                raise AssertionError(f"unexpected child XFAIL: {case.attrib['name']}")
