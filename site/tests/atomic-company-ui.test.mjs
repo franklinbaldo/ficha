@@ -205,3 +205,21 @@ test('resposta de outra consulta não vira resultado positivo ou ausência para 
     if(oldHistory===undefined)delete globalThis.history;else globalThis.history=oldHistory;
   }
 });
+
+test('proveniência distingue declaração, perfil legado e 404 previsto na Ficha',()=>{
+  const doc=documentFor(),output=new Element();
+  for(const state of ['found','absent-in-snapshot','artifact-unavailable']){
+    for(const declared of [true,false]){
+      renderCompanyRecord(doc,output,{...base,state,
+        data:state==='found'?{cnpj,razao_social:'TESTE',porte_empresa:null}:null,
+        declaredWire:declared?'1.0.0':null,decoderProfile:'1.0.0',
+        wireProvenance:declared?'declared':'legacy-assumed',producerSemantics:'unattested'});
+      const text=treeText(output);
+      assert.match(text,declared?/versão 1\.0\.0 declarada no manifesto/:/versão não declarada no manifesto \(legado assumido\)/);
+      assert.match(text,/semântica do produtor não atestada/);
+      if(state==='artifact-unavailable')assert.match(text,/perfil de leitura previsto 1\.0\.0/);
+      else assert.doesNotMatch(text,/perfil de leitura previsto/);
+      if(state==='found')assert.match(text,/Porte empresarial: Não determinado/);
+    }
+  }
+});
