@@ -246,9 +246,7 @@ def local_prepare(tmp_path, monkeypatch):
     payload = _descriptor()
     descriptor.write_text(json.dumps(payload), encoding="utf-8")
     out = tmp_path / "out"
-    session = ShardPackSession(
-        "2026-06", PUBLIC_COMPANIES_GEOMETRY, parquets_base=str(source)
-    )
+    session = ShardPackSession("2026-06", PUBLIC_COMPANIES_GEOMETRY, parquets_base=str(source))
     pins = monthly_sharded.materialization_inputs_from_descriptor(payload)
     expected = {
         prefix: session.materialization_spec(prefix, input_sha1s=pins).materialization_id()
@@ -296,10 +294,7 @@ def _check_shard_zip(out, prefix, expected):
         ):
             pytest.fail("unexpected shard metadata")
         company = Company.FromString(archive.read(member))
-        if (
-            company.cnpj_base != int(prefix + "000001")
-            or company.snapshot_yyyymm != 202606
-        ):
+        if company.cnpj_base != int(prefix + "000001") or company.snapshot_yyyymm != 202606:
             pytest.fail("unexpected Company identity or snapshot")
     return path.read_bytes()
 
@@ -398,10 +393,7 @@ def test_prepare_competing_same_and_other_prefix(
     else:
         prepare("42", a)
         frozen_a = _check_shard_receipt(out, "42", a, expected)
-    if (
-        frozen_b != _check_shard_receipt(out, "43", b, expected)
-        or receipt_b != b.read_bytes()
-    ):
+    if frozen_b != _check_shard_receipt(out, "43", b, expected) or receipt_b != b.read_bytes():
         pytest.fail("continuation of A changed B")
     receipt_a = a.read_bytes()
     with pytest.raises(FileExistsError):
@@ -412,10 +404,7 @@ def test_prepare_competing_same_and_other_prefix(
         pytest.fail("rival attempt changed receipt state")
     if frozen_a != _check_shard_zip(out, "42", expected):
         pytest.fail("retry replaced A")
-    if (
-        frozen_b != _check_shard_receipt(out, "43", b, expected)
-        or receipt_b != b.read_bytes()
-    ):
+    if frozen_b != _check_shard_receipt(out, "43", b, expected) or receipt_b != b.read_bytes():
         pytest.fail("retry replaced B")
     if list(out.glob("*.part")):
         pytest.fail("owned staging was not cleaned")
