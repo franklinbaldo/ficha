@@ -150,7 +150,13 @@ test('README SSG explicita lookup adicional e limite de versão do wire', async 
   const readme = await read('../README.md');
   assert.match(readme, /`lookups\.json` da mesma competência/);
   assert.match(readme, /SHA-256 declarados desse lookup/);
-  assert.match(readme, /schema_version` ausente no manifesto/);
+  assert.match(readme, /`schema_version` está ausente na camada `files\.companies`/);
+  assert.match(readme, /Somente `files\.companies` pode declarar `schema_version`/);
+  assert.match(readme, /ausência ou `null` significa legado assumido; `1\.0\.0` explícito significa versão declarada/);
+  assert.match(readme, /propriedade própria `schema_version` em um shard, inclusive não selecionado, invalida a camada/);
+  assert.match(readme, /SSG valida a competência selecionada; o `ManifestSchema` Zod valida o documento inteiro/);
+  assert.match(readme, /em HTTP 404, o perfil é apenas previsto e a consulta inconclusiva/);
+  assert.match(readme, /Versão declarada não significa semântica do produtor atestada/);
   assert.match(readme, /issuecomment-7032628482/);
   assert.doesNotMatch(readme, /somente um membro Protobuf v1/);
 });

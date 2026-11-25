@@ -45,12 +45,16 @@ LATEST=$(grep -Eo '[0-9]{4}-[0-9]{2}' list-snapshots.txt | sort | tail -n1 || tr
 echo "Latest upstream month: \`${LATEST:-<none>}\`" >> "$GITHUB_STEP_SUMMARY"
 """
 FRESHNESS_RUN = r"""python3 - <<'EOF'
-import datetime, json, sys
+import datetime, json, re, sys
 
 manifest = json.load(open("web/public/manifest.json"))
 current = manifest.get("current", "")
 if not current:
     print("::error::manifest.json sem campo 'current'")
+    sys.exit(1)
+
+if not isinstance(current, str) or not re.fullmatch(r"[0-9]{4}-(0[1-9]|1[0-2])", current) or current.startswith("0000-"):
+    print("::error::manifest.json com 'current' fora do formato YYYY-MM válido")
     sys.exit(1)
 
 year, month = map(int, current.split("-"))
@@ -357,3 +361,54 @@ def test_freshness_threshold_stays_at_three_calendar_months(tmp_path: Path) -> N
         assert proc.returncode == expected_rc, (current, proc.stdout, proc.stderr)
         assert annotation in proc.stdout
         assert "rode com inputs.month" not in proc.stdout
+
+
+def test_freshness_rejects_noncanonical_month_before_lag(tmp_path: Path) -> None:
+    """Invalid calendar values must fail even if they appear recent or future."""
+    import datetime
+    import json
+    import subprocess
+    import sys
+
+    public = tmp_path / "web" / "public"
+    public.mkdir(parents=True)
+    wrapper = _steps(_load())["Check manifest freshness"]["run"]
+    assert wrapper.startswith("python3 - <<'EOF'\n")
+    script = wrapper.split("python3 - <<'EOF'\n", 1)[1].rsplit("\nEOF", 1)[0]
+    year = datetime.date.today().year + 1
+    invalid = (
+        f"{year}-00",
+        f"{year}-13",
+        f"{year}-99",
+        f"{year}-1",
+        f"+{year}-01",
+        f" {year}-01",
+        f"{year}-01 ",
+        f"{year}-０１",
+        f"{year}-01\n",
+        "0000-01",
+        123,
+        ["2026-01"],
+        None,
+        "",
+    )
+    for mode in ([], ["-O"]):
+        for current in (*invalid, f"{year}-01"):
+            (public / "manifest.json").write_text(
+                json.dumps({"current": current}), encoding="utf-8"
+            )
+            proc = subprocess.run(
+                [sys.executable, *mode, "-c", script],
+                cwd=tmp_path,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            if current in invalid:
+                assert proc.returncode == 1, (current, proc.stdout, proc.stderr)
+                assert "::error::" in proc.stdout
+                assert "snapshot atual:" not in proc.stdout
+            else:
+                assert proc.returncode == 0, (current, proc.stdout, proc.stderr)
+                assert "snapshot atual:" in proc.stdout
+                assert "::error::" not in proc.stdout

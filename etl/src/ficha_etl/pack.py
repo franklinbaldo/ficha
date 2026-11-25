@@ -102,14 +102,16 @@ def _cpf_meio(v) -> int:
 
 
 def _porte(v) -> int:
-    code = _int(v)
+    """Translate the lexical RFB domain, not the protobuf enum numbers (#359)."""
+    if not isinstance(v, str):
+        return Porte.PORTE_UNSPECIFIED
     mapping = {
-        1: Porte.NAO_INFORMADO,
-        2: Porte.MICRO_EMPRESA,
-        3: Porte.PEQUENO_PORTE,
-        5: Porte.DEMAIS,
+        "00": Porte.NAO_INFORMADO,
+        "01": Porte.MICRO_EMPRESA,
+        "03": Porte.PEQUENO_PORTE,
+        "05": Porte.DEMAIS,
     }
-    return mapping.get(code, Porte.PORTE_UNSPECIFIED)
+    return mapping.get(v, Porte.PORTE_UNSPECIFIED)
 
 
 def _tipo_estab(v) -> int:

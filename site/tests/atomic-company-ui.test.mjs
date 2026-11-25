@@ -205,3 +205,60 @@ test('resposta de outra consulta não vira resultado positivo ou ausência para 
     if(oldHistory===undefined)delete globalThis.history;else globalThis.history=oldHistory;
   }
 });
+
+test('proveniência distingue declaração, perfil legado e 404 previsto na Ficha',()=>{
+  const doc=documentFor(),output=new Element();
+  for(const state of ['found','absent-in-snapshot','artifact-unavailable']){
+    for(const declared of [true,false]){
+      renderCompanyRecord(doc,output,{...base,state,
+        data:state==='found'?{cnpj,razao_social:'TESTE',porte_empresa:null}:null,
+        declaredWire:declared?'1.0.0':null,decoderProfile:'1.0.0',
+        wireProvenance:declared?'declared':'legacy-assumed',producerSemantics:'unattested'});
+      const text=treeText(output);
+      assert.match(text,declared?/versão 1\.0\.0 declarada no manifesto/:/versão não declarada no manifesto \(legado assumido\)/);
+      assert.match(text,/semântica do produtor não atestada/);
+      if(state==='artifact-unavailable')assert.match(text,/perfil de leitura previsto 1\.0\.0/);
+      else assert.doesNotMatch(text,/perfil de leitura previsto/);
+      if(state==='found')assert.match(text,/Porte empresarial: Não determinado/);
+    }
+  }
+});
+
+test('Ficha mount→bridge mostra perfil previsto para 404 declarado ou legado',async()=>{
+  const oldLocation=globalThis.location,oldHistory=globalThis.history;
+  globalThis.location=new URL('https://franklinbaldo.github.io/ficha/empresa/');
+  globalThis.history={replaceState(_s,_t,url){globalThis.location=new URL(String(url));}};
+  try {
+    for (const declared of [true,false]) {
+      const data={current:date,snapshots:[{date,files:{companies:{
+        shard_by:'cnpj_base_prefix_2',...(declared?{schema_version:'1.0.0'}:{}),
+        shards:[{shard:'33',url:base.archiveUrl}],
+      }}}]};
+      const doc=documentFor(['empresa-cnpj','empresa-competencia','empresa-form',
+        'empresa-estado','empresa-resultado','empresa-enviar']);
+      const urls=[], calls={decoder:0,decode:0,lookup:0};
+      await mountCompany(doc,{loadManifest:async()=>data,
+        lookup:(m,d,value)=>fetchCompanyByCnpj(m,d,value,{
+          fetchImpl:async url=>{urls.push(url);return new Response(null,{status:404});},
+          loadDecoder:async()=>{calls.decoder++;return {decodeCompany:()=>{calls.decode++;}};},
+          loadLookups:async()=>{calls.lookup++;throw Error('lookup indevido após 404');},
+        }),
+      });
+      doc.at('empresa-cnpj').value=cnpj;
+      await doc.at('empresa-form').listeners.get('submit')({preventDefault(){}});
+      assert.deepEqual(urls,[source]);
+      assert.deepEqual(calls,{decoder:1,decode:0,lookup:0});
+      const content=treeText(doc.at('empresa-resultado'));
+      assert.match(content,declared?/versão 1\.0\.0 declarada no manifesto/:
+        /versão não declarada no manifesto \(legado assumido\)/);
+      assert.match(content,/perfil de leitura previsto 1\.0\.0.*semântica do produtor não atestada/);
+      assert.match(doc.at('empresa-estado').textContent,/inconclusiva/i);
+      assert.doesNotMatch(content,/CNPJ não localizado|FICHA CADASTRAL/);
+      assert.equal(doc.at('empresa-enviar').attributes['aria-disabled'],undefined);
+      globalThis.location=new URL('https://franklinbaldo.github.io/ficha/empresa/');
+    }
+  } finally {
+    if(oldLocation===undefined)delete globalThis.location;else globalThis.location=oldLocation;
+    if(oldHistory===undefined)delete globalThis.history;else globalThis.history=oldHistory;
+  }
+});

@@ -299,6 +299,46 @@ def _write_json(path: Path, payload: object) -> None:
     )
 
 
+def _require_prepare_receipt_path(output_dir: Path, receipt: Path) -> None:
+    """Keep prepare receipts outside the canonical shared shard namespace."""
+    reserved = {
+        name
+        for prefix in PUBLIC_COMPANIES_GEOMETRY.prefixes()
+        for name in (
+            PUBLIC_COMPANIES_GEOMETRY.shard_name(prefix),
+            PUBLIC_COMPANIES_GEOMETRY.shard_name(prefix) + ".part",
+        )
+    }
+    # Check lexical and resolved paths: the former reserves even a staging
+    # path with a symlink pointing out, the latter catches aliases pointing in.
+    for root, candidate in (
+        (Path(os.path.abspath(output_dir)), Path(os.path.abspath(receipt))),
+        (output_dir.resolve(), receipt.resolve()),
+    ):
+        if candidate == root or candidate in root.parents:
+            raise ValueError(f"receipt aliases shard output directory: {receipt}")
+        if candidate.is_relative_to(root):
+            name = candidate.relative_to(root).parts[0]
+            if os.name == "nt":
+                # Win32 case, trailing-dot/space and stream aliases.
+                name = name.split(":", 1)[0].rstrip(" .").casefold()
+            if name in reserved:
+                raise ValueError(f"receipt uses reserved shard namespace: {receipt}")
+    try:
+        receipt.lstat()
+    except FileNotFoundError:
+        pass
+    else:
+        raise FileExistsError(f"receipt already exists: {receipt}")
+
+
+def _write_prepare_receipt(path: Path, payload: object) -> None:
+    """Exclusive creation; a late write error may leave partial or full JSON."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("x", encoding="utf-8") as stream:
+        stream.write(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
+
+
 def _load_receipt(path: Path, month: str, prefix: str) -> dict:
     payload = json.loads(path.read_text(encoding="utf-8"))
     expected_name = PUBLIC_COMPANIES_GEOMETRY.shard_name(prefix)
@@ -424,6 +464,10 @@ def command_prepare_shard(args: argparse.Namespace) -> None:
     descriptor = _load_descriptor(Path(args.descriptor), month)
     pinned = materialization_inputs_from_descriptor(descriptor)
     output_dir = Path(args.output_dir)
+    receipt = Path(args.receipt)
+    if ".." in output_dir.parts or ".." in receipt.parts:
+        raise ValueError("parent traversal is not allowed in prepare paths")
+    _require_prepare_receipt_path(output_dir, receipt)
     with ShardPackSession(
         month,
         PUBLIC_COMPANIES_GEOMETRY,
@@ -436,7 +480,7 @@ def command_prepare_shard(args: argparse.Namespace) -> None:
             output_dir,
             pinned_inputs=pinned,
         )
-    _write_json(Path(args.receipt), _receipt_payload(month, prepared))
+    _write_prepare_receipt(receipt, _receipt_payload(month, prepared))
     print(
         f"prepared {prepared.name}: size={prepared.size} sha1={prepared.sha1} "
         f"materialization_id={prepared.materialization_id}"
