@@ -37,7 +37,10 @@ def _require_xfail_enabled(request: pytest.FixtureRequest) -> None:
 def _load(con: duckdb.DuckDBPyConnection, source: Path, work: Path, parallel: bool) -> None:
     if parallel:
         load_zips_parallel(
-            con, [("source_rows", source, ("a", "b"))], work_dir=work, decompress_workers=1
+            con,
+            [("source_rows", source, ("a", "b"))],
+            work_dir=work,
+            decompress_workers=1,
         )
     else:
         create_table_from_zip_streaming(con, "source_rows", source, ("a", "b"), work_dir=work)
@@ -124,7 +127,9 @@ def _fixture(path: Path, kind: str) -> None:
 @pytest.mark.parametrize("parallel", [False, True])
 @pytest.mark.parametrize("kind", ["stored_clean", "deflate_clean"])
 def test_integral_empty_member_is_accepted_in_both_paths(
-    tmp_path: Path, kind: str, parallel: bool
+    tmp_path: Path,
+    kind: str,
+    parallel: bool,
 ) -> None:
     source = tmp_path / "empty.zip"
     _fixture(source, kind)
@@ -148,7 +153,10 @@ def test_integral_empty_member_is_accepted_in_both_paths(
     ids=["stored_gap", "deflate_truncated", "deflate_trailing"],
 )
 def test_invalid_empty_member_preflight_vs_consumer(
-    tmp_path: Path, kind: str, preflight_message: str, parallel: bool
+    tmp_path: Path,
+    kind: str,
+    preflight_message: str,
+    parallel: bool,
 ) -> None:
     """The same fixture must be rejected on both paths, not silently emptied.
 
@@ -319,21 +327,14 @@ def test_optimized_python_replays_zip_controls(tmp_path: Path) -> None:
     clean = ("stored_clean", "deflate_clean")
     invalid = ("stored_gap", "deflate_truncated", "deflate_trailing")
     semantic = ("dir-empty", "dir-data", "text-empty", "text-data")
-    expected = Counter(
-        f"{name}[{case}-{parallel}]"
-        for name, cases in (
-            (tests[0], clean),
-            (tests[1], invalid),
-            (tests[3], clean + invalid),
-        )
-        for case in cases
-        for parallel in (False, True)
-    )
-    expected.update(
-        f"{tests[2]}[{parallel}-{case}]"
-        for parallel in (False, True)
-        for case in semantic
-    )
+    expected = Counter()
+    for name, cases in ((tests[0], clean), (tests[1], invalid), (tests[3], clean + invalid)):
+        for case in cases:
+            for parallel in (False, True):
+                expected[f"{name}[{case}-{parallel}]"] += 1
+    for parallel in (False, True):
+        for case in semantic:
+            expected[f"{tests[2]}[{parallel}-{case}]"] += 1
     allowed_xfail = {
         f"{name}[{case}-{parallel}]"
         for name in (tests[1], tests[3])
