@@ -465,6 +465,8 @@ def command_prepare_shard(args: argparse.Namespace) -> None:
     pinned = materialization_inputs_from_descriptor(descriptor)
     output_dir = Path(args.output_dir)
     receipt = Path(args.receipt)
+    if ".." in output_dir.parts or ".." in receipt.parts:
+        raise ValueError("parent traversal is not allowed in prepare paths")
     _require_prepare_receipt_path(output_dir, receipt)
     with ShardPackSession(
         month,
