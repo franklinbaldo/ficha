@@ -297,16 +297,17 @@ def test_old_producer_receipt_refused_before_file_or_remote(tmp_path, monkeypatc
     def forbidden(*args, **kwargs):
         pytest.fail("obsolete receipt reached file or remote I/O")
 
-    monkeypatch.setattr(Path, "exists", forbidden)
-    with pytest.raises(ShardPublishError, match="prepared materialization_id"):
-        submit_prepared_shard(
-            session,
-            prepared,
-            pinned_inputs=pinned,
-            fetch_metadata=forbidden,
-            fetch_meta=forbidden,
-            upload=forbidden,
-            fetch_direct=forbidden,
-        )
+    with monkeypatch.context() as patch:
+        patch.setattr(Path, "exists", forbidden)
+        with pytest.raises(ShardPublishError, match="prepared materialization_id"):
+            submit_prepared_shard(
+                session,
+                prepared,
+                pinned_inputs=pinned,
+                fetch_metadata=forbidden,
+                fetch_meta=forbidden,
+                upload=forbidden,
+                fetch_direct=forbidden,
+            )
     if session.pack_calls:
         pytest.fail("obsolete receipt caused repack")

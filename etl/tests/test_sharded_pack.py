@@ -563,12 +563,10 @@ def test_both_packers_decode_same_rfb_porte_from_local_parquet(tmp_path):
         ).fetchone()[0]
     if column_type != "VARCHAR":
         pytest.fail("fixture must exercise lexical RFB values")
-    pins = {
-        path.relative_to(tmp_path).as_posix(): hashlib.sha1(
-            path.read_bytes(), usedforsecurity=False
-        ).hexdigest()
-        for path in sorted(tmp_path.rglob("*.parquet"))
-    }
+    pins = {}
+    for path in sorted(tmp_path.rglob("*.parquet")):
+        digest = hashlib.sha1(path.read_bytes(), usedforsecurity=False).hexdigest()
+        pins[path.relative_to(tmp_path).as_posix()] = digest
     mono = tmp_path / "companies.zip"
     pack_from_parquets("2026-08", mono, parquets_base=str(tmp_path))
     with ShardPackSession("2026-08", ShardGeometry(2), parquets_base=str(tmp_path)) as session:
@@ -600,7 +598,7 @@ def test_both_packers_decode_same_rfb_porte_from_local_parquet(tmp_path):
             if actual != expected:
                 pytest.fail(f"{path.name}: {actual!r} != {expected!r}")
             if path == packed.path:
-                if meta["materialization"] != spec.meta_payload():
+                if meta["materialization"] != spec.meta_payload()["materialization"]:
                     pytest.fail("shard materialization differs from expected spec")
                 if spec.packer_format_version != 3:
                     pytest.fail("producer semantic version must be 3")
