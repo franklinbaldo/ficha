@@ -20,7 +20,7 @@ const ids=['historia-competencias','historia-inicio','historia-fim','historia-fo
 const numeric='33000167000101';
 const manifest={current:'2026-07',snapshots:['2026-07','2026-06','2026-05','2026-04']
   .map(date=>({date,files:{...(date==='2026-04'?{}:
-    {companies:{shard_by:'cnpj_base_prefix_2',shards:[{shard:'33',url:'https://archive.org/33'}]}})}}))};
+    {companies:{shard_by:'cnpj_base_prefix_2',...(date==='2026-07'?{schema_version:'1.0.0'}:{}),shards:[{shard:'33',url:'https://archive.org/download/ficha-'+date+'/companies-33.zip'}]}})}}))};
 const treeText=node=>[node.textContent,...node.children.map(treeText)].join(' ');
 function docFor() {
   const elements=new Map(ids.map(id=>[id,new Element(id.includes('inicio')||id.includes('fim')?'select':'div')]));
@@ -137,6 +137,8 @@ test('404 final mantém a proveniência das duas observações sem tabela compar
     assert.match(treeText(output),/2026-06: versão não declarada.*perfil de leitura 1\.0\.0/);
     assert.match(treeText(output),/2026-07: versão 1\.0\.0 declarada.*perfil de leitura previsto 1\.0\.0/);
     assert.doesNotMatch(treeText(output),/Comparação de registros observados/);
+    const containsTable=node=>node.tag==='table'||node.children.some(containsTable);
+    assert.equal(containsTable(output),false);
     assert.match(doc.at('historia-estado').textContent,/inconclusiva.*404/i);
   });
 });
@@ -149,4 +151,12 @@ test('shard não selecionado com versão própria exclui competência dos seleto
     const item=doc.at('historia-competencias').children.find(n=>treeText(n).includes('2026-05'));
     assert.match(treeText(item),/Sem índice para comparação numérica/);
   });
+});
+
+test('SSG selected competence remains readable despite another invalid layer',async()=>{
+  const {planAtomicRecord}=await import('../static/js/atomic-record.mjs');
+  const data=structuredClone(manifest);
+  data.snapshots.find(s=>s.date==='2026-06').files.companies.shards.push({shard:'99',schema_version:null});
+  assert.equal(planAtomicRecord(data,'2026-07',numeric).wireProvenance,'declared');
+  assert.throws(()=>planAtomicRecord(data,'2026-06',numeric),/Camada Protobuf numérica v1/);
 });

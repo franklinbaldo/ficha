@@ -175,3 +175,54 @@ describe('fetchCompany', () => {
     expect(socio!.cnpj_socio).toBe(cnpjSocio);
   });
 });
+
+// These callers intentionally bypass ManifestSchema, as the exported API permits.
+describe('direct API wire authority (#383)', () => {
+  const identifier = 'ficha-2026-05';
+  it('allows a partial numeric shard list with absent/null/explicit v1 wire', () => {
+    for (const version of [undefined, null, '1.0.0'] as const) {
+      const files = shardFiles();
+      const options = { identifier, files: { companies: {
+        ...files.companies, schema_version: version,
+        shards: files.companies.shards.filter(s => s.shard === '12'),
+      } } };
+      expect(companyArchiveUrl('12345678', options)).toContain('companies-12.zip');
+    }
+  });
+  it('rejects incompatible wire, unknown mappings and own shard versions before GET', async () => {
+    type Files = NonNullable<Parameters<typeof companyArchiveUrl>[1]['files']>;
+    const legacy = shardFiles().companies;
+    const alpha = { ...legacy, shard_by: 'cnpj_base_prefix_or_base36_mod_100_v1', schema_version: '1.1.0' } as const;
+    const cases: unknown[] = [
+      ...['1.1.0', '9.0.0', '', 1].map(schema_version => ({...legacy, schema_version})),
+      ...[undefined, null, '1.0.0', '9.0.0'].map(schema_version => ({...alpha, schema_version})),
+      {...legacy, shard_by: 'unknown'},
+    ];
+    for (const layer of [legacy, alpha]) {
+      for (const selected of ['12', '99']) {
+        for (const version of [undefined, null, '1.0.0', '1.1.0', '9.0.0']) {
+          cases.push({...layer, shards: layer.shards.map(s => s.shard === selected
+            ? {...s, schema_version: version} : s)});
+        }
+      }
+    }
+    for (const layer of cases) {
+      const fetchImpl = vi.fn(async () => new Response(null, {status:404}));
+      const files = {companies:layer} as Files;
+      expect(() => companyArchiveUrl('12345678', {identifier, files})).toThrow(/schema|mapping/);
+      await expect(fetchCompany('12345678', {identifier, files, fetchImpl})).rejects.toThrow(/schema|mapping/);
+      expect(fetchImpl).not.toHaveBeenCalled();
+    }
+  });
+  it('rejects every alphanumeric root in legacy mapping even with matching shard', async () => {
+    for (const root of ['ABCD1234', 'A0123456', '0A123456', '00AB1234']) {
+      const files = shardFiles();
+      files.companies.shards.push({shard:root.slice(0,2),url:'https://example.test/forbidden.zip',sha1:'a'.repeat(40),size:1});
+      const fetchImpl = vi.fn(async () => new Response(null, {status:404}));
+      await expect(fetchCompany(root,{identifier,files,fetchImpl})).rejects.toThrow(/alphanumeric root/);
+      expect(fetchImpl).not.toHaveBeenCalled();
+    }
+    const files = {companies:{...shardFiles().companies, shard_by:'cnpj_base_prefix_or_base36_mod_100_v1',schema_version:'1.1.0'} as const};
+    expect(companyArchiveUrl('ABCD1234',{identifier,files})).toContain('companies-71.zip');
+  });
+});
