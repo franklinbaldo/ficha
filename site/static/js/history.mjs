@@ -2,8 +2,8 @@
 import {fetchManifest,snapshotsDescending,competenceLabel} from './catalog.mjs';
 import {canonicalCnpj,compareRecords} from './record.mjs';
 import {fetchCompanyByCnpj} from './atomic-browser.mjs';
-import {CnpjInputError} from './atomic-record.mjs';
-import {BASE,byId,add,anchor,status,setParams,params,watchSelection,populateDateSelect} from './page-helpers.mjs';
+import {CnpjInputError,supportsNumericCompanyLayer} from './atomic-record.mjs';
+import {BASE,byId,add,anchor,status,setParams,params,watchSelection,populateDateSelect,renderWireProvenance} from './page-helpers.mjs';
 
 export function renderHistoryComparison(doc, parent, older, newer) {
   parent.replaceChildren();
@@ -12,8 +12,9 @@ export function renderHistoryComparison(doc, parent, older, newer) {
   const provenance = add(doc,parent,'p','Competências '+older.date+' e '+newer.date+'. As diferenças foram observadas entre snapshots; não representam datas exatas de alteração.');
   provenance.className='fineprint';
   if (older.partial || newer.partial) {
-    add(doc,parent,'p','A comparação numérica utiliza Protobuf v1 declarado no manifesto. Campos desconhecidos permanecem não informados, e o porte histórico não pode ser determinado por este wire.','fineprint');
+    add(doc,parent,'p','A comparação numérica utiliza perfil de leitura compatível com Protobuf v1. Campos desconhecidos permanecem não informados, e o porte histórico não pode ser determinado por este wire.','fineprint');
   }
+  for (const entry of [older,newer]) renderWireProvenance(doc,parent,entry);
   if (older.state === 'absent-in-snapshot' || newer.state === 'absent-in-snapshot') {
     add(doc,parent,'h3','Comparação incompleta: CNPJ não localizado');
     for (const entry of [older,newer]) {
@@ -65,11 +66,7 @@ function requireHistoryObservation(result, date, cnpj) {
   if (!result || result.date !== date || result.cnpj !== cnpj) {
     throw new Error('Identidade da observação divergente; comparação inconclusiva');
   }
-  if (result?.state === 'artifact-unavailable') {
-    throw new Error('Consulta inconclusiva em ' + result.date +
-      ': arquivo Protobuf não respondeu (HTTP 404); ausência não comprovada');
-  }
-  if (!result || !['found', 'absent-in-snapshot'].includes(result.state)) {
+  if (!['found', 'absent-in-snapshot', 'artifact-unavailable'].includes(result.state)) {
     throw new Error('Estado de consulta ausente ou desconhecido; comparação inconclusiva');
   }
   if (result.state === 'found' && (!result.data || typeof result.data !== 'object')) {
@@ -78,7 +75,7 @@ function requireHistoryObservation(result, date, cnpj) {
   if (result.state === 'found' && result.data.cnpj !== cnpj) {
     throw new Error('Identidade do CNPJ no registro divergente; comparação inconclusiva');
   }
-  if (result.state === 'absent-in-snapshot' && result.data != null) {
+  if (result.state !== 'found' && result.data != null) {
     throw new Error('Resposta de ausência contraditória; comparação inconclusiva');
   }
   return result;
@@ -100,18 +97,11 @@ export async function mountHistory(doc,{loadManifest=fetchManifest,lookup=fetchH
     add(doc,li,'span',snap.date,'mono');
     add(doc,li,'strong',competenceLabel(snap.date));
     if(snap.date===manifest.current) add(doc,li,'small','Referência do manifesto');
-    if (snap.files?.companies?.shard_by !== 'cnpj_base_prefix_2' ||
-        (snap.files.companies.schema_version != null &&
-         snap.files.companies.schema_version !== '1.0.0') ||
-        !Array.isArray(snap.files.companies.shards)) {
+    if (!supportsNumericCompanyLayer(snap.files?.companies)) {
       add(doc,li,'small','Sem índice para comparação numérica');
     }
   }
-  const protobufMonths = snaps.filter(s => s.files?.companies?.shard_by ===
-    'cnpj_base_prefix_2' &&
-    (s.files.companies.schema_version == null ||
-      s.files.companies.schema_version === '1.0.0') &&
-    Array.isArray(s.files.companies.shards));
+  const protobufMonths = snaps.filter(s => supportsNumericCompanyLayer(s.files?.companies));
   // Keep the full archival timeline; prevent selecting legacy or future-wire months.
   if (protobufMonths.length < 2) {
     from.replaceChildren(); to.replaceChildren();
@@ -174,15 +164,25 @@ export async function mountHistory(doc,{loadManifest=fetchManifest,lookup=fetchH
     // The busy guard rejects repeated submits without disabling focus.
     button.setAttribute('aria-disabled','true');
     status(state,'Consultando competência inicial ('+start+')…');
+    const unavailable = (entry, observed = []) => {
+      setParams({cnpj,de:start,ate:end});
+      status(state,'Comparação indisponível: Consulta inconclusiva em ' + entry.date +
+        ': arquivo Protobuf não respondeu (HTTP 404); ausência não comprovada',true);
+      for (const prior of observed) renderWireProvenance(doc,output,prior);
+      renderWireProvenance(doc,output,entry);
+      anchor(doc,output,'Ver competências disponíveis',BASE+'acervo/');
+    };
     try {
       const older=requireHistoryObservation(await lookup(manifest,start,cnpj), start, cnpj);
       // Avoid a second archival GET if the user changed the requested comparison.
       if (!stillCurrent()) { status(state,discarded); return; }
+      if (older.state === 'artifact-unavailable') { unavailable(older); return; }
       status(state,older.state === 'absent-in-snapshot'
         ? 'CNPJ não localizado no registro Protobuf de '+start+'. Consultando competência final ('+end+')…'
         : 'Observação de '+start+' recebida. Consultando competência final ('+end+')…');
       const newer=requireHistoryObservation(await lookup(manifest,end,cnpj), end, cnpj);
       if (!stillCurrent()) { status(state,discarded); return; }
+      if (newer.state === 'artifact-unavailable') { unavailable(newer,[older]); return; }
       setParams({cnpj,de:start,ate:end});
       renderHistoryComparison(doc,output,older,newer);
       if (older.state === 'absent-in-snapshot' || newer.state === 'absent-in-snapshot') {
