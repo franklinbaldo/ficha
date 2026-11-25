@@ -2,17 +2,45 @@
 const DATE = /^\d{4}-(0[1-9]|1[0-2])$/;
 const HEX = /^[0-9a-f]{64}$/;
 
+const isObject = value => value !== null && typeof value === 'object' && !Array.isArray(value);
+const own = (object, key) => Object.prototype.hasOwnProperty.call(object, key);
+
+function validateSnapshotFiles(files) {
+  const keys = new Set();
+  const add = key => {
+    if (keys.has(key)) throw new Error('Identidade de arquivo duplicada: ' + key);
+    keys.add(key);
+  };
+  for (const [key, file] of Object.entries(files)) {
+    if (!isObject(file)) throw new Error('Entrada de arquivo inválida: ' + key);
+    if (!own(file, 'shards')) {
+      add(key);
+      continue;
+    }
+    if (!Array.isArray(file.shards)) throw new Error('Lista de shards inválida: ' + key);
+    const pattern = key === 'companies' ? /^[0-9]{2}$/ : /^[a-zA-Z0-9_-]{1,16}$/;
+    for (const shard of file.shards) {
+      if (!isObject(shard) || typeof shard.shard !== 'string' || !pattern.test(shard.shard)) {
+        throw new Error('Identidade de shard inválida: ' + key);
+      }
+      add(key + '/' + shard.shard);
+    }
+  }
+}
+
 export function validateManifest(manifest) {
-  if (!manifest || !DATE.test(manifest.current ?? '') ||
-      !Array.isArray(manifest.snapshots)) {
+  if (!isObject(manifest) || typeof manifest.current !== 'string' ||
+      !DATE.test(manifest.current) || !Array.isArray(manifest.snapshots)) {
     throw new Error('Manifesto sem current/snapshots válidos');
   }
   const dates = new Set();
   for (const snapshot of manifest.snapshots) {
-    if (!DATE.test(snapshot?.date ?? '') || dates.has(snapshot.date) ||
-        !snapshot.files || typeof snapshot.files !== 'object') {
+    if (!isObject(snapshot) || typeof snapshot.date !== 'string' ||
+        !DATE.test(snapshot.date) || dates.has(snapshot.date) || !isObject(snapshot.files) ||
+        (snapshot.row_counts != null && !isObject(snapshot.row_counts))) {
       throw new Error('Snapshot duplicado ou inválido');
     }
+    validateSnapshotFiles(snapshot.files);
     dates.add(snapshot.date);
   }
   if (!dates.has(manifest.current)) throw new Error('Competência current ausente do catálogo');
