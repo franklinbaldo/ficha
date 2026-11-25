@@ -57,20 +57,24 @@ export function companyArchiveUrl(
   const { iaBase = 'https://archive.org/download', identifier, files } = options;
   if (files?.companies) {
     const base = rootText(cnpjBase);
-    // A legacy prefix-2 index only describes numeric roots. A textual root
-    // beginning with digits would otherwise be routed to a plausible old ZIP.
-    if (files.companies.shard_by === 'cnpj_base_prefix_2' && /^[0-9]{2}/.test(base) && /[A-Z]/.test(base)) {
-      throw new Error('companyArchiveUrl: alphanumeric root requires v1.1 shard mapping');
+    const layer = files.companies;
+    // Wire authority belongs to the layer, even for callers bypassing Zod.
+    if (layer.shard_by === 'cnpj_base_prefix_2') {
+      if (/[A-Z]/.test(base)) {
+        throw new Error('companyArchiveUrl: alphanumeric root requires v1.1 shard mapping');
+      }
+      if (layer.schema_version != null && layer.schema_version !== '1.0.0') {
+        throw new Error(`companyArchiveUrl: schema ${layer.schema_version} cannot use legacy numeric shard mapping`);
+      }
+    } else if (layer.shard_by === 'cnpj_base_prefix_or_base36_mod_100_v1') {
+      if (layer.schema_version !== '1.1.0') {
+        throw new Error('companyArchiveUrl: schema 1.1.0 required for alphanumeric shards');
+      }
+    } else {
+      throw new Error('companyArchiveUrl: unknown company shard mapping');
     }
-    // Older manifests remain readable, but the new bucket mapping must explicitly
-    // advertise the wire schema that preserves alphanumeric CNPJ text.
-    if (files.companies.shard_by === 'cnpj_base_prefix_or_base36_mod_100_v1'
-        && files.companies.schema_version !== '1.1.0') {
-      throw new Error('companyArchiveUrl: schema 1.1.0 required for alphanumeric shards');
-    }
-    if (files.companies.shard_by === 'cnpj_base_prefix_2'
-        && files.companies.schema_version === '1.1.0') {
-      throw new Error('companyArchiveUrl: schema 1.1.0 cannot use legacy numeric shard mapping');
+    if (layer.shards.some(entry => Object.prototype.hasOwnProperty.call(entry, 'schema_version'))) {
+      throw new Error('companyArchiveUrl: company shard cannot declare schema_version');
     }
     const rawPrefix = base.slice(0, 2);
     const prefix = files.companies.shard_by === 'cnpj_base_prefix_or_base36_mod_100_v1'
@@ -93,8 +97,9 @@ export function companyArchiveUrl(
  * Quando `files` vem do manifesto, ele é a fonte de verdade para a URL do
  * arquivo atômico. Sem `files`, mantém o fallback histórico por identifier.
  *
- * @returns the decoded Company, or `null` if the path returned 404 (the
- *   CNPJ doesn't exist in this snapshot). Other HTTP errors throw.
+ * @returns the decoded Company, or `null` if the member path returned 404.
+ *   The 404 is inconclusive: it may indicate a missing archive or member,
+ *   not proof of CNPJ absence. Other HTTP errors throw.
  */
 export async function fetchCompany(
   cnpjBase: number | string,

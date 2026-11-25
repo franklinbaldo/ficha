@@ -4,7 +4,7 @@ import { archiveView, archivalFileEntries, catalogueTotals, competenceLabel,
 import { canonicalCnpj, displayValue, RECORD_FIELDS } from './record.mjs';
 import { fetchCompanyByCnpj } from './atomic-browser.mjs';
 import { CnpjInputError } from './atomic-record.mjs';
-import {BASE,byId,create,add,anchor,option,status,setParams,params,watchSelection,populateDateSelect} from './page-helpers.mjs';
+import {BASE,byId,create,add,anchor,option,status,setParams,params,watchSelection,populateDateSelect,renderWireProvenance} from './page-helpers.mjs';
 import {mountHistory} from './history.mjs';
 export {mountHistory,renderHistoryComparison,fetchHistoryRecordAt} from './history.mjs';
 
@@ -47,6 +47,7 @@ export function renderCompanyRecord(doc, parent, result) {
   if (result.state === 'artifact-unavailable') {
     add(doc,parent,'h2','Arquivo indisponível nesta competência');
     add(doc,parent,'p','O arquivo do registro não respondeu (HTTP 404). Consulta inconclusiva: isso não comprova ausência da empresa.');
+    renderWireProvenance(doc,parent,result);
     showProvenance(doc,parent,result.date,result.archiveUrl || result.source);
     return;
   }
@@ -55,6 +56,7 @@ export function renderCompanyRecord(doc, parent, result) {
       ? 'CNPJ não localizado no registro Protobuf desta competência'
       : 'Nenhum registro encontrado nesta competência');
     add(doc,parent,'p','A ausência nesta consulta não comprova encerramento, inexistência histórica ou mudança cadastral.');
+    renderWireProvenance(doc,parent,result);
     showProvenance(doc,parent,result.date,result.archiveUrl || result.source);
     return;
   }
@@ -67,6 +69,7 @@ export function renderCompanyRecord(doc, parent, result) {
   if (result.partial) {
     add(doc,parent,'p','Porte empresarial: Não determinado. O código Protobuf legado não permite afirmar o porte RFB. Simples/MEI não informados também permanecem indeterminados.','fineprint');
   }
+  renderWireProvenance(doc,parent,result);
   showProvenance(doc,parent,result.date,result.archiveUrl || result.source);
 }
 

@@ -26,6 +26,14 @@ export function validNumericCnpj(cnpj) {
     digits[13] === calculate([6,5,4,3,2,9,8,7,6,5,4,3,2]);
 }
 
+/** The layer alone may declare wire; a shard declaration is always invalid. */
+export function supportsNumericCompanyLayer(layer) {
+  return layer?.shard_by === 'cnpj_base_prefix_2' &&
+    (layer.schema_version == null || layer.schema_version === '1.0.0') &&
+    Array.isArray(layer.shards) &&
+    !layer.shards.some(entry => entry != null && Object.hasOwn(entry, 'schema_version'));
+}
+
 export function planAtomicRecord(manifest, date, value) {
   const cnpj = String(value ?? '').trim().replace(/[.\/\-\s]/g, '').toUpperCase();
   if (!VALID_CNPJ.test(cnpj)) throw new CnpjInputError('Informe um CNPJ completo de 14 caracteres');
@@ -40,9 +48,7 @@ export function planAtomicRecord(manifest, date, value) {
   const found = snapshots.filter(snapshot => snapshot?.date === date);
   if (found.length !== 1) throw new Error('Competência não publicada');
   const layer = found[0].files?.companies;
-  if (layer?.shard_by !== 'cnpj_base_prefix_2' ||
-      (layer.schema_version != null && layer.schema_version !== '1.0.0') ||
-      !Array.isArray(layer.shards)) {
+  if (!supportsNumericCompanyLayer(layer)) {
     throw new Error('Camada Protobuf numérica v1 não declarada nesta competência');
   }
   const root = cnpj.slice(0, 8);
@@ -53,7 +59,11 @@ export function planAtomicRecord(manifest, date, value) {
     throw new Error('Shard ausente, duplicado ou URL divergente da competência');
   }
   const member = `${root.slice(0, 2)}/${root.slice(2, 5)}/${root.slice(5)}.pb`;
-  return Object.freeze({cnpj, date, root, archiveUrl, memberUrl: `${archiveUrl}/${member}`, wire: '1.0.0'});
+  const declaredWire = layer.schema_version ?? null;
+  return Object.freeze({cnpj, date, root, archiveUrl, memberUrl: `${archiveUrl}/${member}`,
+    wire: '1.0.0', declaredWire, decoderProfile: '1.0.0',
+    wireProvenance: declaredWire === null ? 'legacy-assumed' : 'declared',
+    producerSemantics: 'unattested'});
 }
 
 /** Stream into bounded memory. Never call unbounded response.arrayBuffer(). */
@@ -127,7 +137,9 @@ export async function fetchAtomicRecord(manifest, date, input, {
   if (typeof decodeCompany !== 'function') throw new Error('Decoder Protobuf canônico obrigatório');
   const response = await fetchImpl(target.memberUrl, {mode:'cors', signal});
   const shared = {cnpj:target.cnpj, date:target.date, source:target.memberUrl,
-    archiveUrl:target.archiveUrl, wire:target.wire, partial:true};
+    archiveUrl:target.archiveUrl, wire:target.wire, declaredWire:target.declaredWire,
+    decoderProfile:target.decoderProfile, wireProvenance:target.wireProvenance,
+    producerSemantics:target.producerSemantics, partial:true};
   // A 404 can mean a missing ZIP, shard or member; it cannot prove CNPJ absence.
   if (response.status === 404) return {...shared, data:null,
     state:'artifact-unavailable', httpStatus:404};
