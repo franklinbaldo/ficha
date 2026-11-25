@@ -5,76 +5,27 @@ A geocodificacao requer --geocode explicito e pode baixar dados CNEFE.
 Nao modifica ETL, manifesto nem snapshots publicados.
 """
 import argparse
-import csv
 import json
-import re
-import unicodedata
-from collections import Counter
 from pathlib import Path
 
-PREFIX = {"R": "RUA", "AV": "AVENIDA", "TV": "TRAVESSA", "AL": "ALAMEDA",
-          "PCA": "PRACA", "PC": "PRACA", "EST": "ESTRADA", "ROD": "RODOVIA",
-          "VL": "VILA", "LG": "LARGO"}
-KNOWN = set(PREFIX) | set(PREFIX.values())
-
-
-def folding(value):
-    value = unicodedata.normalize("NFKD", str(value or "").strip())
-    return re.sub(r"\s+", " ", "".join(
-        c for c in value if not unicodedata.combining(c)
-    ).upper()).strip()
-
-
-def ficha_key(row):
-    street = folding(row["logradouro"])
-    first = re.match(r"^([A-Z]+)\.?\s+", street)
-    if not first or first.group(1) not in KNOWN:
-        kind = folding(row.get("tipo_logradouro"))
-        street = f"{kind} {street}".strip() if kind else street
-    match = re.match(r"^([A-Z]+)\.?\s+(.*)$", street)
-    if match and match.group(1) in PREFIX:
-        return f"{PREFIX[match.group(1)]} {match.group(2)}"
-    return street
+from cohort import ficha_key, read_cohort
 
 
 def run(path, *, geocode=False):
-    with path.open(newline="", encoding="utf-8-sig") as handle:
-        reader = csv.DictReader(handle)
-        required = {"tipo_logradouro", "logradouro", "numero", "cep",
-                    "bairro", "municipio", "uf"}
-        missing = required - set(reader.fieldnames or ())
-        if missing:
-            raise ValueError(f"Missing CSV columns: {', '.join(sorted(missing))}")
-        rows = list(reader)
-    if not rows:
-        raise ValueError("Empty CSV")
-    keys = [ficha_key(row) for row in rows]
-    groups = Counter(
-        (folding(row["uf"]), folding(row["municipio"]), keys[index])
-        for index, row in enumerate(rows)
-    )
-    result = {
-        "input_rows": len(rows),
-        "unique_street_groups": len(groups),
-        "colliding_street_groups": sum(value > 1 for value in groups.values()),
-        "geocode_status": "not_run",
-        "records": [
-            {"row": index, "id": row.get("id", str(index)),
-             "original": row["logradouro"], "ficha_normalizado": keys[index]}
-            for index, row in enumerate(rows)
-        ],
-    }
-    if geocode:
+    result = read_cohort(path)
+    selected = [r for r in result["records"] if r["query_eligible"]]
+    if geocode and not selected:
+        result["geocode_status"] = "empty_cohort"
+    if geocode and selected:
         try:
             import polars as pl
             from geocodebr import definir_campos, geocode as geocode_fn
         except ImportError as error:
             raise RuntimeError("Install geocodebr and polars separately") from error
+        rows = [r["original_fields"] for r in selected]
         addresses = pl.DataFrame({
-            "logradouro": [
-                f'{row.get("tipo_logradouro", "")} {row["logradouro"]}'.strip()
-                for row in rows
-            ],
+            "_ficha_row_id": [r["row_id"] for r in selected],
+            "logradouro": [r["query_street"] for r in selected],
             "numero": [row["numero"] for row in rows],
             "cep": [row["cep"] for row in rows],
             "localidade": [row["bairro"] for row in rows],
@@ -93,6 +44,8 @@ def run(path, *, geocode=False):
             else table.to_dicts() if hasattr(table, "to_dicts")
             else table.to_dict("records")
         )
+        result["queried_rows"] = len(selected)
+        result["geocode_identity_status"] = "unverified"
         result["geocode_status"] = "completed"
         result["geocode_output_rows"] = len(records)
         result["geocode_output_columns"] = list(records[0]) if records else []
