@@ -67,10 +67,13 @@ def _parquet_bag_equal(con, a, b):
     schema_b = con.execute("DESCRIBE SELECT * FROM read_parquet(?)", [str(b)]).fetchall()
     assert schema_a == schema_b
     for left, right in ((a, b), (b, a)):
-        assert con.execute(
-            "SELECT * FROM read_parquet(?) EXCEPT ALL SELECT * FROM read_parquet(?)",
-            [str(left), str(right)],
-        ).fetchall() == []
+        assert (
+            con.execute(
+                "SELECT * FROM read_parquet(?) EXCEPT ALL SELECT * FROM read_parquet(?)",
+                [str(left), str(right)],
+            ).fetchall()
+            == []
+        )
 
 
 def test_monthly_real_transform_and_source_bag(tmp_path, monkeypatch):
@@ -143,9 +146,7 @@ def test_monthly_real_transform_and_source_bag(tmp_path, monkeypatch):
             ).fetchall()
             expected = {
                 (
-                    ESTABELECIMENTO_ROWS[0][0]
-                    + f"{1000 + part:04}"
-                    + ESTABELECIMENTO_ROWS[0][2],
+                    ESTABELECIMENTO_ROWS[0][0] + f"{1000 + part:04}" + ESTABELECIMENTO_ROWS[0][2],
                     str(100 + part),
                 )
                 for part in range(1, 10)
