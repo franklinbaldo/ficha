@@ -125,7 +125,11 @@ def test_late_crc_failure_preserves_pre_batch_table(
         if list(work_dir.iterdir()):
             raise AssertionError("scratch files survived failed batch")
         if outer_transaction:
+            _equal(con.execute("SELECT a, b FROM good").fetchall(), [("NEW", "VALUE")] * 9)
+            _equal(con.execute("SELECT v FROM caller_state ORDER BY v").fetchall(), [(1,), (2,)])
             con.execute("ROLLBACK")
+            _equal(con.execute("SELECT a, b FROM good").fetchall(), [("ORIGINAL", "KEEP")])
+            _equal(con.execute("SELECT v FROM caller_state ORDER BY v").fetchall(), [(1,)])
     finally:
         con.close()
 
@@ -190,7 +194,10 @@ def test_late_sql_failure_preserves_caller_rollback(tmp_path, monkeypatch):
             )
         _equal(good_loaded.is_set(), True)
         _equal(list(work.iterdir()), [])
+        # A SQL error may invalidate the transaction; inspect only after rollback.
         con.execute("ROLLBACK")
+        _equal(con.execute("SELECT a, b FROM good").fetchall(), [("ORIGINAL", "KEEP")])
+        _equal(con.execute("SELECT v FROM caller_state ORDER BY v").fetchall(), [(1,)])
     finally:
         con.close()
 
