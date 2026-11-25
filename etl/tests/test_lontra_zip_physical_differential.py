@@ -304,6 +304,66 @@ def test_nonempty_member_physical_differential(
         con.close()
 
 
+@pytest.mark.parametrize("parallel", [False, True])
+@pytest.mark.parametrize("damaged", [False, True], ids=["aux-clean", "aux-crc"])
+def test_ignored_directory_payload_crc_differential(
+    tmp_path: Path, damaged: bool, parallel: bool
+) -> None:
+    """A selected data member is not evidence of integrity of ignored members."""
+    source = tmp_path / "auxiliary.zip"
+    with zipfile.ZipFile(source, "w") as archive:
+        for name, payload in (("aux/", b"aux"), ("DATA.ESTABELE", b"1;2\n")):
+            member = zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0))
+            member.compress_type = zipfile.ZIP_STORED
+            member.create_system = 3
+            archive.writestr(member, payload)
+
+    with zipfile.ZipFile(source) as archive:
+        offset = archive.infolist()[0].header_offset
+    if damaged:
+        raw = bytearray(source.read_bytes())
+        header = struct.unpack_from("<IHHHHHIIIHH", raw, offset)
+        raw[offset + 30 + header[-2] + header[-1]] ^= 1
+        source.write_bytes(raw)
+
+    with zipfile.ZipFile(source) as archive:
+        _require_equal(archive.testzip(), "aux/" if damaged else None)
+        selected = [member for member in archive.infolist() if not member.is_dir()]
+        _require_equal(len(selected), 1)
+        _require_equal(archive.read(selected[0]), b"1;2\n")
+
+    message = "ZIP CRC failed"
+    if damaged:
+        with pytest.raises(RuntimeError, match=message):
+            _raw_zip_crc_and_budget(source, expanded=0, members=0)
+    else:
+        _require_equal(_raw_zip_crc_and_budget(source, expanded=0, members=0), (7, 2))
+
+    con = duckdb.connect()
+    try:
+        try:
+            _load(con, source, tmp_path / "work", parallel)
+        except (RuntimeError, zipfile.BadZipFile, zlib.error) as exc:
+            if not damaged:
+                raise
+            _require_physical_rejection(exc, message, parallel)
+            _require_equal(
+                con.execute(
+                    "SELECT COUNT(*) FROM duckdb_tables() WHERE table_name = 'source_rows'"
+                ).fetchone()[0],
+                0,
+            )
+        else:
+            _require_equal(
+                con.execute("SELECT a, b FROM source_rows").fetchall(),
+                [("1", "2")],
+            )
+            if damaged:
+                pytest.xfail("#477: corrupt ignored directory payload admitted by consumer")
+    finally:
+        con.close()
+
+
 def test_optimized_python_replays_zip_controls(tmp_path: Path) -> None:
     """Run the real ETL differential tests under Python -O, without recursion."""
     tests = (
@@ -311,6 +371,7 @@ def test_optimized_python_replays_zip_controls(tmp_path: Path) -> None:
         "test_invalid_empty_member_preflight_vs_consumer",
         "test_member_semantics_characterization_pending_primary_rfb_contract",
         "test_nonempty_member_physical_differential",
+        "test_ignored_directory_payload_crc_differential",
     )
     selectors = [f"{__file__}::{name}" for name in tests]
     report = tmp_path / "optimized.xml"
@@ -333,6 +394,8 @@ def test_optimized_python_replays_zip_controls(tmp_path: Path) -> None:
             for parallel in (False, True):
                 expected[f"{name}[{case}-{parallel}]"] += 1
     for parallel in (False, True):
+        for case in ("aux-clean", "aux-crc"):
+            expected[f"{tests[4]}[{case}-{parallel}]"] += 1
         for case in semantic:
             expected[f"{tests[2]}[{parallel}-{case}]"] += 1
     allowed_xfail = {
@@ -341,6 +404,7 @@ def test_optimized_python_replays_zip_controls(tmp_path: Path) -> None:
         for case in invalid
         for parallel in (False, True)
     }
+    allowed_xfail.update(f"{tests[4]}[aux-crc-{parallel}]" for parallel in (False, True))
     # The report must contain precisely the selected child cases, not just exit 0.
     cases = ElementTree.parse(report).findall(".//testcase")
     _require_equal(Counter(case.attrib["name"] for case in cases), expected)

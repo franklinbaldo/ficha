@@ -17,8 +17,8 @@ layout: product
 <section class="workspace">
   <h2>Conjuntos por competência</h2>
   <div class="filter-row">
-    <div class="form-field"><label for="explorar-competencia">Competência</label><select id="explorar-competencia"></select></div>
-    <div class="form-field"><label for="explorar-filtro">Filtrar por conjunto</label><input id="explorar-filtro" type="search" placeholder="Ex.: cnpjs, socios, enderecos"></div>
+    <div class="form-field"><label for="explorar-competencia">Competência</label><select id="explorar-competencia" disabled></select></div>
+    <div class="form-field"><label for="explorar-filtro">Filtrar por conjunto</label><input id="explorar-filtro" disabled type="search" placeholder="Ex.: cnpjs, socios, enderecos"></div>
   </div>
   <p id="explorar-contador" class="big-stat"></p>
   <p id="explorar-estado" class="interface-status" role="status" aria-live="polite">Lendo o manifesto…</p>
@@ -26,7 +26,7 @@ layout: product
   <div class="series-section">
     <h2>Linhas declaradas em cada competência</h2>
     <p class="fineprint">Estes números são contagens de linhas informadas pelo ETL no manifesto. Não representam necessariamente empresas ativas, aberturas ou baixas e não são uma verificação independente.</p>
-    <div class="form-field compact-select"><label for="explorar-serie">Conjunto de registros</label><select id="explorar-serie"></select></div>
+    <div class="form-field compact-select"><label for="explorar-serie">Conjunto de registros</label><select id="explorar-serie" disabled></select></div>
     <div id="explorar-serie-grafico" aria-label="Série histórica de linhas declaradas"></div>
   </div>
 </section>

@@ -287,28 +287,58 @@ export async function mountExplore(doc,{loadManifest=fetchManifest}={}) {
   const counter=byId(doc,'explorar-contador');
   const kindSelect=byId(doc,'explorar-serie'), series=byId(doc,'explorar-serie-grafico');
   if(![select,filter,state,output,counter,kindSelect,series].every(Boolean)) return;
+  let active=false;
+  const disable=()=>{ active=false; select.disabled=filter.disabled=kindSelect.disabled=true; };
+  const fail=error=>{
+    disable();
+    select.replaceChildren(); kindSelect.replaceChildren();
+    output.replaceChildren(); series.replaceChildren();
+    counter.textContent=''; filter.value='';
+    status(state,'Exploração indisponível: '+error.message,true);
+  };
+  disable();
   try{
     const manifest=await loadManifest();
     const snaps=snapshotsDescending(manifest);
-    populateDateSelect(doc,select,manifest,params().get('competencia') || manifest.current);
+    const requested=params().get('competencia');
+    const known=snaps.some(s=>s.date===requested);
+    let notice=requested && !known
+      ? 'Competência solicitada indisponível; usando a referência '+manifest.current+'. ' : '';
+    populateDateSelect(doc,select,manifest,known ? requested : manifest.current);
     const kinds=countKinds(manifest);
+    kindSelect.replaceChildren();
     for(const kind of kinds) option(doc,kindSelect,kind,kind.replaceAll('_',' '));
     if(kinds.includes('cnpjs')) kindSelect.value='cnpjs';
-    const repaintSeries=()=>renderCountSeries(doc,series,manifest,kindSelect.value);
-    kindSelect.addEventListener('change',repaintSeries);
-    repaintSeries();
+    const repaintSeries=()=>{
+      if(kinds.length) renderCountSeries(doc,series,manifest,kindSelect.value);
+      else {
+        series.replaceChildren();
+        add(doc,series,'p','Nenhuma série de linhas declarada no manifesto.');
+      }
+    };
     const paint=()=>{
       const snap=snaps.find(s=>s.date===select.value);
+      if(!snap) throw new Error('Competência selecionada ausente');
       const totals=catalogueTotals(snap);
       counter.textContent=totals.fileCount+' arquivos · '+formatBytes(totals.bytes)+' declarados';
       const visible=renderExploreAssets(doc,output,manifest,select.value,filter.value);
-      setParams({competencia:select.value});
-      status(state,'Exibindo '+visible+' de '+totals.fileCount+' arquivos declarados em '+select.value+'. Tamanhos do manifesto, não quantidade de empresas nem indicadores por UF.');
+      return notice+'Exibindo '+visible+' de '+totals.fileCount+' arquivos declarados em '+select.value+'. Tamanhos do manifesto, não quantidade de empresas nem indicadores por UF.';
     };
-    select.addEventListener('change',paint);
-    filter.addEventListener('input',paint);
-    paint();
-  }catch(error){status(state,'Exploração indisponível: '+error.message,true);}
+    const commitPaint=message=>{
+      setParams({competencia:select.value});
+      status(state,message);
+    };
+    const guarded=fn=>()=>{ if(active) { try{fn();}catch(error){fail(error);} } };
+    const initial=paint();
+    repaintSeries();
+    commitPaint(initial);
+    select.addEventListener('change',guarded(()=>{notice='';commitPaint(paint());}));
+    filter.addEventListener('input',guarded(()=>commitPaint(paint())));
+    kindSelect.addEventListener('change',guarded(repaintSeries));
+    active=true;
+    select.disabled=filter.disabled=false;
+    kindSelect.disabled=!kinds.length;
+  }catch(error){fail(error);}
 }
 
 export function mountPages(doc=document) {

@@ -2,6 +2,7 @@
 import assert from 'node:assert/strict';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { chromium } from 'playwright';
+import { checkExploreStates } from './check-explore-states.mjs';
 
 const base=process.argv[2] || 'http://127.0.0.1:4321/ficha/';
 const out=process.argv[3] || '../accessibility-evidence';
@@ -274,6 +275,10 @@ try {
       assert.ok(count>=2,'série deve refletir snapshots do manifesto');
       view.checks.push({page:'explorar',competences:count});
       await page.screenshot({path:out+'/greenfield-explorar-'+viewport.name+'.png',fullPage:true});
+      // Replay the seven R204 states in mobile and desktop only.
+      if(['mobile','desktop'].includes(viewport.name)) {
+        view.checks.push({page:'explorar-states',cases:await checkExploreStates(browser,base,viewport)});
+      }
 
       await page.goto(base+'historia/',{waitUntil:'domcontentloaded'});
       await page.waitForFunction(()=>document.querySelectorAll('.timeline-item').length>0);
