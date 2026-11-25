@@ -37,6 +37,8 @@ async function withUrl(fn) {
   }
 }
 const observe=(date,state='found')=>({date,cnpj:numeric,state,partial:true,
+  decoderProfile:'1.0.0',declaredWire:date==='2026-07'?'1.0.0':null,
+  wireProvenance:date==='2026-07'?'declared':'legacy-assumed',producerSemantics:'unattested',
   source:'https://archive.org/download/ficha-'+date+'/companies-33.zip/33/000/167.pb',
   data:state==='found'?{cnpj:numeric,razao_social:'PETROLEO BRASILEIRO',opcao_mei:null}:null});
 async function mount(doc, lookup) {
@@ -62,7 +64,9 @@ test('404 do membro é inconclusivo: interrompe segundo GET e não declara compa
     assert.equal(calls,1);
     assert.match(doc.at('historia-estado').textContent,/inconclusiva/i);
     assert.doesNotMatch(doc.at('historia-estado').textContent,/concluída/i);
-    assert.equal(doc.at('historia-resultado').children.length,1,'somente link para catálogo');
+    const output=doc.at('historia-resultado');
+    assert.match(treeText(output),/2026-06: versão não declarada.*perfil de leitura previsto 1\.0\.0/);
+    assert.equal(output.children.length,2,'proveniência e link para catálogo');
   });
 });
 test('ausência PB íntegra é condicional à competência, nunca nascimento/encerramento',async()=>{
@@ -103,6 +107,9 @@ test('dispatcher rejeita alfa antes de acionar qualquer transporte',async()=>{
 test('tabela histórica tem legenda, cabeçalhos com scope e região rolável por teclado',()=> {
   const doc=docFor(), parent=new Element('div');
   pages.renderHistoryComparison(doc,parent,observe('2026-06'),observe('2026-07'));
+  assert.match(treeText(parent),/2026-06: versão não declarada/);
+  assert.match(treeText(parent),/2026-07: versão 1\.0\.0 declarada/);
+  assert.doesNotMatch(treeText(parent),/Protobuf v1 declarado no manifesto/);
   assert.match(treeText(parent),/Pelo teclado, pressione Tab até a tabela e use as setas/);
   const region=parent.children.find(node=>node.attributes.role==='region');
   assert.ok(region,'a tabela está em região navegável');
@@ -118,4 +125,28 @@ test('tabela histórica tem legenda, cabeçalhos com scope e região rolável po
   const body=table.children.find(node=>node.tag==='tbody');
   assert.ok(body.children.length>0,'a tabela mantém as linhas de comparação');
   assert.ok(body.children.every(row=>row.children[0].attributes.scope==='row'));
+});
+
+test('404 final mantém a proveniência das duas observações sem tabela comparativa',async()=>{
+  await withUrl(async()=>{
+    const doc=docFor(), calls=[];
+    await mount(doc,async(_m,date)=>{calls.push(date);return observe(date,date==='2026-07'?'artifact-unavailable':'found');});
+    await submit(doc);
+    assert.deepEqual(calls,['2026-06','2026-07']);
+    const output=doc.at('historia-resultado');
+    assert.match(treeText(output),/2026-06: versão não declarada.*perfil de leitura 1\.0\.0/);
+    assert.match(treeText(output),/2026-07: versão 1\.0\.0 declarada.*perfil de leitura previsto 1\.0\.0/);
+    assert.doesNotMatch(treeText(output),/Comparação de registros observados/);
+    assert.match(doc.at('historia-estado').textContent,/inconclusiva.*404/i);
+  });
+});
+test('shard não selecionado com versão própria exclui competência dos seletores, não da cronologia',async()=>{
+  await withUrl(async()=>{
+    const doc=docFor(), data=structuredClone(manifest);
+    data.snapshots.find(s=>s.date==='2026-05').files.companies.shards.push({shard:'99',schema_version:null});
+    await pages.mountHistory(doc,{loadManifest:async()=>data});
+    assert.deepEqual(doc.at('historia-inicio').options.map(o=>o.value),['2026-07','2026-06']);
+    const item=doc.at('historia-competencias').children.find(n=>treeText(n).includes('2026-05'));
+    assert.match(treeText(item),/Sem índice para comparação numérica/);
+  });
 });
