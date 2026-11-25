@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as pages from '../static/js/pages.mjs';
+import {fetchCompanyByCnpj} from '../static/js/atomic-browser.mjs';
 import {CnpjInputError} from '../static/js/atomic-record.mjs';
 
 class Element {
@@ -159,4 +160,53 @@ test('SSG selected competence remains readable despite another invalid layer',as
   data.snapshots.find(s=>s.date==='2026-06').files.companies.shards.push({shard:'99',schema_version:null});
   assert.equal(planAtomicRecord(data,'2026-07',numeric).wireProvenance,'declared');
   assert.throws(()=>planAtomicRecord(data,'2026-06',numeric),/Camada Protobuf numérica v1/);
+});
+
+test('História mount→dispatcher→bridge preserva observação inicial se o membro final retorna 404',async()=>{
+  for (const found of [true,false]) {
+    await withUrl(async()=>{
+      const doc=docFor(), urls=[], calls={decoder:0,decode:0,lookup:0};
+      await mount(doc,(m,date,cnpj)=>pages.fetchHistoryRecordAt(m,date,cnpj,{
+        atomic:(data,month,value)=>fetchCompanyByCnpj(data,month,value,{
+          fetchImpl:async url=>{
+            urls.push(url);
+            return new Response(month==='2026-06'?Uint8Array.of(1):null,
+              {status:month==='2026-06'?200:404});
+          },
+          loadDecoder:async()=>{
+            calls.decoder++;
+            return {decodeCompany:()=>{
+              calls.decode++;
+              return {cnpj_base:33000167,snapshot_yyyymm:202606,
+                qtd_estabelecimentos:found?1:0,
+                estabelecimentos:found?[{cnpj_ordem:1,cnpj_dv:1}]:[]};
+            }};
+          },
+          loadLookups:async(_m,d)=>{
+            calls.lookup++;
+            assert.equal(d,'2026-06');
+            return {municipios:{},cnaes:{}};
+          },
+        }),
+      }));
+      await submit(doc);
+      assert.deepEqual(urls,[
+        'https://archive.org/download/ficha-2026-06/companies-33.zip/33/000/167.pb',
+        'https://archive.org/download/ficha-2026-07/companies-33.zip/33/000/167.pb',
+      ]);
+      assert.deepEqual(calls,{decoder:2,decode:1,lookup:found?1:0});
+      const output=doc.at('historia-resultado'), content=treeText(output);
+      assert.match(content,/2026-06: versão não declarada.*perfil de leitura 1\.0\.0/);
+      assert.match(content,/2026-07: versão 1\.0\.0 declarada.*perfil de leitura previsto 1\.0\.0/);
+      assert.match(content,found?/CNPJ localizado no registro Protobuf de 2026-06/:
+        /CNPJ não localizado no registro Protobuf de 2026-06/);
+      assert.doesNotMatch(content,found?/CNPJ não localizado/:/CNPJ localizado/);
+      assert.doesNotMatch(content,/CNPJ (?:não )?localizado no registro Protobuf de 2026-07/);
+      const containsTable=node=>node.tag==='table'||node.children.some(containsTable);
+      assert.equal(containsTable(output),false);
+      assert.match(doc.at('historia-estado').textContent,/inconclusiva.*404.*ausência não comprovada/i);
+      assert.doesNotMatch(doc.at('historia-estado').textContent,/concluída/i);
+      assert.equal(doc.at('historia-enviar').attributes['aria-disabled'],undefined);
+    });
+  }
 });

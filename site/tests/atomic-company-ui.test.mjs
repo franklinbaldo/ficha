@@ -223,3 +223,42 @@ test('proveniência distingue declaração, perfil legado e 404 previsto na Fich
     }
   }
 });
+
+test('Ficha mount→bridge mostra perfil previsto para 404 declarado ou legado',async()=>{
+  const oldLocation=globalThis.location,oldHistory=globalThis.history;
+  globalThis.location=new URL('https://franklinbaldo.github.io/ficha/empresa/');
+  globalThis.history={replaceState(_s,_t,url){globalThis.location=new URL(String(url));}};
+  try {
+    for (const declared of [true,false]) {
+      const data={current:date,snapshots:[{date,files:{companies:{
+        shard_by:'cnpj_base_prefix_2',...(declared?{schema_version:'1.0.0'}:{}),
+        shards:[{shard:'33',url:base.archiveUrl}],
+      }}}]};
+      const doc=documentFor(['empresa-cnpj','empresa-competencia','empresa-form',
+        'empresa-estado','empresa-resultado','empresa-enviar']);
+      const urls=[], calls={decoder:0,decode:0,lookup:0};
+      await mountCompany(doc,{loadManifest:async()=>data,
+        lookup:(m,d,value)=>fetchCompanyByCnpj(m,d,value,{
+          fetchImpl:async url=>{urls.push(url);return new Response(null,{status:404});},
+          loadDecoder:async()=>{calls.decoder++;return {decodeCompany:()=>{calls.decode++;}};},
+          loadLookups:async()=>{calls.lookup++;throw Error('lookup indevido após 404');},
+        }),
+      });
+      doc.at('empresa-cnpj').value=cnpj;
+      await doc.at('empresa-form').listeners.get('submit')({preventDefault(){}});
+      assert.deepEqual(urls,[source]);
+      assert.deepEqual(calls,{decoder:1,decode:0,lookup:0});
+      const content=treeText(doc.at('empresa-resultado'));
+      assert.match(content,declared?/versão 1\.0\.0 declarada no manifesto/:
+        /versão não declarada no manifesto \(legado assumido\)/);
+      assert.match(content,/perfil de leitura previsto 1\.0\.0.*semântica do produtor não atestada/);
+      assert.match(doc.at('empresa-estado').textContent,/inconclusiva/i);
+      assert.doesNotMatch(content,/CNPJ não localizado|FICHA CADASTRAL/);
+      assert.equal(doc.at('empresa-enviar').attributes['aria-disabled'],undefined);
+      globalThis.location=new URL('https://franklinbaldo.github.io/ficha/empresa/');
+    }
+  } finally {
+    if(oldLocation===undefined)delete globalThis.location;else globalThis.location=oldLocation;
+    if(oldHistory===undefined)delete globalThis.history;else globalThis.history=oldHistory;
+  }
+});

@@ -168,7 +168,11 @@ export async function mountHistory(doc,{loadManifest=fetchManifest,lookup=fetchH
       setParams({cnpj,de:start,ate:end});
       status(state,'Comparação indisponível: Consulta inconclusiva em ' + entry.date +
         ': arquivo Protobuf não respondeu (HTTP 404); ausência não comprovada',true);
-      for (const prior of observed) renderWireProvenance(doc,output,prior);
+      for (const prior of observed) {
+        renderWireProvenance(doc,output,prior);
+        add(doc,output,'p',(prior.state === 'found' ? 'CNPJ localizado' : 'CNPJ não localizado') +
+          ' no registro Protobuf de ' + prior.date + '.');
+      }
       renderWireProvenance(doc,output,entry);
       anchor(doc,output,'Ver competências disponíveis',BASE+'acervo/');
     };
