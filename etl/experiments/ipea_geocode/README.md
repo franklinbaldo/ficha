@@ -30,3 +30,17 @@ A próxima rodada deve selecionar amostra *real e autorizada* do snapshot RFB, e
 O CSV inteiro é recusado se houver cabeçalho duplicado ou largura irregular. Linhas válidas preservam todos os campos originais, SHA256 da entrada e identificador interno independente de `id` externo. `writer_eligible_rows` replica o predicado não vazio de logradouro/UF; `query_eligible_rows` exige adicionalmente logradouro, UF e município não brancos (não valida o catálogo municipal). Use nome de município confirmado, não código RFB tratado como IBGE. Grupos lexicais agora usam somente a coorte comum. `queried_rows` permanece zero offline.
 
 A composição do logradouro escolhe o prefixo explícito, quando reconhecido, sem apagar acentos nem expandir abreviações na entrada enviada ao Ipea. Conflitos ficam registrados. A consulta opcional passa `_ficha_row_id` apenas como tentativa de transporte: sua retenção pela API real ainda não foi demonstrada. Resultado continua sem join ou taxa automática. O oráculo sintético `reconcile_candidates` recebe pares previamente validados de ID de linha e ID de candidato, deduplica candidatos, rejeita IDs órfãos e distingue zero/um/vários candidatos. Um candidato único não prova acerto; identidade e critérios reais de precisão ainda precisam de validação. Normalização Ipea e CNEFE NOT_RUN nesta fase.
+
+
+## Comparação lexical isolada (R242)
+
+O binding [enderecobr 0.3.0](https://pypi.org/project/enderecobr/0.3.0/) (MIT) pode ser instalado separadamente em ambiente virtual. Para Linux x86_64/glibc, o wheel cp38-abi3 publicado tem SHA256 `845c5e45a8cbc5ebcb0475a69aba91d04b182586eaec6976aef80d352d69f3a2` (metadado PyPI, bytes ainda não adquiridos). Conferir hash antes de instalar. A fixture sintética `lexical_fixture.csv` tem SHA256 `1460ea140540143c4c918884db5a2a722c07d512f34c4e8fe79368931da02a0b`.
+
+```bash
+python -m unittest -v test_lexical
+python -O -m unittest -v test_lexical
+# Após instalar e conferir enderecobr==0.3.0:
+python lexical.py lexical_fixture.csv
+```
+
+O comparativo preserva IDs e campos originais das linhas elegíveis; conta igualdade lexical, diferenças, saídas vazias, grupos do baseline subdivididos pelo Ipea e grupos distintos do baseline fundidos pelo Ipea, dentro de UF/município. Fusões não são falsos positivos confirmados e subdivisões não são falsos negativos confirmados. Não importa geocodebr, não consulta CNEFE. Os testes de contabilidade usam normalizador injetado, não o Ipea. Instalação real NOT_RUN nesta rodada; não há resultados Ipea.

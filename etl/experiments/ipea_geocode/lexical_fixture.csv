@@ -1,0 +1,10 @@
+tipo_logradouro,logradouro,numero,cep,bairro,municipio,uf,id
+R,Gen. Glicério,10,00123456,Centro,Porto Velho,RO,dup
+Rua,General Glicério,20,00123456,Centro,Porto Velho,RO,dup
+,R. Gen.. Glicério,30,00123456,Centro,Porto Velho,RO,c
+AV,São João,10,00123457,Centro,Porto Velho,RO,d
+Avenida,SAO JOAO,11,00123457,Centro,Porto Velho,RO,e
+R,Av. São João,12,00123457,Centro,Porto Velho,RO,f
+R,São João,13,00123457,Centro,Porto Velho,RO,g
+R,São João,14,00123457,Centro,Ji-Paraná,RO,h
+, ,15,00123457,Centro,Porto Velho,RO,i
