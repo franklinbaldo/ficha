@@ -243,10 +243,13 @@ class ShardPackSession:
         return self._con, self._lookups, self._urls
 
     def _validate_materialization(self, prefix: str, spec: MaterializationSpec) -> None:
-        if spec.packer_format_version != PACKER_FORMAT_VERSION:
+        if (
+            type(spec.packer_format_version) is not int
+            or spec.packer_format_version != PACKER_FORMAT_VERSION
+        ):
             raise ValueError(
                 f"materialization packer_format_version {spec.packer_format_version!r} "
-                f"!= current {PACKER_FORMAT_VERSION}"
+                f"must be the current integer {PACKER_FORMAT_VERSION}"
             )
         if spec.snapshot != self.month:
             raise ValueError(

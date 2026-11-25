@@ -190,9 +190,13 @@ def test_materialization_must_match_the_exact_shard(tmp_path):
             session.pack("07", tmp_path / "out", materialization=wrong)
 
 
-def test_real_v11_shard_session_selects_alpha_root_and_plans_versioned_name(tmp_path):
+def test_real_v11_shard_session_selects_alpha_root_and_plans_versioned_name(tmp_path, monkeypatch):
     """Full local DuckDB -> pack -> receipt -> opt-in plan, no network or upload."""
+    from dataclasses import replace
+    from pathlib import Path
+
     from ficha_etl.proto.ficha.v1.company_pb2 import Company
+    from ficha_etl.shard_publish import ShardPublishError
     from ficha_etl.shard_transfer import prepare_one_shard, plan_opt_in_v11_shard
 
     _write_fixture(tmp_path, ["42000001", "CA000001"])
@@ -207,6 +211,22 @@ def test_real_v11_shard_session_selects_alpha_root_and_plans_versioned_name(tmp_
     with ShardPackSession("2026-08", geometry, parquets_base=str(tmp_path)) as session:
         prepared = prepare_one_shard(session, "42", tmp_path / "out", pinned_inputs=pins)
         planned = plan_opt_in_v11_shard(session, prepared, pinned_inputs=pins)
+        current = session.materialization_spec("42", input_sha1s=pins)
+        old = replace(current, packer_format_version=2)
+        obsolete = replace(prepared, materialization_id=old.materialization_id())
+        if (
+            current.packer_format_version != 3
+            or obsolete.materialization_id == planned.materialization_id
+        ):
+            pytest.fail("test requires distinct producer v2 and v3 identities")
+
+        def forbidden(*args, **kwargs):
+            pytest.fail("obsolete wire-1.1 receipt reached local file I/O")
+
+        with monkeypatch.context() as patch:
+            patch.setattr(Path, "exists", forbidden)
+            with pytest.raises(ShardPublishError, match="prepared materialization_id"):
+                plan_opt_in_v11_shard(session, obsolete, pinned_inputs=pins)
 
     assert planned.name == "wire-1.1/companies-42.zip"
     assert prepared.path.name == "companies-42.zip"
@@ -585,11 +605,14 @@ def test_both_packers_decode_same_rfb_porte_from_local_parquet(tmp_path):
             if meta["schema_sha256"] != hashlib.sha256(descriptor).hexdigest():
                 pytest.fail("descriptor hash mismatch")
             members = [n for n in archive.namelist() if n.endswith(".pb") and not n.startswith("_")]
-            if len(members) != len(expected):
-                pytest.fail("unexpected member multiplicity")
+            expected_members = {f"42/000/{root % 1000:03d}.pb": root for root in expected}
+            if len(members) != len(expected) or set(members) != set(expected_members):
+                pytest.fail("unexpected member names or multiplicity")
             actual = {}
             for name in members:
                 company = Company.FromString(archive.read(name))
+                if company.cnpj_base != expected_members[name]:
+                    pytest.fail(f"{name}: wrong decoded root {company.cnpj_base}")
                 if company.snapshot_yyyymm != 202608:
                     pytest.fail("unexpected snapshot")
                 if company.cnpj_base in actual:
@@ -602,11 +625,13 @@ def test_both_packers_decode_same_rfb_porte_from_local_parquet(tmp_path):
                     pytest.fail("shard materialization differs from expected spec")
                 if spec.packer_format_version != 3:
                     pytest.fail("producer semantic version must be 3")
+            elif "materialization" in meta:
+                pytest.fail("monolithic metadata must not attest shard materialization")
     if descriptors[0] != descriptors[1]:
         pytest.fail("packers disagree on wire descriptor")
 
 
-@pytest.mark.parametrize("version", [2, 4])
+@pytest.mark.parametrize("version", [2, 3.0, 4])
 def test_pack_rejects_wrong_producer_version_before_output(tmp_path, version):
     from dataclasses import replace
 
