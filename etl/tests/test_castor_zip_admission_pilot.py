@@ -62,6 +62,20 @@ def _sha(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def _witness_extract(extract, expected, calls):
+    def traced(zip_path, dest_dir):
+        name = Path(zip_path).name
+        calls.append(name)
+        zip_sha, members = expected[name]
+        assert _sha(zip_path) == zip_sha
+        paths = extract(zip_path, dest_dir)
+        actual = [(p.name, p.stat().st_size, _sha(p)) for p in paths]
+        assert actual == members
+        return paths
+
+    return traced
+
+
 def _parquet_bag_equal(con, a, b):
     schema_a = con.execute("DESCRIBE SELECT * FROM read_parquet(?)", [str(a)]).fetchall()
     schema_b = con.execute("DESCRIBE SELECT * FROM read_parquet(?)", [str(b)]).fetchall()
@@ -88,6 +102,7 @@ def test_monthly_real_transform_and_source_bag(tmp_path, monkeypatch):
         _zip_with_csv(source / f"Estabelecimentos{part}.zip", "shared.csv", [tuple(row)])
     # Freeze identical bytes before both arms. Re-encode with fixed timestamp
     # and STORED to make fixture hashes independent of runtime zlib version.
+    expected = {}
     for path in sorted(source.glob("*.zip")):
         with zipfile.ZipFile(path) as archive:
             entries = [(entry.filename, archive.read(entry)) for entry in archive.infolist()]
@@ -96,7 +111,9 @@ def test_monthly_real_transform_and_source_bag(tmp_path, monkeypatch):
                 info = zipfile.ZipInfo(name)
                 info.create_system = 3
                 archive.writestr(info, data)
-    frozen = {p.name: _sha(p) for p in source.glob("*.zip")}
+        members = [(name, len(data), hashlib.sha256(data).hexdigest()) for name, data in entries]
+        expected[path.name] = (_sha(path), members)
+    frozen = {name: zip_sha for name, (zip_sha, _) in expected.items()}
     assert len(frozen) == 37
     print("monthly fixture SHA256:", json.dumps(frozen, sort_keys=True))
 
@@ -104,11 +121,7 @@ def test_monthly_real_transform_and_source_bag(tmp_path, monkeypatch):
     for arm, extract in (("a", extract_a), ("b", _extract_b)):
         calls = []
 
-        def traced(zip_path, dest_dir):
-            calls.append(Path(zip_path).name)
-            return extract(zip_path, dest_dir)
-
-        monkeypatch.setattr(transform, "extract_zip", traced)
+        monkeypatch.setattr(transform, "extract_zip", _witness_extract(extract, expected, calls))
         root = tmp_path / arm
         transform.transform_snapshot(
             "2026-04",
@@ -181,12 +194,16 @@ def test_historical_real_transform_fresh_roots(tmp_path, monkeypatch):
     frozen = _sha(source)
     print("historical fixture SHA256:", frozen)
     outputs = []
-    for arm in ("a", "b"):
-        if arm == "b":
-            monkeypatch.setattr(transform, "extract_zip", _extract_b)
+    members = [(name, len(payload), hashlib.sha256(payload).hexdigest())]
+    expected = {"Estabelecimentos0.zip": (frozen, members)}
+    extract_a = transform.extract_zip
+    for arm, extract in (("a", extract_a), ("b", _extract_b)):
+        calls = []
+        monkeypatch.setattr(transform, "extract_zip", _witness_extract(extract, expected, calls))
         result = canonical_history.run_historical_shadow(
             "2026-04", 0, tmp_path / arm, zip_override=source, sample_size=10
         )
+        assert calls == ["Estabelecimentos0.zip"]
         assert result.reused is False
         assert result.manifest["source"]["zip"]["sha256"] == frozen
         assert result.manifest["source"]["csv"]["sha256"] == hashlib.sha256(payload).hexdigest()
@@ -284,3 +301,35 @@ def test_member_sinks_close_before_next_and_never_suppress_crc(tmp_path):
         _extract_b(source, tmp_path / "invalid", open_sink=Sink)
     assert (active, peak) == (0, 1)
     assert not (tmp_path / "invalid").exists()
+
+
+@pytest.mark.parametrize("with_sink", [False, True])
+def test_physical_budget_accumulates_across_archives(tmp_path, monkeypatch, with_sink):
+    first = tmp_path / "first.zip"
+    second = tmp_path / "second.zip"
+    for path, data in ((first, b"abc"), (second, b"defg")):
+        with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+            archive.writestr("data.csv", data)
+
+    def check(path, expanded, members):
+        if not with_sink:
+            return raw_preflight._raw_zip_crc_and_budget(path, expanded=expanded, members=members)
+        with zipfile.ZipFile(path) as archive:
+            return raw_preflight._check_zip_members(
+                archive, expanded=expanded, members=members, sink_for=lambda _: lambda _: None
+            )
+
+    monkeypatch.setattr(raw_preflight, "_MAX_RAW_UNCOMPRESSED_BYTES", 7)
+    monkeypatch.setattr(raw_preflight, "_MAX_RAW_MEMBERS", 2)
+    first_totals = check(first, 0, 0)
+    assert first_totals == (3, 1)
+    assert check(second, *first_totals) == (7, 2)
+
+    monkeypatch.setattr(raw_preflight, "_MAX_RAW_UNCOMPRESSED_BYTES", 6)
+    with pytest.raises(RuntimeError, match="global uncompressed limit"):
+        check(second, *first_totals)
+
+    monkeypatch.setattr(raw_preflight, "_MAX_RAW_UNCOMPRESSED_BYTES", 7)
+    monkeypatch.setattr(raw_preflight, "_MAX_RAW_MEMBERS", 1)
+    with pytest.raises(RuntimeError, match="invalid ZIP member count"):
+        check(second, *first_totals)
