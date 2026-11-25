@@ -1,11 +1,15 @@
+import tempfile
 import unittest
+from pathlib import Path
+
+from cohort import read_cohort
 from lexical import compare
 
 
 def record(i, base, query, city="A", eligible=True):
     return {"row_id": f"row-{i}", "id": "dup", "query_eligible": eligible,
             "ficha_normalizado": base, "query_street": query,
-            "original_fields": {"uf": "RO", "municipio": city, "cep": "00123456"}}
+            "original_fields": {"logradouro": (query or "B") if eligible else " ", "uf": "RO", "municipio": city, "cep": "00123456"}}
 
 
 class TestAccounting(unittest.TestCase):
@@ -23,11 +27,31 @@ class TestAccounting(unittest.TestCase):
         self.assertNotIn("ipea_normalizado", rows[0])
 
     def test_empty_and_equal(self):
-        report = {"records": [record(0, "A", "A"), record(1, "B", "")],
+        report = {"records": [record(0, "A", "A"), record(1, "B", "B")],
                   "input_rows": 2, "input_sha256": "synthetic"}
-        result = compare(report, lambda query: query)
+        result = compare(report, lambda query: "" if query == "B" else query)
         self.assertEqual((result["equal_rows"], result["different_rows"], result["empty_ipea_rows"]), (1, 1, 1))
 
     def test_invalid_output(self):
         with self.assertRaises(TypeError):
             compare({"records": [record(0, "A", "A")], "input_rows": 1, "input_sha256": "synthetic"}, lambda _: None)
+
+    def test_lexical_without_region(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "cohort.csv"
+            path.write_text(
+                "tipo_logradouro,logradouro,numero,cep,bairro,municipio,uf\n"
+                "R,Sao Joao,1,00123456,C,A,RO\n"
+                "R,Sao Joao,2,00123456,C,,RO\n"
+                "R,Sao Joao,3,00123456,C,A,\n"
+                "R, ,4,00123456,C,A,RO\n",
+                encoding="utf-8",
+            )
+            report = read_cohort(path)
+        result = compare(report, lambda _: "X")
+        self.assertEqual(report["query_eligible_rows"], 1)
+        self.assertEqual(result["compared_rows"], 3)
+        self.assertEqual(result["regional_group_rows"], 1)
+        self.assertEqual(result["excluded_rows"], 1)
+        self.assertEqual([r["row_id"] for r in result["excluded_records"]], ["row-3"])
+        self.assertEqual([r["regional_group_eligible"] for r in result["records"]], [True, False, False])

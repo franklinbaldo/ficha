@@ -18,30 +18,38 @@ VERSION = "0.3.0"
 
 def compare(report, normalize):
     rows = []
+    excluded = []
     baseline_groups = defaultdict(set)
     ipea_groups = defaultdict(set)
     for record in report["records"]:
-        if not record["query_eligible"]:
-            continue
         fields = record["original_fields"]
+        if not fields["logradouro"].strip() or not record["query_street"].strip():
+            excluded.append({**record, "lexical_exclusion": "empty_street"})
+            continue
         region = (folding(fields["uf"]), folding(fields["municipio"]))
         baseline = record["ficha_normalizado"]
         result = normalize(record["query_street"])
         if not isinstance(result, str):
             raise TypeError("Expected string from lexical normalizer")
-        baseline_groups[(*region, baseline)].add(result)
-        ipea_groups[(*region, result)].add(baseline)
-        rows.append({**record, "ipea_normalizado": result, "equal": baseline == result})
+        regional = all(region)
+        if regional:
+            baseline_groups[(*region, baseline)].add(result)
+            ipea_groups[(*region, result)].add(baseline)
+        rows.append({**record, "ipea_normalizado": result, "equal": baseline == result,
+                     "regional_group_eligible": regional})
     return {
         "input_sha256": report["input_sha256"],
         "input_rows": report["input_rows"],
         "compared_rows": len(rows),
+        "excluded_rows": len(excluded),
+        "regional_group_rows": sum(row["regional_group_eligible"] for row in rows),
         "equal_rows": sum(row["equal"] for row in rows),
         "different_rows": sum(not row["equal"] for row in rows),
         "empty_ipea_rows": sum(not row["ipea_normalizado"].strip() for row in rows),
         "baseline_split_groups": sum(len(values) > 1 for values in baseline_groups.values()),
         "ipea_merged_groups": sum(len(values) > 1 for values in ipea_groups.values()),
         "records": rows,
+        "excluded_records": excluded,
     }
 
 

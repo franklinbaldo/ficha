@@ -69,7 +69,7 @@ def test_report_never_overwrites(tmp_path, optimized, alias):
 def test_experiment_suite_is_collected(optimized):
     flags = ["-O"] if optimized else []
     result = subprocess.run(
-        [sys.executable, *flags, "-m", "unittest", "-v", "test_experiment.py", "test_cohort.py"],
+        [sys.executable, *flags, "-m", "unittest", "-v", "test_experiment.py", "test_cohort.py", "test_lexical.py"],
         cwd=SCRIPT.parent,
         capture_output=True,
         text=True,
@@ -77,4 +77,5 @@ def test_experiment_suite_is_collected(optimized):
         check=False,
     )
     assert result.returncode == 0, result.stderr
-    assert "Ran 11 tests" in result.stderr
+    assert "Ran 15 tests" in result.stderr
+    assert "test_lexical_without_region (test_lexical.TestAccounting.test_lexical_without_region) ... ok" in result.stderr

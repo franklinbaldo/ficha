@@ -8,14 +8,14 @@ Fornecer CSV UTF-8 com colunas `tipo_logradouro,logradouro,numero,cep,bairro,mun
 
 ```bash
 cd etl/experiments/ipea_geocode
-python -m unittest -v test_experiment.py test_cohort.py
-python -O -m unittest -v test_experiment.py test_cohort.py
+python -m unittest -v test_experiment.py test_cohort.py test_lexical.py
+python -O -m unittest -v test_experiment.py test_cohort.py test_lexical.py
 python experiment.py /caminho/amostra.csv --output /caminho/relatorio.json
 ```
 
 Para geocodificar, criar ambiente isolado e instalar `geocodebr` e `polars`; executar `--geocode` **somente após aprovação do download do CNEFE**. O cache inicial pode chegar a aproximadamente 1,2 GB e a API do pacote está em evolução. O experimento usa `definir_campos` e `geocode`, conforme a documentação Python do Ipea. Não incluir essa execução no CI nem despachar ETL mensal.
 
-O CI existente (`pytest tests` em `etl/`) coleta `tests/test_caranguejo_ipea_output.py`: 12 casos de CLI (normal e `-O`) e dois replays da suíte original de onze testes. Nenhuma mudança de workflow ou dependência adicional.
+O CI existente (`pytest tests` em `etl/`) coleta `tests/test_caranguejo_ipea_output.py`: 12 casos de CLI (normal e `-O`) e dois replays da suíte de quinze testes (incluindo quatro lexicais). Nenhuma mudança de workflow ou dependência adicional.
 
 ## Interpretação e limitações
 
@@ -43,4 +43,4 @@ python -O -m unittest -v test_lexical
 python lexical.py lexical_fixture.csv
 ```
 
-O comparativo preserva IDs e campos originais das linhas elegíveis; conta igualdade lexical, diferenças, saídas vazias, grupos do baseline subdivididos pelo Ipea e grupos distintos do baseline fundidos pelo Ipea, dentro de UF/município. Fusões não são falsos positivos confirmados e subdivisões não são falsos negativos confirmados. Não importa geocodebr, não consulta CNEFE. Os testes de contabilidade usam normalizador injetado, não o Ipea. Instalação real NOT_RUN nesta rodada; não há resultados Ipea.
+O comparativo usa logradouro não branco como denominador lexical, inclusive sem UF/município. Preserva IDs e campos originais das linhas comparadas e excluídas (motivo explícito); `regional_group_rows` conta apenas as linhas com UF/município não vazios, sem validar catálogo. Conta igualdade lexical, diferenças, saídas vazias, grupos do baseline subdivididos pelo Ipea e grupos distintos do baseline fundidos pelo Ipea, dentro de UF/município. Fusões não são falsos positivos confirmados e subdivisões não são falsos negativos confirmados. Não importa geocodebr, não consulta CNEFE. Os testes de contabilidade usam normalizador injetado, não o Ipea. Instalação real NOT_RUN nesta rodada; não há resultados Ipea.
