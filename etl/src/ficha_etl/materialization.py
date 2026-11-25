@@ -56,7 +56,7 @@ from typing import Mapping
 MATERIALIZATION_VERSION = 1
 """Versão do formato *deste documento*. Muda se a estrutura do spec mudar."""
 
-PACKER_FORMAT_VERSION = 2
+PACKER_FORMAT_VERSION = 3
 """Fronteira de compatibilidade semântica do pack.
 
 Muda quando uma alteração torna materializações anteriores **inadequadas para

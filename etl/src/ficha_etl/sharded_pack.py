@@ -23,7 +23,7 @@ import duckdb
 
 from ficha_etl import mirror
 from ficha_etl.cnpj import SHARD_BY, SHARD_RANGE_KIND, shard_of, source_prefixes
-from ficha_etl.materialization import MaterializationSpec, ShardRange
+from ficha_etl.materialization import PACKER_FORMAT_VERSION, MaterializationSpec, ShardRange
 from ficha_etl.pack import (  # noqa: PLC2701 -- composição interna do mesmo pacote
     LOOKUP_KINDS,
     SCHEMA_VERSION,
@@ -243,6 +243,11 @@ class ShardPackSession:
         return self._con, self._lookups, self._urls
 
     def _validate_materialization(self, prefix: str, spec: MaterializationSpec) -> None:
+        if spec.packer_format_version != PACKER_FORMAT_VERSION:
+            raise ValueError(
+                f"materialization packer_format_version {spec.packer_format_version!r} "
+                f"!= current {PACKER_FORMAT_VERSION}"
+            )
         if spec.snapshot != self.month:
             raise ValueError(
                 f"materialization snapshot {spec.snapshot!r} != session month {self.month!r}"
