@@ -129,6 +129,82 @@ sintética de sócio PF com esse campo nulo é aceita por
 O teste Vitest do consumidor registra explicitamente as duas expectativas,
 sem alterar o comportamento atual.
 
+Uma segunda diferença de aceitação também é exercitável sem consultar dados
+remotos: o v1 rejeita códigos fora dos enums `tipo`, `tipo_descricao` e
+`faixa_etaria` de `Socio`, mas o gerado usa `z.string()` e os admite.
+Testes adicionais exercitam **validadores de campo** para dois nulos
+representativos em `Cnpj.nome_fantasia` e
+`Raiz.ente_federativo_responsavel`, e os outros quatro domínios enum
+(`Cnpj.identificador_matriz_filial`, `Cnpj.porte_empresa`,
+`Cnpj.situacao_cadastral`, `Raiz.porte_empresa`). Assim os sete enums
+inventariados têm um controle runtime. Os testes anteriores de
+`Cnpj` e `Raiz` isolam o validador **de campo**; não confundir esse nível
+de prova com a aceitação de linha inteira.
+
+Três testes adicionais usam **linhas sintéticas completas** de `Cnpj`
+(52 colunas) e `Raiz` (18 colunas), enumeradas explicitamente sem derivar
+as fixtures do gerador sob teste. Primeiro verificam que os dois validadores
+aceitam a linha de controle. Em seguida comprovam, por `safeParse` da
+**linha inteira**, a rejeição OKF de `null` permitido pelo v1 em
+`Cnpj.nome_fantasia` e `Raiz.ente_federativo_responsavel`, e a aceitação
+OKF de valores inválidos em quatro enums v1 de Cnpj/Raiz. Isso estende a
+contraprova runtime aos três tipos. Um teste posterior percorre **28 testemunhas
+literais de nulabilidade** em linhas sintéticas completas, independentes dos
+schemas gerados: 22 campos Cnpj, 1 Raiz e 5 Socio. Para cada mutação isolada,
+`safeParse` da linha no v1 deve aceitar o `null`, enquanto o OKF gerado
+deve rejeitá-lo. Isso exercita os 28 desvios em runtime sem inferir que a
+nulabilidade física dos Parquets reais ou a política do novo site SSG sejam
+equivalentes.
+
+Uma terceira diferença ocorre com coluna futura: o `z.object` público v1
+aceita a linha e retira a chave desconhecida, enquanto o adaptador de views
+aplica `.strict()` e a rejeita. Um controle posterior percorre **Cnpj, Raiz e
+Socio com linhas completas independentes**: (a) linha válida aceita nos dois
+validadores, (b) campo nullable **ausente** rejeitado nos dois, embora o mesmo
+campo com `null` seja aceito pelo v1, e (c) coluna `future_column` aceita e
+descartada pelo v1, mas rejeitada pelo gerado OKF. Assim, `null` não é
+confundido com ausência nem a política de evolução de colunas é inferida
+a partir de um único tipo. Todos são casos sintéticos do consumidor legado
+Astro; não provam Parquet físico nem o SSG público. Os testes documentam
+estas fronteiras, **sem corrigir nem aprovar** mudança de validador,
+contrato ou versão.
+
+O consumidor `validateOkfConvenienceViewRows('empresas_ativas', ...)` também
+recebe `Cnpj` e apresenta, em linha sintética completa, as duas direções:
+rejeita `nome_fantasia: null` que o v1 aceita e admite `porte_empresa: '99'`
+que o v1 recusa. A regressão chama o consumidor real, sem consultar Parquet,
+IA ou a home SSG; não autoriza substituir contratos nem publicar dados.
+
+A regressão de lote sintético estende essa observação para a prévia de duas
+linhas. No consumidor `empresas_ativas`, um segundo Cnpj com
+`nome_fantasia: null` (v1 válido) interrompe a validação identificando
+**row 1**, ao passo que um segundo Cnpj com `porte_empresa: '99'` (v1 inválido)
+é devolvido normalmente pelo validador OKF. Na view
+`socios_de_raizes_ativas`, o segundo sócio PF com `cnpj_socio: null`
+também produz erro em **row 1**, apesar da aceitação pública v1. São
+testemunhas de **validação de output e de lote**, não uma execução de SQL nem
+afirmação de que essas linhas estejam nos Parquets publicados. Em especial,
+a view relacional declara `Raiz` como **input**, mas
+`validateOkfConvenienceViewRows` valida somente o **output Socio**;
+seu sucesso não atesta a nulabilidade, integridade referencial ou versão
+da relação `Raiz` consumida pelo JOIN.
+
+A regressão seguinte distingue explicitamente **formato da saída** de
+**correção semântica da consulta**. Uma linha Cnpj sintética com
+`situacao_cadastral: '08'` é válida no Zod v1 e passa pelo validador
+OKF de saída de `empresas_ativas`, embora a SQL da view filtre
+`situacao_cadastral = '02'`. Analogamente, um Socio sintético com
+`cnpj_base: '99999999'` passa pelo validador de saída de
+`socios_de_raizes_ativas` sem que uma relação Raiz correspondente tenha
+sido apresentada ao validador. **Isso não demonstra defeito no SELECT/JOIN**:
+o teste deliberadamente não executa SQL. Demonstra apenas que
+`validateOkfConvenienceViewRows`, quando invocado isoladamente, não
+atesta a seleção ativa, a existência da Raiz, a cardinalidade do JOIN,
+a competência dos inputs ou a integridade referencial. A página Astro
+legada efetua a consulta separadamente antes de chamar o validador;
+nem essa composição nem o teste provam a versão/proveniência dos Parquets
+consumidos. O site público SSG permanece fora do escopo.
+
 Essa diferença é **dívida já conhecida**, não um incidente novo na
 home pública SSG (`site/`), que é separada do módulo Astro `web/`.
 O teste não consulta Parquet remoto nem prova que determinada linha
@@ -170,3 +246,87 @@ com o dono do contrato público, e só então revisar gerador/consumidores e
 acrescentar provas de `safeParse`/Parquet sobre fixtures. A avaliação das
 RFCs 0001/0001A pertence ao Polvo e ao Elefante. Não se propõe nova
 materialização física.
+
+### Regressão de SQL executável com fixtures isoladas (R164)
+
+`knowledge/tests/test_okf_view_sql_semantics.py` lê a declaração JSON
+das duas views no artefato TypeScript **gerado** e executa o próprio SQL
+em relações SQLite sintéticas e pequenas. Confere que `empresas_ativas`
+seleciona código `02`, mas não `08` ou `NULL`; e que o JOIN de
+`socios_de_raizes_ativas` exclui raiz ausente, contagem zero e `NULL`.
+
+Uma contraprova adicional alimenta **duas linhas Raiz para o mesmo
+`cnpj_base`**, ambas ativas: o JOIN devolve a mesma linha Socio duas
+vezes. Isso demonstra que a SQL não impõe unicidade de raiz e que a
+cardinalidade depende de um contrato físico/relacional externo.
+
+**Limite essencial:** SQLite cobre somente o subconjunto SELECT/JOIN
+portável destas duas declarações; não executa DuckDB-WASM, Astro,
+Parquet remoto ou dados RFB. Não comprova duplicatas reais nem erro no
+produto. A próxima validação precisa de DuckDB com PK/FK e um oráculo
+raw→consulta→produto sob versão fixada. Nenhuma política foi aprovada
+pela ADR 0027; esta PR continua DRAFT/HOLD.
+
+### DuckDB e Parquet sintético: teste de cardinalidade e chaves (R165)
+
+A regressão `etl/tests/test_okf_view_duckdb_parquet.py` executa as
+**declarações SQL geradas existentes**, sem reescrevê-las, sobre três
+relações criadas como arquivos Parquet locais pelo DuckDB. O caso ativo
+`'02'` continua separado de `'08'`/NULL. Duas linhas Raiz ativas com a
+mesma chave e dois sócios distintos dessa chave produzem **quatro**
+linhas no JOIN gerado, enquanto um oráculo independente `EXISTS`
+preserva **duas**: a divergência decorre da multiplicidade física de
+Raiz, não do `safeParse` de Socio. Esse oráculo representa a regra
+hipotética «ao menos uma Raiz ativa», que ainda precisa de aprovação
+semântica.
+
+O teste também tenta carregar o mesmo Parquet duplicado numa tabela
+DuckDB com `PRIMARY KEY(cnpj_base)` e exige erro de restrição;
+outro controle, com `PRIMARY KEY` e `FOREIGN KEY` **declaradas**
+em tabelas DuckDB independentes, rejeita tanto uma segunda Raiz quanto
+um sócio órfão e faz JOIN e `EXISTS` coincidirem preservando os dois
+sócios válidos. **Uma tabela DuckDB restrita não torna automaticamente
+os arquivos Parquet publicados restritos.** Nenhuma política de
+deduplicação, abortar publicação ou substituir JOIN por `EXISTS`
+é decidida por esta regressão.
+
+São dados locais, sintéticos e com apenas as colunas consumidas pelas
+views. Não são os 52/18/16 campos inteiros, não exercitam DuckDB-WASM
+no navegador nem autenticam Parquet publicado, snapshot por competência,
+PK/FK reais, integridade do JOIN em produção ou o site SSG. O teste
+deve ser exercido no job ETL Linux/Windows com DuckDB instalado;
+o gate OKF Python stdlib continua separadamente. A ADR #253 e a
+decisão de contrato/versão permanecem em HOLD.
+
+
+### Competência sintética: pareamento em SQLite (R166)
+
+A SQL OKF gerada roda em SQLite sobre Cnpj, Socio e Raiz sintéticas de
+`2026-07` e `2026-08`. Ambos os conjuntos passam na unicidade de Raiz e
+ausência de sócios órfãos; um oráculo Python literal confirma as duas
+views. Trocar somente Raiz entre meses altera o JOIN: PK/FK de cada
+snapshot não certificam pareamento temporal. Rótulos não são evidência
+RFB. O teste R165 cobre DuckDB/Parquet sintético separadamente;
+sem bytes publicados, site, ETL ou decisão de contrato (ADR #253 HOLD).
+
+### Saída idêntica, competência distinta (R167)
+
+Teste SQLite sintético: Raiz de `2026-07` tem 1 ativo; de `2026-08`, 2.
+Hashes das tuplas diferem, mas a SQL gerada devolve os mesmos sócios.
+Chaves únicas, ausência de órfãos e paridade da saída **não provam**
+pareamento temporal: requer-se proveniência/competência de **cada input**.
+Não usa Parquet RFB, site publicado ou hashes de arquivos reais;
+nenhum contrato ou produto é alterado.
+
+### Identidade declarada e recibos incompletos (R169–R171)
+
+`knowledge/tests/test_okf_view_manifest_pairing.py` cruza as duas views
+geradas com quatro competências, `schema_version`, URL, tamanho e
+SHA-256 declarados no manifesto versionado. Trocar Raiz entre meses
+muda a identidade composta (R169); alterar bytes e digest declarados
+conjuntamente só é detectado por recibo anterior **simulado** (R170).
+A regressão R171 recusa URLs HTTPS sem autoridade e com userinfo; um
+recibo apenas para Raiz não cobre o input Socio do mesmo JOIN.
+Mesmo uma URL bem formada, um hash declarado e recibos hipotéticos
+não autenticam bytes físicos nem origem RFB. Sem rede, publicação ou
+aprovação da ADR #253; PR #346 DRAFT/HOLD.
